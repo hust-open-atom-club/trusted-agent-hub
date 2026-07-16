@@ -15,10 +15,12 @@
     "ref_type": "tag",
     "ref": "v1.0.0",
     "commit_hash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+    "download_url": "https://github.com/alice-dev/code-review-skill/archive/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0.zip",
     "verified_owner": true
   },
   "integrity": {
-    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "download_size_bytes": 18432
   },
   "compatibility": ["claude-code", "cursor"],
   "permissions": {
@@ -28,6 +30,24 @@
   },
   "installation": {
     "method": "copy_directory",
+    "target_client": "claude-code",
+    "steps": [
+      {
+        "action": "download",
+        "url": "https://github.com/alice-dev/code-review-skill/archive/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0.zip"
+      },
+      {
+        "action": "verify",
+        "algorithm": "sha256",
+        "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      { "action": "extract", "archive": "code-review-skill.zip" },
+      {
+        "action": "copy",
+        "source": "code-review-skill/",
+        "destination": "~/.claude/skills/code-review-skill/"
+      }
+    ],
     "targets": [
       { "client": "claude-code", "destination": "~/.claude/skills/code-review-skill/" },
       { "client": "cursor", "destination": "~/.cursor/skills/code-review-skill/" }
