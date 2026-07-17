@@ -186,6 +186,10 @@ class PackageService:
     def get_stats(self, name: str) -> PackageStats:
         package = self.get_public_package(name)
         self._get_public_latest(package)
+        if hasattr(self.repository, "get_package_stats"):
+            stats = self.repository.get_package_stats(name)
+            if stats is not None:
+                return stats
         versions = [
             version
             for version in self.repository.list_versions(name)

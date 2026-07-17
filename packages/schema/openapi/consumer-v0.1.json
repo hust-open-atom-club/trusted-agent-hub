@@ -315,6 +315,131 @@
         "title": "ExtractInstallationStep",
         "type": "object"
       },
+      "FeedbackLevel": {
+        "enum": [
+          "positive",
+          "neutral",
+          "negative"
+        ],
+        "title": "FeedbackLevel",
+        "type": "string"
+      },
+      "FeedbackPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackRecord"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "level_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/FeedbackLevel"
+            },
+            "title": "Level Counts",
+            "type": "object"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "total_pages": {
+            "title": "Total Pages",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "total_pages",
+          "level_counts"
+        ],
+        "title": "FeedbackPage",
+        "type": "object"
+      },
+      "FeedbackRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/FeedbackLevel"
+          },
+          "package_name": {
+            "title": "Package Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "package_name",
+          "level",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "FeedbackRecord",
+        "type": "object"
+      },
+      "FeedbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "level": {
+            "$ref": "#/components/schemas/FeedbackLevel"
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
       "FilesystemPermissions": {
         "additionalProperties": false,
         "properties": {
@@ -450,6 +575,96 @@
           "dependencies"
         ],
         "title": "InstallManifest",
+        "type": "object"
+      },
+      "InstallRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "client": {
+            "title": "Client",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "install_path": {
+            "title": "Install Path",
+            "type": "string"
+          },
+          "installed_at": {
+            "title": "Installed At",
+            "type": "string"
+          },
+          "integrity_verified": {
+            "title": "Integrity Verified",
+            "type": "boolean"
+          },
+          "package_name": {
+            "title": "Package Name",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "package_name",
+          "version",
+          "version_id",
+          "user_id",
+          "client",
+          "install_path",
+          "integrity_verified",
+          "installed_at"
+        ],
+        "title": "InstallRecord",
+        "type": "object"
+      },
+      "InstallReportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client": {
+            "minLength": 1,
+            "title": "Client",
+            "type": "string"
+          },
+          "install_path": {
+            "minLength": 1,
+            "title": "Install Path",
+            "type": "string"
+          },
+          "integrity_verified": {
+            "default": false,
+            "title": "Integrity Verified",
+            "type": "boolean"
+          },
+          "package_name": {
+            "title": "Package Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_name",
+          "version",
+          "client",
+          "install_path"
+        ],
+        "title": "InstallReportRequest",
         "type": "object"
       },
       "InstallTarget": {
@@ -1706,6 +1921,68 @@
         "title": "Source",
         "type": "object"
       },
+      "TrustLevelName": {
+        "enum": [
+          "trusted",
+          "low_risk",
+          "medium_risk",
+          "high_risk",
+          "untrusted"
+        ],
+        "title": "TrustLevelName",
+        "type": "string"
+      },
+      "TrustLevelResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "calculated_at": {
+            "title": "Calculated At",
+            "type": "string"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "install_recommendation": {
+            "title": "Install Recommendation",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/TrustLevelName"
+          },
+          "model_version": {
+            "title": "Model Version",
+            "type": "string"
+          },
+          "top_risks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Top Risks",
+            "type": "array"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_id",
+          "level",
+          "install_recommendation",
+          "model_version",
+          "calculated_at"
+        ],
+        "title": "TrustLevelResponse",
+        "type": "object"
+      },
       "TrustScore": {
         "additionalProperties": false,
         "properties": {
@@ -2147,6 +2424,12 @@
         "title": "VersionSummary",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -2174,6 +2457,92 @@
         "summary": "Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v0/installs": {
+      "post": {
+        "operationId": "record_install_api_v0_installs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallRecord"
+                }
+              }
+            },
+            "description": "Existing install record"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Record Install",
+        "tags": [
+          "feedback"
         ]
       }
     },
@@ -2375,6 +2744,186 @@
         "summary": "Get Package",
         "tags": [
           "packages"
+        ]
+      }
+    },
+    "/api/v0/packages/{name}/feedback": {
+      "get": {
+        "operationId": "list_feedback_api_v0_packages__name__feedback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Feedback",
+        "tags": [
+          "feedback"
+        ]
+      },
+      "post": {
+        "operationId": "upsert_feedback_api_v0_packages__name__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackRecord"
+                }
+              }
+            },
+            "description": "Updated feedback"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Upsert Feedback",
+        "tags": [
+          "feedback"
         ]
       }
     },
@@ -2633,6 +3182,68 @@
         "summary": "Get Package Stats",
         "tags": [
           "stats"
+        ]
+      }
+    },
+    "/api/v0/versions/{version_id}/trust-level": {
+      "get": {
+        "operationId": "get_trust_level_api_v0_versions__version_id__trust_level_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustLevelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Trust Level",
+        "tags": [
+          "feedback"
         ]
       }
     },

@@ -22,7 +22,10 @@ CONSUMER_PATHS = {
     "/api/v0/packages/{name}/versions",
     "/api/v0/packages/{name}/versions/{version}",
     "/api/v0/packages/{name}/install-manifest",
+    "/api/v0/installs",
+    "/api/v0/packages/{name}/feedback",
     "/api/v0/versions/{version_id}/trust-score",
+    "/api/v0/versions/{version_id}/trust-level",
     "/api/v0/stats/packages/{name}",
 }
 
@@ -79,6 +82,67 @@ def test_consumer_openapi_contains_exactly_the_canonical_paths() -> None:
     assert not any("/scan" in path for path in document["paths"])
     assert "/api/v0/packages/{name}/install" not in document["paths"]
     assert "/api/v0/trust-scores/{version_id}" not in document["paths"]
+
+
+def test_feedback_operations_document_stable_error_responses() -> None:
+    document = build_consumer_openapi(create_app())
+    paths = document["paths"]
+
+    assert set(paths["/api/v0/packages/{name}/feedback"]["post"]["responses"]) == {
+        "200",
+        "201",
+        "401",
+        "404",
+        "422",
+        "503",
+    }
+    assert set(paths["/api/v0/packages/{name}/feedback"]["get"]["responses"]) == {
+        "200",
+        "404",
+        "422",
+        "503",
+    }
+    assert set(paths["/api/v0/versions/{version_id}/trust-level"]["get"]["responses"]) == {
+        "200",
+        "404",
+        "422",
+        "503",
+    }
+    schemas = document["components"]["schemas"]
+    assert "score" not in schemas["FeedbackRequest"].get("properties", {})
+    assert "score" not in schemas["TrustLevelResponse"].get("properties", {})
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v0/installs", "/api/v0/packages/{name}/feedback"],
+)
+def test_idempotent_posts_document_200_with_the_created_response_model(
+    path: str,
+) -> None:
+    document = build_consumer_openapi(create_app())
+    responses = document["paths"][path]["post"]["responses"]
+
+    assert "200" in responses
+    assert (
+        responses["200"]["content"]["application/json"]["schema"]
+        == responses["201"]["content"]["application/json"]["schema"]
+    )
+
+
+def test_consumer_writes_use_bearer_auth_without_exposing_dev_header() -> None:
+    document = build_consumer_openapi(create_app())
+
+    assert document["components"]["securitySchemes"] == {
+        "bearerAuth": {"type": "http", "scheme": "bearer"}
+    }
+    assert document["paths"]["/api/v0/installs"]["post"]["security"] == [
+        {"bearerAuth": []}
+    ]
+    assert document["paths"]["/api/v0/packages/{name}/feedback"]["post"][
+        "security"
+    ] == [{"bearerAuth": []}]
+    assert "x-user-id" not in json.dumps(document).lower()
 
 
 def test_committed_snapshot_exactly_matches_current_consumer_openapi() -> None:

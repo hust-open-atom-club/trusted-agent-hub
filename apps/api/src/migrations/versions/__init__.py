@@ -1,0 +1,1 @@
+"""Consumer persistence schema revisions."""

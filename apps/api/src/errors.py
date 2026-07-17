@@ -21,12 +21,14 @@ class ConsumerAPIError(Exception):
         code: str,
         message: str,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = {} if details is None else details
+        self.headers = {} if headers is None else headers
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -53,6 +55,7 @@ def install_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return JSONResponse(
             status_code=error.status_code,
+            headers=error.headers,
             content={
                 "error": {
                     "code": error.code,

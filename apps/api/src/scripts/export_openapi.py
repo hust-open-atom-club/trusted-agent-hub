@@ -21,7 +21,10 @@ CONSUMER_PATHS = (
     "/api/v0/packages/{name}/versions",
     "/api/v0/packages/{name}/versions/{version}",
     "/api/v0/packages/{name}/install-manifest",
+    "/api/v0/installs",
+    "/api/v0/packages/{name}/feedback",
     "/api/v0/versions/{version_id}/trust-score",
+    "/api/v0/versions/{version_id}/trust-level",
     "/api/v0/stats/packages/{name}",
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -77,11 +80,17 @@ def build_consumer_openapi(app: FastAPI) -> dict[str, Any]:
         schema_name: copy.deepcopy(source_schemas[schema_name])
         for schema_name in sorted(selected_schema_names)
     }
+    selected_components: dict[str, Any] = {"schemas": selected_schemas}
+    security_schemes = source.get("components", {}).get("securitySchemes")
+    if security_schemes is not None:
+        selected_components["securitySchemes"] = copy.deepcopy(
+            security_schemes
+        )
     return {
         "openapi": copy.deepcopy(source["openapi"]),
         "info": copy.deepcopy(source["info"]),
         "paths": selected_paths,
-        "components": {"schemas": selected_schemas},
+        "components": selected_components,
     }
 
 
