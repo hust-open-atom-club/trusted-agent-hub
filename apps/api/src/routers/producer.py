@@ -114,12 +114,14 @@ def submit_version(
     repo = _get_producer_repository()
     service = ProducerService(repo)
     try:
-        repo_url, scan_id = service.submit_version(version_id)
+        repo_url, scan_id, next_status = service.submit_version(version_id)
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # 更新状态为 scanning
-    repo.update_version_status(version_id, "scanning")
+    # 对于 draft → submitted 的两跳路径，router 继续置为 scanning；
+    # 对于 resubmitted / changes_requested / error 已在 service 层直达 scanning，跳过。
+    if next_status != "scanning":
+        repo.update_version_status(version_id, "scanning")
 
     # 构建回调闭包
     def on_scan_done(

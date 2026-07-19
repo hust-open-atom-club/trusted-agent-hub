@@ -8,6 +8,7 @@ from alembic import context
 
 from src.database import Base, create_engine_from_url, normalize_database_url
 from src.repositories import orm  # noqa: F401 - registers ORM metadata
+from src.repositories import orm_producer  # noqa: F401 - registers producer ORM metadata
 
 
 config = context.config

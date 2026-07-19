@@ -13,6 +13,7 @@ from starlette.responses import Response
 from .dependencies import clear_runtime_dependencies
 from .errors import install_error_handlers
 from .models.common import HealthResponse
+from .routers.auth import router as auth_router
 from .routers.feedback import router as feedback_router
 from .routers.install import router as install_router
 from .routers.packages import router as packages_router
@@ -27,6 +28,8 @@ from .routers.trust_scores import router as trust_scores_router
 async def lifespan(_application: FastAPI):
     """Release process-wide database resources on application shutdown."""
     try:
+        from src.auth import install as install_auth
+        install_auth()
         yield
     finally:
         clear_runtime_dependencies()
@@ -50,6 +53,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    application.include_router(auth_router)
     application.include_router(packages_router, prefix="/api/v0")
     application.include_router(install_router, prefix="/api/v0")
     application.include_router(feedback_router, prefix="/api/v0")

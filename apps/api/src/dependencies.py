@@ -39,16 +39,27 @@ def clear_runtime_dependencies() -> None:
 
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
-    """Authenticated Consumer identity exposed to route handlers."""
+    """Authenticated user identity exposed to route handlers."""
 
     id: str
+    role: str = "user"
 
 
 BearerTokenVerifier = Callable[[str], CurrentUser]
+_bearer_token_verifier: BearerTokenVerifier | None = None
 
 
 class BearerTokenInvalid(Exception):
     """Raised by a bearer verifier when a presented token is invalid."""
+
+
+def set_bearer_token_verifier(verifier: BearerTokenVerifier) -> None:
+    """注入真实的 Bearer Token 验证函数（由 auth 模块在启动时调用）。
+
+    替换默认的占位实现，使 JWT 认证生效。
+    """
+    global _bearer_token_verifier
+    _bearer_token_verifier = verifier
 
 
 def _authentication_required() -> ConsumerAPIError:
@@ -61,11 +72,11 @@ def _authentication_required() -> ConsumerAPIError:
 
 
 def _reject_unconfigured_bearer_token(_token: str) -> CurrentUser:
+    """占位 verifier，当认证模块未安装时拒绝所有 token。"""
     raise BearerTokenInvalid("No bearer-token verifier is configured.")
 
 
-def get_bearer_token_verifier() -> BearerTokenVerifier:
-    """Return the configured bearer-token verifier integration boundary."""
+def _default_verifier() -> BearerTokenVerifier:
     return _reject_unconfigured_bearer_token
 
 
@@ -77,10 +88,6 @@ def get_current_user(
         HTTPAuthorizationCredentials | None,
         Security(_bearer_auth),
     ],
-    verifier: Annotated[
-        BearerTokenVerifier,
-        Depends(get_bearer_token_verifier),
-    ],
     x_user_id: Annotated[
         str | None,
         Header(alias="X-User-Id", include_in_schema=False),
@@ -89,6 +96,7 @@ def get_current_user(
 ) -> CurrentUser:
     """Resolve a bearer identity or an explicitly enabled development header."""
     if credentials is not None:
+        verifier = _bearer_token_verifier or _default_verifier()
         try:
             return verifier(credentials.credentials)
         except BearerTokenInvalid:
@@ -96,7 +104,7 @@ def get_current_user(
     if settings.allow_insecure_user_header and x_user_id is not None:
         user_id = x_user_id.strip()
         if user_id:
-            return CurrentUser(id=user_id)
+            return CurrentUser(id=user_id, role="admin")
     raise _authentication_required()
 
 

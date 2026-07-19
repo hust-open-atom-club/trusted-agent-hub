@@ -90,22 +90,32 @@ class ProducerService:
 
     # ── 提交审核 ──────────────────────────────────────────
 
-    def submit_version(self, version_id: str) -> tuple[str, str | None]:
+    def submit_version(self, version_id: str) -> tuple[str, str | None, str]:
         """校验状态并触发扫描。
 
         Returns:
-            (repo_url_or_local_path, scan_id)
+            (repo_url_or_local_path, scan_id, next_status)
+            next_status 告知调用方当前版本所处的中间状态：
+            - draft → "submitted"（需 router 进一步置为 scanning）
+            - resubmitted / changes_requested / error → "scanning"（一跳直达）
         """
         version = self.repository.get_version(version_id)
         if version is None:
             raise ProducerServiceError(f"版本 {version_id} 不存在")
 
         current_status = version.get("status", "")
-        # 允许 draft / resubmitted / changes_requested → scanning
-        if current_status not in ("draft", "resubmitted", "changes_requested"):
+
+        # 统一走状态机校验；根据当前状态决定中间跳
+        if current_status == "draft":
+            validate_transition(current_status, "submitted")
+            next_status = "submitted"
+        elif current_status in ("resubmitted", "changes_requested", "error"):
+            validate_transition(current_status, "scanning")
+            next_status = "scanning"
+        else:
             raise ProducerServiceError(
                 f"无法提交审核：当前状态为 '{current_status}'，"
-                f"仅 'draft'、'resubmitted' 或 'changes_requested' 状态可提交"
+                f"仅 'draft'、'resubmitted'、'changes_requested' 或 'error' 状态可提交"
             )
 
         # 提取源码路径
@@ -117,8 +127,8 @@ class ProducerService:
                 "版本缺少源码地址（source.repository_url），无法提交扫描"
             )
 
-        # 更新状态为 submitted（扫描由 router 层触发后置为 scanning）
-        self.repository.update_version_status(version_id, "submitted")
+        # 更新状态
+        self.repository.update_version_status(version_id, next_status)
         self.repository.create_audit_log(
             action=AuditAction.SUBMIT.value,
             target_type="version",
@@ -129,7 +139,7 @@ class ProducerService:
         # 生成 scan_id（由 router 层传给 _run_scan_task）
         import uuid
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
-        return repo_url, scan_id
+        return repo_url, scan_id, next_status
 
     # ── 扫描完成回调 ──────────────────────────────────────
 

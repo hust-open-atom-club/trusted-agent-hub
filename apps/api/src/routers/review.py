@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.auth import require_role
+from src.dependencies import CurrentUser
 from src.database import create_session_factory, get_runtime_engine
 from src.models.common import ErrorEnvelope
 from src.models.producer import (
@@ -48,6 +50,7 @@ def _get_producer_repository() -> ProducerRepository:
 def submit_review(
     version_id: str,
     body: ReviewRequest,
+    _user: CurrentUser = Depends(require_role("reviewer")),
 ) -> ReviewResponse:
     """审核员对指定版本提交审核结论。
 
@@ -60,8 +63,7 @@ def submit_review(
             version_id=version_id,
             conclusion=body.conclusion,
             comment=body.comment,
-            # TODO: 任务1.5 替换为真实审核员 ID
-            reviewer_id="system",
+            reviewer_id=_user.id,
         )
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -75,7 +77,10 @@ def submit_review(
     status_code=200,
     responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
 )
-def publish_version(version_id: str) -> ReviewResponse:
+def publish_version(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> ReviewResponse:
     """管理员将审核通过的版本正式发布上线。
 
     状态：approved → published
@@ -85,8 +90,7 @@ def publish_version(version_id: str) -> ReviewResponse:
     try:
         return service.publish_version(
             version_id=version_id,
-            # TODO: 任务1.5 替换为真实管理员 ID
-            operator_id="system",
+            operator_id=_user.id,
         )
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -102,6 +106,7 @@ def publish_version(version_id: str) -> ReviewResponse:
 )
 def yank_version(
     version_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
     reason: str = Query(default="", description="下架原因"),
 ) -> ReviewResponse:
     """管理员下架已发布的版本。
@@ -113,8 +118,7 @@ def yank_version(
     try:
         return service.yank_version(
             version_id=version_id,
-            # TODO: 任务1.5 替换为真实管理员 ID
-            operator_id="system",
+            operator_id=_user.id,
             reason=reason if reason else None,
         )
     except ProducerServiceError as exc:

@@ -30,9 +30,12 @@ REPORTS_DIR = _PROJECT / "packages" / "schema" / "reports"
 
 def seed_packages(repo: SqlAlchemyPackageRepository) -> int:
     """将 mock JSON 的包和版本数据导入 PG。"""
-    source = JsonPackageRepository(
-        MOCK_DIR / "packages.json", MOCK_DIR / "versions"
-    )
+    pkg_file = MOCK_DIR / "packages.json"
+    if not pkg_file.is_file():
+        print("[seed]   mock/packages.json 不存在，跳过包数据导入")
+        return 0
+
+    source = JsonPackageRepository(pkg_file, MOCK_DIR / "versions")
     packages = list(source.list_packages())
     seed_sqlalchemy_repository(repo, source)
     print(f"[seed]   包: {len(packages)} 个")
@@ -90,6 +93,45 @@ def seed_scan_reports(repo: SqlAlchemyPackageRepository) -> int:
     return count
 
 
+def seed_users() -> int:
+    """预置测试账号到 users 表。"""
+    from src.repositories.orm_producer import UserRow
+    from sqlalchemy import select
+    import uuid
+
+    engine = create_engine_from_url(get_settings().database_url)
+    session = create_session_factory(engine)()
+
+    users = [
+        ("admin", "admin123", "admin"),
+        ("reviewer", "review123", "reviewer"),
+        ("submitter", "submit123", "submitter"),
+    ]
+
+    count = 0
+    try:
+        for username, password, role in users:
+            existing = session.scalar(
+                select(UserRow).where(UserRow.username == username)
+            )
+            if existing is not None:
+                print(f"[seed]   用户 {username} 已存在，跳过")
+                continue
+            user = UserRow(
+                id=f"user-{uuid.uuid4().hex}",
+                username=username,
+                password_hash=hash_password(password),
+                role=role,
+            )
+            session.add(user)
+            count += 1
+            print(f"[seed]   创建用户: {username} (role={role})")
+        session.commit()
+    finally:
+        session.close()
+    return count
+
+
 def main() -> None:
     settings = get_settings()
     if not settings.database_url:
@@ -102,6 +144,9 @@ def main() -> None:
     print("[seed] 开始种子数据导入...")
     n_pkgs = seed_packages(repo)
     print(f"[seed] 包数据: {n_pkgs} 个包")
+
+    n_users = seed_users()
+    print(f"[seed] 用户数据: {n_users} 个用户")
 
     n_reports = seed_scan_reports(repo)
     print(f"[seed] 扫描报告: {n_reports} 个")
