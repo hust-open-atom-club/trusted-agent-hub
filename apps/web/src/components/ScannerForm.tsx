@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
 import ScoreBadge from './ScoreBadge';
 
 type ScanStatus = 'idle' | 'submitting' | 'scanning' | 'complete' | 'error';
@@ -36,6 +38,8 @@ const LOCAL_SKILLS = [
 ];
 
 export default function ScannerForm() {
+  const router = useRouter();
+  const { user } = useAuth();
   const [repoUrl, setRepoUrl] = useState('');
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -224,7 +228,27 @@ export default function ScannerForm() {
               </div>
             )}
 
-            <button className="scanner-reset-btn" onClick={handleReset}>Scan Another Package</button>
+            <div className="scanner-result-actions">
+              {user ? (
+                <button
+                  className="btn btn-primary"
+                  onClick={() =>
+                    router.push(
+                      `/submit?repo_url=${encodeURIComponent(repoUrl)}`
+                    )
+                  }
+                >
+                  提交入库审核
+                </button>
+              ) : (
+                <p className="scanner-login-hint">
+                  <a href="/login">登录</a>后即可提交入库审核
+                </p>
+              )}
+              <button className="scanner-reset-btn" onClick={handleReset}>
+                Scan Another Package
+              </button>
+            </div>
           </div>
         )}
       </div>
