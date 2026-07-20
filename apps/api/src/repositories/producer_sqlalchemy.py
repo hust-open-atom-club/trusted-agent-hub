@@ -333,6 +333,45 @@ class ProducerRepository:
             ]
 # ── 辅助函数 ──────────────────────────────────────────────
 
+    def list_versions_by_submitter(
+        self, submitter_id: str
+    ) -> list[dict[str, object]]:
+        """返回某个提交者的所有版本列表，按提交时间倒序。"""
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(
+                    PackageVersionRow.id,
+                    PackageVersionRow.package_id,
+                    PackageVersionRow.version,
+                    PackageVersionRow.status,
+                    PackageVersionRow.data,
+                    PackageRow.name.label("package_name"),
+                )
+                .join(PackageRow, PackageRow.id == PackageVersionRow.package_id)
+                .where(
+                    PackageVersionRow.data["submitter_id"].as_string()
+                    == submitter_id
+                )
+                .order_by(
+                    PackageVersionRow.data["submitted_at"]
+                    .as_string()
+                    .desc()
+                    .nullslast()
+                )
+            ).all()
+            return [
+                {
+                    "version_id": row.id,
+                    "package_id": row.package_id,
+                    "package_name": row.package_name,
+                    "version": row.version,
+                    "status": row.status,
+                    "submitted_at": (row.data or {}).get("submitted_at"),
+                }
+                for row in rows
+            ]
+
+
 def _version_brief(row: PackageVersionRow) -> dict[str, object]:
     data = dict(row.data) if row.data else {}
     return {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.database import (
     create_session_factory,
@@ -184,3 +184,21 @@ def get_version(version_id: str) -> dict[str, object]:
             status_code=404, detail=f"版本 {version_id} 不存在"
         )
     return detail
+
+
+# ── GET /versions ──────────────────────────────────────────
+
+@router.get(
+    "/versions",
+    responses={400: {"model": ErrorEnvelope}},
+)
+def list_versions(
+    submitter_id: str = Query(..., description="提交者用户 ID"),
+) -> list[dict[str, object]]:
+    """获取某个提交者的所有版本列表（按提交时间倒序）。
+
+    每个版本摘要包含 version_id、package_name、version、status、submitted_at。
+    """
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    return service.list_my_versions(submitter_id)

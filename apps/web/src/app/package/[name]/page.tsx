@@ -144,7 +144,7 @@ export default function PackageDetailPage() {
           <ScoreBadge score={pkg.trust_score} size="lg" />
           <div>
             <span className="trust-label">{riskLabel}</span>
-            <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginTop: 4 }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-2)', marginTop: 4 }}>
               {trustAdvice}
             </p>
           </div>
@@ -197,7 +197,7 @@ export default function PackageDetailPage() {
               href={pkg.homepage}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: 'var(--color-primary)' }}
+              style={{ color: 'var(--color-accent)' }}
             >
               {pkg.homepage}
             </a>
@@ -212,7 +212,7 @@ export default function PackageDetailPage() {
           <li>
             <strong>v{pkg.latest_version}</strong> — latest
             {pkg.created_at && (
-              <span style={{ color: 'var(--color-text-muted)', marginLeft: 8 }}>
+              <span style={{ color: 'var(--color-muted)', marginLeft: 8 }}>
                 ({new Date(pkg.created_at).toLocaleDateString('en-US', {
                   year: 'numeric',
                   month: 'short',

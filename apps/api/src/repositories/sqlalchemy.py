@@ -409,12 +409,19 @@ def _upsert_version(session: Session, version: VersionDetail) -> None:
         row.data = data
 
 
+def _safe_validate(model_cls, data: dict[str, object]):
+    """Validate only the fields the model knows about, ignoring extras."""
+    allowed = set(model_cls.model_fields.keys())
+    filtered = {k: v for k, v in data.items() if k in allowed}
+    return model_cls.model_validate(filtered)
+
+
 def _package_from_row(row: PackageRow) -> PackageSummary:
-    return PackageSummary.model_validate(row.data)
+    return _safe_validate(PackageSummary, row.data)
 
 
 def _version_from_row(row: PackageVersionRow) -> VersionDetail:
-    return VersionDetail.model_validate(row.data)
+    return _safe_validate(VersionDetail, row.data)
 
 
 def _serialize_datetime(value: datetime) -> str:
