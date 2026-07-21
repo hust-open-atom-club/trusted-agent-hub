@@ -14,7 +14,7 @@ import type {
   InstallRecommendation,
   Grade,
 } from '../../../packages/schema/constants';
-import type { PackageSummary, VersionDetail } from './mock-loader';
+import type { PackageSummary, VersionDetail } from './api-client';
 
 // ── Color helpers ───────────────────────────────────────────────────────
 
@@ -232,8 +232,11 @@ export function formatPackageDetail(
   }
 
   // Owner
+  const ownerStr = pkg.owner
+    ? `${pkg.owner.display_name} (@${pkg.owner.username})`
+    : 'N/A';
   lines.push(
-    `  ${chalk.dim('Owner:')}       ${pkg.owner.display_name} (@${pkg.owner.username})`,
+    `  ${chalk.dim('Owner:')}       ${ownerStr}`,
   );
 
   // Permissions summary (from version)

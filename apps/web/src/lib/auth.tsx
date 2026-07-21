@@ -57,6 +57,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (saved) {
       const user = deriveUser(saved);
       if (user) {
+        // 同步到 cookie 供 middleware 读取
+        if (!document.cookie.includes('tah_token=')) {
+          document.cookie =
+            `tah_token=${saved}; path=/; max-age=${2 * 60 * 60}; SameSite=Lax`;
+        }
         setState({ user, token: saved, loading: false });
         return;
       }
@@ -83,11 +88,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) throw new Error('Token 解析失败');
 
     localStorage.setItem('tah_token', token);
+    document.cookie = `tah_token=${token}; path=/; max-age=${2 * 60 * 60}; SameSite=Lax`;
     setState({ user, token, loading: false });
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('tah_token');
+    document.cookie = 'tah_token=; path=/; max-age=0';
     setState({ user: null, token: null, loading: false });
   }, []);
 

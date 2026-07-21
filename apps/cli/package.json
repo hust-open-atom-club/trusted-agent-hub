@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
-    "test": "ts-node tests/grade-gate.test.ts"
+    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts"
   },
   "dependencies": {
     "chalk": "^4.1.2",
@@ -16,6 +16,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.23.1",
     "typescript": "^5.3.3"
   }
 }
