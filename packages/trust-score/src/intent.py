@@ -47,6 +47,13 @@ _DANGEROUS_CATEGORIES = frozenset({
     "credential_access",
     "hardcoded_secret",
     "remote_code_execution",
+    "supply_chain",
+    "output_handling",
+    "system_prompt_leakage",
+    "memory_poisoning",
+    "ssrf",
+    "agent_snooping",
+    "tool_misuse",
 })
 
 

@@ -23,7 +23,21 @@ interface ScanResult {
   trust_score?: {
     score: number | null;
     level: string | null;
+    grade: string | null;
     recommendation: string | null;
+  };
+  llm_review?: {
+    triggered: boolean;
+    findings_reviewed: number;
+    labels_summary?: {
+      suspected_malicious: number;
+      suspected_negligent: number;
+      likely_benign: number;
+      uncertain: number;
+      unavailable: number;
+    };
+    error?: string;
+    fallback?: string;
   };
   error?: string;
 }
@@ -196,6 +210,11 @@ export default function ScannerForm() {
               <div className="scanner-result-score">
                 <span className="scanner-result-label">Trust Score</span>
                 <ScoreBadge score={scanResult.trust_score?.score ?? null} size="lg" />
+                {scanResult.trust_score?.grade && (
+                  <span className={`scanner-result-grade grade-${scanResult.trust_score.grade.toLowerCase()}`}>
+                    Grade {scanResult.trust_score.grade}
+                  </span>
+                )}
                 {scanResult.trust_score?.level && (
                   <span className="scanner-result-level">{scanResult.trust_score.level.replace(/_/g, ' ')}</span>
                 )}
@@ -211,6 +230,29 @@ export default function ScannerForm() {
                   </span>
                 )}
               </div>
+              {scanResult.llm_review?.triggered && (
+                <div className="scanner-result-llm">
+                  <span className="llm-review-badge" title={`LLM reviewed ${scanResult.llm_review.findings_reviewed} findings`}>
+                    &#x1F916; LLM Review: {scanResult.llm_review.findings_reviewed} findings
+                  </span>
+                  {scanResult.llm_review.labels_summary && (
+                    <div className="llm-labels-summary">
+                      {scanResult.llm_review.labels_summary.suspected_malicious > 0 && (
+                        <span className="llm-label malicious">&#x1F6A8; {scanResult.llm_review.labels_summary.suspected_malicious} malicious</span>
+                      )}
+                      {scanResult.llm_review.labels_summary.suspected_negligent > 0 && (
+                        <span className="llm-label negligent">&#x26A0;&#xFE0F; {scanResult.llm_review.labels_summary.suspected_negligent} negligent</span>
+                      )}
+                      {scanResult.llm_review.labels_summary.uncertain > 0 && (
+                        <span className="llm-label uncertain">&#x2753; {scanResult.llm_review.labels_summary.uncertain} uncertain</span>
+                      )}
+                    </div>
+                  )}
+                  {scanResult.llm_review.fallback && (
+                    <span className="llm-fallback-note">({scanResult.llm_review.fallback})</span>
+                  )}
+                </div>
+              )}
             </div>
 
             {scanResult.summary && (

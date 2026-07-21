@@ -466,6 +466,17 @@
         "title": "FilesystemPermissions",
         "type": "object"
       },
+      "Grade": {
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ],
+        "title": "Grade",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -842,6 +853,92 @@
         "title": "Integrity",
         "type": "object"
       },
+      "LLMReview": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "fallback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback"
+          },
+          "findings_reviewed": {
+            "default": 0,
+            "title": "Findings Reviewed",
+            "type": "integer"
+          },
+          "labels_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMReviewLabelsSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "triggered": {
+            "default": false,
+            "title": "Triggered",
+            "type": "boolean"
+          }
+        },
+        "title": "LLMReview",
+        "type": "object"
+      },
+      "LLMReviewLabelsSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "likely_benign": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Likely Benign",
+            "type": "integer"
+          },
+          "suspected_malicious": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Suspected Malicious",
+            "type": "integer"
+          },
+          "suspected_negligent": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Suspected Negligent",
+            "type": "integer"
+          },
+          "unavailable": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unavailable",
+            "type": "integer"
+          },
+          "uncertain": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Uncertain",
+            "type": "integer"
+          }
+        },
+        "title": "LLMReviewLabelsSummary",
+        "type": "object"
+      },
       "ManifestInstallation": {
         "additionalProperties": false,
         "properties": {
@@ -1095,6 +1192,16 @@
             "title": "Description",
             "type": "string"
           },
+          "grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "homepage": {
             "anyOf": [
               {
@@ -1340,6 +1447,16 @@
             "title": "Description",
             "type": "string"
           },
+          "grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "homepage": {
             "anyOf": [
               {
@@ -1567,6 +1684,16 @@
       "RiskSummary": {
         "additionalProperties": false,
         "properties": {
+          "grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "install_recommendation": {
             "title": "Install Recommendation",
             "type": "string"
@@ -1612,9 +1739,38 @@
             "title": "Description",
             "type": "string"
           },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "llm_label": {
+            "anyOf": [
+              {
+                "enum": [
+                  "llm:suspected-malicious",
+                  "llm:suspected-negligent",
+                  "llm:likely-benign",
+                  "llm:uncertain",
+                  "llm:unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Label"
           },
           "location": {
             "anyOf": [
@@ -1709,6 +1865,16 @@
             ],
             "title": "Findings"
           },
+          "llm_review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LLMReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "metadata_validation": {
             "anyOf": [
               {
@@ -1720,6 +1886,17 @@
               }
             ],
             "title": "Metadata Validation"
+          },
+          "package_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Name"
           },
           "scan_id": {
             "title": "Scan Id",
@@ -1763,6 +1940,17 @@
               }
             ],
             "title": "Summary"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [

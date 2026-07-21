@@ -20,6 +20,7 @@ export interface Package {
   status: string;
   trust_score: number | null;
   risk_level: string | null;
+  grade: string | null;
   install_count: number;
   avg_rating: number | null;
   created_at: string;

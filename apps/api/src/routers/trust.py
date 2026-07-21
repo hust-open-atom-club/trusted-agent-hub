@@ -72,6 +72,7 @@ class ScanStatusResponse(BaseModel):
     finished_at: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
     trust_score: Optional[Dict[str, Any]] = None
+    llm_review: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
@@ -284,6 +285,7 @@ def _run_scan_task(
                 "grade": trust_score_result.get("risk_summary", {}).get("grade"),
                 "recommendation": trust_score_result.get("risk_summary", {}).get("install_recommendation"),
             },
+            "llm_review": scan_report.get("llm_review"),
         })
 
         # 清理临时目录（仅 git clone 模式）
@@ -620,6 +622,7 @@ def get_scan_status(scan_id: str) -> Dict[str, Any]:
         "finished_at": info.get("finished_at"),
         "summary": info.get("summary"),
         "trust_score": info.get("trust_score"),
+        "llm_review": info.get("llm_review"),
         "error": info.get("error"),
     }
 

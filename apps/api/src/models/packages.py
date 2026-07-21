@@ -1,8 +1,20 @@
 """Canonical package and version models for the Consumer API."""
 
+from enum import StrEnum
+from typing import Literal
+
 from pydantic import ConfigDict, Field
 
 from .common import Owner, PackageType, Page, StrictContractModel
+
+# Valid LLM review labels as defined by scan-report.schema.json
+LLM_LABEL = Literal[
+    "llm:suspected-malicious",
+    "llm:suspected-negligent",
+    "llm:likely-benign",
+    "llm:uncertain",
+    "llm:unavailable",
+]
 
 
 class Author(StrictContractModel):
@@ -123,8 +135,17 @@ class TrustScoreExplanation(StrictContractModel):
     evidence: str | None = None
 
 
+class Grade(StrEnum):
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+    E = "E"
+
+
 class RiskSummary(StrictContractModel):
     level: str
+    grade: Grade | None = None
     top_risks: list[str] = Field(default_factory=list)
     install_recommendation: str
 
@@ -146,12 +167,32 @@ class ScanFinding(StrictContractModel):
     title: str
     description: str
     location: dict[str, object] | None = None
+    evidence: str | None = None
+    llm_label: LLM_LABEL | None = None
     remediation: str | None = None
     cwe_id: str | None = None
 
 
+class LLMReviewLabelsSummary(StrictContractModel):
+    suspected_malicious: int = Field(default=0, ge=0)
+    suspected_negligent: int = Field(default=0, ge=0)
+    likely_benign: int = Field(default=0, ge=0)
+    uncertain: int = Field(default=0, ge=0)
+    unavailable: int = Field(default=0, ge=0)
+
+
+class LLMReview(StrictContractModel):
+    triggered: bool = False
+    findings_reviewed: int = 0
+    labels_summary: LLMReviewLabelsSummary | None = None
+    error: str | None = None
+    fallback: str | None = None
+
+
 class ScanReport(StrictContractModel):
     scan_id: str
+    package_name: str | None = None
+    version: str | None = None
     scanner_version: str
     duration_ms: int | None = None
     summary: dict[str, object] | None = None
@@ -159,6 +200,7 @@ class ScanReport(StrictContractModel):
     metadata_validation: dict[str, object] | None = None
     structure_check: dict[str, object] | None = None
     dependency_check: dict[str, object] | None = None
+    llm_review: LLMReview | None = None
     scanned_at: str | None = None
 
 
@@ -177,6 +219,7 @@ class PackageSummary(StrictContractModel):
     status: str
     trust_score: float | None = None
     risk_level: str | None = None
+    grade: Grade | None = None
     install_count: int = 0
     avg_rating: float | None = None
     created_at: str | None = None

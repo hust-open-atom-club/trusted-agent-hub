@@ -72,7 +72,14 @@
               "network_access",
               "dependency_risk",
               "source_integrity",
-              "metadata_quality"
+              "metadata_quality",
+              "supply_chain",
+              "output_handling",
+              "system_prompt_leakage",
+              "memory_poisoning",
+              "ssrf",
+              "agent_snooping",
+              "tool_misuse"
             ],
             "description": "风险分类"
           },

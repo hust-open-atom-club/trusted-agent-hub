@@ -5,7 +5,8 @@
   "bin": "./dist/apps/cli/src/cli.js",
   "scripts": {
     "build": "tsc",
-    "dev": "ts-node src/cli.ts"
+    "dev": "ts-node src/cli.ts",
+    "test": "ts-node tests/grade-gate.test.ts"
   },
   "dependencies": {
     "chalk": "^4.1.2",

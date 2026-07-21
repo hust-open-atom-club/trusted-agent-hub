@@ -170,6 +170,13 @@ export const FINDING_CATEGORIES = [
   'dependency_risk',
   'source_integrity',
   'metadata_quality',
+  'supply_chain',
+  'output_handling',
+  'system_prompt_leakage',
+  'memory_poisoning',
+  'ssrf',
+  'agent_snooping',
+  'tool_misuse',
 ] as const;
 export type FindingCategory = (typeof FINDING_CATEGORIES)[number];
 
@@ -184,6 +191,13 @@ export const FINDING_CATEGORY_LABELS: Record<FindingCategory, string> = {
   dependency_risk: '依赖风险',
   source_integrity: '来源完整性',
   metadata_quality: '元数据质量',
+  supply_chain: '供应链风险',
+  output_handling: '输出处理风险',
+  system_prompt_leakage: '系统提示泄露',
+  memory_poisoning: '记忆投毒',
+  ssrf: 'SSRF 服务端请求伪造',
+  agent_snooping: 'Agent 窥探',
+  tool_misuse: '工具滥用',
 };
 
 // ============================================================
@@ -235,6 +249,13 @@ export const RISK_TAGS = [
   'no-license',
   'incomplete-metadata',
   'undocumented-permission',
+  'supply-chain-risk',
+  'output-handling-risk',
+  'system-prompt-leakage',
+  'memory-poisoning',
+  'ssrf',
+  'agent-snooping',
+  'tool-misuse',
 ] as const;
 export type RiskTag = (typeof RISK_TAGS)[number];
 
@@ -254,6 +275,13 @@ export const RISK_TAG_LEVELS: Record<RiskTag, 'high' | 'medium' | 'low'> = {
   'no-license': 'low',
   'incomplete-metadata': 'low',
   'undocumented-permission': 'low',
+  'supply-chain-risk': 'high',
+  'output-handling-risk': 'medium',
+  'system-prompt-leakage': 'high',
+  'memory-poisoning': 'high',
+  'ssrf': 'high',
+  'agent-snooping': 'high',
+  'tool-misuse': 'medium',
 };
 
 // ============================================================
@@ -362,6 +390,48 @@ export const TRUST_SCORE_THRESHOLDS = {
   CAUTION: 50,          // >= 50 需要确认
   BLOCKED: 50,          // < 50 默认阻止
 } as const;
+
+// ============================================================
+// Grade A-E 安装决策
+// ============================================================
+export const GRADES = ['A', 'B', 'C', 'D', 'E'] as const;
+export type Grade = (typeof GRADES)[number];
+
+export const GRADE_LABELS: Record<Grade, string> = {
+  A: 'A · 可信',
+  B: 'B · 低风险',
+  C: 'C · 中风险',
+  D: 'D · 高风险',
+  E: 'E · 不可信',
+};
+
+/**
+ * Grade -> install decision (matching the CLI spec and scanner weights.py).
+ *
+ * | Grade | CLI 行为                  |
+ * |-------|---------------------------|
+ * | A     | 允许自动安装              |
+ * | B     | 展示权限声明              |
+ * | C     | 展示扫描摘要并确认        |
+ * | D     | 强警告并双重确认          |
+ * | E     | 禁止安装                  |
+ */
+export const GRADE_INSTALL_POLICY: Record<Grade, 'allow' | 'warn' | 'confirm' | 'block'> = {
+  A: 'allow',
+  B: 'warn',
+  C: 'confirm',
+  D: 'confirm',   // double-confirm in CLI
+  E: 'block',
+};
+
+/** Fallback: map legacy risk_level → grade when grade field is missing. */
+export const RISK_LEVEL_TO_GRADE: Record<string, Grade> = {
+  trusted: 'A',
+  low_risk: 'B',
+  medium_risk: 'C',
+  high_risk: 'D',
+  untrusted: 'E',
+};
 
 // ============================================================
 // 排序选项
