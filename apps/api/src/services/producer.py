@@ -186,6 +186,12 @@ class ProducerService:
                     else 0
                 ),
                 "trust_score": trust_score.get("score"),
+                "trust_grade": trust_score.get("risk_summary", {}).get("grade") if isinstance(trust_score, dict) else None,
+                "llm_review": (
+                    scan_report.get("llm_review", {}).get("labels_summary")
+                    if isinstance(scan_report, dict)
+                    else None
+                ),
             },
         )
 
