@@ -13,7 +13,7 @@ import uvicorn
 
 if __name__ == "__main__":
     # 确保项目根目录和 packages 目录在 Python 搜索路径中
-    _repo_root = Path(__file__).resolve().parents[1]  # apps/api → repo root
+    _repo_root = Path(__file__).resolve().parents[2]  # apps/api → repo root
     _packages = _repo_root / "packages"
     sys.path.insert(0, str(_repo_root))
     sys.path.insert(0, str(_packages))

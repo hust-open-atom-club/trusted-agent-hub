@@ -37,7 +37,15 @@ function ResultContent() {
             </div>
 
             <div className="result-actions">
-              <button className="btn btn-primary" onClick={() => router.push('/submit')}>
+              {versionId && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => router.push(`/versions/${versionId}/status`)}
+                >
+                  查看提交状态
+                </button>
+              )}
+              <button className="btn btn-secondary" onClick={() => router.push('/submit')}>
                 继续提交
               </button>
               <button className="btn btn-secondary" onClick={() => router.push('/')}>

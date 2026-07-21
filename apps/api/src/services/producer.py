@@ -221,6 +221,10 @@ class ProducerService:
                 }
         return version
 
+    def list_my_versions(self, submitter_id: str) -> list[dict[str, object]]:
+        """返回某个提交者的所有版本列表。"""
+        return self.repository.list_versions_by_submitter(submitter_id)
+
 
 # ── 状态校验 ──────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 
@@ -7,54 +8,86 @@ const ROLE_LEVEL: Record<string, number> = { admin: 0, reviewer: 1, submitter: 2
 
 export default function Navbar() {
   const { user, loading, logout } = useAuth();
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('tah-theme');
+    if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      setTheme('dark');
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('tah-theme', next);
+    if (next === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  };
 
   const roleLevel = user ? (ROLE_LEVEL[user.role] ?? 99) : 99;
 
   return (
-    <header className="header">
-      <div className="header-inner">
-        <Link href="/" className="header-logo">
-          Trusted <span>Agent Hub</span>
-        </Link>
+    <nav className="nav-pill" aria-label="Primary">
+      <Link href="/" className="nav-pill__logo">
+        Trusted <span>Agent Hub</span>
+      </Link>
 
-        <nav className="header-nav">
+      <ul className="nav-pill__links">
+        <li>
           <Link href="/">Browse</Link>
-
-          {roleLevel <= ROLE_LEVEL.submitter && (
-            <Link href="/submit">Submit</Link>
-          )}
-          {roleLevel <= ROLE_LEVEL.reviewer && (
+        </li>
+        {roleLevel <= ROLE_LEVEL.submitter && (
+          <>
+            <li>
+              <Link href="/submit">Submit</Link>
+            </li>
+            <li>
+              <Link href="/versions/lookup">我的提交</Link>
+            </li>
+          </>
+        )}
+        {roleLevel <= ROLE_LEVEL.reviewer && (
+          <li>
             <Link href="/review">Review</Link>
-          )}
-          {roleLevel <= ROLE_LEVEL.admin && (
+          </li>
+        )}
+        {roleLevel <= ROLE_LEVEL.admin && (
+          <li>
             <Link href="/admin">Admin</Link>
-          )}
-        </nav>
+          </li>
+        )}
+      </ul>
 
-        <div className="header-actions">
-          {/* 主题切换占位 */}
-          <button className="header-theme-btn" title="主题切换（开发中）" disabled>
-            &#9788;
-          </button>
+      <div className="nav-pill__actions">
+        <button
+          className="nav-pill__theme-btn"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}
+          title={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}
+        >
+          {theme === 'dark' ? '\u2600' : '\u263D'}
+        </button>
 
-          {loading ? (
-            <span className="header-user-placeholder" />
-          ) : user ? (
-            <div className="header-user">
-              <span className="header-username" title={`角色: ${user.role}`}>
-                {user.username}
-              </span>
-              <button className="header-logout-btn" onClick={logout}>
-                退出
-              </button>
-            </div>
-          ) : (
-            <Link href="/login" className="header-login-link">
-              登录
-            </Link>
-          )}
-        </div>
+        {loading ? null : user ? (
+          <div className="nav-pill__user">
+            <span className="nav-pill__username" title={`角色: ${user.role}`}>
+              {user.username}
+            </span>
+            <button className="nav-pill__logout" onClick={logout}>
+              退出
+            </button>
+          </div>
+        ) : (
+          <Link href="/login" className="nav-pill__login">
+            登录
+          </Link>
+        )}
       </div>
-    </header>
+    </nav>
   );
 }
