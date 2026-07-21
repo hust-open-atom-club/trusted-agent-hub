@@ -52,7 +52,7 @@ def test_b1_code_review_skill_all_green_approved() -> None:
         f"Expected trusted, got {result['risk_summary']['level']}"
     assert 85 <= result["score"] <= 100
     assert result["package_name"] == "code-review-skill"
-    assert result["model_version"] == "0.1.0"
+    assert result["model_version"] == "0.2.0"
     # Verify schema-compatible structure
     _assert_valid_output(result, fx["expected_level"])
 
@@ -432,6 +432,270 @@ def test_edge_opaque_with_newcomer_downgraded_when_baseline_is_low() -> None:
     assert result["risk_summary"]["level"] == "medium_risk"
 
 
+def test_grade_mapping() -> None:
+    """Grade A-E maps correctly from trust levels."""
+    from src.derived_score import level_to_grade
+    assert level_to_grade("trusted") == "A"
+    assert level_to_grade("low_risk") == "B"
+    assert level_to_grade("medium_risk") == "C"
+    assert level_to_grade("high_risk") == "D"
+    assert level_to_grade("untrusted") == "E"
+
+
+def test_new_dangerous_category_triggers_v2_ssrf() -> None:
+    """Critical SSRF finding in scan → I2 dangerous → V2 veto → untrusted → Grade E."""
+    fx = _load_fixture("b1_code_review_skill")
+    # Modify the scan to include a critical SSRF finding
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-ssrf-1",
+        "rule_id": "SR-014",
+        "severity": "critical",
+        "category": "ssrf",
+        "title": "SSRF to cloud metadata endpoint",
+        "description": "Package makes requests to 169.254.169.254",
+        "location": {"file": "src/handler.py", "line": 42},
+        "cwe_id": "CWE-918",
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"SSRF critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E", \
+        f"V2 veto should produce Grade E, got {result['risk_summary']['grade']}"
+    veto_msgs = [e["message"] for e in result["explanations"] if "Veto" in e.get("message", "")]
+    assert len(veto_msgs) > 0, "Expected V2 veto explanation"
+
+
+def test_new_dangerous_category_triggers_v2_supply_chain() -> None:
+    """Critical supply_chain finding → V2 veto → untrusted → Grade E."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-sc-1",
+        "rule_id": "SR-008",
+        "severity": "critical",
+        "category": "supply_chain",
+        "title": "Dependency confusion detected",
+        "description": "Package name matches internal private package",
+        "location": {"file": "package.json", "line": 5},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"Supply chain critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_new_category_low_severity_does_not_trigger_v2() -> None:
+    """Low severity finding in new category should NOT trigger V2 veto."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-low-1",
+        "rule_id": "SR-016",
+        "severity": "low",
+        "category": "tool_misuse",
+        "title": "Minor tool configuration issue",
+        "description": "Tool parameter could be more restrictive",
+        "location": {"file": "config.yaml", "line": 10},
+    }]
+    scan["summary"] = {"total": 1, "critical": 0, "high": 0, "medium": 0, "low": 1, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    # Low severity should not trigger I2=dangerous, so no V2 veto
+    assert result["risk_summary"]["level"] != "untrusted", \
+        f"Low severity should not trigger veto, got {result['risk_summary']['level']}"
+
+
+def test_old_report_without_llm_fields() -> None:
+    """Scan report missing llm_label and llm_review should not crash the engine."""
+    fx = _load_fixture("b1_code_review_skill")
+    # The fixture scan report doesn't have llm_label or llm_review — this is the old format
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert "score" in result
+    assert 0 <= result["score"] <= 100
+
+
+def test_all_grades_appear_in_output() -> None:
+    """Smoke test: each level produces its corresponding grade."""
+    from src.engine import _to_grade
+    assert _to_grade("trusted") == "A"
+    assert _to_grade("low_risk") == "B"
+    assert _to_grade("medium_risk") == "C"
+    assert _to_grade("high_risk") == "D"
+    assert _to_grade("untrusted") == "E"
+    assert _to_grade("unknown") == "C"  # default
+
+
+def test_dangerous_category_memory_poisoning_veto() -> None:
+    """Critical memory_poisoning finding → V2 veto → untrusted."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-mp-1",
+        "rule_id": "SR-013",
+        "severity": "critical",
+        "category": "memory_poisoning",
+        "title": "Agent memory poisoning via skill instructions",
+        "description": "Skill injects persistent instructions into agent memory",
+        "location": {"file": "SKILL.md", "line": 15},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"Memory poisoning critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_dangerous_category_system_prompt_leakage_veto() -> None:
+    """Critical system_prompt_leakage finding → V2 veto → untrusted."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-spl-1",
+        "rule_id": "SR-012",
+        "severity": "critical",
+        "category": "system_prompt_leakage",
+        "title": "System prompt exfiltration attempt",
+        "description": "Skill attempts to send system prompt to external URL",
+        "location": {"file": "src/main.py", "line": 42},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"System prompt leakage critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_dangerous_category_agent_snooping_veto() -> None:
+    """Critical agent_snooping finding → V2 veto → untrusted."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-as-1",
+        "rule_id": "SR-015",
+        "severity": "critical",
+        "category": "agent_snooping",
+        "title": "Agent conversation history exfiltration",
+        "description": "Skill reads and transmits full conversation log",
+        "location": {"file": "src/snoop.py", "line": 10},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"Agent snooping critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_dangerous_category_output_handling_veto() -> None:
+    """Critical output_handling finding → V2 veto → untrusted."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-oh-1",
+        "rule_id": "SR-011",
+        "severity": "critical",
+        "category": "output_handling",
+        "title": "Unsanitized command output rendered to user",
+        "description": "Shell command output is rendered without HTML escaping",
+        "location": {"file": "src/render.py", "line": 30},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"Output handling critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_dangerous_category_tool_misuse_critical_veto() -> None:
+    """Critical tool_misuse finding → V2 veto → untrusted."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-tm-1",
+        "rule_id": "SR-016",
+        "severity": "critical",
+        "category": "tool_misuse",
+        "title": "Dangerous tool chain: BashTool → write → execute",
+        "description": "Skill chains file write with bash execution without user confirmation",
+        "location": {"file": "SKILL.md", "line": 25},
+    }]
+    scan["summary"] = {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        f"Tool misuse critical should trigger V2 veto, got {result['risk_summary']['level']}"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+def test_output_handling_medium_does_not_veto() -> None:
+    """Medium output_handling finding should NOT trigger V2 veto (severity filter)."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": "f-oh-med-1",
+        "rule_id": "SR-011",
+        "severity": "medium",
+        "category": "output_handling",
+        "title": "Minor output formatting issue",
+        "description": "Output uses basic string formatting without sanitization",
+        "location": {"file": "src/format.py", "line": 12},
+    }]
+    scan["summary"] = {"total": 1, "critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0}
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] != "untrusted", \
+        f"Medium output_handling should NOT trigger veto, got {result['risk_summary']['level']}"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -452,6 +716,10 @@ def _assert_valid_output(result: dict[str, Any], expected_level: str | None) -> 
     assert result["risk_summary"]["install_recommendation"] in {
         "safe", "review_recommended", "caution", "not_recommended", "blocked"
     }
+    # Grade field must be present and valid
+    assert "grade" in result["risk_summary"], "risk_summary must include grade"
+    assert result["risk_summary"]["grade"] in {"A", "B", "C", "D", "E"}, \
+        f"Invalid grade: {result['risk_summary']['grade']}"
 
     if expected_level is not None:
         assert result["risk_summary"]["level"] == expected_level, \

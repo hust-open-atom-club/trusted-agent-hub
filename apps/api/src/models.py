@@ -145,6 +145,7 @@ class TrustScoreExplanation(BaseModel):
 
 class RiskSummary(BaseModel):
     level: str
+    grade: Optional[str] = None
     top_risks: List[str] = Field(default_factory=list)
     install_recommendation: str
 
@@ -171,12 +172,16 @@ class ScanFinding(BaseModel):
     title: str
     description: str
     location: Optional[Dict[str, Any]] = None
+    evidence: Optional[str] = None
+    llm_label: Optional[str] = None
     remediation: Optional[str] = None
     cwe_id: Optional[str] = None
 
 
 class ScanReport(BaseModel):
     scan_id: str
+    package_name: Optional[str] = None
+    version: Optional[str] = None
     scanner_version: str
     duration_ms: Optional[int] = None
     summary: Optional[Dict[str, Any]] = None
@@ -184,6 +189,7 @@ class ScanReport(BaseModel):
     metadata_validation: Optional[Dict[str, Any]] = None
     structure_check: Optional[Dict[str, Any]] = None
     dependency_check: Optional[Dict[str, Any]] = None
+    llm_review: Optional[Dict[str, Any]] = None
     scanned_at: Optional[str] = None
 
 
@@ -294,6 +300,7 @@ class TrustScoreResponse(BaseModel):
     version_id: str
     score: float
     level: Optional[str] = None
+    grade: Optional[str] = None
     recommendation: Optional[str] = None
     dimensions: Optional[Dict[str, Any]] = None
     explanations: Optional[List[Dict[str, Any]]] = None

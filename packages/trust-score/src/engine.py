@@ -644,17 +644,32 @@ def rate(
     # --- Install recommendation ---
     recommendation = get_recommendation(final_level)
 
+    grade = _to_grade(final_level)
     return {
         "score": score,
         "package_name": package_metadata.get("name", "unknown"),
         "version": package_metadata.get("version", "0.0.0"),
         "calculated_at": datetime.now(timezone.utc).isoformat(),
-        "model_version": "0.1.0",
+        "model_version": "0.2.0",
         "dimensions": dimensions,
         "explanations": explanations,
         "risk_summary": {
             "level": final_level,
+            "grade": grade,
             "top_risks": top_risks,
             "install_recommendation": recommendation,
         },
     }
+
+
+_LEVEL_TO_GRADE: dict[str, str] = {
+    "trusted": "A",
+    "low_risk": "B",
+    "medium_risk": "C",
+    "high_risk": "D",
+    "untrusted": "E",
+}
+
+
+def _to_grade(level: str) -> str:
+    return _LEVEL_TO_GRADE.get(level, "C")

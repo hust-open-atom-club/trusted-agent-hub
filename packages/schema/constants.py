@@ -160,6 +160,13 @@ class FindingCategory(StrEnum):
     DEPENDENCY_RISK = "dependency_risk"
     SOURCE_INTEGRITY = "source_integrity"
     METADATA_QUALITY = "metadata_quality"
+    SUPPLY_CHAIN = "supply_chain"
+    OUTPUT_HANDLING = "output_handling"
+    SYSTEM_PROMPT_LEAKAGE = "system_prompt_leakage"
+    MEMORY_POISONING = "memory_poisoning"
+    SSRF = "ssrf"
+    AGENT_SNOOPING = "agent_snooping"
+    TOOL_MISUSE = "tool_misuse"
 
 
 FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
@@ -173,6 +180,13 @@ FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
     "dependency_risk": "依赖风险",
     "source_integrity": "来源完整性",
     "metadata_quality": "元数据质量",
+    "supply_chain": "供应链风险",
+    "output_handling": "输出处理风险",
+    "system_prompt_leakage": "系统提示泄露",
+    "memory_poisoning": "记忆投毒",
+    "ssrf": "SSRF 服务端请求伪造",
+    "agent_snooping": "Agent 窥探",
+    "tool_misuse": "工具滥用",
 }
 
 
@@ -211,6 +225,13 @@ RISK_TAGS: Final[tuple[str, ...]] = (
     "no-license",
     "incomplete-metadata",
     "undocumented-permission",
+    "supply-chain-risk",
+    "output-handling-risk",
+    "system-prompt-leakage",
+    "memory-poisoning",
+    "ssrf",
+    "agent-snooping",
+    "tool-misuse",
 )
 
 RISK_TAG_LEVELS: Final[dict[str, str]] = {
@@ -229,6 +250,13 @@ RISK_TAG_LEVELS: Final[dict[str, str]] = {
     "no-license": "low",
     "incomplete-metadata": "low",
     "undocumented-permission": "low",
+    "supply-chain-risk": "high",
+    "output-handling-risk": "medium",
+    "system-prompt-leakage": "high",
+    "memory-poisoning": "high",
+    "ssrf": "high",
+    "agent-snooping": "high",
+    "tool-misuse": "medium",
 }
 
 

@@ -72,7 +72,14 @@
               "network_access",
               "dependency_risk",
               "source_integrity",
-              "metadata_quality"
+              "metadata_quality",
+              "supply_chain",
+              "output_handling",
+              "system_prompt_leakage",
+              "memory_poisoning",
+              "ssrf",
+              "agent_snooping",
+              "tool_misuse"
             ],
             "description": "风险分类"
           },
@@ -96,6 +103,17 @@
               "snippet": { "type": "string", "description": "匹配到的代码片段（已脱敏）" }
             },
             "additionalProperties": false
+          },
+          "llm_label": {
+            "type": "string",
+            "enum": [
+              "llm:suspected-malicious",
+              "llm:suspected-negligent",
+              "llm:likely-benign",
+              "llm:uncertain",
+              "llm:unavailable"
+            ],
+            "description": "LLM 审查标签"
           },
           "evidence": {
             "type": "string",
@@ -182,6 +200,27 @@
       },
       "additionalProperties": false,
       "description": "依赖检查结果"
+    },
+    "llm_review": {
+      "type": "object",
+      "properties": {
+        "triggered": { "type": "boolean", "description": "是否触发了 LLM 审查" },
+        "findings_reviewed": { "type": "integer", "description": "LLM 审查的 finding 数量" },
+        "labels_summary": {
+          "type": "object",
+          "properties": {
+            "suspected_malicious": { "type": "integer" },
+            "suspected_negligent": { "type": "integer" },
+            "likely_benign": { "type": "integer" },
+            "uncertain": { "type": "integer" },
+            "unavailable": { "type": "integer" }
+          }
+        },
+        "error": { "type": "string", "description": "LLM 审查错误信息" },
+        "fallback": { "type": "string", "description": "LLM 审查降级说明" }
+      },
+      "additionalProperties": true,
+      "description": "LLM 深度审查结果"
     }
   },
   "additionalProperties": false

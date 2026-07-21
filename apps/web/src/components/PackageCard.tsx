@@ -29,7 +29,14 @@ export default function PackageCard({ pkg }: PackageCardProps) {
     <div className="package-card" onClick={handleClick}>
       <div className="card-header">
         <h3 className="card-name">{pkg.name}</h3>
-        <ScoreBadge score={pkg.trust_score} />
+        <div className="card-header-right">
+          {pkg.grade && (
+            <span className={`card-grade grade-${pkg.grade.toLowerCase()}`} title={`安全等级 ${pkg.grade}`}>
+              {pkg.grade}
+            </span>
+          )}
+          <ScoreBadge score={pkg.trust_score} />
+        </div>
       </div>
 
       <p className="card-description">{pkg.description}</p>
@@ -37,6 +44,9 @@ export default function PackageCard({ pkg }: PackageCardProps) {
       <div className="card-badges">
         <TypeBadge type={pkg.type} />
         <StatusBadge status={pkg.status} />
+        {pkg.risk_level && (
+          <span className={`risk-level-badge risk-${pkg.risk_level}`}>{pkg.risk_level.replace(/_/g, ' ')}</span>
+        )}
       </div>
 
       <div className="card-meta">

@@ -1,0 +1,32 @@
+# Node
+node_modules/
+.next/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Env
+.env
+.env.local
+
+# Claude
+.claude/
+
+# Misc
+*.md
+LICENSE

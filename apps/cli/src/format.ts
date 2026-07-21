@@ -4,12 +4,15 @@ import {
   VERSION_STATUS_LABELS,
   RISK_LEVEL_LABELS,
   INSTALL_RECOMMENDATION_LABELS,
+  GRADE_LABELS,
+  RISK_LEVEL_TO_GRADE,
 } from '../../../packages/schema/constants';
 import type {
   PackageType,
   VersionStatus,
   RiskLevel,
   InstallRecommendation,
+  Grade,
 } from '../../../packages/schema/constants';
 import type { PackageSummary, VersionDetail } from './mock-loader';
 
@@ -53,6 +56,34 @@ function statusColor(status: string): chalk.Chalk {
   }
 }
 
+/** Return a chalk colour for a grade value (A-E). */
+function gradeColor(grade: string | null): chalk.Chalk {
+  if (grade === null) return chalk.gray;
+  switch (grade) {
+    case 'A': return chalk.greenBright;
+    case 'B': return chalk.blue;
+    case 'C': return chalk.yellow;
+    case 'D': return chalk.red;
+    case 'E': return chalk.redBright;
+    default:  return chalk.gray;
+  }
+}
+
+/** Resolve grade from version detail, falling back to risk_level mapping. */
+function resolveGrade(pkg: PackageSummary, version: VersionDetail | null): string | null {
+  // Prefer backend-supplied grade
+  if (version?.trust_score?.risk_summary?.grade) {
+    return version.trust_score.risk_summary.grade;
+  }
+  if (pkg.grade) return pkg.grade;
+  // Fallback: map risk_level → grade for legacy data
+  const level = pkg.risk_level || version?.trust_score?.risk_summary?.level;
+  if (level && level in RISK_LEVEL_TO_GRADE) {
+    return RISK_LEVEL_TO_GRADE[level];
+  }
+  return null;
+}
+
 /** Format a trust score value for display. */
 function formatTrustScore(score: number | null): string {
   if (score === null) return 'N/A';
@@ -82,15 +113,20 @@ export function formatPackageCard(pkg: PackageSummary): string {
   // Description
   lines.push(`    ${chalk.dim(pkg.description)}`);
 
+  // Grade
+  const gradeVal = pkg.grade || null;
+  const gradeStr = gradeVal ? `${gradeColor(gradeVal)(gradeVal)}` : '';
+
   // Stats row
   const stats = [
+    gradeStr ? `${chalk.dim('Grade:')} ${gradeStr}` : null,
     `${chalk.dim('Trust:')} ${trustScoreColor(pkg.trust_score)(formatTrustScore(pkg.trust_score))}`,
     `${chalk.dim('Risk:')} ${riskLevelColor(pkg.risk_level)(riskLabel)}`,
     `${chalk.dim('Status:')} ${statusColor(pkg.status)(statusLabel)}`,
     `${chalk.dim('v')}${pkg.latest_version}`,
     `${chalk.dim('Installs:')} ${pkg.install_count.toLocaleString()}`,
     `${chalk.dim('Rating:')} ${pkg.avg_rating != null ? pkg.avg_rating.toString() : 'N/A'}`,
-  ];
+  ].filter(Boolean) as string[];
   lines.push(`    ${stats.join('  ')}`);
 
   // Keywords
@@ -140,6 +176,13 @@ export function formatPackageDetail(
 
   // Trust & risk section
   lines.push('');
+  const gradeVal = resolveGrade(pkg, version);
+  if (gradeVal) {
+    const gradeLabel = GRADE_LABELS[gradeVal as Grade] || gradeVal;
+    lines.push(
+      `  ${chalk.dim('Grade:')}        ${gradeColor(gradeVal)(gradeLabel)}`,
+    );
+  }
   lines.push(
     `  ${chalk.dim('Trust Score:')} ${trustScoreColor(pkg.trust_score)(formatTrustScore(pkg.trust_score))}`,
   );

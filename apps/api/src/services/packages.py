@@ -36,6 +36,7 @@ class PackageService:
         ]
         for package in items:
             self._get_public_latest(package)
+            self._enrich_grade(package)
 
         if query.q:
             needle = query.q.casefold()
@@ -122,7 +123,27 @@ class PackageService:
         package = self.repository.get_package(name)
         if package is None or package.status != "published":
             raise PackageNotFoundError(name)
+        self._enrich_grade(package)
         return package
+
+    def _enrich_grade(self, package: PackageSummary) -> None:
+        """Populate PackageSummary.grade from the latest published version's trust_score.
+
+        When the repository does not already provide grade at the package level,
+        this reads the latest version's trust_score.risk_summary.grade and copies
+        it to the package summary so that API responses and frontend cards can
+        display it without loading the full version detail.
+        """
+        if package.grade is not None:
+            return  # already populated by repository
+        try:
+            version = self._get_public_latest(package)
+        except RepositoryDataError:
+            return  # no valid latest version
+        if version.trust_score is not None and version.trust_score.risk_summary is not None:
+            rs_grade = version.trust_score.risk_summary.grade
+            if rs_grade is not None:
+                package.grade = rs_grade
 
     def get_public_version(self, name: str, version: str) -> VersionDetail:
         self.get_public_package(name)

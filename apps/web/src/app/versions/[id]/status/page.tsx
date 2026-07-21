@@ -47,22 +47,26 @@ const CONCLUSION_LABELS: Record<string, { text: string; className: string }> = {
 };
 
 /* ── 评分等级 ── */
-function getGradeClass(score: number | null): string {
+function getGradeClass(score: number | null, backendGrade?: string | null): string {
+  // Prefer backend-supplied grade
+  if (backendGrade) return `grade-${backendGrade}`;
   if (score === null) return '';
   if (score >= 80) return 'grade-A';
   if (score >= 60) return 'grade-B';
   if (score >= 40) return 'grade-C';
   if (score >= 20) return 'grade-D';
-  return 'grade-F';
+  return 'grade-E';
 }
 
-function getGrade(score: number | null): string {
+function getGrade(score: number | null, backendGrade?: string | null): string {
+  // Prefer backend-supplied grade
+  if (backendGrade) return backendGrade;
   if (score === null) return '—';
   if (score >= 80) return 'A';
   if (score >= 60) return 'B';
   if (score >= 40) return 'C';
   if (score >= 20) return 'D';
-  return 'F';
+  return 'E';
 }
 
 /* ── 扫描发现接口 ── */
@@ -217,8 +221,8 @@ export default function StatusPage() {
 
   const timeline = buildTimeline();
   const statusLabel = STATUS_LABELS[detail.status] || detail.status;
-  const grade = getGrade(detail.trust_score?.score ?? null);
-  const gradeClass = getGradeClass(detail.trust_score?.score ?? null);
+  const grade = getGrade(detail.trust_score?.score ?? null, detail.trust_score?.grade);
+  const gradeClass = getGradeClass(detail.trust_score?.score ?? null, detail.trust_score?.grade);
   const conclusion = detail.review_conclusion;
   const conclusionMeta = conclusion ? CONCLUSION_LABELS[conclusion] : null;
 

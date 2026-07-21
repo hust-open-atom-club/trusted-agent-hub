@@ -31,6 +31,7 @@ export interface PackageSummary {
   status: string;
   trust_score: number | null;
   risk_level: string | null;
+  grade: string | null;
   install_count: number;
   avg_rating: number | null;
   created_at: string;
@@ -71,6 +72,7 @@ export interface VersionDetail {
     score: number;
     risk_summary: {
       level: string;
+      grade?: string;
       top_risks: string[];
       install_recommendation: string;
     };

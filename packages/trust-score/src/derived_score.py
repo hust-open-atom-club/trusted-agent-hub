@@ -105,6 +105,27 @@ def derive_score(
     return max(min_score, min(max_score, position))
 
 
+GRADE_RECOMMENDATION: dict[str, str] = {
+    "A": "自动安装",
+    "B": "安装前展示权限声明",
+    "C": "展示扫描摘要 + 权限，用户确认",
+    "D": "强烈建议不安装，需双重确认",
+    "E": "禁止安装",
+}
+
+LEVEL_TO_GRADE: dict[str, str] = {
+    "trusted": "A",
+    "low_risk": "B",
+    "medium_risk": "C",
+    "high_risk": "D",
+    "untrusted": "E",
+}
+
+
+def level_to_grade(level: str) -> str:
+    return LEVEL_TO_GRADE.get(level, "C")
+
+
 def get_recommendation(level: str) -> str:
     """Map trust level to an install recommendation.
 

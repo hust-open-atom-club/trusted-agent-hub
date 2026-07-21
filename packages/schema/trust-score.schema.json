@@ -271,11 +271,17 @@
     },
     "risk_summary": {
       "type": "object",
+      "required": ["level", "grade"],
       "properties": {
         "level": {
           "type": "string",
           "enum": ["trusted", "low_risk", "medium_risk", "high_risk", "untrusted"],
           "description": "风险等级"
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["A", "B", "C", "D", "E"],
+          "description": "A-E 综合安全等级"
         },
         "top_risks": {
           "type": "array",
