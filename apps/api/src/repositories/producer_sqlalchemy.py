@@ -371,6 +371,94 @@ class ProducerRepository:
                 for row in rows
             ]
 
+    def list_versions_by_status(
+        self,
+        *,
+        status: str | list[str] | None = None,
+        grade: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """按状态筛选版本列表（审核员视图用），带包名和扫描摘要。
+
+        支持逗号分隔的多状态筛选、风险等级过滤。
+        返回字段：version_id / package_id / package_name / package_type /
+        version / status / submitted_at / grade / findings_count。
+        """
+        with self.session_factory() as session:
+            stmt = (
+                select(
+                    PackageVersionRow.id,
+                    PackageVersionRow.package_id,
+                    PackageVersionRow.version,
+                    PackageVersionRow.status,
+                    PackageVersionRow.data,
+                    PackageRow.name.label("package_name"),
+                    PackageRow.data.label("package_data"),
+                    ScanReportRow.scan_json,
+                )
+                .join(PackageRow, PackageRow.id == PackageVersionRow.package_id)
+                .outerjoin(
+                    ScanReportRow,
+                    ScanReportRow.version_id == PackageVersionRow.id,
+                )
+            )
+
+            if status:
+                if isinstance(status, str):
+                    statuses = [s.strip() for s in status.split(",") if s.strip()]
+                else:
+                    statuses = status
+                if statuses:
+                    stmt = stmt.where(PackageVersionRow.status.in_(statuses))
+
+            stmt = stmt.order_by(
+                PackageVersionRow.data["submitted_at"]
+                .as_string()
+                .desc()
+                .nullslast()
+            ).offset(offset).limit(limit)
+
+            rows = session.execute(stmt).all()
+
+        results: list[dict[str, object]] = []
+        for row in rows:
+            data = row.data or {}
+            trust_score = data.get("trust_score", {})
+            grade_val = None
+            if isinstance(trust_score, dict):
+                risk_summary = trust_score.get("risk_summary", {})
+                if isinstance(risk_summary, dict):
+                    grade_val = risk_summary.get("grade")
+
+            findings_count = 0
+            if row.scan_json and isinstance(row.scan_json, dict):
+                summary = row.scan_json.get("summary", {})
+                if isinstance(summary, dict):
+                    findings_count = summary.get("total", 0)
+
+            pkg_data = row.package_data or {}
+            package_type = None
+            if isinstance(pkg_data, dict):
+                package_type = pkg_data.get("type")
+
+            results.append({
+                "version_id": row.id,
+                "package_id": row.package_id,
+                "package_name": row.package_name,
+                "package_type": package_type,
+                "version": row.version,
+                "status": row.status,
+                "submitted_at": data.get("submitted_at"),
+                "grade": grade_val,
+                "findings_count": findings_count,
+            })
+
+        if grade:
+            results = [r for r in results if r.get("grade") == grade]
+
+        return results
+
 
 def _version_brief(row: PackageVersionRow) -> dict[str, object]:
     data = dict(row.data) if row.data else {}

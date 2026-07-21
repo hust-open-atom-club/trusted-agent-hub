@@ -221,6 +221,7 @@ class ProducerService:
             scan_json = scan.get("scan_json", {})
             if isinstance(scan_json, dict):
                 version["scan_summary"] = scan_json.get("summary", {})
+                version["findings"] = scan_json.get("findings", [])
                 version["trust_score"] = version.get("trust_score") or {
                     "score": None,
                     "risk_summary": None,
@@ -231,21 +232,26 @@ class ProducerService:
         """返回某个提交者的所有版本列表。"""
         return self.repository.list_versions_by_submitter(submitter_id)
 
+    # ── 按状态筛选（审核员视图） ─────────────────────────
 
-# ── 状态校验 ──────────────────────────────────────────────
+    _GRADE_LABELS: dict[str, str] = {
+        "A": "高度可信", "B": "可信", "C": "需注意",
+        "D": "有风险", "E": "高风险", "F": "严重风险",
+    }
 
-
-def validate_transition(current: str, target: str) -> None:
-    """校验状态跳转是否合法，不合法抛 ProducerServiceError。"""
-    allowed = STATUS_TRANSITIONS.get(current, [])
-    if target not in allowed:
-        raise ProducerServiceError(
-            f"状态跳转非法：'{current}' → '{target}' 不在允许的跳转列表中"
+    def list_versions_by_status(
+        self,
+        status: str | list[str] | None = None,
+        grade: str | None = None,
+    ) -> list[dict[str, object]]:
+        """按状态/风险等级筛选版本列表（审核员视图用）。"""
+        items = self.repository.list_versions_by_status(
+            status=status, grade=grade
         )
-
-
-# ── ProducerService: 审核与发布 ────────────────────────────
-
+        for item in items:
+            g = item.get("grade")
+            item["grade_label"] = self._GRADE_LABELS.get(str(g)) if g else None
+        return items
 
     def review_version(
         self,
@@ -287,10 +293,7 @@ def validate_transition(current: str, target: str) -> None:
                 )
 
         # 写入审核记录
-        import uuid
-        review_id = f"rev-{uuid.uuid4().hex[:12]}"
         self.repository.create_review_record(
-            review_id=review_id,
             version_id=version_id,
             reviewer_id=reviewer_id,
             conclusion=conclusion,
@@ -386,3 +389,20 @@ def validate_transition(current: str, target: str) -> None:
             new_status=target,
             message=f"版本已下架{f'（原因：{reason}）' if reason else ''}",
         )
+
+
+# ── 模块级函数 ──────────────────────────────────────────
+
+
+def validate_transition(current: str, target: str) -> None:
+    """校验状态跳转是否合法，不合法抛 ProducerServiceError。"""
+    allowed = STATUS_TRANSITIONS.get(current, [])
+    if target not in allowed:
+        raise ProducerServiceError(
+            f"状态跳转非法：'{current}' → '{target}' 不在允许的跳转列表中"
+        )
+
+
+# ── ProducerService: 审核与发布 ────────────────────────────
+
+

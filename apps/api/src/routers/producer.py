@@ -193,12 +193,27 @@ def get_version(version_id: str) -> dict[str, object]:
     responses={400: {"model": ErrorEnvelope}},
 )
 def list_versions(
-    submitter_id: str = Query(..., description="提交者用户 ID"),
+    submitter_id: str | None = Query(default=None, description="提交者用户 ID"),
+    status: str | None = Query(default=None, description="按状态筛选，逗号分隔多个"),
+    grade: str | None = Query(default=None, description="按风险等级筛选（A/B/C/D/E/F）"),
 ) -> list[dict[str, object]]:
-    """获取某个提交者的所有版本列表（按提交时间倒序）。
+    """获取版本列表（按提交时间倒序）。
 
-    每个版本摘要包含 version_id、package_name、version、status、submitted_at。
+    支持两种查询模式：
+    - 按提交者筛选：?submitter_id=xxx
+    - 按状态筛选：?status=pending_review（审核员用）
+    - 组合筛选：?status=pending_review&grade=D
     """
     repo = _get_producer_repository()
     service = ProducerService(repo)
-    return service.list_my_versions(submitter_id)
+
+    if submitter_id is not None:
+        return service.list_my_versions(submitter_id)
+
+    if status is not None:
+        return service.list_versions_by_status(
+            status=status,
+            grade=grade,
+        )
+
+    return service.list_versions_by_status()
