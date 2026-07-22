@@ -76,7 +76,7 @@ export default function Navbar() {
         {loading ? null : user ? (
           <div className="nav-pill__user">
             <span className="nav-pill__username" title={`角色: ${user.role}`}>
-              {user.username}
+              {user.display_name || user.username}
             </span>
             <button className="nav-pill__logout" onClick={logout}>
               退出

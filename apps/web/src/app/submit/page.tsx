@@ -205,7 +205,7 @@ function SubmitForm() {
         throw new Error(err.detail || `提交审核失败 (${subRes.status})`);
       }
 
-      router.push(`/submit/result?status=success&version_id=${encodeURIComponent(versionId)}`);
+      router.push(`/packages/${encodeURIComponent(form.name.trim())}/versions/${encodeURIComponent(form.version.trim())}/status?vid=${encodeURIComponent(versionId)}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '提交失败，请重试';
       setError(msg);

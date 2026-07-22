@@ -30,6 +30,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_iso_date(value: str) -> datetime:
+    """将 ISO 格式日期字符串转为带时区的 datetime。"""
+    s = value.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _serialize_dt(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
@@ -304,21 +313,36 @@ class ProducerRepository:
         target_type: str | None = None,
         target_id: str | None = None,
         action: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, object]]:
-        """分页查询审计日志，支持按目标类型/目标ID/操作类型筛选。"""
+        """分页查询审计日志，支持按目标类型/目标ID/操作类型/时间范围筛选。"""
         with self.session_factory() as session:
-            stmt = select(AuditLogRow)
+            stmt = select(
+                AuditLogRow.id,
+                AuditLogRow.action,
+                AuditLogRow.target_type,
+                AuditLogRow.target_id,
+                AuditLogRow.operator_id,
+                AuditLogRow.timestamp,
+                AuditLogRow.detail,
+                UserRow.username.label("operator_name"),
+            ).outerjoin(UserRow, UserRow.id == AuditLogRow.operator_id)
             if target_type:
                 stmt = stmt.where(AuditLogRow.target_type == target_type)
             if target_id:
                 stmt = stmt.where(AuditLogRow.target_id == target_id)
             if action:
                 stmt = stmt.where(AuditLogRow.action == action)
+            if start_date:
+                stmt = stmt.where(AuditLogRow.timestamp >= _parse_iso_date(start_date))
+            if end_date:
+                stmt = stmt.where(AuditLogRow.timestamp <= _parse_iso_date(end_date))
             stmt = stmt.order_by(AuditLogRow.timestamp.desc())
             stmt = stmt.offset(offset).limit(limit)
-            rows = session.execute(stmt).scalars().all()
+            rows = session.execute(stmt).all()
             return [
                 {
                     "id": row.id,
@@ -326,6 +350,7 @@ class ProducerRepository:
                     "target_type": row.target_type,
                     "target_id": row.target_id,
                     "operator_id": row.operator_id,
+                    "operator_name": row.operator_name,
                     "timestamp": _serialize_dt(row.timestamp),
                     "detail": row.detail,
                 }
@@ -450,6 +475,7 @@ class ProducerRepository:
                 "version": row.version,
                 "status": row.status,
                 "submitted_at": data.get("submitted_at"),
+                "published_at": data.get("published_at"),
                 "grade": grade_val,
                 "findings_count": findings_count,
             })

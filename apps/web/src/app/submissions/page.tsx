@@ -30,7 +30,7 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
 };
 
 function formatDate(iso: string | null): string {
-  if (!iso) return '—';
+  if (!iso) return '\u2014';
   try {
     const d = new Date(iso);
     return d.toLocaleString('zh-CN', {
@@ -88,7 +88,6 @@ export default function MySubmissionsPage() {
         <p>查看你提交的所有能力包及其审核状态</p>
       </div>
 
-      {/* 搜索 + 提交入口 */}
       <div style={{ maxWidth: '640px', margin: '0 auto 2rem' }}>
         <form
           onSubmit={(e) => e.preventDefault()}
@@ -113,7 +112,6 @@ export default function MySubmissionsPage() {
         </form>
       </div>
 
-      {/* 加载态 */}
       {loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
@@ -121,7 +119,6 @@ export default function MySubmissionsPage() {
         </div>
       )}
 
-      {/* 错误态 */}
       {error && !loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
@@ -130,7 +127,6 @@ export default function MySubmissionsPage() {
         </div>
       )}
 
-      {/* 空态 */}
       {!loading && !error && !hasResults && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4E6;</div>
@@ -142,11 +138,11 @@ export default function MySubmissionsPage() {
         </div>
       )}
 
-      {/* 列表 */}
       {!loading && !error && hasResults && (
         <div style={{ maxWidth: '720px', margin: '0 auto' }}>
           {filtered.map((item) => {
             const st = STATUS_LABELS[item.status] || { label: item.status, className: 'status-unknown' };
+            const statusUrl = `/packages/${encodeURIComponent(item.package_name)}/versions/${encodeURIComponent(item.version)}/status?vid=${encodeURIComponent(item.version_id)}`;
             return (
               <div
                 key={item.version_id}
@@ -194,7 +190,7 @@ export default function MySubmissionsPage() {
                 </div>
                 <button
                   className="btn btn-primary"
-                  onClick={() => router.push(`/versions/${item.version_id}/status`)}
+                  onClick={() => router.push(statusUrl)}
                   style={{ flexShrink: 0 }}
                 >
                   查看状态

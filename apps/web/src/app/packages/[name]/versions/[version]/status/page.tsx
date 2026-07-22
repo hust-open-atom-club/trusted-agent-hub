@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-/* ── 状态标签 ── */
+const POLL_INTERVAL_MS = 10_000;
+const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error']);
+
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   submitted: '已提交',
@@ -19,7 +22,6 @@ const STATUS_LABELS: Record<string, string> = {
   scan_failed: '扫描失败',
 };
 
-/* ── 状态流转顺序 ── */
 const STATUS_ORDER = [
   'draft', 'submitted', 'scanning', 'pending_review',
   'approved', 'published',
@@ -30,7 +32,6 @@ const TERMINAL_BAD: Record<string, string> = {
   scan_failed: '扫描失败',
 };
 
-/* ── 严重度映射 ── */
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'severity-critical',
   high: 'severity-high',
@@ -39,16 +40,13 @@ const SEVERITY_CLASS: Record<string, string> = {
   info: 'severity-info',
 };
 
-/* ── 审核结论标签 ── */
 const CONCLUSION_LABELS: Record<string, { text: string; className: string }> = {
   approved: { text: '审核通过', className: 'conclusion-approved' },
   rejected: { text: '已驳回', className: 'conclusion-rejected' },
   changes_requested: { text: '需要修改', className: 'conclusion-changes_requested' },
 };
 
-/* ── 评分等级 ── */
 function getGradeClass(score: number | null, backendGrade?: string | null): string {
-  // Prefer backend-supplied grade
   if (backendGrade) return `grade-${backendGrade}`;
   if (score === null) return '';
   if (score >= 80) return 'grade-A';
@@ -59,9 +57,8 @@ function getGradeClass(score: number | null, backendGrade?: string | null): stri
 }
 
 function getGrade(score: number | null, backendGrade?: string | null): string {
-  // Prefer backend-supplied grade
   if (backendGrade) return backendGrade;
-  if (score === null) return '—';
+  if (score === null) return '\u2014';
   if (score >= 80) return 'A';
   if (score >= 60) return 'B';
   if (score >= 40) return 'C';
@@ -69,7 +66,6 @@ function getGrade(score: number | null, backendGrade?: string | null): string {
   return 'E';
 }
 
-/* ── 扫描发现接口 ── */
 interface Finding {
   rule_id: string;
   severity: string;
@@ -113,15 +109,18 @@ interface VersionDetail {
   created_at?: string;
 }
 
-export default function StatusPage() {
-  const params = useParams();
+function StatusContent() {
   const router = useRouter();
-  const versionId = params.id as string;
+  const searchParams = useSearchParams();
+  const versionId = searchParams.get('vid') || '';
+  const { user, loading: authLoading } = useAuth();
 
   const [detail, setDetail] = useState<VersionDetail | null>(null);
+  const [packageName, setPackageName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -133,15 +132,62 @@ export default function StatusPage() {
       }
       const data = await res.json();
       setDetail(data);
+
+      if (data.package_id && !packageName) {
+        try {
+          const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`);
+          if (pkgRes.ok) {
+            const pkgData = await pkgRes.json();
+            setPackageName(pkgData.name || null);
+          }
+        } catch { /* 包名获取失败不影响主流程 */ }
+      }
+
+      return data;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '加载失败');
+      return null;
     }
-  }, [versionId]);
+  }, [versionId, packageName]);
 
   useEffect(() => {
     setLoading(true);
     fetchDetail().finally(() => setLoading(false));
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
   }, [fetchDetail]);
+
+  useEffect(() => {
+    if (!detail) return;
+    if (TERMINAL_STATUSES.has(detail.status)) {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      return;
+    }
+
+    if (intervalRef.current) return;
+
+    intervalRef.current = setInterval(async () => {
+      const latest = await fetchDetail();
+      if (latest && TERMINAL_STATUSES.has(latest.status)) {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      }
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [detail?.status, fetchDetail]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -149,13 +195,11 @@ export default function StatusPage() {
     setRefreshing(false);
   };
 
-  /* ── 构建时间线 ── */
   const buildTimeline = () => {
     if (!detail) return [];
     const current = detail.status;
     const stages: { key: string; label: string; phase: 'done' | 'active' | 'pending' | 'rejected' }[] = [];
 
-    // 遍历标准流转
     for (const s of STATUS_ORDER) {
       const idx = STATUS_ORDER.indexOf(s);
       const curIdx = STATUS_ORDER.indexOf(current);
@@ -164,14 +208,12 @@ export default function StatusPage() {
       if (current === s) phase = 'active';
       else if (curIdx > idx) phase = 'done';
       else if (TERMINAL_BAD[current] && idx <= STATUS_ORDER.indexOf('pending_review')) {
-        // 如果当前是终态拒绝，已完成部分标记 done
         if (idx < curIdx || (curIdx === -1 && idx < STATUS_ORDER.indexOf('pending_review'))) phase = 'done';
       }
 
       stages.push({ key: s, label: STATUS_LABELS[s] || s, phase });
     }
 
-    // 检查是否是坏终态
     if (TERMINAL_BAD[current]) {
       stages.push({
         key: current,
@@ -180,7 +222,6 @@ export default function StatusPage() {
       });
     }
 
-    // 如果状态不在标准流转中（如 changes_requested），追加
     if (!STATUS_ORDER.includes(current) && !TERMINAL_BAD[current]) {
       stages.push({
         key: current,
@@ -192,8 +233,7 @@ export default function StatusPage() {
     return stages;
   };
 
-  /* ── 渲染 ── */
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="status-page">
         <div className="empty-state">
@@ -225,12 +265,17 @@ export default function StatusPage() {
   const gradeClass = getGradeClass(detail.trust_score?.score ?? null, detail.trust_score?.grade);
   const conclusion = detail.review_conclusion;
   const conclusionMeta = conclusion ? CONCLUSION_LABELS[conclusion] : null;
+  const pageTitle = packageName
+    ? `${packageName} v${detail.version}`
+    : detail.version
+      ? `v${detail.version}`
+      : '版本状态';
+  const isScanning = detail.status === 'scanning';
 
   return (
     <div className="status-page">
-      {/* 头部 */}
       <div className="status-header">
-        <h1>{detail.version ? `v${detail.version}` : '版本状态'}</h1>
+        <h1>{pageTitle}</h1>
         <p>
           {detail.source?.repository_url ? (
             <span style={{ color: 'var(--color-muted)', fontSize: '0.83rem' }}>
@@ -244,12 +289,14 @@ export default function StatusPage() {
         </p>
       </div>
 
-      {/* 刷新栏 */}
       <div className="status-refresh">
         <span className="status-refresh-meta">
           当前状态: <strong style={{ color: 'var(--color-ink)' }}>{statusLabel}</strong>
           {detail.submitted_at && (
             <> · 提交于 {new Date(detail.submitted_at).toLocaleString('zh-CN')}</>
+          )}
+          {isScanning && (
+            <span className="status-auto-refresh-hint"> · 每 10 秒自动刷新</span>
           )}
         </span>
         <button className="btn btn-sm btn-secondary" onClick={handleRefresh} disabled={refreshing}>
@@ -257,23 +304,32 @@ export default function StatusPage() {
         </button>
       </div>
 
-      {/* 时间线 */}
       <div className="timeline">
         {timeline.map((stage) => (
-          <div key={stage.key} className="timeline-stage">
+          <div key={stage.key} className={`timeline-stage ${stage.key === detail.status ? `timeline-stage-${stage.key}` : ''}`}>
             <div className={`timeline-dot ${stage.phase}`} />
             <div className="timeline-stage-header">
               <span className="timeline-stage-number">
                 {STATUS_ORDER.indexOf(stage.key) >= 0
                   ? `${STATUS_ORDER.indexOf(stage.key) + 1}.0`
-                  : '··'}
+                  : '\u00B7\u00B7'}
               </span>
               <span className="timeline-stage-label">{stage.label}</span>
             </div>
-            {stage.phase === 'active' && detail.status === 'scanning' && (
-              <p className="timeline-stage-desc">
-                系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
-              </p>
+            {stage.phase === 'active' && isScanning && (
+              <div className="scanning-block">
+                <div className="scanning-animation">
+                  <span className="scanning-dot" />
+                  <span className="scanning-dot" />
+                  <span className="scanning-dot" />
+                </div>
+                <p className="timeline-stage-desc">
+                  系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
+                </p>
+                <p className="scanning-estimate">
+                  预计耗时 30–90 秒 · 页面每 10 秒自动刷新
+                </p>
+              </div>
             )}
             {stage.phase === 'active' && detail.status === 'pending_review' && (
               <p className="timeline-stage-desc">
@@ -289,7 +345,6 @@ export default function StatusPage() {
         ))}
       </div>
 
-      {/* 信任评分 */}
       {detail.trust_score && (
         <div className="trust-score-card">
           <div className={`trust-score-grade ${gradeClass}`}>
@@ -318,7 +373,6 @@ export default function StatusPage() {
         </div>
       )}
 
-      {/* 扫描发现 */}
       {detail.scan_summary && detail.scan_summary.findings && detail.scan_summary.findings.length > 0 && (
         <div className="findings-section">
           <h2>
@@ -354,14 +408,18 @@ export default function StatusPage() {
         </div>
       )}
 
-      {/* 扫描中提示 */}
-      {(!detail.scan_summary || !detail.scan_summary.findings) && detail.status === 'scanning' && (
-        <div className="empty-state" style={{ padding: '2rem 0' }}>
+      {(!detail.scan_summary || !detail.scan_summary.findings) && isScanning && (
+        <div className="scanning-block scanning-block-large">
+          <div className="scanning-animation">
+            <span className="scanning-dot" />
+            <span className="scanning-dot" />
+            <span className="scanning-dot" />
+          </div>
           <p>扫描进行中，完成后将自动展示发现详情。</p>
+          <p className="scanning-estimate">预计耗时 30–90 秒 · 页面每 10 秒自动刷新</p>
         </div>
       )}
 
-      {/* 审核结论 */}
       {conclusionMeta && (
         <div className={`review-conclusion ${conclusionMeta.className}`}>
           <div className="review-conclusion-header">
@@ -370,12 +428,24 @@ export default function StatusPage() {
         </div>
       )}
 
-      {/* 底部返回 */}
-      <div style={{ marginTop: '2rem', textAlign: 'center' }}>
-        <button className="btn btn-secondary" onClick={() => router.back()}>
-          返回
+      <div className="status-bottom-actions">
+        {user && (
+          <button className="btn btn-secondary" onClick={() => router.push('/submissions')}>
+            我的提交列表
+          </button>
+        )}
+        <button className="btn btn-secondary" onClick={() => router.push('/')}>
+          返回首页
         </button>
       </div>
     </div>
+  );
+}
+
+export default function StatusPage() {
+  return (
+    <Suspense fallback={<div className="status-page"><div className="empty-state"><div className="empty-state-icon">&#x23F3;</div><h3>加载中...</h3></div></div>}>
+      <StatusContent />
+    </Suspense>
   );
 }

@@ -34,6 +34,8 @@ router = APIRouter(prefix="/api/v0/auth", tags=["auth"])
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=6, max_length=128)
+    email: str | None = Field(default=None, max_length=256)
+    display_name: str | None = Field(default=None, max_length=128)
 
 
 class LoginRequest(BaseModel):
@@ -41,10 +43,19 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    role: str
+    email: str | None = None
+    display_name: str | None = None
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    user: UserResponse | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -65,10 +76,12 @@ def _get_session() -> Session:
 # ── POST /auth/register ───────────────────────────────────
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201, response_model=TokenResponse)
 def register(body: RegisterRequest) -> dict:
-    """注册新用户。默认角色为 submitter。"""
+    """注册新用户。默认角色为 submitter，返回 access + refresh token 和用户信息。"""
     session = _get_session()
+    import uuid
+
     try:
         existing = session.scalar(
             select(UserRow).where(UserRow.username == body.username)
@@ -76,17 +89,37 @@ def register(body: RegisterRequest) -> dict:
         if existing is not None:
             raise HTTPException(status_code=409, detail="用户名已存在")
 
-        import uuid
+        user_id = f"user-{uuid.uuid4().hex}"
+        display_name = body.display_name
+        if not display_name or not display_name.strip():
+            display_name = f"user_{uuid.uuid4().hex[:8]}"
 
         user = UserRow(
-            id=f"user-{uuid.uuid4().hex}",
+            id=user_id,
             username=body.username,
             password_hash=hash_password(body.password),
-            role="submitter",  # 默认角色
+            role="submitter",
+            email=body.email.strip() if body.email and body.email.strip() else None,
+            display_name=display_name,
         )
         session.add(user)
         session.commit()
-        return {"id": user.id, "username": user.username, "role": user.role}
+
+        access = create_access_token(user.id, user.role)
+        refresh = create_refresh_token(user.id, user.role)
+
+        return {
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "email": user.email,
+                "display_name": user.display_name,
+            },
+        }
     finally:
         session.close()
 
@@ -96,7 +129,7 @@ def register(body: RegisterRequest) -> dict:
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest) -> TokenResponse:
-    """登录，返回 access token（2h）+ refresh token（7d）。"""
+    """登录，返回 access token（2h）+ refresh token（7d）+ 用户信息。"""
     session = _get_session()
     try:
         user = session.scalar(
@@ -107,7 +140,17 @@ def login(body: LoginRequest) -> TokenResponse:
 
         access = create_access_token(user.id, user.role)
         refresh = create_refresh_token(user.id, user.role)
-        return TokenResponse(access_token=access, refresh_token=refresh)
+        return TokenResponse(
+            access_token=access,
+            refresh_token=refresh,
+            user=UserResponse(
+                id=user.id,
+                username=user.username,
+                role=user.role,
+                email=user.email,
+                display_name=user.display_name,
+            ),
+        )
     finally:
         session.close()
 

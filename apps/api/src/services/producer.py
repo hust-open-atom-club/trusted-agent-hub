@@ -343,6 +343,10 @@ class ProducerService:
         validate_transition(current, target)
 
         self.repository.update_version_status(version_id, target)
+        self.repository.update_version_data(
+            version_id,
+            {"published_at": datetime.now(timezone.utc).isoformat()},
+        )
         self.repository.create_audit_log(
             action=AuditAction.PUBLISH.value,
             target_type="version",

@@ -112,5 +112,6 @@ class AuditLogEntry(StrictContractModel):
     target_type: str
     target_id: str
     operator_id: str
+    operator_name: str | None = None
     timestamp: str
     detail: dict[str, object] | None = None

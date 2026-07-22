@@ -135,15 +135,19 @@ def list_audit_logs(
     target_type: str | None = Query(default=None, description="目标类型：package / version"),
     target_id: str | None = Query(default=None, description="目标 ID"),
     action: str | None = Query(default=None, description="操作类型"),
+    start_date: str | None = Query(default=None, description="开始日期（ISO 格式，如 2026-07-01T00:00:00）"),
+    end_date: str | None = Query(default=None, description="结束日期（ISO 格式，如 2026-07-31T23:59:59）"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> list[AuditLogEntry]:
-    """查询审计日志，支持按目标类型/目标ID/操作类型筛选。"""
+    """查询审计日志，支持按目标类型/目标ID/操作类型/时间范围筛选。"""
     repo = _get_producer_repository()
     rows = repo.list_audit_logs(
         target_type=target_type,
         target_id=target_id,
         action=action,
+        start_date=start_date,
+        end_date=end_date,
         limit=limit,
         offset=offset,
     )
