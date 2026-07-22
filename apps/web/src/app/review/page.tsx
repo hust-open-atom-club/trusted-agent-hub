@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -113,6 +114,11 @@ export default function ReviewPage() {
             <span>（已筛选 {gradeFilter} 级）</span>
           )}
         </p>
+        <div style={{ marginTop: '0.5rem' }}>
+          <Link href="/review/history" className="link-btn" style={{ fontSize: '0.85rem' }}>
+            查看审核历史 →
+          </Link>
+        </div>
       </div>
 
       {/* 筛选栏 */}

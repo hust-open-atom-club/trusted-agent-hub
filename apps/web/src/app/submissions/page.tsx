@@ -52,6 +52,26 @@ export default function MySubmissionsPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 20;
+
+  const fetchItems = () => {
+    if (!user) return;
+    setLoading(true);
+    const offset = page * pageSize;
+    fetch(`${API_BASE}/api/v0/producer/versions?submitter_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: VersionItem[]) => {
+        setItems(data);
+        setTotalCount(data.length >= pageSize ? (page + 2) * pageSize : (page * pageSize) + data.length);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  };
 
   useEffect(() => {
     if (authLoading) return;
@@ -60,16 +80,8 @@ export default function MySubmissionsPage() {
       setError('请先登录');
       return;
     }
-
-    fetch(`${API_BASE}/api/v0/producer/versions?submitter_id=${encodeURIComponent(user.id)}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data: VersionItem[]) => setItems(data))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [user, authLoading]);
+    fetchItems();
+  }, [user, authLoading, page]);
 
   const filtered = search.trim()
     ? items.filter(
@@ -198,6 +210,27 @@ export default function MySubmissionsPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* 分页 */}
+      {!loading && !error && hasResults && (
+        <div className="pagination" style={{ maxWidth: '720px', margin: '1.5rem auto 0', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={page === 0}
+          >
+            上一页
+          </button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>第 {page + 1} 页</span>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={items.length < pageSize}
+          >
+            下一页
+          </button>
         </div>
       )}
     </div>

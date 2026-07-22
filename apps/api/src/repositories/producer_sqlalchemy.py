@@ -126,6 +126,23 @@ class ProducerRepository:
             data["versions_count"] = versions_count or 0
             return data
 
+    def delete_package(self, package_id: str) -> bool:
+        """删除包（仅无版本的包可删除，防止误删有数据的包）。"""
+        with self.session_factory() as session:
+            pkg = session.get(PackageRow, package_id)
+            if pkg is None:
+                return False
+            has_versions = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.package_id == package_id)
+            )
+            if has_versions:
+                return False
+            session.delete(pkg)
+            session.commit()
+            return True
+
     def list_package_versions(
         self, package_id: str
     ) -> list[dict[str, object]]:
@@ -342,6 +359,50 @@ class ProducerRepository:
                 for row in rows
             ]
 
+    def list_reviews_by_reviewer(
+        self, reviewer_id: str, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, object]]:
+        """返回某审核员的全部审核记录，附带版本和包信息。"""
+        with self.session_factory() as session:
+            stmt = (
+                select(
+                    ReviewRecordRow.id,
+                    ReviewRecordRow.version_id,
+                    ReviewRecordRow.conclusion,
+                    ReviewRecordRow.comment,
+                    ReviewRecordRow.created_at,
+                    PackageVersionRow.version.label("version_label"),
+                    PackageVersionRow.status.label("version_status"),
+                    PackageRow.name.label("package_name"),
+                )
+                .join(
+                    PackageVersionRow,
+                    PackageVersionRow.id == ReviewRecordRow.version_id,
+                )
+                .join(
+                    PackageRow,
+                    PackageRow.id == PackageVersionRow.package_id,
+                )
+                .where(ReviewRecordRow.reviewer_id == reviewer_id)
+                .order_by(ReviewRecordRow.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            rows = session.execute(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "version_id": row.version_id,
+                    "conclusion": row.conclusion,
+                    "comment": row.comment,
+                    "created_at": _serialize_dt(row.created_at),
+                    "version": row.version_label,
+                    "version_status": row.version_status,
+                    "package_name": row.package_name,
+                }
+                for row in rows
+            ]
+
     # ── 审计日志 ──────────────────────────────────────────
 
     def create_audit_log(
@@ -418,10 +479,69 @@ class ProducerRepository:
                 }
                 for row in rows
             ]
+# ── 统计查询 ──────────────────────────────────────────────
+
+    def get_dashboard_stats(self) -> dict[str, object]:
+        """返回管理仪表盘统计数据。"""
+        today_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        with self.session_factory() as session:
+            total_packages = session.scalar(
+                select(func.count()).select_from(PackageRow)
+            ) or 0
+            total_versions = session.scalar(
+                select(func.count()).select_from(PackageVersionRow)
+            ) or 0
+            pending_review = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.status == "pending_review")
+            ) or 0
+            today_submissions = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(
+                    PackageVersionRow.data["submitted_at"]
+                    .as_string()
+                    >= today_start.isoformat()
+                )
+            ) or 0
+            approved_count = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.status == "approved")
+            ) or 0
+            published_count = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.status == "published")
+            ) or 0
+            rejected_count = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.status == "rejected")
+            ) or 0
+            yanked_count = session.scalar(
+                select(func.count())
+                .select_from(PackageVersionRow)
+                .where(PackageVersionRow.status == "yanked")
+            ) or 0
+        return {
+            "total_packages": total_packages,
+            "total_versions": total_versions,
+            "pending_review": pending_review,
+            "today_submissions": today_submissions,
+            "approved": approved_count,
+            "published": published_count,
+            "rejected": rejected_count,
+            "yanked": yanked_count,
+        }
+
 # ── 辅助函数 ──────────────────────────────────────────────
 
     def list_versions_by_submitter(
-        self, submitter_id: str
+        self, submitter_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, object]]:
         """返回某个提交者的所有版本列表，按提交时间倒序。"""
         with self.session_factory() as session:
@@ -445,6 +565,8 @@ class ProducerRepository:
                     .desc()
                     .nullslast()
                 )
+                .offset(offset)
+                .limit(limit)
             ).all()
             return [
                 {

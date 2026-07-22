@@ -68,6 +68,17 @@ interface VersionDetail {
   created_at?: string | null;
 }
 
+interface ReviewRecord {
+  id: string;
+  version_id: string;
+  reviewer_id: string;
+  reviewer_name: string | null;
+  reviewer_display_name: string | null;
+  conclusion: string;
+  comment: string | null;
+  created_at: string;
+}
+
 interface Permissions {
   filesystem?: string;
   shell?: string;
@@ -217,6 +228,8 @@ export default function ReviewDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const [reviewHistory, setReviewHistory] = useState<ReviewRecord[]>([]);
+
   /* ── 登录检查 ── */
   useEffect(() => {
     if (authLoading) return;
@@ -258,6 +271,14 @@ export default function ReviewDetailPage() {
         }
 
         setVersion(vData);
+
+        // 获取审核历史
+        fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((res) => res.ok ? res.json() : [])
+          .then((data) => { if (!cancelled) setReviewHistory(data); })
+          .catch(() => {});
 
         // 初始化文件折叠：默认全部展开
         const findings = vData.findings || [];
@@ -493,6 +514,54 @@ export default function ReviewDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── 审核历史时间线 ── */}
+      {reviewHistory.length > 0 && (
+        <section className="review-detail-section">
+          <h2 className="review-detail-section-title">审核历史（{reviewHistory.length}）</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {reviewHistory.map((record) => {
+              const cLabels: Record<string, { label: string; color: string }> = {
+                approved: { label: '通过', color: 'var(--color-success)' },
+                rejected: { label: '驳回', color: 'var(--color-danger)' },
+                changes_requested: { label: '需修改', color: 'var(--color-warning)' },
+              };
+              const c = cLabels[record.conclusion] || { label: record.conclusion, color: 'var(--color-muted)' };
+              return (
+                <div key={record.id} style={{
+                  padding: '0.85rem 1rem',
+                  borderLeft: `3px solid ${c.color}`,
+                  background: 'var(--color-paper-2)',
+                  borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '0.1rem 0.5rem',
+                      borderRadius: 'var(--radius-pill)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      background: c.color,
+                      color: '#fff',
+                    }}>{c.label}</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>
+                      {record.reviewer_display_name || record.reviewer_name || record.reviewer_id}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)', marginLeft: 'auto' }}>
+                      {formatDate(record.created_at)}
+                    </span>
+                  </div>
+                  {record.comment && (
+                    <p style={{ fontSize: '0.82rem', color: 'var(--color-ink)', margin: '0.25rem 0 0', lineHeight: 1.5 }}>
+                      {record.comment}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ── 包元数据 ── */}
       <section className="review-detail-section">

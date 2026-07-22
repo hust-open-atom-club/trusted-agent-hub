@@ -243,9 +243,13 @@ class ProducerService:
                 }
         return version
 
-    def list_my_versions(self, submitter_id: str) -> list[dict[str, object]]:
+    def list_my_versions(
+        self, submitter_id: str, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, object]]:
         """返回某个提交者的所有版本列表。"""
-        return self.repository.list_versions_by_submitter(submitter_id)
+        return self.repository.list_versions_by_submitter(
+            submitter_id, limit=limit, offset=offset
+        )
 
     # ── 按状态筛选（审核员视图） ─────────────────────────
 
@@ -285,11 +289,19 @@ class ProducerService:
                 raise ProducerServiceError("两个版本不属于同一个包，无法对比")
         else:
             base = self.repository.get_previous_version(version_id)
-            if base is None:
-                raise ProducerServiceError(
-                    "该包只有一个版本，无可对比的基准版本。"
-                    "可通过 ?base={version_id} 指定基准版本。"
-                )
+
+        if base is None:
+            return {
+                "current": {
+                    "version_id": current.get("id"),
+                    "version": current.get("version"),
+                    "source_url": (current.get("source", {}) or {}).get("repository_url", "")
+                    if isinstance(current.get("source"), dict) else "",
+                },
+                "base": None,
+                "diff": None,
+                "message": "当前是该包唯一的版本（首版），无上一版本可对比。可通过 ?base={version_id} 显式指定基准版本。",
+            }
 
         base_data = {k: v for k, v in base.items() if k not in ("id", "created_at")}
         diff_result = _deep_diff(base_data, current_data)
@@ -359,6 +371,9 @@ class ProducerService:
 
         # 更新版本状态
         self.repository.update_version_status(version_id, target)
+
+        # 将审核结论写入版本 data JSON（供前端版本详情页直接读取）
+        self.repository.update_version_data(version_id, {"review_conclusion": conclusion})
 
         # 写入审计日志
         audit_action = AuditAction.REQUEST_CHANGES.value if conclusion == ReviewConclusion.CHANGES_REQUESTED.value else conclusion
@@ -449,6 +464,38 @@ class ProducerService:
             version_id=version_id,
             new_status=target,
             message=f"版本已下架{f'（原因：{reason}）' if reason else ''}",
+        )
+
+    def unyank_version(
+        self,
+        *,
+        version_id: str,
+        operator_id: str = "system",
+    ) -> "ReviewResponse":
+        """管理员撤销下架：yanked → published。"""
+        from src.models.producer import ReviewResponse
+        from schema.constants import AuditAction
+
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+
+        current = version.get("status", "")
+        target = "published"
+        validate_transition(current, target)
+
+        self.repository.update_version_status(version_id, target)
+        self.repository.create_audit_log(
+            action=AuditAction.UNYANK.value if hasattr(AuditAction, 'UNYANK') else "unyank",
+            target_type="version",
+            target_id=version_id,
+            operator_id=operator_id,
+        )
+
+        return ReviewResponse(
+            version_id=version_id,
+            new_status=target,
+            message="版本已撤销下架，恢复为已发布",
         )
 
 

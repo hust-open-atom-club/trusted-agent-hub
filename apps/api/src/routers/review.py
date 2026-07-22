@@ -80,6 +80,24 @@ def list_reviews(version_id: str):
     return repo.list_review_records(version_id)
 
 
+# ── GET /reviews ──────────────────────────────────────────
+
+@router.get(
+    "/reviews",
+)
+def list_my_reviews(
+    reviewer_id: str = Query(description="审核员用户 ID"),
+    limit: int = Query(default=50, ge=1, le=200, description="每页数量"),
+    offset: int = Query(default=0, ge=0, description="偏移量"),
+    _user: CurrentUser = Depends(require_role("reviewer")),
+):
+    """获取某审核员的全部审核历史（按时间倒序，含版本和包信息）。"""
+    repo = _get_producer_repository()
+    return repo.list_reviews_by_reviewer(
+        reviewer_id=reviewer_id, limit=limit, offset=offset
+    )
+
+
 # ── POST /versions/{version_id}/publish ───────────────────
 
 @router.post(
@@ -131,6 +149,33 @@ def yank_version(
             version_id=version_id,
             operator_id=_user.id,
             reason=reason if reason else None,
+        )
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── POST /versions/{version_id}/unyank ────────────────────
+
+@router.post(
+    "/versions/{version_id}/unyank",
+    response_model=ReviewResponse,
+    status_code=200,
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def unyank_version(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> ReviewResponse:
+    """管理员撤销下架，恢复为已发布状态。
+
+    状态：yanked → published
+    """
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    try:
+        return service.unyank_version(
+            version_id=version_id,
+            operator_id=_user.id,
         )
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
