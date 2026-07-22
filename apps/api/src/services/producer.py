@@ -38,7 +38,7 @@ class ProducerService:
     # ── 创建包 ────────────────────────────────────────────
 
     def create_package(
-        self, data: CreatePackageRequest
+        self, data: CreatePackageRequest, submitter_id: str | None = None
     ) -> PackageResponse:
         if not data.name or not data.name.strip():
             raise ProducerServiceError("包名称不能为空")
@@ -49,6 +49,7 @@ class ProducerService:
             name=data.name.strip(),
             type=data.type.value,
             description=data.description,
+            submitter_id=submitter_id,
             license=data.license,
             keywords=data.keywords,
             category=data.category,
@@ -60,12 +61,25 @@ class ProducerService:
             source=data.source.model_dump() if data.source else None,
             compatibility=data.compatibility,
         )
-        return PackageResponse(**result)
+        return PackageResponse(
+            id=result["id"],
+            name=result["name"],
+            type=result["type"],
+            description=result["description"],
+            status=result["status"],
+            latest_version=result.get("latest_version"),
+            license=result.get("license"),
+            keywords=result.get("keywords", []),
+            category=result.get("category"),
+            author=result.get("author"),
+            created_at=result.get("created_at"),
+            updated_at=result.get("updated_at"),
+        )
 
     # ── 创建版本 ──────────────────────────────────────────
 
     def create_version(
-        self, package_id: str, data: CreateVersionRequest
+        self, package_id: str, data: CreateVersionRequest, submitter_id: str | None = None
     ) -> dict[str, object]:
         # 校验包存在
         pkg = self.repository.get_package(package_id)
@@ -81,6 +95,7 @@ class ProducerService:
         result = self.repository.create_version(
             package_id=package_id,
             version=data.version,
+            submitter_id=submitter_id,
             repo_url=data.repo_url,
             description=data.description,
             installation=data.installation.model_dump() if data.installation else None,
@@ -90,7 +105,7 @@ class ProducerService:
 
     # ── 提交审核 ──────────────────────────────────────────
 
-    def submit_version(self, version_id: str) -> tuple[str, str | None, str]:
+    def submit_version(self, version_id: str, user_id: str | None = None) -> tuple[str, str | None, str]:
         """校验状态并触发扫描。
 
         Returns:
@@ -133,7 +148,7 @@ class ProducerService:
             action=AuditAction.SUBMIT.value,
             target_type="version",
             target_id=version_id,
-            operator_id="system",  # TODO: 任务1.5 替换为真实用户 ID
+            operator_id=user_id or "system",
         )
 
         # 生成 scan_id（由 router 层传给 _run_scan_task）
@@ -252,6 +267,48 @@ class ProducerService:
             g = item.get("grade")
             item["grade_label"] = self._GRADE_LABELS.get(str(g)) if g else None
         return items
+
+    def diff_versions(
+        self, version_id: str, base_version_id: str | None = None
+    ) -> dict[str, object]:
+        current = self.repository.get_version(version_id)
+        if current is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+
+        current_data = {k: v for k, v in current.items() if k not in ("id", "created_at")}
+
+        if base_version_id:
+            base = self.repository.get_version(base_version_id)
+            if base is None:
+                raise ProducerServiceError(f"基准版本 {base_version_id} 不存在")
+            if base.get("package_id") != current.get("package_id"):
+                raise ProducerServiceError("两个版本不属于同一个包，无法对比")
+        else:
+            base = self.repository.get_previous_version(version_id)
+            if base is None:
+                raise ProducerServiceError(
+                    "该包只有一个版本，无可对比的基准版本。"
+                    "可通过 ?base={version_id} 指定基准版本。"
+                )
+
+        base_data = {k: v for k, v in base.items() if k not in ("id", "created_at")}
+        diff_result = _deep_diff(base_data, current_data)
+
+        return {
+            "current": {
+                "version_id": current.get("id"),
+                "version": current.get("version"),
+                "source_url": (current.get("source", {}) or {}).get("repository_url", "")
+                if isinstance(current.get("source"), dict) else "",
+            },
+            "base": {
+                "version_id": base.get("id"),
+                "version": base.get("version"),
+                "source_url": (base.get("source", {}) or {}).get("repository_url", "")
+                if isinstance(base.get("source"), dict) else "",
+            },
+            "diff": diff_result,
+        }
 
     def review_version(
         self,
@@ -405,6 +462,51 @@ def validate_transition(current: str, target: str) -> None:
         raise ProducerServiceError(
             f"状态跳转非法：'{current}' → '{target}' 不在允许的跳转列表中"
         )
+
+
+def _deep_diff(
+    base: dict[str, object],
+    current: dict[str, object],
+    prefix: str = "",
+) -> dict[str, object]:
+    """递归对比两个字典，返回 added / removed / changed。"""
+    added: dict[str, object] = {}
+    removed: dict[str, object] = {}
+    changed: dict[str, object] = {}
+
+    all_keys = set(base.keys()) | set(current.keys())
+
+    for key in sorted(all_keys):
+        full_key = f"{prefix}.{key}" if prefix else key
+        in_base = key in base
+        in_current = key in current
+
+        if not in_base and in_current:
+            added[full_key] = current[key]
+        elif in_base and not in_current:
+            removed[full_key] = base[key]
+        elif in_base and in_current:
+            bv = base[key]
+            cv = current[key]
+            if isinstance(bv, dict) and isinstance(cv, dict):
+                sub = _deep_diff(bv, cv, prefix=full_key)
+                if sub["added"]:
+                    added.update(sub["added"])
+                if sub["removed"]:
+                    removed.update(sub["removed"])
+                if sub["changed"]:
+                    changed.update(sub["changed"])
+            elif bv != cv:
+                changed[full_key] = {"old": bv, "new": cv}
+
+    return {
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "changed_count": len(changed),
+    }
 
 
 # ── ProducerService: 审核与发布 ────────────────────────────

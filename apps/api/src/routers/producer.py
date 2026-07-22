@@ -18,6 +18,8 @@ from src.database import (
     create_session_factory,
     get_runtime_engine,
 )
+from src.auth import require_role
+from src.dependencies import CurrentUser
 from src.models.common import ErrorEnvelope
 from src.models.producer import (
     CreatePackageRequest,
@@ -58,8 +60,9 @@ def _get_producer_repository() -> ProducerRepository:
 )
 def create_package(
     body: CreatePackageRequest,
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> PackageResponse:
-    """注册一个新能力包。
+    """注册一个新能力包（需登录，仅 submitter 及以上角色）。
 
     提交元数据（名称、类型、描述、权限声明等），
     包状态初始为 draft。
@@ -67,7 +70,7 @@ def create_package(
     repo = _get_producer_repository()
     service = ProducerService(repo)
     try:
-        return service.create_package(body)
+        return service.create_package(body, submitter_id=_user.id)
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -82,15 +85,16 @@ def create_package(
 def create_version(
     package_id: str,
     body: CreateVersionRequest,
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> dict[str, object]:
-    """为指定包创建一个新版本。
+    """为指定包创建一个新版本（需登录，仅 submitter 及以上角色）。
 
     支持填写 GitHub 仓库 URL，版本号需符合 SemVer 规范。
     """
     repo = _get_producer_repository()
     service = ProducerService(repo)
     try:
-        return service.create_version(package_id, body)
+        return service.create_version(package_id, body, submitter_id=_user.id)
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -105,16 +109,15 @@ def create_version(
 def submit_version(
     version_id: str,
     background_tasks: BackgroundTasks,
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> SubmitResponse:
-    """提交审核：状态 draft → submitted → scanning，自动触发安全扫描。
-
-    扫描在后台执行（clone → 扫描 → 评分），完成后自动回调更新
-    版本状态为 pending_review。
+    """提交审核（需登录）：状态变更 → scanning，自动触发安全扫描。
+    扫描在后台执行，完成后自动回调更新版本状态为 pending_review。
     """
     repo = _get_producer_repository()
     service = ProducerService(repo)
     try:
-        repo_url, scan_id, next_status = service.submit_version(version_id)
+        repo_url, scan_id, next_status = service.submit_version(version_id, user_id=_user.id)
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -168,7 +171,29 @@ def get_package(package_id: str) -> dict[str, object]:
     return pkg
 
 
-# ── GET /versions/{version_id} ────────────────────────────
+# ── GET /versions/{version_id}/diff ────────────────────────
+
+@router.get(
+    "/versions/{version_id}/diff",
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def diff_version(
+    version_id: str,
+    base: str | None = Query(default=None, description="基准版本 ID，不传则对比同包的上一版本"),
+) -> dict[str, object]:
+    """对比两个版本的元数据差异。
+
+    默认对比同包中最近的前一个版本，
+    也可通过 ?base={version_id} 指定基准版本。
+
+    返回 current 和 base 的版本信息（含 source_url）及 diff 差异详情。
+    """
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    try:
+        return service.diff_versions(version_id, base_version_id=base)
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.get(
     "/versions/{version_id}",

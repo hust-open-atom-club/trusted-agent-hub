@@ -69,6 +69,17 @@ def submit_review(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# ── GET /versions/{version_id}/reviews ────────────────────
+
+@router.get(
+    "/versions/{version_id}/reviews",
+)
+def list_reviews(version_id: str):
+    """获取某个版本的全部审核历史记录（按时间倒序）。"""
+    repo = _get_producer_repository()
+    return repo.list_review_records(version_id)
+
+
 # ── POST /versions/{version_id}/publish ───────────────────
 
 @router.post(
