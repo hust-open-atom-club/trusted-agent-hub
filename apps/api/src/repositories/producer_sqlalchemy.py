@@ -59,6 +59,7 @@ class ProducerRepository:
         name: str,
         type: str,
         description: str,
+        submitter_id: str | None = None,
         license: str | None = None,
         keywords: list[str] | None = None,
         category: str | None = None,
@@ -78,6 +79,7 @@ class ProducerRepository:
             "name": name,
             "description": description,
             "type": type,
+            "submitter_id": submitter_id,
             "license": license,
             "keywords": keywords or [],
             "category": category,
@@ -142,6 +144,7 @@ class ProducerRepository:
         *,
         package_id: str,
         version: str,
+        submitter_id: str | None = None,
         repo_url: str | None = None,
         description: str | None = None,
         installation: dict[str, object] | None = None,
@@ -155,6 +158,7 @@ class ProducerRepository:
             "package_id": package_id,
             "version": version,
             "status": "draft",
+            "submitter_id": submitter_id,
             "source": source or {"type": "git", "repository_url": repo_url or "", "ref": "", "commit_hash": ""},
             "description": description,
             "installation": installation,
@@ -181,6 +185,30 @@ class ProducerRepository:
             if row is None:
                 return None
             return dict(row.data)
+
+    def get_previous_version(
+        self, version_id: str
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            current = session.get(PackageVersionRow, version_id)
+            if current is None:
+                return None
+            prev = session.scalars(
+                select(PackageVersionRow)
+                .where(
+                    PackageVersionRow.package_id == current.package_id,
+                    PackageVersionRow.id != version_id,
+                )
+                .order_by(
+                    PackageVersionRow.data["created_at"]
+                    .as_string()
+                    .desc()
+                )
+                .limit(1)
+            ).first()
+            if prev is None:
+                return None
+            return dict(prev.data)
 
     def update_version_status(
         self, version_id: str, new_status: str
@@ -279,6 +307,40 @@ class ProducerRepository:
             "comment": comment,
             "created_at": _serialize_dt(now),
         }
+
+    def list_review_records(
+        self, version_id: str
+    ) -> list[dict[str, object]]:
+        with self.session_factory() as session:
+            stmt = (
+                select(
+                    ReviewRecordRow.id,
+                    ReviewRecordRow.version_id,
+                    ReviewRecordRow.reviewer_id,
+                    ReviewRecordRow.conclusion,
+                    ReviewRecordRow.comment,
+                    ReviewRecordRow.created_at,
+                    UserRow.username.label("reviewer_name"),
+                    UserRow.display_name.label("reviewer_display_name"),
+                )
+                .outerjoin(UserRow, UserRow.id == ReviewRecordRow.reviewer_id)
+                .where(ReviewRecordRow.version_id == version_id)
+                .order_by(ReviewRecordRow.created_at.desc())
+            )
+            rows = session.execute(stmt).all()
+            return [
+                {
+                    "id": row.id,
+                    "version_id": row.version_id,
+                    "reviewer_id": row.reviewer_id,
+                    "reviewer_name": row.reviewer_name,
+                    "reviewer_display_name": row.reviewer_display_name,
+                    "conclusion": row.conclusion,
+                    "comment": row.comment,
+                    "created_at": _serialize_dt(row.created_at),
+                }
+                for row in rows
+            ]
 
     # ── 审计日志 ──────────────────────────────────────────
 

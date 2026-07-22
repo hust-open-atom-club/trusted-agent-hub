@@ -78,6 +78,26 @@ export interface PackagePage {
   total_pages: number;
 }
 
+export interface InstallReportRequest {
+  package_name: string;
+  version: string;
+  client: string;
+  install_path: string;
+  integrity_verified: boolean;
+}
+
+export interface InstallRecordResponse {
+  id: string;
+  package_name: string;
+  version: string;
+  version_id: string;
+  user_id: string;
+  client: string;
+  install_path: string;
+  integrity_verified: boolean;
+  installed_at: string;
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -86,6 +106,8 @@ const API_BASE =
   process.env.TRUSTED_AGENT_HUB_API_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   'http://localhost:8000';
+
+const API_TOKEN = process.env.TRUSTED_AGENT_HUB_TOKEN || '';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_PAGE_SIZE = 100;
@@ -279,6 +301,19 @@ export function createApiClient(customFetch?: FetchFn) {
       throw new ApiError('Resource not found', 404);
     }
 
+    // 409 Conflict → install manifest unavailable (expected for some packages)
+    if (response.status === 409) {
+      let detail = '';
+      try {
+        const body = await response.json();
+        detail = body?.error?.message || '';
+      } catch { /* ignore */ }
+      throw new ApiError(
+        detail || 'Install manifest unavailable for this package/client combination',
+        409,
+      );
+    }
+
     if (!response.ok) {
       let detail = '';
       try {
@@ -345,6 +380,82 @@ export function createApiClient(customFetch?: FetchFn) {
         `/api/v0/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`,
       );
       return validateVersionDetail(raw);
+    },
+
+    async getInstallManifest(
+      name: string,
+      client: string,
+      version?: string,
+    ): Promise<unknown> {
+      const params: Record<string, string> = { client };
+      if (version) params.version = version;
+      return apiFetch<unknown>(
+        `/api/v0/packages/${encodeURIComponent(name)}/install-manifest`,
+        params,
+      );
+    },
+
+    async recordInstall(request: InstallReportRequest): Promise<InstallRecordResponse> {
+      const url = new URL(`${API_BASE}/api/v0/installs`);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const headers: Record<string, string> = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      };
+      // P1 fix: include Bearer token when available (POST /api/v0/installs requires auth)
+      if (API_TOKEN) {
+        headers['Authorization'] = `Bearer ${API_TOKEN}`;
+      }
+
+      let response: Response;
+      try {
+        response = await fetcher(url.toString(), {
+          method: 'POST',
+          signal: controller.signal,
+          headers,
+          body: JSON.stringify(request),
+        });
+      } catch (err: unknown) {
+        clearTimeout(timer);
+        if (err instanceof Error && (
+          err.name === 'AbortError' || err.message.toLowerCase().includes('abort')
+        )) {
+          throw new ApiError(
+            `API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`,
+          );
+        }
+        throw new ApiError(
+          `Cannot reach API at ${API_BASE}. Is the server running?`,
+          undefined,
+          err,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const body = await response.json();
+          detail = body?.error?.message || body?.detail || '';
+        } catch { /* ignore */ }
+        throw new ApiError(
+          `Install record failed (${response.status})${detail ? ': ' + detail : ''}`,
+          response.status,
+        );
+      }
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch (err: unknown) {
+        throw new ApiError('Failed to parse install record response', undefined, err);
+      }
+
+      return body as InstallRecordResponse;
     },
 
     async isApiReachable(): Promise<boolean> {

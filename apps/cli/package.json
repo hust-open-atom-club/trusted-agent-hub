@@ -6,14 +6,17 @@
   "scripts": {
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
-    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts"
+    "pretest": "npm run build",
+    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts && tsx tests/install-executor.test.ts && tsx tests/cli-parsing.test.ts"
   },
   "dependencies": {
+    "adm-zip": "^0.6.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "ora": "^5.4.1"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.11.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.23.1",

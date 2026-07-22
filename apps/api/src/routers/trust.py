@@ -30,12 +30,8 @@ router = APIRouter(tags=["trust-scan"])
 # ---------------------------------------------------------------------------
 _API_SRC_DIR = Path(__file__).resolve().parent.parent  # apps/api/src/
 _PROJECT_ROOT = _API_SRC_DIR.parent.parent.parent  # repo root
-_REPORTS_DIR = _PROJECT_ROOT / "packages" / "schema" / "reports"
 _SCANNER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "scanner.py"
 _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
-
-# 确保 reports 目录存在
-_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
@@ -269,15 +265,11 @@ def _run_scan_task(
             "trust_score": trust_score_result,
         }
 
-        report_path = _REPORTS_DIR / f"{scan_id}.json"
-        with open(report_path, "w", encoding="utf-8") as fh:
-            json.dump(full_report, fh, indent=2, ensure_ascii=False)
-
-        # Step 5: 更新状态
+        # Step 5: 更新内存状态（完整报告已在 PostgreSQL 中）
         _scans[scan_id].update({
             "status": "complete",
             "finished_at": full_report["finished_at"],
-            "report_path": str(report_path),
+            "full_report": full_report,
             "summary": scan_report.get("summary", {}),
             "trust_score": {
                 "score": trust_score_result.get("score"),
@@ -427,38 +419,6 @@ def _parse_frontmatter(content: str) -> Dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# 缓存中已有报告的加载（供已存在的 scan_id 使用）
-# ---------------------------------------------------------------------------
-
-def _load_cached_reports() -> None:
-    """从磁盘加载已有的扫描报告到内存索引。"""
-    if not _REPORTS_DIR.is_dir():
-        return
-    for fpath in sorted(_REPORTS_DIR.glob("*.json")):
-        scan_id = fpath.stem
-        if scan_id in _scans:
-            continue
-        try:
-            with open(fpath, encoding="utf-8") as fh:
-                report = json.load(fh)
-            _scans[scan_id] = {
-                "status": "complete",
-                "package_name": report.get("package_name"),
-                "created_at": report.get("created_at", ""),
-                "finished_at": report.get("finished_at", ""),
-                "report_path": str(fpath),
-                "summary": report.get("scan_report", {}).get("summary", {}),
-                "trust_score": report.get("trust_score", {}),
-            }
-        except (json.JSONDecodeError, OSError):
-            continue
-
-
-# 启动时加载缓存
-_load_cached_reports()
-
-
-# ---------------------------------------------------------------------------
 # URL 规范化
 # ---------------------------------------------------------------------------
 
@@ -572,7 +532,7 @@ async def submit_scan(
         "package_name": None,
         "created_at": now,
         "finished_at": None,
-        "report_path": None,
+        "full_report": None,
         "summary": None,
         "trust_score": None,
         "error": None,
@@ -648,15 +608,13 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
         )
 
     if info["status"] == "complete":
-        # 从磁盘读取完整报告
-        report_path = info.get("report_path")
-        if report_path and os.path.isfile(report_path):
-            with open(report_path, encoding="utf-8") as fh:
-                return json.load(fh)
+        full_report = info.get("full_report")
+        if full_report:
+            return full_report
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Report file missing.",
+                detail="Report data not found in memory.",
             )
 
     elif info["status"] == "error":

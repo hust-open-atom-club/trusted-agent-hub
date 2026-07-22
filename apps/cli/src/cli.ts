@@ -4,7 +4,9 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { formatPackageCard, formatPackageDetail } from './format';
-import { checkInstall } from './grade-gate';
+import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
+import { validateManifest, ManifestValidationError } from './manifest-types';
+import type { InstallManifest } from './manifest-types';
 import { client, ApiError } from './api-client';
 import type { PackageSummary, VersionDetail } from './api-client';
 import {
@@ -37,6 +39,10 @@ function handleApiError(err: unknown): never {
 // ── Program setup ───────────────────────────────────────────────────────
 
 const program = new Command();
+
+// Allow subcommands to define options that shadow root-level options
+// (e.g. install --version <version> vs root --version).
+program.enablePositionalOptions();
 
 program
   .name('trusted-agent-hub')
@@ -148,129 +154,165 @@ program
 program
   .command('install <name>')
   .description('Install a package with grade-based safety gating')
+  .option('-c, --client <client>', 'Target client (e.g. claude-code)', 'claude-code')
+  .option('--version <version>', 'Specific version to install (default: latest)')
   .option('-y, --yes', 'Skip confirmation prompts (Grade C)')
   .option('-f, --force', 'First explicit consent for high-risk installs (Grade D)')
   .option('--accept-high-risk', 'Second explicit consent for high-risk installs (Grade D, required with --force)')
-  .action(async (name: string, options: { yes?: boolean; force?: boolean; acceptHighRisk?: boolean }) => {
-    let pkg: PackageSummary;
-    let version: VersionDetail | null = null;
+  .action(async (name: string, options: {
+    client?: string;
+    version?: string;
+    yes?: boolean;
+    force?: boolean;
+    acceptHighRisk?: boolean;
+  }) => {
+    const clientType = options.client || 'claude-code';
+    const executor = new InstallExecutor(client);
 
-    const spinner = ora('Looking up package details…').start();
+    // ── Display intent ──
+    console.log('');
+    console.log(`  ${chalk.dim('Package:')}  ${chalk.cyan(name)}`);
+    console.log(`  ${chalk.dim('Client:')}   ${chalk.cyan(clientType)}`);
+    if (options.version) {
+      console.log(`  ${chalk.dim('Version:')}  ${chalk.cyan(options.version)}`);
+    }
+    console.log('');
+
+    // ── Phase 1: Fetch manifest ──
+    const fetchSpinner = ora('Fetching install manifest…').start();
+    let manifestRaw: unknown;
     try {
-      pkg = await client.getPackage(name);
+      manifestRaw = await client.getInstallManifest(name, clientType, options.version || undefined);
     } catch (err) {
-      spinner.stop();
+      fetchSpinner.stop();
+      if (err instanceof ApiError && err.statusCode === 404) {
+        fatal('Package not found or no published version available.');
+      }
+      if (err instanceof ApiError && err.statusCode === 409) {
+        fatal(
+          `Install manifest unavailable for "${name}" with client "${clientType}".\n` +
+          `    This package may not support this client, or installation is blocked by the server.`,
+        );
+      }
       handleApiError(err);
     }
+    fetchSpinner.stop();
 
+    // ── Phase 2: Validate manifest (client-side) ──
+    let manifest: InstallManifest;
     try {
-      version = await client.getVersionDetail(name, pkg!.latest_version);
-    } catch (err) {
-      if (!(err instanceof ApiError && err.statusCode === 404)) {
-        spinner.stop();
-        handleApiError(err);
+      manifest = validateManifest(manifestRaw);
+    } catch (err: unknown) {
+      if (err instanceof ManifestValidationError) {
+        fatal(
+          `Invalid install manifest received from server.\n` +
+          `    ${err.message}\n` +
+          `    This is a server-side issue — please report it to the package maintainer.`,
+        );
       }
+      throw err;
     }
-    spinner.stop();
 
-    // ── Resolve grade and check install ──
-    const gateResult = checkInstall(
-      {
-        grade: version?.trust_score?.risk_summary?.grade || pkg!.grade || null,
-        riskLevel: pkg!.risk_level || null,
-        versionLevel: version?.trust_score?.risk_summary?.level || null,
-      },
-      { yes: options.yes, force: options.force, acceptHighRisk: options.acceptHighRisk },
-    );
-
-    const grade = gateResult.grade;
-    const rec = version?.trust_score?.risk_summary?.install_recommendation || null;
-    const topRisks = version?.trust_score?.risk_summary?.top_risks || [];
-    const trustScore = pkg!.trust_score;
-
-    // ── Display summary ──
-    console.log('');
-    console.log(
-      `  ${chalk.dim('Package:')}  ${chalk.cyan(pkg!.name)}  ${chalk.dim('v' + pkg!.latest_version)}`,
-    );
-    console.log(
-      `  ${chalk.dim('Type:')}     ${PACKAGE_TYPE_LABELS[pkg!.type as PackageType] || pkg!.type}`,
-    );
-
-    if (grade && grade !== 'unknown') {
-      const gradeLabel = GRADE_LABELS[grade as Grade] || grade;
-      const policy = (gateResult as any).policy || 'block';
+    // ── Display package info ──
+    console.log(`  ${chalk.dim('Package:')}  ${chalk.cyan(manifest.name)}  ${chalk.dim('v' + manifest.version)}`);
+    console.log(`  ${chalk.dim('Type:')}     ${PACKAGE_TYPE_LABELS[manifest.type as PackageType] || manifest.type}`);
+    const gradeVal = manifest.risk_summary.grade || null;
+    if (gradeVal) {
+      const gradeLabel = GRADE_LABELS[gradeVal as Grade] || gradeVal;
+      const policy = gradeVal === 'A' ? 'allow' : gradeVal === 'B' ? 'warn' : gradeVal === 'C' ? 'confirm' : gradeVal === 'D' ? 'confirm' : 'block';
       const policyIcon =
         policy === 'allow' ? chalk.green('✓')
         : policy === 'warn' ? chalk.yellow('⚠')
         : policy === 'confirm' ? chalk.yellow('⚠')
         : chalk.red('✗');
       console.log(
-        `  ${chalk.dim('Grade:')}     ${chalk.bold(gradeLabel)}  ${policyIcon} ${
-          policy === 'allow' ? chalk.green('允许自动安装')
-          : policy === 'warn' ? chalk.yellow('展示权限声明')
-          : policy === 'confirm' ? chalk.yellow('需确认后安装')
-          : chalk.red('禁止安装')}`,
+        `  ${chalk.dim('Grade:')}     ${chalk.bold(gradeLabel)}  ${policyIcon}`,
       );
     }
-
-    if (trustScore !== null) console.log(`  ${chalk.dim('Trust:')}    ${trustScore}/100`);
+    console.log(`  ${chalk.dim('Trust:')}    ${manifest.trust_score}/100`);
+    console.log(`  ${chalk.dim('Source:')}   ${manifest.source.type} · ${manifest.source.repository_url}`);
+    const rec = manifest.risk_summary.install_recommendation;
     if (rec) console.log(`  ${chalk.dim('Recommend:')} ${rec}`);
 
-    if (topRisks.length > 0) {
+    // Top risks
+    if (manifest.risk_summary.top_risks && manifest.risk_summary.top_risks.length > 0) {
       console.log('');
       console.log(`  ${chalk.yellow('Top risks:')}`);
-      for (const risk of topRisks.slice(0, 5)) {
+      for (const risk of manifest.risk_summary.top_risks.slice(0, 5)) {
         console.log(`    ${chalk.dim('•')} ${risk}`);
       }
     }
 
+    // Permissions for Grade B
+    if (gradeVal === 'B' && manifest.permissions) {
+      console.log('');
+      console.log(chalk.blue('  ℹ Grade B — Review permissions:'));
+      const p = manifest.permissions;
+      if (p.filesystem) console.log(chalk.dim(`    filesystem: ${JSON.stringify(p.filesystem)}`));
+      if (p.shell) console.log(chalk.dim(`    shell: ${JSON.stringify(p.shell)}`));
+      if (p.network) console.log(chalk.dim(`    network: ${JSON.stringify(p.network)}`));
+      if (p.environment) console.log(chalk.dim(`    environment: ${JSON.stringify(p.environment)}`));
+    }
+
     console.log('');
 
-    if (!gateResult.allowed) {
-      const reason = 'reason' in gateResult ? gateResult.reason : 'Installation blocked by safety policy.';
-      const header =
-        grade === 'E' ? chalk.red.bold('  ✗ Installation blocked')
-        : grade === 'D' ? chalk.yellow.bold('  ⚠ Grade D — High Risk')
-        : grade === 'C' ? chalk.yellow.bold('  ⚠ Installation requires confirmation')
-        : chalk.red.bold('  ✗ Installation blocked');
-      console.log(header);
-      console.log(chalk.yellow(`    ${reason}`));
+    // ── Phase 3: Execute install (reuse pre-fetched manifest) ──
+    const installSpinner = ora('Installing…').start();
+    try {
+      const result = await executor.installWithManifest(
+        manifest,
+        clientType,
+        {
+          yes: options.yes,
+          force: options.force,
+          acceptHighRisk: options.acceptHighRisk,
+        },
+      );
+
+      installSpinner.succeed(chalk.green('Installation complete'));
+
       console.log('');
-      return;
-    }
+      console.log(`  ${chalk.dim('Installed to:')} ${chalk.cyan(result.targetDir)}`);
+      console.log(`  ${chalk.dim('SHA-256:')}      ${chalk.dim(result.sha256.slice(0, 16))}…`);
+      console.log(`  ${chalk.dim('Record:')}       ${chalk.dim('~/.trusted-agent-hub/installs.json')}`);
 
-    if (grade === 'D') {
-      console.log(chalk.yellow.bold('  ⚠ Forcing install of Grade D package'));
-      console.log(chalk.yellow('    You have confirmed twice (--force + --accept-high-risk).'));
-    }
-
-    if (grade === 'B' && version?.permissions) {
-      console.log(chalk.blue('  ℹ Grade B — Low Risk'));
-      console.log(chalk.blue('    Review the permission declarations:'));
-      const perms = version.permissions;
-      if (perms.filesystem) console.log(chalk.dim(`      filesystem: ${JSON.stringify(perms.filesystem)}`));
-      if (perms.shell) console.log(chalk.dim(`      shell: ${JSON.stringify(perms.shell)}`));
-      if (perms.network) console.log(chalk.dim(`      network: ${JSON.stringify(perms.network)}`));
-      if (perms.environment) console.log(chalk.dim(`      environment: ${JSON.stringify(perms.environment)}`));
-    }
-
-    if (version?.installation?.targets) {
-      console.log(`  ${chalk.dim('Targets:')}`);
-      for (const t of version.installation.targets) {
-        console.log(`    ${chalk.dim('•')} ${t.client}: ${t.destination}`);
+      // Post-install message
+      if (manifest.installation.post_install_message) {
+        console.log('');
+        console.log(chalk.cyan(`  ℹ ${manifest.installation.post_install_message}`));
       }
-    }
 
-    if (version?.installation?.post_install_message) {
       console.log('');
-      console.log(chalk.cyan(`  ℹ ${version.installation.post_install_message}`));
-    }
+    } catch (err: unknown) {
+      installSpinner.stop();
 
-    console.log('');
-    console.log(chalk.green('  ✓ Ready to install'));
-    console.log(chalk.dim('  Install execution pending backend API integration.'));
-    console.log('');
+      if (err instanceof InstallBlockedError) {
+        const header =
+          err.grade === 'E' ? chalk.red.bold('  ✗ Installation blocked (Grade E)')
+          : err.grade === 'D' ? chalk.yellow.bold('  ⚠ Grade D — requires --force + --accept-high-risk')
+          : err.grade === 'C' ? chalk.yellow.bold('  ⚠ Grade C — requires --yes')
+          : chalk.red.bold('  ✗ Installation blocked');
+        console.log(header);
+        console.log(chalk.yellow(`    ${err.message}`));
+        console.log('');
+        process.exit(1);
+      }
+
+      if (err instanceof InstallError) {
+        console.log('');
+        console.log(chalk.red.bold(`  ✗ Installation failed (${err.code})`));
+        console.log(chalk.red(`    ${err.message}`));
+        console.log('');
+        process.exit(1);
+      }
+
+      // Unexpected errors
+      console.log('');
+      console.log(chalk.red.bold('  ✗ Installation failed'));
+      console.log(chalk.red(`    ${err instanceof Error ? err.message : String(err)}`));
+      console.log('');
+      process.exit(1);
+    }
   });
 
 // ── Parse ───────────────────────────────────────────────────────────────
