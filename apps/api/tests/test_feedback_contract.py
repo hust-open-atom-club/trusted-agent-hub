@@ -30,8 +30,7 @@ from src.repositories.sqlalchemy import (
 from src.services.feedback import FeedbackService
 
 
-ROOT = Path(__file__).resolve().parents[3]
-MOCK = ROOT / "packages" / "schema" / "mock"
+MOCK = Path(__file__).resolve().parent / "fixtures" / "mock"
 API_ROOT = Path(__file__).resolve().parents[1]
 
 

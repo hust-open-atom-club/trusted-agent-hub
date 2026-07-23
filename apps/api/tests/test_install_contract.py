@@ -30,7 +30,6 @@ def test_install_manifest_defaults_to_latest_published_version(
         "installation",
         "permissions",
         "risk_summary",
-        "trust_score",
         "compatibility",
         "dependencies",
     }
@@ -78,8 +77,7 @@ def test_install_manifest_defaults_to_latest_published_version(
     ]
     assert manifest["permissions"]["network"]["allowed"] is False
     assert manifest["risk_summary"]["install_recommendation"] == "safe"
-    assert manifest["trust_score"] == 92
-    assert isinstance(manifest["trust_score"], int)
+    assert manifest["risk_summary"]["grade"] == "A"
     assert manifest["compatibility"] == ["claude-code", "cursor"]
     assert manifest["dependencies"] == {
         "npm": None,
@@ -223,7 +221,7 @@ def test_install_manifest_collects_all_unsafe_fields_deterministically(
                     "installation.target_client",
                     "installation.method",
                     "permissions",
-                    "trust_score",
+                    "risk_summary.grade",
                 ]
             },
         }
@@ -288,7 +286,6 @@ def test_install_manifest_openapi_contract_is_strict(client: TestClient) -> None
         "installation",
         "permissions",
         "risk_summary",
-        "trust_score",
         "compatibility",
         "dependencies",
     ]
@@ -644,11 +641,9 @@ def test_install_manifest_rejects_untrusted_step_instructions(
     }
 
 
-@pytest.mark.parametrize("score", [float("nan"), float("inf"), float("-inf")])
-def test_install_manifest_rejects_non_finite_trust_score(
+def test_install_manifest_rejects_missing_grade(
     client: TestClient,
     repository: JsonPackageRepository,
-    score: float,
 ) -> None:
     record = repository.get_version("code-review-skill", "1.0.0")
     assert record is not None
@@ -656,7 +651,11 @@ def test_install_manifest_rejects_non_finite_trust_score(
     replacement = record.model_copy(
         update={
             "trust_score": record.trust_score.model_copy(
-                update={"score": score}
+                update={
+                    "risk_summary": record.trust_score.risk_summary.model_copy(
+                        update={"grade": None}
+                    )
+                }
             )
         }
     )
@@ -671,5 +670,5 @@ def test_install_manifest_rejects_non_finite_trust_score(
         "message": (
             "Install manifest for 'code-review-skill@1.0.0' is unavailable."
         ),
-        "details": {"invalid_fields": ["trust_score"]},
+        "details": {"invalid_fields": ["risk_summary.grade"]},
     }

@@ -106,7 +106,7 @@ export interface ManifestPermissions {
 
 export interface ManifestRiskSummary {
   level: string;
-  grade?: string | null;
+  grade: 'A' | 'B' | 'C' | 'D' | 'E';
   top_risks?: string[];
   install_recommendation: string;
 }
@@ -138,7 +138,6 @@ export interface InstallManifest {
   installation: ManifestInstallation;
   permissions: ManifestPermissions;
   risk_summary: ManifestRiskSummary;
-  trust_score: number; // 0-100
   compatibility: string[];
   dependencies: ManifestDependencies;
 }
@@ -194,13 +193,6 @@ export function validateManifest(raw: unknown): InstallManifest {
 
   // description
   check(typeof m.description === 'string', 'description', 'must be a string');
-
-  // trust_score
-  check(
-    typeof m.trust_score === 'number' && Number.isFinite(m.trust_score) && Number.isInteger(m.trust_score) && m.trust_score >= 0 && m.trust_score <= 100,
-    'trust_score',
-    'must be an integer 0-100',
-  );
 
   // compatibility
   check(Array.isArray(m.compatibility), 'compatibility', 'must be an array');
@@ -269,6 +261,11 @@ export function validateManifest(raw: unknown): InstallManifest {
   // --- risk_summary ---
   const risk = m.risk_summary as Record<string, unknown> | undefined;
   check(risk != null && typeof risk === 'object', 'risk_summary', 'must be an object');
+  check(
+    typeof risk!.grade === 'string' && /^[A-E]$/.test(risk!.grade),
+    'risk_summary.grade',
+    'must be one of A, B, C, D, E',
+  );
   check(typeof risk!.install_recommendation === 'string', 'risk_summary.install_recommendation', 'must be a string');
   // Blocked recommendation → reject manifest entirely
   check(risk!.install_recommendation !== 'blocked', 'risk_summary.install_recommendation', 'install is blocked by server');

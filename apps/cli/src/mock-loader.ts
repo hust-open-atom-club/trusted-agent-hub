@@ -29,7 +29,6 @@ export interface PackageSummary {
   owner: PackageOwner;
   latest_version: string;
   status: string;
-  trust_score: number | null;
   risk_level: string | null;
   grade: string | null;
   install_count: number;
@@ -69,10 +68,9 @@ export interface VersionDetail {
   };
   status: string;
   trust_score: {
-    score: number;
     risk_summary: {
       level: string;
-      grade?: string;
+      grade?: 'A' | 'B' | 'C' | 'D' | 'E';
       top_risks: string[];
       install_recommendation: string;
     };

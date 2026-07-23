@@ -14,6 +14,7 @@ import {
   LocalInstallStore,
   RecordStoreError,
 } from '../src/local-install-store';
+import type { RecordStorePersistence } from '../src/local-install-store';
 import type { LocalInstallRecord } from '../src/local-install-store';
 
 // ---------------------------------------------------------------------------
@@ -345,6 +346,113 @@ async function main() {
   });
 
   // -----------------------------------------------------------------------
+  // save() rejects invalid records (does not corrupt the file)
+  // -----------------------------------------------------------------------
+
+  runTest('save rejects record with unknown field', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      // First write a valid record so the file exists
+      store.save(makeRecord({ version: '1.0.0' }));
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      // Attempt to save a record with an unknown field
+      const badRecord = makeRecord({ version: '2.0.0' });
+      (badRecord as any).future_field = 'should-not-persist';
+
+      try {
+        store.save(badRecord);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_invalid');
+      }
+
+      // Original file must be intact — the invalid record must NOT
+      // have been written
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw,
+        'file must be byte-for-byte unchanged after rejected save');
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('save rejects record with invalid SHA format', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ version: '1.0.0' }));
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      const badRecord = makeRecord({ version: '2.0.0', sha256: 'too-short' });
+
+      try {
+        store.save(badRecord);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_invalid');
+      }
+
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('save rejects record with half-missing content hash fields', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ version: '1.0.0' }));
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      // content_hash_algorithm present but content_sha256 missing
+      const badRecord = makeRecord({
+        version: '2.0.0',
+        content_hash_algorithm: 'sha256-tree-v1',
+        content_sha256: undefined,
+      });
+
+      try {
+        store.save(badRecord);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_invalid');
+      }
+
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // RECORD_COMPARE_FIELDS completeness
+  // -----------------------------------------------------------------------
+
+  runTest('RECORD_COMPARE_FIELDS covers every LocalInstallRecord key', () => {
+    const { RECORD_COMPARE_FIELDS } = require('../src/local-install-store');
+    // Build the set of known keys from a full record
+    const full = makeRecord({
+      content_hash_algorithm: 'sha256-tree-v1',
+      content_sha256: 'b'.repeat(64),
+    });
+    const recordKeys = Object.keys(full).sort();
+    const fieldKeys = [...RECORD_COMPARE_FIELDS].sort();
+    assert.deepStrictEqual(fieldKeys, recordKeys,
+      'RECORD_COMPARE_FIELDS must exactly match LocalInstallRecord keys');
+  });
+
+  // -----------------------------------------------------------------------
   // Atomic save — original preserved and temp cleaned on rename failure
   // -----------------------------------------------------------------------
 
@@ -388,6 +496,265 @@ async function main() {
       const dirFiles = fs.readdirSync(dir);
       const tempFiles = dirFiles.filter(f => f.startsWith('installs.json.tmp-'));
       assert.strictEqual(tempFiles.length, 0, 'no temp file should remain');
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Unknown fields → record_invalid
+  // -----------------------------------------------------------------------
+
+  runTest('Unknown fields in record throw record_invalid', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const filePath = store.getPath();
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      // Record has an extra field that is not in the known set
+      const recordWithExtra = {
+        package_name: 'pkg-a',
+        version: '1.0.0',
+        client: 'claude-code',
+        install_path: '/tmp/pkg-a',
+        sha256: 'a'.repeat(64),
+        integrity_verified: true,
+        installed_at: '2026-01-01T00:00:00.000Z',
+        manifest_version: '1.0',
+        future_field: 'this-should-not-be-accepted',
+      };
+      fs.writeFileSync(filePath, JSON.stringify([recordWithExtra]), 'utf-8');
+
+      try {
+        store.load();
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_invalid');
+        assert.ok(
+          (e as RecordStoreError).message.includes('future_field'),
+          `error must mention the unknown field, got: ${(e as RecordStoreError).message}`,
+        );
+      }
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // remove() — basic
+  // -----------------------------------------------------------------------
+
+  runTest('remove deletes the only record', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ package_name: 'pkg-a', client: 'claude-code' }));
+
+      const removed = store.remove('pkg-a', 'claude-code');
+      assert.notStrictEqual(removed, null);
+      assert.strictEqual(removed!.package_name, 'pkg-a');
+
+      const remaining = store.load();
+      assert.deepStrictEqual(remaining, []);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('remove preserves other records', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ package_name: 'pkg-a', client: 'claude-code' }));
+      store.save(makeRecord({ package_name: 'pkg-b', client: 'claude-code' }));
+      store.save(makeRecord({ package_name: 'pkg-a', client: 'cursor' }));
+
+      const removed = store.remove('pkg-a', 'claude-code');
+      assert.notStrictEqual(removed, null);
+      assert.strictEqual(removed!.package_name, 'pkg-a');
+      assert.strictEqual(removed!.client, 'claude-code');
+
+      const remaining = store.load();
+      assert.strictEqual(remaining.length, 2);
+      assert.deepStrictEqual(
+        remaining.map(r => r.package_name).sort(),
+        ['pkg-a', 'pkg-b'],
+      );
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('remove missing returns null without modifying file', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ package_name: 'pkg-a', client: 'claude-code' }));
+
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      const removed = store.remove('missing', 'claude-code');
+      assert.strictEqual(removed, null);
+
+      // File must be unchanged
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // remove() with expectedRecord
+  // -----------------------------------------------------------------------
+
+  runTest('remove with matching expectedRecord succeeds', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const record = makeRecord({ package_name: 'pkg-a', version: '1.0.0' });
+      store.save(record);
+
+      // Re-read for a snapshot
+      const snapshot = store.find('pkg-a', 'claude-code');
+      assert.notStrictEqual(snapshot, null);
+
+      const removed = store.remove('pkg-a', 'claude-code', snapshot!);
+      assert.notStrictEqual(removed, null);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('remove with changed expectedRecord throws record_changed', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const record = makeRecord({ package_name: 'pkg-a', version: '1.0.0' });
+      store.save(record);
+
+      const snapshot = store.find('pkg-a', 'claude-code')!;
+      // Modify the record on disk
+      store.save(makeRecord({ package_name: 'pkg-a', version: '2.0.0' }));
+
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      try {
+        store.remove('pkg-a', 'claude-code', snapshot);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_changed');
+      }
+
+      // File must be unchanged
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('remove with expectedRecord and missing record throws record_changed', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const fakeRecord = makeRecord({ package_name: 'ghost', client: 'claude-code' });
+
+      try {
+        store.remove('ghost', 'claude-code', fakeRecord);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_changed');
+      }
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // remove() atomic rename failure
+  // -----------------------------------------------------------------------
+
+  runTest('remove atomic rename failure preserves original file', () => {
+    const home = makeTmpDir();
+    try {
+      // First, save records using a normal store (real fs)
+      const normalStore = new LocalInstallStore(home);
+      normalStore.save(makeRecord({ package_name: 'pkg-a', client: 'claude-code' }));
+      normalStore.save(makeRecord({ package_name: 'pkg-b', client: 'claude-code' }));
+
+      const filePath = normalStore.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      // Now create a store with injected persistence that fails on rename
+      const failPersistence: RecordStorePersistence = {
+        writeText: (fp: string, value: string) => {
+          fs.writeFileSync(fp, value, 'utf-8');
+        },
+        rename: (_source: string, _destination: string) => {
+          throw new Error('simulated rename failure');
+        },
+        remove: (fp: string) => {
+          try { fs.unlinkSync(fp); } catch { /* ignore */ }
+        },
+      };
+
+      const failStore = new LocalInstallStore(home, failPersistence);
+      try {
+        failStore.remove('pkg-a', 'claude-code');
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'save_failed');
+      }
+
+      // Original file must be intact byte-for-byte
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw,
+        'original file must be preserved byte-for-byte after failed remove');
+
+      // No temp file should be left behind
+      const dir = path.dirname(filePath);
+      const dirFiles = fs.readdirSync(dir);
+      const tempFiles = dirFiles.filter(f => f.includes('.tmp-'));
+      assert.strictEqual(tempFiles.length, 0, 'no temp file should remain');
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // remove() with expectedRecord — add to store import check
+  // -----------------------------------------------------------------------
+  runTest('remove with expectedRecord and extra fields detects change', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const record = makeRecord({ package_name: 'pkg-a', version: '1.0.0' });
+      store.save(record);
+
+      const snapshot = store.find('pkg-a', 'claude-code')!;
+      // Mutate snapshot's version so it no longer matches the stored record
+      const tamperedSnapshot = { ...snapshot, version: '9.9.9' };
+
+      const filePath = store.getPath();
+      const originalRaw = fs.readFileSync(filePath, 'utf-8');
+
+      try {
+        store.remove('pkg-a', 'claude-code', tamperedSnapshot);
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof RecordStoreError);
+        assert.strictEqual((e as RecordStoreError).code, 'record_changed');
+      }
+
+      const afterRaw = fs.readFileSync(filePath, 'utf-8');
+      assert.strictEqual(afterRaw, originalRaw);
     } finally {
       cleanup(home);
     }

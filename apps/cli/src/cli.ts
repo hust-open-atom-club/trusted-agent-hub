@@ -7,6 +7,9 @@ import { formatPackageCard, formatPackageDetail } from './format';
 import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
 import { VerifyExecutor } from './verify-executor';
 import type { VerifyResult } from './verify-executor';
+import { UninstallExecutor } from './uninstall-executor';
+import type { UninstallResult } from './uninstall-executor';
+import { createTerminalConfirm } from './confirm';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest } from './manifest-types';
 import { client, ApiError } from './api-client';
@@ -231,7 +234,6 @@ program
         `  ${chalk.dim('Grade:')}     ${chalk.bold(gradeLabel)}  ${policyIcon}`,
       );
     }
-    console.log(`  ${chalk.dim('Trust:')}    ${manifest.trust_score}/100`);
     console.log(`  ${chalk.dim('Source:')}   ${manifest.source.type} · ${manifest.source.repository_url}`);
     const rec = manifest.risk_summary.install_recommendation;
     if (rec) console.log(`  ${chalk.dim('Recommend:')} ${rec}`);
@@ -358,6 +360,57 @@ program
   .action(async (name: string, options: { client: string }) => {
     const result = await new VerifyExecutor(client).verify(name, options.client);
     printVerifyResult(result);
+    if (!result.ok) process.exitCode = 1;
+  });
+
+// ── uninstall ────────────────────────────────────────────────────────────
+
+/**
+ * Print an uninstall result with a stable, machine-parseable status line.
+ * Never leaks file content, tokens, or response bodies.
+ */
+function printUninstallResult(result: UninstallResult): void {
+  const icon =
+    result.ok ? chalk.green('✓')
+    : result.status === 'cancelled' ? chalk.green('✓')
+    : chalk.red('✗');
+
+  console.log('');
+  console.log(
+    `  ${icon} ${chalk.bold(result.packageName)}  ${chalk.dim(`[${result.status}]`)}`,
+  );
+  if (result.version) {
+    console.log(`  ${chalk.dim('Version:')}       ${result.version}`);
+  }
+  console.log(`  ${chalk.dim('Client:')}        ${result.client}`);
+  if (result.installPath) {
+    console.log(`  ${chalk.dim('Install path:')}  ${result.installPath}`);
+  }
+  if (result.quarantinePath) {
+    console.log(`  ${chalk.dim('Recovery path:')} ${result.quarantinePath}`);
+  }
+  console.log('');
+  console.log(`  ${result.ok ? chalk.green(result.message) : chalk.yellow(result.message)}`);
+  console.log('');
+}
+
+program
+  .command('uninstall <name>')
+  .description('Safely uninstall a locally installed package')
+  .option('-c, --client <client>', 'Installed client', 'claude-code')
+  .option('-y, --yes', 'Skip the confirmation prompt')
+  .option('-f, --force', 'Allow modified or legacy content to be removed')
+  .action(async (
+    name: string,
+    options: { client: string; yes?: boolean; force?: boolean },
+  ) => {
+    const confirm = options.yes ? undefined : createTerminalConfirm();
+    const result = await new UninstallExecutor().uninstall(name, options.client, {
+      yes: options.yes,
+      force: options.force,
+      confirm,
+    });
+    printUninstallResult(result);
     if (!result.ok) process.exitCode = 1;
   });
 

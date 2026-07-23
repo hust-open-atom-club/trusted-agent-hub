@@ -89,7 +89,6 @@ function makeManifest(overrides: Record<string, unknown> = {}): Record<string, u
       grade: 'A',
       install_recommendation: 'safe',
     },
-    trust_score: 80,
     compatibility: ['claude-code'],
     dependencies: {},
     ...overrides,

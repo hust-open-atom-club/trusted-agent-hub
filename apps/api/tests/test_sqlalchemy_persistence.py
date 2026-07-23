@@ -33,8 +33,7 @@ from src.repositories.sqlalchemy import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[3]
-MOCK = ROOT / "packages" / "schema" / "mock"
+MOCK = Path(__file__).resolve().parent / "fixtures" / "mock"
 
 
 @pytest.fixture

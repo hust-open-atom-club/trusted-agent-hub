@@ -22,18 +22,19 @@ from .errors import (
     VersionNotFoundError,
 )
 
-_GRADE_NUMERIC: dict[Grade | None, int] = {
+_GRADE_NUMERIC: dict[Grade, int] = {
     Grade.A: 5,
     Grade.B: 4,
     Grade.C: 3,
     Grade.D: 2,
     Grade.E: 1,
-    None: 0,
 }
 
 
-def _grade_order(grade: Grade | None) -> int:
-    return _GRADE_NUMERIC.get(grade, 0)
+def _grade_order(grade: Grade | None) -> int | None:
+    if grade is None:
+        return None
+    return _GRADE_NUMERIC[grade]
 
 
 class PackageService:

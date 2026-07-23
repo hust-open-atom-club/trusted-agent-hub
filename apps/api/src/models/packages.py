@@ -123,7 +123,7 @@ class EntryPoints(StrictContractModel):
 
 
 class TrustScoreDimension(StrictContractModel):
-    model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
+    model_config = ConfigDict(extra="ignore")  # accept but do not expose legacy DB fields
     weight: float
     details: dict[str, object] | None = None
 
@@ -151,7 +151,7 @@ class RiskSummary(StrictContractModel):
 
 
 class TrustScore(StrictContractModel):
-    model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
+    model_config = ConfigDict(extra="ignore")  # accept but do not expose legacy DB fields
     model_version: str | None = None
     dimensions: dict[str, TrustScoreDimension] | None = None
     explanations: list[TrustScoreExplanation] | None = None
