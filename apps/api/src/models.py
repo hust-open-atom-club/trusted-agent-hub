@@ -131,7 +131,6 @@ class EntryPoints(BaseModel):
 
 
 class TrustScoreDimension(BaseModel):
-    score: float
     weight: float
     details: Optional[Dict[str, Any]] = None
 
@@ -151,7 +150,6 @@ class RiskSummary(BaseModel):
 
 
 class TrustScore(BaseModel):
-    score: float
     model_version: Optional[str] = None
     dimensions: Optional[Dict[str, TrustScoreDimension]] = None
     explanations: Optional[List[TrustScoreExplanation]] = None
@@ -213,7 +211,6 @@ class PackageSummary(BaseModel):
     owner: Optional[Owner] = None
     latest_version: str
     status: str
-    trust_score: Optional[float] = None
     risk_level: Optional[str] = None
     install_count: int = 0
     avg_rating: Optional[float] = None
@@ -236,7 +233,6 @@ class PackageDetail(BaseModel):
     owner: Optional[Owner] = None
     latest_version: str
     status: str
-    trust_score: Optional[float] = None
     risk_level: Optional[str] = None
     install_count: int = 0
     avg_rating: Optional[float] = None
@@ -252,7 +248,6 @@ class VersionSummary(BaseModel):
     status: str
     submitted_at: Optional[str] = None
     created_at: Optional[str] = None
-    trust_score: Optional[float] = None
 
 
 class VersionDetail(BaseModel):
@@ -298,7 +293,6 @@ class TrustScoreResponse(BaseModel):
     """Trust score data returned to the consumer."""
 
     version_id: str
-    score: float
     level: Optional[str] = None
     grade: Optional[str] = None
     recommendation: Optional[str] = None

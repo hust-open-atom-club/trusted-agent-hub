@@ -22,11 +22,11 @@ class StrictContractModel(BaseModel):
 
 
 class SortField(StrEnum):
-    TRUST_SCORE = "trust_score"
     UPDATED_AT = "updated_at"
     INSTALL_COUNT = "install_count"
     AVG_RATING = "avg_rating"
     NAME = "name"
+    GRADE = "grade"
 
 
 class SortOrder(StrEnum):
@@ -42,7 +42,7 @@ class PackageListQuery(BaseModel):
     client: str | None = None
     category: str | None = None
     status: Literal["published"] = "published"
-    sort_by: SortField = SortField.TRUST_SCORE
+    sort_by: SortField = SortField.UPDATED_AT
     order: SortOrder = SortOrder.DESC
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)

@@ -123,7 +123,7 @@ class EntryPoints(StrictContractModel):
 
 
 class TrustScoreDimension(StrictContractModel):
-    score: float
+    model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
     weight: float
     details: dict[str, object] | None = None
 
@@ -151,7 +151,7 @@ class RiskSummary(StrictContractModel):
 
 
 class TrustScore(StrictContractModel):
-    score: float
+    model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
     model_version: str | None = None
     dimensions: dict[str, TrustScoreDimension] | None = None
     explanations: list[TrustScoreExplanation] | None = None
@@ -217,7 +217,6 @@ class PackageSummary(StrictContractModel):
     owner: Owner | None = None
     latest_version: str
     status: str
-    trust_score: float | None = None
     risk_level: str | None = None
     grade: Grade | None = None
     install_count: int = 0
@@ -232,7 +231,6 @@ class VersionSummary(StrictContractModel):
     status: str
     submitted_at: str | None = None
     created_at: str | None = None
-    trust_score: float | None = None
 
 
 class VersionDetail(StrictContractModel):

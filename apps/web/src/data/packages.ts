@@ -18,7 +18,6 @@ export interface Package {
   owner: Owner;
   latest_version: string;
   status: string;
-  trust_score: number | null;
   risk_level: string | null;
   grade: string | null;
   install_count: number;

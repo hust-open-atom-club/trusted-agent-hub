@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth';
 import Navbar from '@/components/Navbar';
+import '@/i18n/i18n';
 
 function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -17,13 +18,37 @@ function ThemeProvider({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function RevealProvider({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-in');
+          }
+        });
+      },
+      { threshold: 0.15 }
+    );
+
+    const targets = document.querySelectorAll('.reveal');
+    targets.forEach((el) => observer.observe(el));
+
+    return () => observer.disconnect();
+  }, []);
+
+  return <>{children}</>;
+}
+
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <Navbar />
-        <div className="nav-spacer" />
-        <main>{children}</main>
+        <RevealProvider>
+          <Navbar />
+          <div className="nav-spacer" />
+          <main>{children}</main>
+        </RevealProvider>
       </ThemeProvider>
     </AuthProvider>
   );

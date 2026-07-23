@@ -186,8 +186,7 @@ class InstallManifestService:
         if (
             trust_score is None
             or risk_summary is None
-            or not math.isfinite(trust_score.score)
-            or not 0 <= round(trust_score.score) <= 100
+            or risk_summary.grade is None
         ):
             invalid_fields.append("trust_score")
         if (
@@ -240,7 +239,6 @@ class InstallManifestService:
             ),
             permissions=record.permissions,
             risk_summary=risk_summary,
-            trust_score=round(trust_score.score),
             compatibility=record.compatibility,
             dependencies=record.dependencies or Dependencies(),
         )

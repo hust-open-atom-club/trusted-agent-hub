@@ -143,6 +143,5 @@ class InstallManifest(StrictContractModel):
     installation: ManifestInstallation
     permissions: Permissions
     risk_summary: RiskSummary
-    trust_score: int = Field(ge=0, le=100)
     compatibility: list[str]
     dependencies: Dependencies
