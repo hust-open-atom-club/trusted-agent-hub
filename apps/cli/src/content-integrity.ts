@@ -42,7 +42,12 @@ export interface DirectoryDigest {
 
 export interface DigestLimits {
   maxFiles?: number;    // default 10000
+  maxDirs?: number;     // default 5000
   maxBytes?: number;    // default 500 MiB
+  maxDepth?: number;    // default 50
+  /** Test-only hook: fires after collectEntries, before hashing + post-scan.
+   *  Modify the directory here to simulate a TOCTOU race. */
+  _afterCollectHook?: (root: string, dirs: { relPath: string }[], files: { relPath: string }[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +69,9 @@ export class ContentIntegrityError extends Error {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MAX_FILES = 10_000;
+const DEFAULT_MAX_DIRS = 5_000;
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024; // 500 MiB
+const DEFAULT_MAX_DEPTH = 50;
 const CHUNK_SIZE = 64 * 1024; // 64 KiB
 
 // ---------------------------------------------------------------------------
@@ -218,6 +225,54 @@ interface FileEntry {
 interface DirEntry {
   relPath: string;
   absPath: string;
+  /** Identity from initial lstat — compared post-scan to detect directory swap */
+  identity: { dev: bigint; ino: bigint };
+}
+
+/**
+ * Classify a filesystem entry from its lstat result.
+ *
+ * Returns 'dir' or 'file' for safe, supported types.  Throws
+ * ContentIntegrityError for symlinks, junctions, sockets, FIFOs, devices,
+ * and any unknown type (fail-closed — silent omission is not allowed).
+ *
+ * Exported for unit testing of the unknown-type rejection path.
+ */
+export function classifyEntryType(
+  stat: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean; isSocket(): boolean; isFIFO(): boolean; isBlockDevice(): boolean; isCharacterDevice(): boolean },
+  relPath: string,
+): 'dir' | 'file' {
+  if (stat.isSymbolicLink()) {
+    throw new ContentIntegrityError(
+      `Symbolic link not allowed in installed content: "${relPath}"`,
+      'unsafe_content',
+    );
+  }
+  if (stat.isDirectory()) return 'dir';
+  if (stat.isFile()) return 'file';
+  if (stat.isSocket()) {
+    throw new ContentIntegrityError(
+      `Socket not allowed in installed content: "${relPath}"`,
+      'unsafe_content',
+    );
+  }
+  if (stat.isFIFO()) {
+    throw new ContentIntegrityError(
+      `FIFO not allowed in installed content: "${relPath}"`,
+      'unsafe_content',
+    );
+  }
+  if (stat.isBlockDevice() || stat.isCharacterDevice()) {
+    throw new ContentIntegrityError(
+      `Device file not allowed in installed content: "${relPath}"`,
+      'unsafe_content',
+    );
+  }
+  // Unknown type — fail closed
+  throw new ContentIntegrityError(
+    `Unsupported file type in installed content: "${relPath}"`,
+    'unsafe_content',
+  );
 }
 
 /**
@@ -227,14 +282,29 @@ interface DirEntry {
  */
 async function collectEntries(
   root: string,
-  limits: Required<DigestLimits>,
+  limits: { maxFiles: number; maxDirs: number; maxBytes: number; maxDepth: number },
 ): Promise<{ dirs: DirEntry[]; files: FileEntry[] }> {
   const dirs: DirEntry[] = [];
   const files: FileEntry[] = [];
   let fileCount = 0;
+  let dirCount = 0;
   let totalBytes = 0;
 
-  async function walk(currentDir: string, relPrefix: string): Promise<void> {
+  async function walk(currentDir: string, relPrefix: string, depth: number): Promise<void> {
+    if (depth > limits.maxDepth) {
+      throw new ContentIntegrityError(
+        `Directory depth ${depth} exceeds maximum ${limits.maxDepth}`,
+        'too_deep',
+      );
+    }
+
+    dirCount++;
+    if (dirCount > limits.maxDirs) {
+      throw new ContentIntegrityError(
+        `Directory count ${dirCount} exceeds maximum ${limits.maxDirs}`,
+        'too_many_dirs',
+      );
+    }
     let dirEntries: fs.Dirent[];
     try {
       dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
@@ -265,21 +335,16 @@ async function collectEntries(
         );
       }
 
-      // lstat would return isSymbolicLink()=true for symlinks; for Windows
-      // junctions, Node reports isDirectory()=true but isSymbolicLink()=false.
-      // We catch those via the ancestor chain check at the higher level.  The
-      // best we can do here for direct children is to check isSymbolicLink().
-      if (stat.isSymbolicLink()) {
-        throw new ContentIntegrityError(
-          `Symbolic link not allowed in installed content: "${relPath}"`,
-          'unsafe_content',
-        );
-      }
+      const entryType = classifyEntryType(stat, relPath);
 
-      if (stat.isDirectory()) {
-        dirs.push({ relPath, absPath });
-        await walk(absPath, relPath);
-      } else if (stat.isFile()) {
+      if (entryType === 'dir') {
+        dirs.push({
+          relPath,
+          absPath,
+          identity: { dev: stat.dev, ino: stat.ino },
+        });
+        await walk(absPath, relPath, depth + 1);
+      } else if (entryType === 'file') {
         fileCount++;
         if (fileCount > limits.maxFiles) {
           throw new ContentIntegrityError(
@@ -303,27 +368,12 @@ async function collectEntries(
           absPath,
           identity: { dev: stat.dev, ino: stat.ino, size: stat.size },
         });
-      } else if (stat.isSocket()) {
-        throw new ContentIntegrityError(
-          `Socket not allowed in installed content: "${relPath}"`,
-          'unsafe_content',
-        );
-      } else if (stat.isFIFO()) {
-        throw new ContentIntegrityError(
-          `FIFO not allowed in installed content: "${relPath}"`,
-          'unsafe_content',
-        );
-      } else if (stat.isBlockDevice() || stat.isCharacterDevice()) {
-        throw new ContentIntegrityError(
-          `Device file not allowed in installed content: "${relPath}"`,
-          'unsafe_content',
-        );
       }
-      // Unknown types — skip silently (safe: won't contribute to hash)
+      // classifyEntryType already throws for unsafe/unknown types
     }
   }
 
-  await walk(root, '');
+  await walk(root, '', 1);
 
   // Sort by relative path with locale-independent binary comparison
   dirs.sort((a, b) => binaryCompare(a.relPath, b.relPath));
@@ -503,15 +553,14 @@ export async function computeDirectoryDigest(
     );
   }
 
-  const effectiveLimits: Required<DigestLimits> = {
-    maxFiles: limits?.maxFiles ?? DEFAULT_MAX_FILES,
-    maxBytes: limits?.maxBytes ?? DEFAULT_MAX_BYTES,
+  // Record root identity before scan — used after hashing to detect
+  // directory replacement during the scan.
+  const rootIdentity: { dev: bigint; ino: bigint } = {
+    dev: rootStat.dev,
+    ino: rootStat.ino,
   };
 
-  // Collect all entries (validated, sorted) — metadata only, no file content
-  const { dirs, files } = await collectEntries(resolvedRoot, effectiveLimits);
-
-  // Resolve the real root for physical containment checks during file reads
+  // Resolve real path before scan
   let realRoot: string;
   try {
     realRoot = fs.realpathSync(resolvedRoot);
@@ -522,7 +571,23 @@ export async function computeDirectoryDigest(
     );
   }
 
-  // Build the hash input — stream file content in chunks
+  const effectiveLimits = {
+    maxFiles: limits?.maxFiles ?? DEFAULT_MAX_FILES,
+    maxDirs: limits?.maxDirs ?? DEFAULT_MAX_DIRS,
+    maxBytes: limits?.maxBytes ?? DEFAULT_MAX_BYTES,
+    maxDepth: limits?.maxDepth ?? DEFAULT_MAX_DEPTH,
+    _afterCollectHook: undefined as ((root: string, dirs: { relPath: string }[], files: { relPath: string }[]) => void) | undefined,
+  };
+
+  // Phase 1: Collect all entries (validated, sorted) — metadata only
+  const { dirs, files } = await collectEntries(resolvedRoot, effectiveLimits);
+
+  // Test hook — simulate TOCTOU race between scan and hash
+  if (limits?._afterCollectHook) {
+    limits._afterCollectHook(resolvedRoot, dirs, files);
+  }
+
+  // Phase 2: Build the hash input — stream file content in chunks
   const hash = crypto.createHash('sha256');
   let fileCount = 0;
   let totalBytes = 0;
@@ -553,6 +618,128 @@ export async function computeDirectoryDigest(
     );
 
     hash.update('\0');
+  }
+
+  // Phase 3: Post-scan verification — re-scan the directory to detect
+  // TOCTOU races (files added, removed, renamed, or directories replaced
+  // with symlinks during the scan+hash window).
+  {
+    // Verify root identity hasn't changed (wasn't replaced with symlink/junction)
+    let currentRootStat: fs.BigIntStats;
+    try {
+      currentRootStat = fs.lstatSync(resolvedRoot, { bigint: true }) as fs.BigIntStats;
+    } catch {
+      throw new ContentIntegrityError('Root directory disappeared during scan', 'unsafe_content');
+    }
+    if (currentRootStat.dev !== rootIdentity.dev || currentRootStat.ino !== rootIdentity.ino) {
+      throw new ContentIntegrityError('Root directory was replaced during scan', 'unsafe_content');
+    }
+    if (currentRootStat.isSymbolicLink() || !currentRootStat.isDirectory()) {
+      throw new ContentIntegrityError('Root directory type changed during scan', 'unsafe_content');
+    }
+
+    // Re-scan and compare entries.  Enforce the same limits as the initial
+    // scan so a crafted post-scan directory tree can't exhaust resources.
+    const postEntries = new Map<string, { kind: string; dev: bigint; ino: bigint }>();
+    let postDirCount = 0;
+
+    function scanPost(currentDir: string, relPrefix: string, depth: number): void {
+      if (depth > effectiveLimits.maxDepth) {
+        throw new ContentIntegrityError(
+          `Directory depth ${depth} exceeds maximum during post-scan`,
+          'too_deep',
+        );
+      }
+      postDirCount++;
+      if (postDirCount > effectiveLimits.maxDirs) {
+        throw new ContentIntegrityError(
+          `Directory count ${postDirCount} exceeds maximum during post-scan`,
+          'too_many_dirs',
+        );
+      }
+
+      let dirEntries: fs.Dirent[];
+      try {
+        dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
+      } catch {
+        throw new ContentIntegrityError(`Cannot re-scan directory`, 'read_error');
+      }
+
+      for (const entry of dirEntries) {
+        const absPath = path.join(currentDir, entry.name);
+        const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+
+        let stat: fs.BigIntStats;
+        try {
+          stat = fs.lstatSync(absPath, { bigint: true }) as fs.BigIntStats;
+        } catch {
+          throw new ContentIntegrityError(`Entry disappeared during scan`, 'modified');
+        }
+
+        // Reject unsafe types in post-scan just like initial scan
+        if (stat.isSymbolicLink()) {
+          throw new ContentIntegrityError(`Symlink appeared during scan`, 'unsafe_content');
+        }
+
+        let kind: string;
+        if (stat.isDirectory()) {
+          kind = 'D';
+        } else if (stat.isFile()) {
+          kind = 'F';
+        } else if (stat.isSocket() || stat.isFIFO() || stat.isBlockDevice() || stat.isCharacterDevice()) {
+          throw new ContentIntegrityError(`Unsafe file type appeared during scan`, 'unsafe_content');
+        } else {
+          throw new ContentIntegrityError(`Unknown file type appeared during scan`, 'unsafe_content');
+        }
+
+        const key = kind + ':' + relPath;
+        postEntries.set(key, { kind, dev: stat.dev, ino: stat.ino });
+
+        if (stat.isDirectory()) {
+          scanPost(absPath, relPath, depth + 1);
+        }
+      }
+    }
+    scanPost(resolvedRoot, '', 1);
+
+    // Compare: every original entry must still exist with same type and identity
+    for (const e of dirs) {
+      const key = 'D:' + e.relPath;
+      const post = postEntries.get(key);
+      if (!post) {
+        throw new ContentIntegrityError(`Directory removed during scan`, 'modified');
+      }
+      if (post.kind !== 'D') {
+        throw new ContentIntegrityError(`Directory type changed during scan`, 'unsafe_content');
+      }
+      if (post.dev !== e.identity.dev || post.ino !== e.identity.ino) {
+        throw new ContentIntegrityError(`Directory replaced during scan`, 'unsafe_content');
+      }
+      postEntries.delete(key);
+    }
+
+    for (const e of files) {
+      const key = 'F:' + e.relPath;
+      const post = postEntries.get(key);
+      if (!post) {
+        throw new ContentIntegrityError(`File removed during scan`, 'modified');
+      }
+      if (post.kind !== 'F') {
+        throw new ContentIntegrityError(`File type changed during scan`, 'unsafe_content');
+      }
+      if (post.dev !== e.identity.dev || post.ino !== e.identity.ino) {
+        throw new ContentIntegrityError(`File replaced during scan`, 'modified');
+      }
+      postEntries.delete(key);
+    }
+
+    // Any remaining entries were added after the initial scan
+    if (postEntries.size > 0) {
+      throw new ContentIntegrityError(
+        `New entries added during scan (${postEntries.size} total)`,
+        'modified',
+      );
+    }
   }
 
   return {

@@ -359,11 +359,12 @@ async function main() {
       const originalRaw = fs.readFileSync(filePath, 'utf-8');
       assert.ok(originalRaw.includes('1.0.0'), 'original record must contain v1.0.0');
 
-      // Install the beforeRename hook: throw to simulate a rename failure
-      // without touching the target file.  The temp file is written, the hook
-      // fires, renameSync is skipped, the catch block cleans the temp file.
-      LocalInstallStore._beforeRenameHook = () => {
-        throw new Error('Simulated rename failure');
+      // Install the beforeRename hook: delete the temp file so the
+      // subsequent renameSync(tmpPath, filePath) throws a real ENOENT.
+      // This exercises the actual rename failure path, error wrapping,
+      // original file preservation, and temp-file cleanup.
+      LocalInstallStore._beforeRenameHook = (tmpPath: string) => {
+        fs.unlinkSync(tmpPath);
       };
 
       try {

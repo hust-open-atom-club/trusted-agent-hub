@@ -586,6 +586,254 @@ async function main() {
 
   // -----------------------------------------------------------------------
 
+  // -----------------------------------------------------------------------
+  // Directory count limit exceeded
+  // -----------------------------------------------------------------------
+
+  await runTest('Directory count limit exceeded', async () => {
+    const dir = makeTmpDir();
+    try {
+      // Create 15 directories (exceeds limit of 10)
+      for (let i = 0; i < 15; i++) {
+        fs.mkdirSync(path.join(dir, `dir_${i}`));
+      }
+      try {
+        await computeDirectoryDigest(dir, { maxDirs: 10 });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        assert.strictEqual((e as ContentIntegrityError).code, 'too_many_dirs');
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Race: file added between scan and hash
+  // -----------------------------------------------------------------------
+
+  await runTest('Race detection: file added between scan and hash', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'a.txt', 'hello');
+      try {
+        await computeDirectoryDigest(dir, {
+          _afterCollectHook: (root: string) => {
+            writeFile(root, 'b.txt', 'injected');
+          },
+        });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        assert.strictEqual((e as ContentIntegrityError).code, 'modified');
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Race: file deleted between scan and hash
+  // (File is in collectEntries list but deleted before hashFileContent opens it)
+  // -----------------------------------------------------------------------
+
+  await runTest('Race detection: file deleted between scan and hash', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'a.txt', 'hello');
+      writeFile(dir, 'b.txt', 'world');
+      try {
+        await computeDirectoryDigest(dir, {
+          _afterCollectHook: (root: string) => {
+            fs.unlinkSync(path.join(root, 'b.txt'));
+          },
+        });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        // hashFileContent fails to open deleted file → read_error, or
+        // post-scan detects the missing entry → modified
+        const code = (e as ContentIntegrityError).code;
+        assert.ok(code === 'modified' || code === 'read_error',
+          `expected modified or read_error, got ${code}`);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Race: file renamed between scan and hash
+  // -----------------------------------------------------------------------
+
+  await runTest('Race detection: file renamed between scan and hash', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'a.txt', 'hello');
+      try {
+        await computeDirectoryDigest(dir, {
+          _afterCollectHook: (root: string) => {
+            fs.renameSync(path.join(root, 'a.txt'), path.join(root, 'renamed.txt'));
+          },
+        });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        const code = (e as ContentIntegrityError).code;
+        assert.ok(code === 'modified' || code === 'read_error',
+          `expected modified or read_error, got ${code}`);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Race: root replaced between scan and hash
+  // -----------------------------------------------------------------------
+
+  await runTest('Race detection: root replaced between scan and hash', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'a.txt', 'hello');
+      const backup = dir + '.bak';
+      const replacement = makeTmpDir();
+      writeFile(replacement, 'evil.txt', 'pwned');
+      try {
+        await computeDirectoryDigest(dir, {
+          _afterCollectHook: (_root: string) => {
+            fs.renameSync(dir, backup);
+            fs.renameSync(replacement, dir);
+          },
+        });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        const code = (e as ContentIntegrityError).code;
+        // Root dev/ino mismatch → unsafe_content, or entries mismatch → modified,
+        // or file path changed → read_error
+        assert.ok(
+          code === 'unsafe_content' || code === 'modified' || code === 'read_error',
+          `expected unsafe_content/modified/read_error, got ${code}`,
+        );
+        if (fs.existsSync(dir)) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+        fs.renameSync(backup, dir);
+      } finally {
+        cleanup(backup);
+        cleanup(replacement);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Race: subdirectory replaced between scan and hash
+  // -----------------------------------------------------------------------
+
+  await runTest('Race detection: subdirectory replaced between scan and hash', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'sub/a.txt', 'hello');
+      try {
+        await computeDirectoryDigest(dir, {
+          _afterCollectHook: (root: string) => {
+            const subPath = path.join(root, 'sub');
+            fs.rmSync(subPath, { recursive: true, force: true });
+            fs.mkdirSync(subPath);
+            writeFile(root, 'sub/b.txt', 'injected');
+          },
+        });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        const code = (e as ContentIntegrityError).code;
+        assert.ok(
+          code === 'modified' || code === 'unsafe_content' || code === 'read_error',
+          `expected modified/unsafe_content/read_error, got ${code}`,
+        );
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Unknown file type rejected (fail-closed)
+  // -----------------------------------------------------------------------
+
+  await runTest('Unknown file type rejected (fail-closed)', async () => {
+    const { classifyEntryType, ContentIntegrityError } = await import('../src/content-integrity');
+    // Mock stat where ALL isX() methods return false — simulates an
+    // unrecognised platform-specific type (door, port, etc.).
+    const unknownStat = {
+      isSymbolicLink: () => false,
+      isDirectory: () => false,
+      isFile: () => false,
+      isSocket: () => false,
+      isFIFO: () => false,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+    };
+    try {
+      classifyEntryType(unknownStat, 'test-entry');
+      assert.fail('Should have thrown');
+    } catch (e: unknown) {
+      assert.ok(e instanceof ContentIntegrityError);
+      assert.strictEqual((e as ContentIntegrityError).code, 'unsafe_content');
+      assert.ok((e as ContentIntegrityError).message.includes('Unsupported file type'));
+    }
+
+    // Verify that known types work
+    assert.strictEqual(classifyEntryType({ ...unknownStat, isDirectory: () => true }, 'd'), 'dir');
+    assert.strictEqual(classifyEntryType({ ...unknownStat, isFile: () => true }, 'f'), 'file');
+
+    // Verify each unsafe type throws
+    for (const [method, label] of [
+      ['isSymbolicLink', 'Symbolic link'],
+      ['isSocket', 'Socket'],
+      ['isFIFO', 'FIFO'],
+      ['isBlockDevice', 'Device file'],
+      ['isCharacterDevice', 'Device file'],
+    ] as const) {
+      try {
+        classifyEntryType({ ...unknownStat, [method]: () => true }, label);
+        assert.fail(`Should have thrown for ${label}`);
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        assert.strictEqual((e as ContentIntegrityError).code, 'unsafe_content');
+      }
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Max depth limit exceeded
+  // -----------------------------------------------------------------------
+
+  await runTest('Max depth limit exceeded', async () => {
+    const dir = makeTmpDir();
+    try {
+      // Create deep nesting (> 5 levels)
+      let current = dir;
+      for (let i = 0; i < 10; i++) {
+        current = path.join(current, `l${i}`);
+        fs.mkdirSync(current);
+      }
+      try {
+        await computeDirectoryDigest(dir, { maxDepth: 5 });
+        assert.fail('Should have thrown');
+      } catch (e: unknown) {
+        assert.ok(e instanceof ContentIntegrityError);
+        assert.strictEqual((e as ContentIntegrityError).code, 'too_deep');
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   console.log(`\n  ✓ ${passed} passed` + (failed ? `  ✗ ${failed} failed` : '') + '\n');
   if (failed) process.exit(1);
 }

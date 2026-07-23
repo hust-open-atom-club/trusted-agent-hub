@@ -66,13 +66,16 @@ function runCli(args: string[], env: Record<string, string>): {
 
 async function startManifestServer(manifest: unknown): Promise<{
   url: string;
-  stop: () => Promise<void>;
+  stop: () => Promise<{ method: string; url: string }[]>;
 }> {
   const encodedManifest = Buffer.from(JSON.stringify(manifest), 'utf-8').toString('base64');
   const serverSource = `
     const http = require('http');
     const manifest = JSON.parse(Buffer.from(process.argv[1], 'base64').toString('utf8'));
-    const server = http.createServer((_request, response) => {
+    const requests = [];
+    const server = http.createServer((req, response) => {
+      // Write request info to stderr for parent assertion
+      process.stderr.write('REQ:' + JSON.stringify({ method: req.method, url: req.url }) + '\\n');
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(manifest));
     });
@@ -87,15 +90,16 @@ async function startManifestServer(manifest: unknown): Promise<{
     windowsHide: true,
   });
 
+  let stderrAccum = '';
+
   const port = await new Promise<number>((resolve, reject) => {
     let stdout = '';
-    let stderr = '';
     const timeout = setTimeout(() => {
       child.kill();
-      reject(new Error(`Timed out starting manifest server: ${stderr}`));
+      reject(new Error(`Timed out starting manifest server: ${stderrAccum}`));
     }, 5_000);
 
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { stderrAccum += chunk.toString(); });
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
       const match = stdout.match(/^(\d+)\r?\n/);
@@ -110,27 +114,39 @@ async function startManifestServer(manifest: unknown): Promise<{
     child.once('exit', (code) => {
       if (stdout.match(/^(\d+)\r?\n/)) return;
       clearTimeout(timeout);
-      reject(new Error(`Manifest server exited before ready (${code}): ${stderr}`));
+      reject(new Error(`Manifest server exited before ready (${code}): ${stderrAccum}`));
     });
   });
 
+  // Parse already-received REQ lines from stderr accumulator
+  function parseRequests(): { method: string; url: string }[] {
+    const reqs: { method: string; url: string }[] = [];
+    for (const line of stderrAccum.split('\n')) {
+      if (line.startsWith('REQ:')) {
+        try { reqs.push(JSON.parse(line.slice(4))); } catch { /* ignore */ }
+      }
+    }
+    return reqs;
+  }
+
   return {
     url: `http://127.0.0.1:${port}`,
-    stop: () => new Promise<void>((resolve) => {
+    stop: () => new Promise<{ method: string; url: string }[]>((resolve) => {
       if (child.exitCode !== null) {
-        resolve();
+        resolve(parseRequests());
         return;
       }
       const timeout = setTimeout(() => {
         child.kill('SIGKILL');
-        resolve();
+        resolve(parseRequests());
       }, 3_000);
       child.once('exit', () => {
         clearTimeout(timeout);
-        resolve();
+        resolve(parseRequests());
       });
-      child.kill();
+      child.kill('SIGTERM');
     }),
+    getRequests: () => parseRequests(),
   };
 }
 
@@ -323,7 +339,7 @@ async function main() {
 
   await runTest('valid installation → exit 0', async () => {
     const home = makeTmpDir();
-    let server: { url: string; stop: () => Promise<void> } | undefined;
+    let server: Awaited<ReturnType<typeof startManifestServer>> | undefined;
     try {
       const installDir = path.join(home, '.claude/skills/test-pkg');
       fs.mkdirSync(installDir, { recursive: true });
@@ -386,8 +402,87 @@ async function main() {
       const combined = stdout + stderr;
       assert.strictEqual(status, 0, `expected exit 0, got ${status}: ${combined.slice(0, 500)}`);
       assert.ok(combined.includes('[valid]'), `expected [valid]: ${combined.slice(0, 500)}`);
+
+      // Assert the API request was correct — strict URL parsing
+      const requests = await server.stop();
+      assert.ok(requests.length >= 1, `expected at least 1 request, got ${requests.length}`);
+      const req = requests[0];
+      assert.strictEqual(req.method, 'GET', `expected GET, got ${req.method}`);
+
+      // Parse URL and assert exact pathname + query params
+      const reqUrl = new URL(req.url, 'http://localhost');
+      assert.strictEqual(
+        reqUrl.pathname,
+        '/api/v0/packages/test-pkg/install-manifest',
+        `pathname mismatch, got ${reqUrl.pathname}`,
+      );
+      assert.strictEqual(
+        reqUrl.searchParams.get('client'), 'claude-code',
+        `client param must be claude-code, got ${reqUrl.searchParams.get('client')}`,
+      );
+      assert.strictEqual(
+        reqUrl.searchParams.get('version'), '1.0.0',
+        `version param must be 1.0.0, got ${reqUrl.searchParams.get('version')}`,
+      );
+      // No unexpected params
+      const expectedParams = new Set(['client', 'version']);
+      for (const key of reqUrl.searchParams.keys()) {
+        assert.ok(expectedParams.has(key), `unexpected query param: ${key}`);
+      }
+      server = undefined; // already stopped
     } finally {
       if (server) await server.stop();
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // CLI output sanitization: ANSI/control chars cannot reach stdout
+  // -----------------------------------------------------------------------
+
+  await runTest('CLI output strips ANSI and control chars', async () => {
+    const home = makeTmpDir();
+    try {
+      const installDir = path.join(home, '.claude/skills', 'test-pkg');
+      fs.mkdirSync(installDir, { recursive: true });
+      fs.writeFileSync(path.join(installDir, 'README.md'), '# Test');
+      const digest = (await computeDirectoryDigest(installDir)).digest;
+
+      // Inject ANSI into package_name in the record
+      const store = new LocalInstallStore(home);
+      store.save({
+        package_name: '\x1b[31mRED\x1b[0m',
+        version: '1.0\r\nINJECTED',
+        client: 'claude-code',
+        install_path: installDir,
+        sha256: 'b'.repeat(64),
+        integrity_verified: true,
+        installed_at: new Date().toISOString(),
+        manifest_version: '1.0',
+        content_hash_algorithm: 'sha256-tree-v1',
+        content_sha256: digest,
+      });
+
+      const { stdout, stderr, status } = runCli(
+        ['verify', '\x1b[31mRED\x1b[0m', '--client', 'claude-code'],
+        {
+          HOME: home,
+          USERPROFILE: home,
+          TRUSTED_AGENT_HUB_API_URL: 'http://127.0.0.1:1',
+        },
+      );
+      const combined = stdout + stderr;
+      // Injected ANSI escape sequences and CR must not survive sanitization.
+      // (Visible text like "RED" may remain after ANSI codes are stripped —
+      // that's expected. We check the raw escape bytes are gone.)
+      assert.strictEqual(combined.includes('\x1b[31m'), false,
+        'output must not contain injected ANSI sequence \\x1b[31m');
+      assert.strictEqual(combined.includes('\rINJECTED'), false,
+        'output must not contain \\r injected version');
+      assert.strictEqual(combined.includes('\nINJECTED'), false,
+        'output must not contain \\n injected version');
+      assert.strictEqual(status, 1);
+    } finally {
       cleanup(home);
     }
   });

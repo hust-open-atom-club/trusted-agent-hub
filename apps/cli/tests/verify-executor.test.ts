@@ -1129,6 +1129,184 @@ async function main() {
     }
   });
 
+  // -----------------------------------------------------------------------
+  // sanitizeOutput — filters ANSI, OSC, control chars, limits length
+  // -----------------------------------------------------------------------
+
+  await runTest('sanitizeOutput filters ANSI escape codes', async () => {
+    const { sanitizeOutput } = await import('../src/verify-executor');
+    const result = sanitizeOutput('\x1b[31mRED\x1b[0m');
+    assert.strictEqual(result.includes('\x1b'), false);
+    assert.ok(result.includes('RED'));
+  });
+
+  await runTest('sanitizeOutput filters OSC sequences', async () => {
+    const { sanitizeOutput } = await import('../src/verify-executor');
+    const result = sanitizeOutput('\x1b]0;title\x07text');
+    assert.strictEqual(result.includes('\x1b]'), false);
+    assert.ok(result.includes('text'));
+  });
+
+  await runTest('sanitizeOutput filters C0 control chars (\\n, \\r, \\t)', async () => {
+    const { sanitizeOutput } = await import('../src/verify-executor');
+    const result = sanitizeOutput('line1\nline2\rline3\tindent');
+    assert.strictEqual(result.includes('\n'), false);
+    assert.strictEqual(result.includes('\r'), false);
+    assert.strictEqual(result.includes('\t'), false);
+  });
+
+  await runTest('sanitizeOutput filters C1 control chars (0x80-0x9F)', async () => {
+    const { sanitizeOutput } = await import('../src/verify-executor');
+    // U+0086 (START OF SELECTED AREA) — C1 control
+    const result = sanitizeOutput('text\x86more');
+    assert.strictEqual(result.includes('\x86'), false);
+    assert.ok(result.includes('text'));
+    assert.ok(result.includes('more'));
+  });
+
+  await runTest('sanitizeOutput truncates at 200 chars', async () => {
+    const { sanitizeOutput } = await import('../src/verify-executor');
+    const long = 'a'.repeat(300);
+    const result = sanitizeOutput(long);
+    assert.strictEqual(result.length, 200); // 199 + '…'
+    assert.ok(result.endsWith('…'));
+  });
+
+  // -----------------------------------------------------------------------
+  // VerifyResult → CLI output: all fields sanitized
+  // -----------------------------------------------------------------------
+
+  await runTest('CLI output cannot inject ANSI via packageName', async () => {
+    const home = makeTmpDir();
+    try {
+      const installDir = path.join(home, '.claude/skills', 'test-pkg');
+      fs.mkdirSync(installDir, { recursive: true });
+      fs.writeFileSync(path.join(installDir, 'README.md'), '# Test');
+      const digest = await computeDirectoryDigest(installDir);
+
+      const store = new LocalInstallStore(home);
+      // Package name with ANSI injection
+      store.save({
+        package_name: '\x1b[31mRED\x1b[0m',
+        version: '1.0.0',
+        client: 'claude-code',
+        install_path: installDir,
+        sha256: 'b'.repeat(64),
+        integrity_verified: true,
+        installed_at: new Date().toISOString(),
+        manifest_version: '1.0',
+        content_hash_algorithm: 'sha256-tree-v1',
+        content_sha256: digest.digest,
+      });
+
+      const manifest = makeManifest({
+        name: '\x1b[31mRED\x1b[0m',
+        integrity: { sha256: 'b'.repeat(64), download_size_bytes: 1000 },
+      });
+      const apiClient = createApiClient((async () => {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }) as FetchFn);
+
+      const executor = new VerifyExecutor(apiClient, { homeDir: home });
+      const result = await executor.verify('\x1b[31mRED\x1b[0m', 'claude-code');
+
+      // All user-facing fields must be free of ANSI
+      assert.strictEqual(result.packageName.includes('\x1b'), false);
+      assert.strictEqual(result.client.includes('\x1b'), false);
+      assert.strictEqual(result.message.includes('\x1b'), false);
+      if (result.version) assert.strictEqual(result.version.includes('\x1b'), false);
+      if (result.installPath) assert.strictEqual(result.installPath.includes('\x1b'), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  await runTest('CLI output cannot inject newlines via version', async () => {
+    const home = makeTmpDir();
+    try {
+      const installDir = path.join(home, '.claude/skills', 'test-pkg');
+      fs.mkdirSync(installDir, { recursive: true });
+      fs.writeFileSync(path.join(installDir, 'README.md'), '# Test');
+      const digest = await computeDirectoryDigest(installDir);
+
+      const store = new LocalInstallStore(home);
+      store.save({
+        package_name: 'test-pkg',
+        version: '1.0\n\rINJECTED',
+        client: 'claude-code',
+        install_path: installDir,
+        sha256: 'b'.repeat(64),
+        integrity_verified: true,
+        installed_at: new Date().toISOString(),
+        manifest_version: '1.0',
+        content_hash_algorithm: 'sha256-tree-v1',
+        content_sha256: digest.digest,
+      });
+
+      const manifest = makeManifest({
+        version: '1.0\n\rINJECTED',
+        integrity: { sha256: 'b'.repeat(64), download_size_bytes: 1000 },
+      });
+      const apiClient = createApiClient((async () => {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }) as FetchFn);
+
+      const executor = new VerifyExecutor(apiClient, { homeDir: home });
+      const result = await executor.verify('test-pkg', 'claude-code');
+
+      assert.strictEqual(result.version!.includes('\n'), false);
+      assert.strictEqual(result.version!.includes('\r'), false);
+      assert.strictEqual(result.packageName.includes('\n'), false);
+      assert.strictEqual(result.message.includes('\n'), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // Stable error messages — no raw manifest fields
+  // -----------------------------------------------------------------------
+
+  await runTest('manifest_mismatch does not leak raw server values', async () => {
+    const home = makeTmpDir();
+    try {
+      const installDir = path.join(home, '.claude/skills/test-pkg');
+      fs.mkdirSync(installDir, { recursive: true });
+      fs.writeFileSync(path.join(installDir, 'README.md'), '# Test');
+      const digest = await computeDirectoryDigest(installDir);
+
+      const store = new LocalInstallStore(home);
+      store.save({
+        package_name: 'test-pkg', version: '1.0.0', client: 'claude-code',
+        install_path: installDir, sha256: 'b'.repeat(64),
+        integrity_verified: true, installed_at: new Date().toISOString(),
+        manifest_version: '1.0', content_hash_algorithm: 'sha256-tree-v1',
+        content_sha256: digest.digest,
+      });
+
+      // Manifest with injected ANSI in name field
+      const manifest = makeManifest({
+        name: 'test-pkg',
+        version: '\x1b[31mINJECTED\x1b[0m', // ANSI in version
+        integrity: { sha256: 'b'.repeat(64), download_size_bytes: 1000 },
+      });
+      const apiClient = createApiClient((async () => {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }) as FetchFn);
+
+      const executor = new VerifyExecutor(apiClient, { homeDir: home });
+      const result = await executor.verify('test-pkg', 'claude-code');
+
+      // Must detect mismatch but NOT leak the ANSI version string
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.status, 'manifest_mismatch');
+      assert.strictEqual(result.message.includes('\x1b'), false);
+      assert.strictEqual(result.message.includes('INJECTED'), false);
+    } finally {
+      cleanup(home);
+    }
+  });
+
   console.log(`\n  ✓ ${passed} passed` + (failed ? `  ✗ ${failed} failed` : '') + '\n');
   if (failed) process.exit(1);
 }
