@@ -7,7 +7,7 @@
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
     "pretest": "npm run build",
-    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts && tsx tests/install-executor.test.ts && tsx tests/cli-parsing.test.ts"
+    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts && tsx tests/client-paths.test.ts && tsx tests/content-integrity.test.ts && tsx tests/local-install-store.test.ts && tsx tests/install-executor.test.ts && tsx tests/verify-executor.test.ts && tsx tests/cli-verify.test.ts && tsx tests/cli-parsing.test.ts"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

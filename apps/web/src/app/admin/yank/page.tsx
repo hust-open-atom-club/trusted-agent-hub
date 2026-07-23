@@ -49,6 +49,7 @@ export default function AdminYankPage() {
   const { user, token, loading: authLoading } = useAuth();
 
   const [items, setItems] = useState<YankItem[]>([]);
+  const [yankedItems, setYankedItems] = useState<YankItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,14 +65,24 @@ export default function AdminYankPage() {
     setLoading(true);
     setError(null);
 
-    fetch(`${API_BASE}/api/v0/producer/versions?status=published`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
+    Promise.all([
+      fetch(`${API_BASE}/api/v0/producer/versions?status=published`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => {
         if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
         return res.json();
+      }),
+      fetch(`${API_BASE}/api/v0/producer/versions?status=yanked`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => {
+        if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
+        return res.json();
+      }),
+    ])
+      .then(([published, yanked]) => {
+        setItems(published);
+        setYankedItems(yanked);
       })
-      .then((data) => setItems(data))
       .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
       .finally(() => setLoading(false));
   };
@@ -121,6 +132,28 @@ export default function AdminYankPage() {
       setSubmitError(err instanceof Error ? err.message : '下架失败');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleUnyank = async (item: YankItem) => {
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v0/producer/versions/${item.version_id}/unyank`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: '撤销失败' }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setSuccessMsg(`${item.package_name} v${item.version} 已重新发布`);
+      fetchItems();
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : '撤销失败');
     }
   };
 
@@ -211,6 +244,54 @@ export default function AdminYankPage() {
                       }}
                     >
                       下架
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 已下架版本 */}
+      <div className="admin-section-header" style={{ marginTop: '3rem' }}>
+        <h2>已下架版本</h2>
+        <p>已下架版本 · 共 {yankedItems.length} 个</p>
+      </div>
+
+      {!error && yankedItems.length > 0 && (
+        <div className="admin-table-wrapper">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>包名称</th>
+                <th>版本</th>
+                <th>类型</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yankedItems.map((item) => (
+                <tr key={item.version_id}>
+                  <td data-label="包名称" className="admin-pkg-name">
+                    {item.package_name}
+                  </td>
+                  <td data-label="版本">
+                    <code>v{item.version}</code>
+                  </td>
+                  <td data-label="类型">
+                    {item.package_type && (
+                      <span className={`type-badge ${item.package_type}`}>
+                        {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                      </span>
+                    )}
+                  </td>
+                  <td data-label="操作">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleUnyank(item)}
+                    >
+                      重新发布
                     </button>
                   </td>
                 </tr>

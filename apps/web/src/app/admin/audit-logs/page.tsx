@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 
@@ -237,6 +237,7 @@ export default function AdminAuditLogsPage() {
               </thead>
               <tbody>
                 {logs.map((log) => (
+                  <React.Fragment key={log.id}>
                   <tr key={log.id}>
                     <td data-label="时间">{formatDate(log.timestamp)}</td>
                     <td data-label="操作">
@@ -253,13 +254,40 @@ export default function AdminAuditLogsPage() {
                     <td data-label="操作人">
                       {log.operator_name || log.operator_id}
                     </td>
-                    <td data-label="详情" className="admin-detail-cell">
+                    <td data-label="详情" className="admin-detail-cell" style={{ cursor: 'pointer' }} onClick={() => {
+                      const detailStr = log.detail ? JSON.stringify(log.detail, null, 2) : '';
+                      const el = document.getElementById(`detail-${log.id}`);
+                      if (el) {
+                        const isHidden = el.style.display === 'none';
+                        el.style.display = isHidden ? 'block' : 'none';
+                      }
+                    }}>
                       {log.detail
                         ? JSON.stringify(log.detail).slice(0, 60) +
                           (JSON.stringify(log.detail).length > 60 ? '...' : '')
                         : '—'}
+                      {log.detail && JSON.stringify(log.detail).length > 60 && (
+                        <span style={{ fontSize: '0.7rem', marginLeft: '0.3rem', opacity: 0.5 }}>&#x25BC;</span>
+                      )}
                     </td>
                   </tr>
+                  {log.detail && (
+                    <tr key={`detail-${log.id}`} id={`detail-${log.id}`} style={{ display: 'none' }}>
+                      <td colSpan={6} style={{ padding: '0.75rem 1.25rem', background: 'var(--color-paper-1)' }}>
+                        <pre style={{
+                          margin: 0,
+                          fontSize: '0.78rem',
+                          fontFamily: 'var(--font-mono)',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                          color: 'var(--color-ink)',
+                          maxHeight: '300px',
+                          overflowY: 'auto',
+                        }}>{JSON.stringify(log.detail, null, 2)}</pre>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
                 ))}
               </tbody>
             </table>

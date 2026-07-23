@@ -39,6 +39,7 @@ import { validateManifest, ManifestValidationError, isSafeInstallPath } from '..
 import { createApiClient } from '../src/api-client';
 import type { FetchFn } from '../src/api-client';
 import type { InstallManifest } from '../src/manifest-types';
+import { isStrictChildPath, resolveManifestDestination, ClientPathError } from '../src/client-paths';
 
 // ---------------------------------------------------------------------------
 // Raw ZIP construction (bypasses AdmZip's filename normalization)
@@ -983,6 +984,92 @@ async function test_gradeGating() {
 // ---------------------------------------------------------------------------
 // Test: API reporting failure surfaced (not silently swallowed)
 // ---------------------------------------------------------------------------
+// Test: Content digest failure preserves existing installation
+// ---------------------------------------------------------------------------
+
+async function test_digestFailureRestoresBackup() {
+  cleanup();
+  const skillsRoot = path.join(TEST_HOME, '.claude', 'skills');
+  fs.mkdirSync(skillsRoot, { recursive: true });
+
+  // Pre-create an existing installation
+  const targetDir = path.resolve(TEST_HOME, '.claude/skills/test-pkg');
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.writeFileSync(path.join(targetDir, 'existing.txt'), 'old installation');
+  const oldContent = fs.readFileSync(path.join(targetDir, 'existing.txt'), 'utf-8');
+
+  const zipFiles = { 'package/README.md': '# new install' };
+  const zipBuf = createPayloadZip(zipFiles);
+  const realSha = sha256(zipBuf);
+  const manifest = makeManifest({
+    integrity: { sha256: realSha, download_size_bytes: zipBuf.length },
+    installation: { method: 'copy_directory', target_client: 'claude-code',
+      steps: [
+        { action: 'download', url: 'https://example.com/package.zip' },
+        { action: 'verify', algorithm: 'sha256', checksum: realSha },
+        { action: 'extract', archive: 'package.zip' },
+        { action: 'copy', source: 'package/', destination: '~/.claude/skills/test-pkg/' },
+      ],
+    },
+  });
+
+  // Save record snapshot before install attempt
+  const { LocalInstallStore } = await import('../src/local-install-store');
+  const { ContentIntegrityError } = await import('../src/content-integrity');
+  const store = new LocalInstallStore(TEST_HOME);
+  const recordsBefore = (() => {
+    try { return store.load(); } catch { return []; }
+  })();
+
+  // Inject digest failure via beforeDigest hook — directly throw
+  // ContentIntegrityError to simulate a genuine digest computation failure.
+  // No symlink creation needed, so this works on all platforms.
+  const executor = new InstallExecutor(
+    createApiClient(mockFetch([{ status: 200, body: zipBuf }])),
+    {
+      homeDir: TEST_HOME,
+      beforeDigest: (_stagingDir: string) => {
+        throw new ContentIntegrityError(
+          'Simulated digest failure',
+          'unsafe_content',
+        );
+      },
+    },
+  );
+
+  try {
+    await executor.installWithManifest(manifest, 'claude-code', {});
+    assert.fail('Should have thrown');
+  } catch (e: unknown) {
+    // The ContentIntegrityError from beforeDigest propagates through the
+    // rollback handler (which re-throws).  Accept either the original error
+    // or InstallError wrapping it, since the important property is that
+    // the old installation is preserved, not the error type.
+    assert.ok(e instanceof Error, 'should throw an Error');
+  }
+
+  // The old installation MUST still be intact (digest failed BEFORE backup)
+  assert.ok(fs.existsSync(targetDir), 'target directory must still exist');
+  assert.ok(fs.existsSync(path.join(targetDir, 'existing.txt')), 'old file must be intact');
+  const restoredContent = fs.readFileSync(path.join(targetDir, 'existing.txt'), 'utf-8');
+  assert.strictEqual(restoredContent, oldContent, 'old content must be unchanged');
+
+  // No staging or backup leftovers
+  const dirs = fs.readdirSync(skillsRoot);
+  assert.strictEqual(dirs.filter(f => f.startsWith('.staging-')).length, 0, 'no staging dirs');
+  assert.strictEqual(dirs.filter(f => f.startsWith('.backup-')).length, 0, 'no backup dirs');
+
+  // Install records must be unchanged
+  const recordsAfter = (() => {
+    try { return store.load(); } catch { return []; }
+  })();
+  assert.deepStrictEqual(recordsAfter, recordsBefore, 'install records must be unchanged');
+
+  cleanup();
+  console.log('  ✓ Digest failure preserves existing installation');
+}
+
+// ---------------------------------------------------------------------------
 
 async function test_apiReportFailureSurfaced() {
   cleanup();
@@ -1278,9 +1365,9 @@ async function test_streamingSizeExceededWithoutContentLength() {
 
 function test_targetDirBounds() {
   const clientRoot = path.join(TEST_HOME, '.claude', 'skills');
-  assert.strictEqual(InstallExecutor.isStrictChildPath(path.join(clientRoot, 'pkg'), clientRoot), true);
-  assert.strictEqual(InstallExecutor.isStrictChildPath(path.join(TEST_HOME, '.ssh'), clientRoot), false);
-  assert.strictEqual(InstallExecutor.isStrictChildPath(clientRoot, clientRoot), false);
+  assert.strictEqual(isStrictChildPath(path.join(clientRoot, 'pkg'), clientRoot), true);
+  assert.strictEqual(isStrictChildPath(path.join(TEST_HOME, '.ssh'), clientRoot), false);
+  assert.strictEqual(isStrictChildPath(clientRoot, clientRoot), false);
   console.log('  ✓ Target directory bounds');
 }
 
@@ -1292,10 +1379,8 @@ function test_manifestDestinationResolvedCorrectly() {
   const home = 'C:\\e2e-home';
   const clientRoot = path.resolve(home, '.claude/skills');
 
-  const executor = new InstallExecutor({} as any, { homeDir: home });
-
   // Claude Code: correct resolution
-  const claudeTarget = (executor as any).resolveManifestDestination(
+  const claudeTarget = resolveManifestDestination(
     '~/.claude/skills/test-package/',
     'claude-code',
     clientRoot,
@@ -1307,7 +1392,7 @@ function test_manifestDestinationResolvedCorrectly() {
 
   // Cursor: correct resolution
   const cursorRoot = path.resolve(home, '.cursor/skills');
-  const cursorTarget = (executor as any).resolveManifestDestination(
+  const cursorTarget = resolveManifestDestination(
     '~/.cursor/skills/test-package/',
     'cursor',
     cursorRoot,
@@ -1321,19 +1406,18 @@ function test_manifestDestinationResolvedCorrectly() {
 function test_manifestDestinationRejectsWrongRoot() {
   const home = 'C:\\e2e-home';
   const clientRoot = path.resolve(home, '.claude/skills');
-  const executor = new InstallExecutor({} as any, { homeDir: home });
 
   // Cursor path in a Claude Code destination → reject
   try {
-    (executor as any).resolveManifestDestination(
+    resolveManifestDestination(
       '~/.cursor/skills/test-package/',
       'claude-code',
       clientRoot,
     );
     assert.fail('Should have thrown');
   } catch (e: unknown) {
-    assert.ok(e instanceof InstallError);
-    assert.strictEqual((e as InstallError).code, 'destination_root_mismatch');
+    assert.ok(e instanceof ClientPathError);
+    assert.strictEqual((e as ClientPathError).code, 'destination_root_mismatch');
   }
 
   console.log('  ✓ Manifest destination rejects wrong client root');
@@ -1342,19 +1426,18 @@ function test_manifestDestinationRejectsWrongRoot() {
 function test_manifestDestinationRejectsRootItself() {
   const home = 'C:\\e2e-home';
   const clientRoot = path.resolve(home, '.claude/skills');
-  const executor = new InstallExecutor({} as any, { homeDir: home });
 
   // The root directory itself (no child path) → reject
   try {
-    (executor as any).resolveManifestDestination(
+    resolveManifestDestination(
       '~/.claude/skills/',
       'claude-code',
       clientRoot,
     );
     assert.fail('Should have thrown');
   } catch (e: unknown) {
-    assert.ok(e instanceof InstallError);
-    assert.strictEqual((e as InstallError).code, 'invalid_destination');
+    assert.ok(e instanceof ClientPathError);
+    assert.strictEqual((e as ClientPathError).code, 'invalid_destination');
   }
 
   console.log('  ✓ Manifest destination rejects root itself');
@@ -1363,19 +1446,18 @@ function test_manifestDestinationRejectsRootItself() {
 function test_manifestDestinationRejectsTraversal() {
   const home = 'C:\\e2e-home';
   const clientRoot = path.resolve(home, '.claude/skills');
-  const executor = new InstallExecutor({} as any, { homeDir: home });
 
   // Traversal attempt → reject
   try {
-    (executor as any).resolveManifestDestination(
+    resolveManifestDestination(
       '~/.claude/skills/../escape/',
       'claude-code',
       clientRoot,
     );
     assert.fail('Should have thrown');
   } catch (e: unknown) {
-    assert.ok(e instanceof InstallError);
-    assert.strictEqual((e as InstallError).code, 'invalid_destination');
+    assert.ok(e instanceof ClientPathError);
+    assert.strictEqual((e as ClientPathError).code, 'invalid_destination');
   }
 
   console.log('  ✓ Manifest destination rejects traversal');
@@ -1384,19 +1466,18 @@ function test_manifestDestinationRejectsTraversal() {
 function test_manifestDestinationRejectsRelative() {
   const home = 'C:\\e2e-home';
   const clientRoot = path.resolve(home, '.claude/skills');
-  const executor = new InstallExecutor({} as any, { homeDir: home });
 
   // Relative path (no manifest root prefix) → reject
   try {
-    (executor as any).resolveManifestDestination(
+    resolveManifestDestination(
       'test-package/',
       'claude-code',
       clientRoot,
     );
     assert.fail('Should have thrown');
   } catch (e: unknown) {
-    assert.ok(e instanceof InstallError);
-    assert.strictEqual((e as InstallError).code, 'destination_root_mismatch');
+    assert.ok(e instanceof ClientPathError);
+    assert.strictEqual((e as ClientPathError).code, 'destination_root_mismatch');
   }
 
   console.log('  ✓ Manifest destination rejects relative path');
@@ -1416,24 +1497,29 @@ function test_localRecords() {
       { homeDir: tmpHome },
     );
 
-    assert.deepStrictEqual(executor.getLocalRecords(), []);
+    const store = executor.getRecordStore();
+    assert.deepStrictEqual(store.load(), []);
 
-    (executor as any).saveLocalRecord({
+    store.save({
       package_name: 'test', version: '1.0.0', client: 'claude-code',
       install_path: '/test', sha256: 'a'.repeat(64),
       integrity_verified: true, installed_at: new Date().toISOString(), manifest_version: '1.0',
     });
-    assert.strictEqual(executor.getLocalRecords().length, 1);
+    assert.strictEqual(store.load().length, 1);
 
     // Upsert
-    (executor as any).saveLocalRecord({
+    store.save({
       package_name: 'test', version: '2.0.0', client: 'claude-code',
       install_path: '/test2', sha256: 'b'.repeat(64),
       integrity_verified: true, installed_at: new Date().toISOString(), manifest_version: '1.0',
     });
-    const records = executor.getLocalRecords();
+    const records = store.load();
     assert.strictEqual(records.length, 1);
     assert.strictEqual(records[0].version, '2.0.0');
+
+    // Verify getLocalRecords still works
+    const executorRecords = executor.getLocalRecords();
+    assert.strictEqual(executorRecords.length, 1);
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
@@ -1562,6 +1648,7 @@ async function test_versionParamInManifestRequest() {
   await test_installWithManifest();
   await test_versionParamInManifestRequest();
   await test_apiReportFailureSurfaced();
+  await test_digestFailureRestoresBackup();
 
   console.log('\n  ✓ All tests passed!\n');
 })();

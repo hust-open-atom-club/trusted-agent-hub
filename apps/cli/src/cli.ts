@@ -5,6 +5,8 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { formatPackageCard, formatPackageDetail } from './format';
 import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
+import { VerifyExecutor } from './verify-executor';
+import type { VerifyResult } from './verify-executor';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest } from './manifest-types';
 import { client, ApiError } from './api-client';
@@ -313,6 +315,50 @@ program
       console.log('');
       process.exit(1);
     }
+  });
+
+// ── verify ──────────────────────────────────────────────────────────────
+
+/**
+ * Print a verify result with a stable, machine-parseable status line.
+ * Never leaks file content, tokens, or response bodies.
+ */
+function printVerifyResult(result: VerifyResult): void {
+  const icon =
+    result.status === 'valid' ? chalk.green('✓')
+    : result.status === 'remote_unavailable' ? chalk.yellow('⚠')
+    : chalk.red('✗');
+
+  console.log('');
+  console.log(`  ${icon} ${chalk.bold(result.packageName)}${result.version ? chalk.dim(' v' + result.version) : ''}  ${chalk.dim(`[${result.status}]`)}`);
+  console.log(`  ${chalk.dim('Client:')}       ${result.client}`);
+  if (result.installPath) {
+    console.log(`  ${chalk.dim('Install path:')} ${result.installPath}`);
+  }
+  if (result.artifactSha256) {
+    console.log(`  ${chalk.dim('Artifact SHA:')} ${result.artifactSha256.slice(0, 16)}…`);
+  }
+  if (result.expectedContentSha256) {
+    console.log(`  ${chalk.dim('Expected content:')} ${result.expectedContentSha256.slice(0, 16)}…`);
+  }
+  if (result.actualContentSha256) {
+    const match = result.expectedContentSha256 === result.actualContentSha256;
+    const color = match ? chalk.dim : chalk.red;
+    console.log(`  ${chalk.dim('Actual content:')}   ${color(result.actualContentSha256.slice(0, 16) + '…')}`);
+  }
+  console.log('');
+  console.log(`  ${result.status === 'valid' ? chalk.green(result.message) : chalk.yellow(result.message)}`);
+  console.log('');
+}
+
+program
+  .command('verify <name>')
+  .description('Verify an installed package against its local record and registry manifest')
+  .option('-c, --client <client>', 'Installed client', 'claude-code')
+  .action(async (name: string, options: { client: string }) => {
+    const result = await new VerifyExecutor(client).verify(name, options.client);
+    printVerifyResult(result);
+    if (!result.ok) process.exitCode = 1;
   });
 
 // ── Parse ───────────────────────────────────────────────────────────────

@@ -25,30 +25,20 @@ import { pipeline } from 'stream';
 import { promisify } from 'util';
 import AdmZip from 'adm-zip';
 
-import { validateManifest, ManifestValidationError, isSafeInstallPath } from './manifest-types';
+import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest, DownloadStep, CopyStep } from './manifest-types';
 import { checkInstall, resolveGrade } from './grade-gate';
+import {
+  CLIENT_INSTALL_ROOTS,
+  isStrictChildPath,
+  resolveManifestDestination,
+  getClientRoot,
+} from './client-paths';
+import { computeDirectoryDigest } from './content-integrity';
+import { LocalInstallStore } from './local-install-store';
+import type { LocalInstallRecord } from './local-install-store';
 
 const streamPipeline = promisify(pipeline);
-
-// ---------------------------------------------------------------------------
-// Client install root mappings (mirrors apps/api/src/services/install.py)
-// ---------------------------------------------------------------------------
-
-const CLIENT_INSTALL_ROOTS: Record<string, string> = {
-  'claude-code': '.claude/skills',
-  'cursor': '.cursor/skills',
-};
-
-/**
- * Logical roots used in Manifest destination fields.
- * The server sends destinations like `~/.claude/skills/<package>/`.
- * The CLI strips this prefix and joins the remainder to the real HOME-based root.
- */
-const CLIENT_MANIFEST_ROOTS: Record<string, string> = {
-  'claude-code': '~/.claude/skills/',
-  'cursor': '~/.cursor/skills/',
-};
 
 // ---------------------------------------------------------------------------
 // Safety limits
@@ -59,13 +49,6 @@ const DEFAULT_MAX_EXTRACT_SIZE = 500 * 1024 * 1024;     // 500 MB
 const DEFAULT_MAX_EXTRACT_FILES = 10_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;             // 120 seconds
 const LOCALHOST_ORIGINS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
-// ---------------------------------------------------------------------------
-// Local install record paths
-// ---------------------------------------------------------------------------
-
-const INSTALL_RECORDS_DIR = '.trusted-agent-hub';
-const INSTALL_RECORDS_FILE = 'installs.json';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -96,16 +79,7 @@ export class InstallError extends Error {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface LocalInstallRecord {
-  package_name: string;
-  version: string;
-  client: string;
-  install_path: string;
-  sha256: string;
-  integrity_verified: boolean;
-  installed_at: string;
-  manifest_version: string;
-}
+export type { LocalInstallRecord } from './local-install-store';
 
 export interface InstallResult {
   success: true;
@@ -130,6 +104,9 @@ export interface InstallOptions {
   fetchFn?: typeof fetch;
   /** Test hook: called before saving local record; can throw to simulate failure */
   beforeSaveRecord?: () => void;
+  /** Test hook: called after copy to staging but before content digest; can throw or
+   *  corrupt the staging directory to simulate digest failure */
+  beforeDigest?: (stagingDir: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +132,8 @@ export class InstallExecutor {
   private readonly downloadTimeout: number;
   private readonly downloadFetch: typeof fetch;
   private readonly beforeSaveRecord?: () => void;
+  private readonly beforeDigest?: (stagingDir: string) => void;
+  private readonly recordStore: LocalInstallStore;
 
   constructor(
     private apiClient: ReturnType<typeof import('./api-client').createApiClient>,
@@ -167,6 +146,8 @@ export class InstallExecutor {
     this.downloadTimeout = options.downloadTimeout || DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.downloadFetch = options.fetchFn || fetch;
     this.beforeSaveRecord = options.beforeSaveRecord;
+    this.beforeDigest = options.beforeDigest;
+    this.recordStore = new LocalInstallStore(this.homeDir);
   }
 
   // -----------------------------------------------------------------------
@@ -273,7 +254,7 @@ export class InstallExecutor {
       );
     }
 
-    const targetDir = this.resolveManifestDestination(
+    const targetDir = resolveManifestDestination(
       copyStep.destination,
       clientType,
       clientRoot,
@@ -335,18 +316,26 @@ export class InstallExecutor {
       this.copyDirSync(sourceDir, stagingDir, clientRoot);
       stagingPopulated = true;
 
-      // 6. Backup existing target if present
+      // 6. Test hook — can corrupt staging to simulate digest failure
+      if (this.beforeDigest) this.beforeDigest(stagingDir);
+
+      // 7. Compute content digest of staging directory BEFORE touching the
+      //    live target.  If this fails the old target is still intact —
+      //    no backup has been made yet.
+      const contentDigest = await computeDirectoryDigest(stagingDir);
+
+      // 8. Backup existing target if present (digest succeeded — staging is valid)
       if (fs.existsSync(targetDir)) {
         fs.renameSync(targetDir, backupDir);
         backupCreated = true;
       }
 
-      // 7. Atomically rename staging → target
+      // 9. Atomically rename staging → target
       fs.renameSync(stagingDir, targetDir);
       stagingPopulated = false; // staging is now the live target
-      targetActivated = true;   // P1: mark that target now holds new content
+      targetActivated = true;   // target now holds the new content
 
-      // 8. Save local install record — MUST succeed before deleting backup.
+      // 10. Save local install record — MUST succeed before deleting backup.
       //    If this fails, we restore the backup and remove the new target.
       const record: LocalInstallRecord = {
         package_name: manifest.name,
@@ -357,12 +346,14 @@ export class InstallExecutor {
         integrity_verified: true,
         installed_at: new Date().toISOString(),
         manifest_version: manifest.manifest_version,
+        content_hash_algorithm: contentDigest.algorithm,
+        content_sha256: contentDigest.digest,
       };
       // Allow test hooks to inject failure at this exact point
       if (this.beforeSaveRecord) this.beforeSaveRecord();
-      this.saveLocalRecord(record);
+      this.recordStore.save(record);
 
-      // 9. Only now is it safe to remove the old backup.
+      // 11. Only now is it safe to remove the old backup.
       //    P2: backup cleanup is non-fatal — failure here must not invalidate
       //    the already-committed install.
       if (backupCreated && fs.existsSync(backupDir)) {
@@ -375,7 +366,7 @@ export class InstallExecutor {
         }
       }
 
-      // 10. Report install to API (fire-and-forget)
+      // 11. Report install to API (fire-and-forget)
       this.reportInstallAsync(manifest, clientType, targetDir, actualSha256);
 
       return {
@@ -388,19 +379,21 @@ export class InstallExecutor {
     } catch (err: unknown) {
       // Rollback (reverse order of activation):
       //   a) Clean up staging if it still exists on disk
-      //   b) If target was activated: delete new target, restore backup if any
+      //   b) If target was activated: delete new target
+      //   c) Restore backup whenever one was created (regardless of targetActivated)
       if (fs.existsSync(stagingDir)) {
         try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
       if (targetActivated) {
-        // P1: always delete the new target when activation succeeded
         if (fs.existsSync(targetDir)) {
           try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* best-effort */ }
         }
-        // Restore backup if one was created
-        if (backupCreated && fs.existsSync(backupDir)) {
-          try { fs.renameSync(backupDir, targetDir); } catch { /* best-effort restore */ }
-        }
+      }
+      // Restore backup whenever one was created — this covers:
+      //   - Digest succeeded, backup created, but rename or record save failed
+      //   - Any post-backup failure before the install fully committed
+      if (backupCreated && fs.existsSync(backupDir)) {
+        try { fs.renameSync(backupDir, targetDir); } catch { /* best-effort restore */ }
       }
       throw err;
     } finally {
@@ -679,7 +672,7 @@ export class InstallExecutor {
 
   private copyDirSync(src: string, dest: string, clientRoot: string): void {
     // Safety check: dest must be within clientRoot
-    if (!this.isStrictChildPath(dest, clientRoot)) {
+    if (!isStrictChildPath(dest, clientRoot)) {
       throw new InstallError(
         `Copy destination "${dest}" escapes client root "${clientRoot}"`,
         'copy_path_escape',
@@ -694,7 +687,7 @@ export class InstallExecutor {
       const destPath = path.join(dest, entry.name);
 
       // Verify destPath is still within clientRoot
-      if (!this.isStrictChildPath(destPath, clientRoot)) {
+      if (!isStrictChildPath(destPath, clientRoot)) {
         throw new InstallError(
           `Copy destination "${destPath}" escapes client root`,
           'copy_path_escape',
@@ -716,48 +709,17 @@ export class InstallExecutor {
   }
 
   // -----------------------------------------------------------------------
-  // Private: Local install records
+  // Public: Local install records (delegates to LocalInstallStore)
   // -----------------------------------------------------------------------
-
-  private getRecordsPath(): string {
-    const dir = path.resolve(this.homeDir, INSTALL_RECORDS_DIR);
-    return path.join(dir, INSTALL_RECORDS_FILE);
-  }
-
-  private loadRecords(): LocalInstallRecord[] {
-    const filePath = this.getRecordsPath();
-    if (!fs.existsSync(filePath)) {
-      return [];
-    }
-    try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
-      return JSON.parse(raw) as LocalInstallRecord[];
-    } catch {
-      return [];
-    }
-  }
-
-  private saveLocalRecord(record: LocalInstallRecord): void {
-    const filePath = this.getRecordsPath();
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const records = this.loadRecords();
-    const idx = records.findIndex(
-      r => r.package_name === record.package_name && r.client === record.client,
-    );
-    if (idx >= 0) {
-      records[idx] = record;
-    } else {
-      records.push(record);
-    }
-    fs.writeFileSync(filePath, JSON.stringify(records, null, 2), 'utf-8');
-  }
 
   /** Get all locally installed packages (for verify/update/uninstall). */
   getLocalRecords(): LocalInstallRecord[] {
-    return this.loadRecords();
+    return this.recordStore.load();
+  }
+
+  /** Expose the underlying store for verify executor. */
+  getRecordStore(): LocalInstallStore {
+    return this.recordStore;
   }
 
   // -----------------------------------------------------------------------
@@ -789,84 +751,15 @@ export class InstallExecutor {
   // -----------------------------------------------------------------------
 
   // -----------------------------------------------------------------------
-  // Private: Manifest destination resolution
-  // -----------------------------------------------------------------------
-
-  /**
-   * Resolve a server-supplied logical destination (e.g. `~/.claude/skills/pkg/`)
-   * into a real filesystem path under the client root.
-   *
-   * The manifest root prefix is stripped, and the remainder is joined to the
-   * platform-native clientRoot.  This prevents the CLI from creating a literal
-   * `~` directory or double-nesting the logical root under the real root.
-   */
-  private resolveManifestDestination(
-    destination: string,
-    clientType: string,
-    clientRoot: string,
-  ): string {
-    const manifestRoot = CLIENT_MANIFEST_ROOTS[clientType];
-    if (!manifestRoot) {
-      throw new InstallError(
-        `Unsupported client: "${clientType}"`,
-        'unsupported_client',
-      );
-    }
-
-    if (!destination.startsWith(manifestRoot)) {
-      throw new InstallError(
-        `Manifest destination "${destination}" is outside the declared root "${manifestRoot}"`,
-        'destination_root_mismatch',
-      );
-    }
-
-    const relative = destination.slice(manifestRoot.length);
-
-    if (!relative || !isSafeInstallPath(relative)) {
-      throw new InstallError(
-        `Manifest destination "${destination}" does not identify a safe child directory`,
-        'invalid_destination',
-      );
-    }
-
-    // The Manifest uses POSIX `/` separators; split and re-join via platform
-    // path.resolve so the result uses the correct native separators.
-    const targetDir = path.resolve(
-      clientRoot,
-      ...relative.split('/').filter(Boolean),
-    );
-
-    if (!this.isStrictChildPath(targetDir, clientRoot)) {
-      throw new InstallError(
-        `Target directory "${destination}" escapes client root`,
-        'path_escape',
-      );
-    }
-
-    return targetDir;
-  }
-
-  // -----------------------------------------------------------------------
   // Static helpers
   // -----------------------------------------------------------------------
 
-  static isStrictChildPath(child: string, parent: string): boolean {
-    const normalizedChild = path.resolve(child);
-    const normalizedParent = path.resolve(parent);
-    return (
-      normalizedChild !== normalizedParent &&
-      normalizedChild.startsWith(normalizedParent + path.sep)
-    );
-  }
-
-  private isStrictChildPath(child: string, parent: string): boolean {
-    return InstallExecutor.isStrictChildPath(child, parent);
-  }
-
   /** Resolve the client-specific root directory (for use by CLI display). */
   static getClientRoot(clientType: string, homeDir?: string): string | null {
-    const rel = CLIENT_INSTALL_ROOTS[clientType];
-    if (!rel) return null;
-    return path.resolve(homeDir || os.homedir(), rel);
+    try {
+      return getClientRoot(clientType, homeDir);
+    } catch {
+      return null;
+    }
   }
 }

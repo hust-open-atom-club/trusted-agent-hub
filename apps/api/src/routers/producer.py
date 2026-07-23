@@ -221,6 +221,9 @@ def list_versions(
     submitter_id: str | None = Query(default=None, description="提交者用户 ID"),
     status: str | None = Query(default=None, description="按状态筛选，逗号分隔多个"),
     grade: str | None = Query(default=None, description="按风险等级筛选（A/B/C/D/E/F）"),
+    limit: int = Query(default=50, ge=1, le=200, description="每页数量"),
+    offset: int = Query(default=0, ge=0, description="偏移量"),
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> list[dict[str, object]]:
     """获取版本列表（按提交时间倒序）。
 
@@ -233,7 +236,7 @@ def list_versions(
     service = ProducerService(repo)
 
     if submitter_id is not None:
-        return service.list_my_versions(submitter_id)
+        return service.list_my_versions(submitter_id, limit=limit, offset=offset)
 
     if status is not None:
         return service.list_versions_by_status(
@@ -242,3 +245,43 @@ def list_versions(
         )
 
     return service.list_versions_by_status()
+
+
+# ── DELETE /packages/{package_id} ──────────────────────────
+
+@router.delete(
+    "/packages/{package_id}",
+    status_code=204,
+    responses={403: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def delete_package(
+    package_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> None:
+    """删除包（仅 admin 可操作，且仅无版本的孤儿包可删除）。"""
+    repo = _get_producer_repository()
+    pkg = repo.get_package(package_id)
+    if pkg is None:
+        raise HTTPException(status_code=404, detail=f"包 {package_id} 不存在")
+    versions_count = pkg.get("versions_count", 0)
+    if versions_count > 0:
+        raise HTTPException(
+            status_code=403,
+            detail=f"包 {package_id} 包含 {versions_count} 个版本，无法删除。请先删除所有版本。",
+        )
+    if not repo.delete_package(package_id):
+        raise HTTPException(status_code=404, detail=f"删除失败：包 {package_id} 不存在")
+    return None
+
+
+# ── GET /stats/dashboard ───────────────────────────────────
+
+@router.get(
+    "/stats/dashboard",
+)
+def get_dashboard_stats(
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> dict[str, object]:
+    """管理仪表盘统计数据（需 admin 权限）。"""
+    repo = _get_producer_repository()
+    return repo.get_dashboard_stats()

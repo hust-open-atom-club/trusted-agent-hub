@@ -127,6 +127,14 @@ function test_installHelpShowsVersionOption() {
   console.log('  ✓ install --help shows --version option');
 }
 
+function test_verifyHelpShowsOptions() {
+  const { stdout, status } = runCli(['verify', '--help']);
+  assert.strictEqual(status, 0);
+  assert.ok(stdout.includes('verify'), 'verify help must show verify');
+  assert.ok(stdout.includes('--client'), 'verify help must show --client option');
+  console.log('  ✓ verify --help shows options');
+}
+
 // ---------------------------------------------------------------------------
 // Run all
 // ---------------------------------------------------------------------------
@@ -139,5 +147,6 @@ test_installVersionOptionDoesNotPrintCliVersion();
 test_installVersionOptionOrderSwapped();
 test_installWithoutVersionStillWorks();
 test_installHelpShowsVersionOption();
+test_verifyHelpShowsOptions();
 
 console.log('\n  ✓ All CLI parsing tests passed!\n');
