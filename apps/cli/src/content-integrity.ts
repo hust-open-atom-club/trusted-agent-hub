@@ -94,13 +94,12 @@ function binaryCompare(a: string, b: string): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Verify that every path component from the filesystem root down to `target`
- * is a real directory — not a symlink, junction, or reparse point.
- *
- * This prevents junction-based escapes where an ancestor directory redirects
- * the lexical path to a physically different location on disk.
+ * Internal shared implementation: walk from root to target, lstat'ing each
+ * component.  When `tolerateMissingLeaf` is true and the current component
+ * is NOT the root, ENOENT is treated as a clean stop — the target leaf
+ * simply does not exist yet.
  */
-export function validateAncestorChain(target: string): void {
+function validateAncestorChainInternal(target: string, tolerateMissingLeaf: boolean): void {
   const resolved = path.resolve(target);
 
   // Use path.parse to get the filesystem root (e.g. "/" on Linux, "C:\" on
@@ -117,8 +116,10 @@ export function validateAncestorChain(target: string): void {
 
   // Build the relative segments from root to resolved
   const relative = path.relative(root, resolved);
-  if (!relative) {
-    // resolved is the root itself — stat it directly
+  const parts = relative ? relative.split(path.sep).filter(Boolean) : [];
+
+  // Validate the root itself first
+  {
     let stat: fs.Stats;
     try {
       stat = fs.lstatSync(root);
@@ -140,44 +141,27 @@ export function validateAncestorChain(target: string): void {
         'unsafe_content',
       );
     }
-    return;
   }
 
-  const parts = relative.split(path.sep).filter(Boolean);
+  // If resolved IS the root, we're done (parts is empty)
+  if (parts.length === 0) return;
 
   let current = root;
-  // Validate the root itself first
-  {
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(current);
-    } catch (err: unknown) {
-      throw new ContentIntegrityError(
-        `Cannot stat root "${current}": ${err instanceof Error ? err.message : String(err)}`,
-        'unsafe_content',
-      );
-    }
-    if (stat.isSymbolicLink()) {
-      throw new ContentIntegrityError(
-        `Root path "${current}" is a symbolic link — must be a real directory`,
-        'unsafe_content',
-      );
-    }
-    if (!stat.isDirectory()) {
-      throw new ContentIntegrityError(
-        `Root path "${current}" is not a directory`,
-        'unsafe_content',
-      );
-    }
-  }
-
-  for (const part of parts) {
-    current = path.join(current, part);
+  for (let index = 0; index < parts.length; index++) {
+    current = path.join(current, parts[index]);
 
     let stat: fs.Stats;
     try {
       stat = fs.lstatSync(current);
     } catch (err: unknown) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // When tolerating a missing leaf, any component beyond the root can be
+      // missing (ENOENT) — the target simply hasn't been created yet.
+      // The root itself is already validated above, so every candidate here
+      // is a non-root component.
+      if (tolerateMissingLeaf && code === 'ENOENT') {
+        return;
+      }
       throw new ContentIntegrityError(
         `Cannot stat ancestor "${current}": ${err instanceof Error ? err.message : String(err)}`,
         'unsafe_content',
@@ -202,6 +186,33 @@ export function validateAncestorChain(target: string): void {
       );
     }
   }
+}
+
+/**
+ * Verify that every path component from the filesystem root down to `target`
+ * is a real directory — not a symlink, junction, or reparse point.
+ *
+ * This prevents junction-based escapes where an ancestor directory redirects
+ * the lexical path to a physically different location on disk.
+ */
+export function validateAncestorChain(target: string): void {
+  validateAncestorChainInternal(target, false);
+}
+
+/**
+ * Verify that every path component from the filesystem root down to `target`
+ * that **currently exists** is a real directory.
+ *
+ * Unlike {@link validateAncestorChain}, this variant tolerates the target
+ * leaf (or any intermediate component above the leaf) not existing yet.
+ * Only the components that are present on disk are checked — the first
+ * `ENOENT` encountered after the root cleanly stops the walk.
+ *
+ * This is used by the uninstall path when confirming that a stale record's
+ * missing directory had safe ancestry before removing the record.
+ */
+export function validateExistingAncestorChain(target: string): void {
+  validateAncestorChainInternal(target, true);
 }
 
 // ---------------------------------------------------------------------------

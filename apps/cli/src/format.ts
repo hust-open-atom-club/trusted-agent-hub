@@ -18,14 +18,6 @@ import type { PackageSummary, VersionDetail } from './api-client';
 
 // ── Color helpers ───────────────────────────────────────────────────────
 
-/** Return a chalk colour for a trust score value. */
-function trustScoreColor(score: number | null): chalk.Chalk {
-  if (score === null) return chalk.gray;
-  if (score >= 80) return chalk.greenBright;
-  if (score >= 50) return chalk.yellow;
-  return chalk.red;
-}
-
 /** Return a chalk colour for a risk level string. */
 function riskLevelColor(level: string | null): chalk.Chalk {
   if (level === null) return chalk.gray;
@@ -84,12 +76,6 @@ function resolveGrade(pkg: PackageSummary, version: VersionDetail | null): strin
   return null;
 }
 
-/** Format a trust score value for display. */
-function formatTrustScore(score: number | null): string {
-  if (score === null) return 'N/A';
-  return `${score}/100`;
-}
-
 // ── Public formatters ───────────────────────────────────────────────────
 
 /**
@@ -120,7 +106,6 @@ export function formatPackageCard(pkg: PackageSummary): string {
   // Stats row
   const stats = [
     gradeStr ? `${chalk.dim('Grade:')} ${gradeStr}` : null,
-    `${chalk.dim('Trust:')} ${trustScoreColor(pkg.trust_score)(formatTrustScore(pkg.trust_score))}`,
     `${chalk.dim('Risk:')} ${riskLevelColor(pkg.risk_level)(riskLabel)}`,
     `${chalk.dim('Status:')} ${statusColor(pkg.status)(statusLabel)}`,
     `${chalk.dim('v')}${pkg.latest_version}`,
@@ -183,9 +168,6 @@ export function formatPackageDetail(
       `  ${chalk.dim('Grade:')}        ${gradeColor(gradeVal)(gradeLabel)}`,
     );
   }
-  lines.push(
-    `  ${chalk.dim('Trust Score:')} ${trustScoreColor(pkg.trust_score)(formatTrustScore(pkg.trust_score))}`,
-  );
   const riskLabel = pkg.risk_level
     ? RISK_LEVEL_LABELS[pkg.risk_level as RiskLevel]
     : 'N/A';

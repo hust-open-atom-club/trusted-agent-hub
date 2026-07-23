@@ -25,6 +25,12 @@ BUSINESS_TABLES = {
     "install_records",
     "feedback_records",
 }
+PRODUCER_TABLES = {
+    "users",
+    "scan_reports",
+    "review_records",
+    "audit_logs",
+}
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -149,7 +155,9 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
     migrated_sqlite_engine: Engine,
 ) -> None:
     inspector = inspect(migrated_sqlite_engine)
-    assert set(inspector.get_table_names()) - {"alembic_version"} == BUSINESS_TABLES
+    assert set(inspector.get_table_names()) - {"alembic_version"} == (
+        BUSINESS_TABLES | PRODUCER_TABLES
+    )
 
     assert {
         constraint["name"]

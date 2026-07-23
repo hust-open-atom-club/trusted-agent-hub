@@ -72,7 +72,7 @@ def test_injected_version_lookup_does_not_read_base_repository(
     assert augmented_repository.get_version_by_id(injected.id) == injected
 
 
-def test_trust_score_returns_full_published_score_document(
+def test_trust_score_returns_public_grade_document(
     client: TestClient,
     repository: JsonPackageRepository,
 ) -> None:
@@ -83,7 +83,8 @@ def test_trust_score_returns_full_published_score_document(
     assert record.trust_score is not None
     assert response.status_code == 200
     assert response.json() == record.trust_score.model_dump(mode="json")
-    assert response.json()["score"] == 92
+    assert "score" not in response.json()
+    assert response.json()["risk_summary"]["grade"] == "A"
 
 
 def test_unknown_version_has_canonical_trust_score_not_found(

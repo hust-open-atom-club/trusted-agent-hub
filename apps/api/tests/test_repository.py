@@ -9,8 +9,7 @@ from src.repositories.base import RepositoryDataError
 from src.repositories.mock import JsonPackageRepository
 
 
-ROOT = Path(__file__).resolve().parents[3]
-MOCK = ROOT / "packages" / "schema" / "mock"
+MOCK = Path(__file__).resolve().parent / "fixtures" / "mock"
 
 
 def _write_repository(

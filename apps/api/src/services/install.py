@@ -1,6 +1,5 @@
 """Safe Install Manifest v1.0 construction service."""
 
-import math
 import posixpath
 import re
 
@@ -188,7 +187,7 @@ class InstallManifestService:
             or risk_summary is None
             or risk_summary.grade is None
         ):
-            invalid_fields.append("trust_score")
+            invalid_fields.append("risk_summary.grade")
         if (
             risk_summary is not None
             and risk_summary.install_recommendation == "blocked"

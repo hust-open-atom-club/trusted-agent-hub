@@ -556,12 +556,6 @@
           "source": {
             "$ref": "#/components/schemas/ManifestSource"
           },
-          "trust_score": {
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Trust Score",
-            "type": "integer"
-          },
           "type": {
             "$ref": "#/components/schemas/PackageType"
           },
@@ -581,7 +575,6 @@
           "installation",
           "permissions",
           "risk_summary",
-          "trust_score",
           "compatibility",
           "dependencies"
         ],
@@ -1287,17 +1280,6 @@
             "title": "Status",
             "type": "string"
           },
-          "trust_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trust Score"
-          },
           "type": {
             "$ref": "#/components/schemas/PackageType"
           },
@@ -1538,17 +1520,6 @@
           "status": {
             "title": "Status",
             "type": "string"
-          },
-          "trust_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trust Score"
           },
           "type": {
             "$ref": "#/components/schemas/PackageType"
@@ -1992,11 +1963,11 @@
       },
       "SortField": {
         "enum": [
-          "trust_score",
           "updated_at",
           "install_count",
           "avg_rating",
-          "name"
+          "name",
+          "grade"
         ],
         "title": "SortField",
         "type": "string"
@@ -2172,7 +2143,6 @@
         "type": "object"
       },
       "TrustScore": {
-        "additionalProperties": false,
         "properties": {
           "calculated_at": {
             "anyOf": [
@@ -2233,20 +2203,12 @@
                 "type": "null"
               }
             ]
-          },
-          "score": {
-            "title": "Score",
-            "type": "number"
           }
         },
-        "required": [
-          "score"
-        ],
         "title": "TrustScore",
         "type": "object"
       },
       "TrustScoreDimension": {
-        "additionalProperties": false,
         "properties": {
           "details": {
             "anyOf": [
@@ -2260,17 +2222,12 @@
             ],
             "title": "Details"
           },
-          "score": {
-            "title": "Score",
-            "type": "number"
-          },
           "weight": {
             "title": "Weight",
             "type": "number"
           }
         },
         "required": [
-          "score",
           "weight"
         ],
         "title": "TrustScoreDimension",
@@ -2588,17 +2545,6 @@
             ],
             "title": "Submitted At"
           },
-          "trust_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trust Score"
-          },
           "version": {
             "title": "Version",
             "type": "string"
@@ -2819,7 +2765,7 @@
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/SortField",
-              "default": "trust_score"
+              "default": "updated_at"
             }
           },
           {

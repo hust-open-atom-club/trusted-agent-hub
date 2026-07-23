@@ -386,7 +386,6 @@ async function main() {
         },
         permissions: {},
         risk_summary: { level: 'low', grade: 'A', install_recommendation: 'safe' },
-        trust_score: 80,
         compatibility: ['claude-code'],
         dependencies: {},
       });

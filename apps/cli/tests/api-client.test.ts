@@ -61,7 +61,7 @@ const samplePackage = {
   id: '1', name: 'test-skill', description: 'A test', type: 'skill',
   license: 'MIT', keywords: [], category: null, homepage: null, icon_url: null,
   owner: { id: 'o1', username: 'dev', display_name: 'Dev', role: 'submitter' },
-  latest_version: '1.0.0', status: 'published', trust_score: 92,
+  latest_version: '1.0.0', status: 'published',
   risk_level: 'low_risk', grade: 'B', install_count: 10, avg_rating: 4.5,
   created_at: '2026-01-01', updated_at: '2026-06-01',
 };
@@ -75,7 +75,7 @@ const sampleVersion = {
   compatibility: ['claude-code'],
   permissions: {},
   installation: { method: 'copy_directory', targets: [] },
-  trust_score: { score: 92, risk_summary: {
+  trust_score: { risk_summary: {
     level: 'low_risk', grade: 'B', top_risks: [], install_recommendation: 'safe',
   }},
   created_at: null, submitted_at: null,
@@ -89,6 +89,7 @@ async function test_searchPackages_success() {
   assert.strictEqual(result.items.length, 1);
   assert.strictEqual(result.items[0].name, 'test-skill');
   assert.strictEqual(result.items[0].grade, 'B');
+  assert.ok(!('trust_score' in result.items[0]));
   assert.ok(fetchFn.urls[0].includes('/api/v0/packages'));
   assert.ok(fetchFn.urls[0].includes('q=test'));
   console.log('  ✓ searchPackages success');
