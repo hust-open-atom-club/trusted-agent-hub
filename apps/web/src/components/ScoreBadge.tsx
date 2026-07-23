@@ -1,27 +1,29 @@
 'use client';
 
 interface ScoreBadgeProps {
-  score: number | null;
+  grade: string | null;
   size?: 'sm' | 'lg';
 }
 
-function getScoreClass(score: number | null): string {
-  if (score === null) return 'unknown';
-  if (score >= 80) return 'trusted';
-  if (score >= 50) return 'caution';
-  return 'danger';
+function getGradeClass(grade: string | null): string {
+  if (grade === null) return 'unknown';
+  const g = grade.toUpperCase();
+  if (g === 'A' || g === 'B') return 'trusted';
+  if (g === 'C') return 'caution';
+  if (g === 'D' || g === 'E' || g === 'F') return 'danger';
+  return 'unknown';
 }
 
-export default function ScoreBadge({ score, size = 'sm' }: ScoreBadgeProps) {
+export default function ScoreBadge({ grade, size = 'sm' }: ScoreBadgeProps) {
   const classNames = [
     'score-badge',
-    getScoreClass(score),
+    getGradeClass(grade),
     size === 'lg' ? 'size-lg' : '',
   ]
     .filter(Boolean)
     .join(' ');
 
-  const display = score !== null ? score : '--';
+  const display = grade ?? '--';
 
   return <span className={classNames}>{display}</span>;
 }

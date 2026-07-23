@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import ScannerForm from '@/components/ScannerForm';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -217,6 +218,8 @@ function SubmitForm() {
 
   return (
     <div className="submit-page">
+      <ScannerForm onRepoScanned={(url) => updateField('repoUrl', url)} />
+
       <div className="submit-container">
         <div className="submit-header">
           <h1>提交新 Skill</h1>

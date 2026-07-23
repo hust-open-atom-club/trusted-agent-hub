@@ -272,7 +272,6 @@ def _run_scan_task(
             "full_report": full_report,
             "summary": scan_report.get("summary", {}),
             "trust_score": {
-                "score": trust_score_result.get("score"),
                 "level": trust_score_result.get("risk_summary", {}).get("level"),
                 "grade": trust_score_result.get("risk_summary", {}).get("grade"),
                 "recommendation": trust_score_result.get("risk_summary", {}).get("install_recommendation"),
@@ -285,7 +284,7 @@ def _run_scan_task(
             shutil.rmtree(tmp_dir, ignore_errors=True)
         if on_complete:
             on_complete(scan_id, full_report, None)
-        print(f"[TAH-trust] *** 扫描流水线完成: {scan_id}, score={trust_score_result.get('score')}")
+        print(f"[TAH-trust] *** 扫描流水线完成: {scan_id}, grade={trust_score_result.get('risk_summary', {}).get('grade')}")
 
     except Exception as exc:
         _scans[scan_id]["status"] = "error"

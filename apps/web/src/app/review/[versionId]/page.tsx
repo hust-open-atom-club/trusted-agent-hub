@@ -38,7 +38,6 @@ interface ScanSummary {
 }
 
 interface TrustScore {
-  score?: number | null;
   risk_summary?: {
     grade?: string;
     level?: string;

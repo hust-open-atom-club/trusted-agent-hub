@@ -24,10 +24,11 @@ const RISK_LEVEL_LABELS: Record<string, string> = {
   untrusted: 'Untrusted',
 };
 
-function getScoreClass(score: number | null): string {
-  if (score === null) return 'unknown';
-  if (score >= 80) return 'trusted';
-  if (score >= 50) return 'caution';
+function getGradeClass(grade: string | null): string {
+  if (grade === null) return 'unknown';
+  const g = grade.toUpperCase();
+  if (g === 'A' || g === 'B') return 'trusted';
+  if (g === 'C') return 'caution';
   return 'danger';
 }
 
@@ -74,7 +75,7 @@ export default function PackageDetailPage() {
     );
   }
 
-  const scoreClass = getScoreClass(pkg.trust_score);
+  const gradeClass = getGradeClass(pkg.grade);
   const riskLabel = pkg.risk_level
     ? (RISK_LEVEL_LABELS[pkg.risk_level] ?? pkg.risk_level)
     : 'Unknown';
@@ -83,11 +84,11 @@ export default function PackageDetailPage() {
     pkg.avg_rating !== null ? pkg.avg_rating.toFixed(1) : 'N/A';
 
   const trustAdvice =
-    pkg.trust_score === null
+    pkg.grade === null
       ? 'This package has not been evaluated yet.'
-      : pkg.trust_score >= 80
+      : pkg.grade === 'A' || pkg.grade === 'B'
         ? 'This package has passed all security scans and is safe to install.'
-        : pkg.trust_score >= 50
+        : pkg.grade === 'C'
           ? 'This package has medium trust. Review the details before installing.'
           : 'This package has low trust. Installation is not recommended without thorough review.';
 
@@ -140,8 +141,8 @@ export default function PackageDetailPage() {
       {/* Trust Score Section */}
       <div className="detail-section">
         <h2>Trust Score</h2>
-        <div className={`trust-level ${scoreClass}`}>
-          <ScoreBadge score={pkg.trust_score} size="lg" />
+        <div className={`trust-level ${gradeClass}`}>
+          <ScoreBadge grade={pkg.grade} size="lg" />
           <div>
             <span className="trust-label">{riskLabel}</span>
             <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-2)', marginTop: 4 }}>

@@ -173,12 +173,11 @@ class ProducerService:
             report_path=str(report_path) if report_path else None,
         )
 
-        # 更新版本数据（附加信任评分信息）
+        # 更新版本数据（附加信任评分信息 —— 只写入 grade 等级，不写入数字分数）
         self.repository.update_version_data(
             version_id,
             {
                 "trust_score": {
-                    "score": trust_score.get("score"),
                     "risk_summary": trust_score.get("risk_summary"),
                     "calculated_at": full_report.get("finished_at"),
                 },
@@ -200,7 +199,6 @@ class ProducerService:
                     if isinstance(scan_report, dict)
                     else 0
                 ),
-                "trust_score": trust_score.get("score"),
                 "trust_grade": trust_score.get("risk_summary", {}).get("grade") if isinstance(trust_score, dict) else None,
                 "llm_review": (
                     scan_report.get("llm_review", {}).get("labels_summary")
@@ -238,7 +236,6 @@ class ProducerService:
                 version["scan_summary"] = scan_json.get("summary", {})
                 version["findings"] = scan_json.get("findings", [])
                 version["trust_score"] = version.get("trust_score") or {
-                    "score": None,
                     "risk_summary": None,
                 }
         return version

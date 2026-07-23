@@ -383,15 +383,6 @@ export const INSTALL_RECOMMENDATION_LABELS: Record<InstallRecommendation, string
 };
 
 // ============================================================
-// 信任评分阈值
-// ============================================================
-export const TRUST_SCORE_THRESHOLDS = {
-  TRUSTED: 80,          // >= 80 安全安装
-  CAUTION: 50,          // >= 50 需要确认
-  BLOCKED: 50,          // < 50 默认阻止
-} as const;
-
-// ============================================================
 // Grade A-E 安装决策
 // ============================================================
 export const GRADES = ['A', 'B', 'C', 'D', 'E'] as const;
@@ -437,7 +428,7 @@ export const RISK_LEVEL_TO_GRADE: Record<string, Grade> = {
 // 排序选项
 // ============================================================
 export const SORT_OPTIONS = [
-  'trust_score',
+  'grade',
   'updated_at',
   'install_count',
   'avg_rating',

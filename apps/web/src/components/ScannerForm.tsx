@@ -21,7 +21,6 @@ interface ScanResult {
     pass_rate: number;
   };
   trust_score?: {
-    score: number | null;
     level: string | null;
     grade: string | null;
     recommendation: string | null;
@@ -51,7 +50,11 @@ const LOCAL_SKILLS = [
   { path: 'examples/plugins/demo-dev-toolkit', name: 'demo-dev-toolkit', desc: 'Developer toolkit plugin — aggregates 3 skills', risk: 'low' },
 ];
 
-export default function ScannerForm() {
+interface ScannerFormProps {
+  onRepoScanned?: (url: string) => void;
+}
+
+export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
   const router = useRouter();
   const { user } = useAuth();
   const [repoUrl, setRepoUrl] = useState('');
@@ -70,7 +73,6 @@ export default function ScannerForm() {
         setScanStatus('complete');
         setScanResult(data);
         setStatusMessage('');
-        console.log(`%c[TAH-frontend] *** ${label} DONE score=${data.trust_score?.score}`, 'color:#10b981;font-weight:bold');
         return;
       }
       if (data.status === 'error') {
@@ -93,15 +95,12 @@ export default function ScannerForm() {
       setScanStatus('submitting');
       setScanResult(null);
       setStatusMessage('Submitting...');
-      console.log('%c[TAH-frontend] >>> GitHub scan', 'color:#3b82f6;font-weight:bold', url);
       try {
         const r = await fetch(`${API_BASE}/api/v0/scan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo_url: url }) });
         if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Failed'); }
         const { scan_id } = await r.json();
-        console.log('[TAH-frontend] scan_id =', scan_id);
         await pollUntilDone(scan_id, url);
       } catch (err: unknown) {
-        console.error('%c[TAH-frontend] *** ERROR', 'color:#ef4444;font-weight:bold', err);
         setScanStatus('error');
         setScanResult({ scan_id: '', status: 'error', package_name: 'unknown', error: err instanceof Error ? err.message : 'Unknown error' });
       }
@@ -112,17 +111,15 @@ export default function ScannerForm() {
   // --- 本地路径扫描 ---
   const scanLocalPath = useCallback(async (localPath: string, label: string) => {
     setScanStatus('submitting');
-    setScanResult(null);
+      setScanResult(null);
     setRepoUrl(localPath);
     setStatusMessage(`Scanning ${label}...`);
-    console.log(`%c[TAH-frontend] >>> Local scan: ${label}`, 'color:#f59e0b;font-weight:bold');
     try {
       const r = await fetch(`${API_BASE}/api/v0/scan`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ local_path: localPath }) });
       if (!r.ok) { const e = await r.json(); throw new Error(e.detail || 'Failed'); }
       const { scan_id } = await r.json();
       await pollUntilDone(scan_id, label);
     } catch (err: unknown) {
-      console.error('%c[TAH-frontend] *** ERROR', 'color:#ef4444;font-weight:bold', err);
       setScanStatus('error');
       setScanResult({ scan_id: '', status: 'error', package_name: 'unknown', error: err instanceof Error ? err.message : 'Unknown error' });
     }
@@ -142,7 +139,7 @@ export default function ScannerForm() {
       <div className="scanner-card">
         <div className="scanner-header">
           <h2 className="scanner-title">
-            <span className="scanner-icon">&#x1F50D;</span>
+            <svg className="scanner-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             Submit a Package for Trust Scan
           </h2>
           <p className="scanner-desc">
@@ -194,7 +191,9 @@ export default function ScannerForm() {
 
         {scanStatus === 'error' && scanResult && (
           <div className="scanner-status scanner-status-error">
-            <div className="scanner-status-icon">&#x274C;</div>
+            <div className="scanner-status-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            </div>
             <div>
               <p className="scanner-status-title">Scan Failed</p>
               <p className="scanner-status-msg">{scanResult.error || 'Unknown error'}</p>
@@ -209,7 +208,7 @@ export default function ScannerForm() {
             <div className="scanner-result-header">
               <div className="scanner-result-score">
                 <span className="scanner-result-label">Trust Score</span>
-                <ScoreBadge score={scanResult.trust_score?.score ?? null} size="lg" />
+                <ScoreBadge grade={scanResult.trust_score?.grade ?? null} size="lg" />
                 {scanResult.trust_score?.grade && (
                   <span className={`scanner-result-grade grade-${scanResult.trust_score.grade.toLowerCase()}`}>
                     Grade {scanResult.trust_score.grade}
@@ -233,18 +232,28 @@ export default function ScannerForm() {
               {scanResult.llm_review?.triggered && (
                 <div className="scanner-result-llm">
                   <span className="llm-review-badge" title={`LLM reviewed ${scanResult.llm_review.findings_reviewed} findings`}>
-                    &#x1F916; LLM Review: {scanResult.llm_review.findings_reviewed} findings
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    LLM Review: {scanResult.llm_review.findings_reviewed} findings
                   </span>
                   {scanResult.llm_review.labels_summary && (
                     <div className="llm-labels-summary">
                       {scanResult.llm_review.labels_summary.suspected_malicious > 0 && (
-                        <span className="llm-label malicious">&#x1F6A8; {scanResult.llm_review.labels_summary.suspected_malicious} malicious</span>
+                        <span className="llm-label malicious">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                          {scanResult.llm_review.labels_summary.suspected_malicious} malicious
+                        </span>
                       )}
                       {scanResult.llm_review.labels_summary.suspected_negligent > 0 && (
-                        <span className="llm-label negligent">&#x26A0;&#xFE0F; {scanResult.llm_review.labels_summary.suspected_negligent} negligent</span>
+                        <span className="llm-label negligent">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                          {scanResult.llm_review.labels_summary.suspected_negligent} negligent
+                        </span>
                       )}
                       {scanResult.llm_review.labels_summary.uncertain > 0 && (
-                        <span className="llm-label uncertain">&#x2753; {scanResult.llm_review.labels_summary.uncertain} uncertain</span>
+                        <span className="llm-label uncertain">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                          {scanResult.llm_review.labels_summary.uncertain} uncertain
+                        </span>
                       )}
                     </div>
                   )}
@@ -272,16 +281,25 @@ export default function ScannerForm() {
 
             <div className="scanner-result-actions">
               {user ? (
-                <button
-                  className="btn btn-primary"
-                  onClick={() =>
-                    router.push(
-                      `/submit?repo_url=${encodeURIComponent(repoUrl)}`
-                    )
-                  }
-                >
-                  提交入库审核
-                </button>
+                onRepoScanned ? (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => onRepoScanned(repoUrl)}
+                  >
+                    填入表单继续提交
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() =>
+                      router.push(
+                        `/submit?repo_url=${encodeURIComponent(repoUrl)}`
+                      )
+                    }
+                  >
+                    提交入库审核
+                  </button>
+                )
               ) : (
                 <p className="scanner-login-hint">
                   <a href="/login">登录</a>后即可提交入库审核
