@@ -6,6 +6,8 @@ const FILTER_OPTIONS = [
   { key: 'mcp_server', label: 'MCP Server' },
   { key: 'plugin', label: 'Plugin' },
   { key: 'command', label: 'Command' },
+  { key: 'subagent', label: 'Subagent' },
+  { key: 'prompt', label: 'Prompt' },
 ];
 
 interface SearchBarProps {

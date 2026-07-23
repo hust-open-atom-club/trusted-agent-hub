@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from src.models.common import PackageListQuery, SortField, SortOrder
 from src.models.packages import (
+    Grade,
     PackageDetail,
     PackagePage,
     PackageStats,
@@ -20,6 +21,20 @@ from .errors import (
     TrustScoreNotFoundError,
     VersionNotFoundError,
 )
+
+_GRADE_NUMERIC: dict[Grade, int] = {
+    Grade.A: 5,
+    Grade.B: 4,
+    Grade.C: 3,
+    Grade.D: 2,
+    Grade.E: 1,
+}
+
+
+def _grade_order(grade: Grade | None) -> int | None:
+    if grade is None:
+        return None
+    return _GRADE_NUMERIC[grade]
 
 
 class PackageService:
@@ -94,6 +109,8 @@ class PackageService:
                 return item.name.casefold()
             if field is SortField.UPDATED_AT:
                 return self._parse_updated_at(item)
+            if field is SortField.GRADE:
+                return _grade_order(item.grade)
             return getattr(item, field.value)
 
         keyed_items = [(item, raw_value(item)) for item in items]
@@ -233,7 +250,4 @@ class PackageService:
             status=version.status,
             submitted_at=version.submitted_at,
             created_at=version.created_at,
-            trust_score=(
-                version.trust_score.score if version.trust_score is not None else None
-            ),
         )

@@ -2,12 +2,14 @@
  * Local install record persistence.
  *
  * Stores a JSON array at `~/.trusted-agent-hub/installs.json` with strict
- * validation and atomic saves.  Used by both the install and verify paths.
+ * validation and atomic saves.  Used by the install, verify, and uninstall
+ * paths.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -47,6 +49,46 @@ export interface LocalInstallRecord {
   content_sha256?: string;      // installed content digest (may be absent for legacy records)
 }
 
+/** Canonical ordered list of every field in {@link LocalInstallRecord}.
+ *  Shared between the store and the uninstall executor so that record
+ *  comparison never silently diverges when a field is added. */
+export const RECORD_COMPARE_FIELDS: readonly (keyof LocalInstallRecord)[] = [
+  'package_name',
+  'version',
+  'client',
+  'install_path',
+  'sha256',
+  'integrity_verified',
+  'installed_at',
+  'manifest_version',
+  'content_hash_algorithm',
+  'content_sha256',
+];
+
+/**
+ * Narrow persistence adapter — allows tests to inject failures at specific
+ * file-operation boundaries without mocking the entire `fs` module.
+ *
+ * The default implementation delegates to Node's real `fs` functions.
+ */
+export interface RecordStorePersistence {
+  writeText(filePath: string, value: string): void;
+  rename(source: string, destination: string): void;
+  remove(filePath: string): void;
+}
+
+const defaultPersistence: RecordStorePersistence = {
+  writeText(filePath, value) {
+    fs.writeFileSync(filePath, value, 'utf-8');
+  },
+  rename(source, destination) {
+    fs.renameSync(source, destination);
+  },
+  remove(filePath) {
+    fs.unlinkSync(filePath);
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Validators
 // ---------------------------------------------------------------------------
@@ -70,6 +112,21 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
   }
 
   const r = record as Record<string, unknown>;
+
+  // ── Unknown field detection ──────────────────────────────────────────
+  // Every key must be in the known set; extra fields are rejected so that
+  // a save→remove round-trip never silently drops data from other records.
+  // KNOWN_KEYS is derived from RECORD_COMPARE_FIELDS so that adding a field
+  // to the type automatically updates both lists.
+  const KNOWN_KEYS = new Set<string>(RECORD_COMPARE_FIELDS);
+  for (const key of Object.keys(r)) {
+    if (!KNOWN_KEYS.has(key)) {
+      throw new RecordStoreError(
+        `Record at index ${index}: unknown field "${key}"`,
+        'record_invalid',
+      );
+    }
+  }
 
   // Required string fields
   for (const field of REQUIRED_STRING_FIELDS) {
@@ -143,19 +200,37 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
   };
 }
 
+/**
+ * Compare two records field-by-field — used by `remove()` to ensure the
+ * record hasn't changed since a caller last read it.
+ */
+function recordsMatch(a: LocalInstallRecord, b: LocalInstallRecord): boolean {
+  for (const key of RECORD_COMPARE_FIELDS) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
 export class LocalInstallStore {
   private readonly homeDir: string;
+  private readonly persistence: RecordStorePersistence;
 
   /** Test-only hook invoked after temp-file write and before renameSync.
-   *  Throw to simulate a rename failure while the original file is intact. */
+   *  Throw to simulate a rename failure while the original file is intact.
+   *
+   *  @deprecated Prefer injecting a custom {@link RecordStorePersistence}
+   *  through the constructor for new tests; this static hook remains for
+   *  backward compatibility with existing `save()` tests only.
+   */
   static _beforeRenameHook: ((tmpPath: string, targetPath: string) => void) | null = null;
 
-  constructor(homeDir?: string) {
+  constructor(homeDir?: string, persistence?: RecordStorePersistence) {
     this.homeDir = homeDir || os.homedir();
+    this.persistence = persistence || defaultPersistence;
   }
 
   /** Filesystem path of the install records file. */
@@ -221,25 +296,15 @@ export class LocalInstallStore {
     ) || null;
   }
 
+  // -----------------------------------------------------------------------
+  // Atomic write helper
+  // -----------------------------------------------------------------------
+
   /**
-   * Save or update a record with atomic replacement.
-   *
-   * Writes to a temporary file in the same directory, then renames it over
-   * the target.  If the write or rename fails, the temporary file is cleaned
-   * up and the original file is preserved.
+   * Write `records` to the install file atomically using a temp file and
+   * rename.  Cleans up the temp file on any failure.
    */
-  save(record: LocalInstallRecord): void {
-    const records = this.load();
-    const idx = records.findIndex(
-      (r) => r.package_name === record.package_name && r.client === record.client,
-    );
-
-    if (idx >= 0) {
-      records[idx] = record;
-    } else {
-      records.push(record);
-    }
-
+  private writeRecordsAtomically(records: LocalInstallRecord[]): void {
     const filePath = this.getPath();
     const dir = path.dirname(filePath);
 
@@ -249,21 +314,115 @@ export class LocalInstallStore {
     }
 
     // Write to a temp file, then atomically rename
-    const tmpPath = filePath + '.tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const tmpPath = filePath + '.tmp-' + Date.now() + '-' +
+      Math.random().toString(36).slice(2, 8);
     try {
-      fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2), 'utf-8');
-      // Test hook: allows injection of rename failure for atomic-save testing
+      this.persistence.writeText(tmpPath, JSON.stringify(records, null, 2));
+      // Backward-compatible static hook for existing tests
       if (LocalInstallStore._beforeRenameHook) {
         LocalInstallStore._beforeRenameHook(tmpPath, filePath);
       }
-      fs.renameSync(tmpPath, filePath);
+      this.persistence.rename(tmpPath, filePath);
     } catch (err: unknown) {
       // Clean up temp file on failure
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      try { this.persistence.remove(tmpPath); } catch { /* ignore */ }
       throw new RecordStoreError(
         `Failed to save install records: ${err instanceof Error ? err.message : String(err)}`,
         'save_failed',
       );
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Save
+  // -----------------------------------------------------------------------
+
+  /**
+   * Save or update a record with atomic replacement.
+   *
+   * The incoming record is validated through {@link validateRecord} before
+   * touching the file — invalid records (extra fields, wrong types, bad SHA
+   * format, mismatched content-hash fields) are rejected without modifying
+   * the existing file.
+   *
+   * Writes to a temporary file in the same directory, then renames it over
+   * the target.  If the write or rename fails, the temporary file is cleaned
+   * up and the original file is preserved.
+   */
+  save(record: LocalInstallRecord): void {
+    // Validate BEFORE loading or touching the file.  This prevents
+    // an invalid record from being persisted, which would make the
+    // file unreadable on the next load().
+    const validated = validateRecord(record, -1);
+
+    const records = this.load();
+    const idx = records.findIndex(
+      (r) => r.package_name === validated.package_name && r.client === validated.client,
+    );
+
+    if (idx >= 0) {
+      records[idx] = validated;
+    } else {
+      records.push(validated);
+    }
+
+    this.writeRecordsAtomically(records);
+  }
+
+  // -----------------------------------------------------------------------
+  // Remove
+  // -----------------------------------------------------------------------
+
+  /**
+   * Atomically remove a record by `package_name` + `client`.
+   *
+   * - Loads and validates the full array, removes the matching entry, and
+   *   writes the remaining records atomically.
+   * - Returns the removed record, or `null` if no match is found.
+   * - When `expectedRecord` is supplied, the current record (before removal)
+   *   is compared field-by-field against it.  If the record is absent or has
+   *   changed, a {@link RecordStoreError} with code `record_changed` is
+   *   thrown **without** writing to disk.
+   */
+  remove(
+    packageName: string,
+    client: string,
+    expectedRecord?: LocalInstallRecord,
+  ): LocalInstallRecord | null {
+    // Must load the full array first to validate integrity
+    const records = this.load();
+
+    const idx = records.findIndex(
+      (r) => r.package_name === packageName && r.client === client,
+    );
+
+    if (idx < 0) {
+      // Not found
+      if (expectedRecord) {
+        throw new RecordStoreError(
+          `Record for "${packageName}" (client: "${client}") not found — may have been removed concurrently.`,
+          'record_changed',
+        );
+      }
+      return null;
+    }
+
+    // If an expected snapshot was provided, verify the current record matches
+    if (expectedRecord) {
+      if (!recordsMatch(records[idx], expectedRecord)) {
+        throw new RecordStoreError(
+          `Record for "${packageName}" (client: "${client}") changed since last read.`,
+          'record_changed',
+        );
+      }
+    }
+
+    const removed = records[idx];
+
+    // Write back the remaining records atomically
+    const remaining = [...records.slice(0, idx), ...records.slice(idx + 1)];
+    this.writeRecordsAtomically(remaining);
+
+    return removed;
   }
 }

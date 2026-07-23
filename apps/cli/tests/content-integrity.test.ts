@@ -16,6 +16,8 @@ import {
   CONTENT_HASH_ALGORITHM,
   computeDirectoryDigest,
   ContentIntegrityError,
+  validateAncestorChain,
+  validateExistingAncestorChain,
 } from '../src/content-integrity';
 
 // ---------------------------------------------------------------------------
@@ -558,7 +560,7 @@ async function main() {
   // -----------------------------------------------------------------------
 
   await runTest('validateAncestorChain accepts normal directories', async () => {
-    const { validateAncestorChain } = require('../src/content-integrity');
+    // using imported validateAncestorChain
     const dir = makeTmpDir();
     try {
       writeFile(dir, 'a.txt', 'hello');
@@ -574,7 +576,7 @@ async function main() {
   // -----------------------------------------------------------------------
 
   await runTest('validateAncestorChain rejects non-existent path', async () => {
-    const { validateAncestorChain } = require('../src/content-integrity');
+    // using imported validateAncestorChain
     try {
       validateAncestorChain(path.join(os.tmpdir(), 'does-not-exist-xyz-12345'));
       assert.fail('Should have thrown');
@@ -833,6 +835,121 @@ async function main() {
       cleanup(dir);
     }
   });
+
+  // -----------------------------------------------------------------------
+  // validateExistingAncestorChain — tolerates missing target leaf
+  // -----------------------------------------------------------------------
+
+  await runTest('validateExistingAncestorChain accepts full existing path', async () => {
+    const dir = makeTmpDir();
+    try {
+      writeFile(dir, 'a.txt', 'hello');
+      // Should not throw — all ancestors exist
+      validateExistingAncestorChain(dir);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain tolerates missing leaf', async () => {
+    const dir = makeTmpDir();
+    try {
+      const missingLeaf = path.join(dir, 'missing-target');
+      // Should not throw — missing leaf triggers ENOENT, which stops the walk
+      validateExistingAncestorChain(missingLeaf);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain tolerates multi-level missing', async () => {
+    const dir = makeTmpDir();
+    try {
+      const deep = path.join(dir, 'a', 'b', 'c', 'target');
+      // Should not throw — first ENOENT (a/) stops the walk
+      validateExistingAncestorChain(deep);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain rejects symlink ancestor', async () => {
+    const dir = makeTmpDir();
+    try {
+      const realDir = path.join(dir, 'real');
+      fs.mkdirSync(realDir);
+      try {
+        fs.symlinkSync(realDir, path.join(dir, 'link'), 'dir');
+      } catch {
+        // Cannot create symlink — skip
+        return;
+      }
+      const targetInLink = path.join(dir, 'link', 'missing');
+      assert.throws(
+        () => validateExistingAncestorChain(targetInLink),
+        (error: unknown) => error instanceof ContentIntegrityError && error.code === 'unsafe_content',
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain rejects file as ancestor', async () => {
+    const dir = makeTmpDir();
+    try {
+      const filePath = path.join(dir, 'file.txt');
+      fs.writeFileSync(filePath, 'hello');
+      const targetInFile = path.join(filePath, 'sub', 'missing');
+      assert.throws(
+        () => validateExistingAncestorChain(targetInFile),
+        (error: unknown) => error instanceof ContentIntegrityError && error.code === 'unsafe_content',
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain rejects EACCES (not ENOENT)', async () => {
+    // On Windows, this is difficult to set up reliably — skip
+    if (process.platform === 'win32') return;
+
+    const dir = makeTmpDir();
+    try {
+      // Create a unreadable directory
+      const restricted = path.join(dir, 'restricted');
+      fs.mkdirSync(restricted, 0o000);
+      try {
+        const target = path.join(restricted, 'sub', 'target');
+        assert.throws(
+          () => validateExistingAncestorChain(target),
+          (error: unknown) => error instanceof ContentIntegrityError && error.code === 'unsafe_content',
+        );
+      } finally {
+        fs.chmodSync(restricted, 0o777);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  await runTest('validateExistingAncestorChain — first component missing accepted', async () => {
+    // The very first component after root can be missing — the function
+    // should stop cleanly on ENOENT rather than throwing.
+    const dir = makeTmpDir();
+    try {
+      const deepMissing = path.join(dir, 'first-missing', 'child');
+      // Should not throw — first-missing/ yields ENOENT, walk stops
+      validateExistingAncestorChain(deepMissing);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // validateAncestorChain (strict) still rejects any missing component
+  // including the target — this is already tested by the earlier
+  // "validateAncestorChain rejects non-existent path" test above.
+  // validateExistingAncestorChain (lenient) is tested by the
+  // "first component missing accepted" test above.
 
   console.log(`\n  ✓ ${passed} passed` + (failed ? `  ✗ ${failed} failed` : '') + '\n');
   if (failed) process.exit(1);

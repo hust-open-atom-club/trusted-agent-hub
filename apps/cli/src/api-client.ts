@@ -30,7 +30,6 @@ export interface PackageSummary {
   owner: PackageOwner | null;
   latest_version: string;
   status: string;
-  trust_score: number | null;
   risk_level: string | null;
   grade: string | null;
   install_count: number;
@@ -58,10 +57,9 @@ export interface VersionDetail {
   };
   status: string;
   trust_score?: {
-    score: number;
     risk_summary?: {
       level: string;
-      grade?: string;
+      grade?: 'A' | 'B' | 'C' | 'D' | 'E';
       top_risks?: string[];
       install_recommendation?: string;
     };
@@ -212,7 +210,6 @@ function validatePackageSummary(raw: unknown): PackageSummary {
     owner: validateOwner(o.owner),
     latest_version: requireString(o.latest_version, 'latest_version', 'PackageSummary'),
     status: requireString(o.status, 'status', 'PackageSummary'),
-    trust_score: requireNumberOrNull(o.trust_score, 'trust_score', 'PackageSummary'),
     risk_level: requireNullableString(o.risk_level, 'risk_level', 'PackageSummary'),
     grade: requireNullableString(o.grade, 'grade', 'PackageSummary'),
     install_count: requireInt(o.install_count, 'install_count', 'PackageSummary', 0),

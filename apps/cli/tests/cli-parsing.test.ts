@@ -135,6 +135,48 @@ function test_verifyHelpShowsOptions() {
   console.log('  ✓ verify --help shows options');
 }
 
+function test_uninstallHelpShowsOptions() {
+  const { stdout, status } = runCli(['uninstall', '--help']);
+  assert.strictEqual(status, 0);
+  assert.ok(stdout.includes('uninstall'), 'uninstall help must show uninstall');
+  assert.ok(stdout.includes('--client'), 'uninstall help must show --client');
+  assert.ok(stdout.includes('--yes'), 'uninstall help must show --yes');
+  assert.ok(stdout.includes('--force'), 'uninstall help must show --force');
+  console.log('  ✓ uninstall --help shows options');
+}
+
+function test_uninstallClientOptionWorks() {
+  // uninstall --client should route to the uninstall action
+  const { stdout, status } = runCli(['uninstall', 'pkg', '--client', 'cursor', '--yes']);
+  // Should fail with not_installed (not a real package) but NOT print CLI version
+  assert.notStrictEqual(status, 0, 'uninstall should fail (no record)');
+  assert.ok(!stdout.includes('0.1.0'),
+    'uninstall --client must NOT print CLI version');
+  assert.ok(stdout.includes('cursor'), 'must show cursor client');
+  console.log('  ✓ uninstall --client cursor works');
+}
+
+function test_uninstallForceOptionWorks() {
+  const { stdout, status } = runCli(['uninstall', 'pkg', '--force', '--yes']);
+  assert.notStrictEqual(status, 0, 'uninstall should fail (no record)');
+  assert.ok(!stdout.includes('0.1.0'),
+    'uninstall --force must NOT print CLI version');
+  console.log('  ✓ uninstall --force works');
+}
+
+function test_installOptionsStillWorkAfterUninstallRegistered() {
+  // Regression: install --version <version> must still work
+  const { stdout, stderr, status } = runCli(
+    ['install', 'test-pkg', '--version', '1.0.0', '--client', 'claude-code'],
+    ENV,
+  );
+  assert.notStrictEqual(status, 0, 'install should fail (no API)');
+  const combined = stdout + stderr;
+  assert.ok(!combined.includes('0.1.0'),
+    `install --version after uninstall registration must not print CLI version. Got: "${combined.slice(0, 200)}"`);
+  console.log('  ✓ install --version still works after uninstall registered');
+}
+
 // ---------------------------------------------------------------------------
 // Run all
 // ---------------------------------------------------------------------------
@@ -148,5 +190,9 @@ test_installVersionOptionOrderSwapped();
 test_installWithoutVersionStillWorks();
 test_installHelpShowsVersionOption();
 test_verifyHelpShowsOptions();
+test_uninstallHelpShowsOptions();
+test_uninstallClientOptionWorks();
+test_uninstallForceOptionWorks();
+test_installOptionsStillWorkAfterUninstallRegistered();
 
 console.log('\n  ✓ All CLI parsing tests passed!\n');

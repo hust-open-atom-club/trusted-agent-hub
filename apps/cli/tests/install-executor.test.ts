@@ -194,7 +194,6 @@ function makeManifest(overrides: Partial<InstallManifest> = {}): InstallManifest
       top_risks: [],
       install_recommendation: 'safe',
     },
-    trust_score: 85,
     compatibility: ['claude-code'],
     dependencies: { npm: null, pip: null, system: null, docker: null, mcp_servers: null },
     ...overrides,
@@ -347,6 +346,22 @@ function test_isSafeInstallPath() {
 
 function test_manifestValidation() {
   assert.doesNotThrow(() => validateManifest(makeManifest()));
+
+  const missingGrade = makeManifest();
+  delete (missingGrade.risk_summary as any).grade;
+  assert.throws(
+    () => validateManifest(missingGrade),
+    (err: unknown) => err instanceof ManifestValidationError
+      && err.invalidFields.includes('risk_summary.grade'),
+  );
+
+  const invalidGrade = makeManifest();
+  (invalidGrade.risk_summary as any).grade = 'F';
+  assert.throws(
+    () => validateManifest(invalidGrade),
+    (err: unknown) => err instanceof ManifestValidationError
+      && err.invalidFields.includes('risk_summary.grade'),
+  );
 
   assert.throws(() => validateManifest({}), ManifestValidationError);
   assert.throws(() => validateManifest(null), ManifestValidationError);

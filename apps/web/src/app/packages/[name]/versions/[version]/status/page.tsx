@@ -46,24 +46,13 @@ const CONCLUSION_LABELS: Record<string, { text: string; className: string }> = {
   changes_requested: { text: '需要修改', className: 'conclusion-changes_requested' },
 };
 
-function getGradeClass(score: number | null, backendGrade?: string | null): string {
-  if (backendGrade) return `grade-${backendGrade}`;
-  if (score === null) return '';
-  if (score >= 80) return 'grade-A';
-  if (score >= 60) return 'grade-B';
-  if (score >= 40) return 'grade-C';
-  if (score >= 20) return 'grade-D';
-  return 'grade-E';
+function getGradeClass(grade: string | null): string {
+  if (!grade) return '';
+  return `grade-${grade}`;
 }
 
-function getGrade(score: number | null, backendGrade?: string | null): string {
-  if (backendGrade) return backendGrade;
-  if (score === null) return '\u2014';
-  if (score >= 80) return 'A';
-  if (score >= 60) return 'B';
-  if (score >= 40) return 'C';
-  if (score >= 20) return 'D';
-  return 'E';
+function getGrade(grade: string | null): string {
+  return grade ?? '\u2014';
 }
 
 interface Finding {
@@ -88,11 +77,16 @@ interface ScanSummary {
 }
 
 interface TrustScore {
-  score: number | null;
   level?: string;
   grade?: string;
   recommendation?: string;
-  dimensions?: Record<string, number>;
+  risk_summary?: {
+    grade?: string;
+    level?: string;
+    top_risks?: string[];
+    install_recommendation?: string;
+  };
+  dimensions?: Record<string, unknown>;
 }
 
 interface VersionDetail {
@@ -261,8 +255,8 @@ function StatusContent() {
 
   const timeline = buildTimeline();
   const statusLabel = STATUS_LABELS[detail.status] || detail.status;
-  const grade = getGrade(detail.trust_score?.score ?? null, detail.trust_score?.grade);
-  const gradeClass = getGradeClass(detail.trust_score?.score ?? null, detail.trust_score?.grade);
+  const grade = getGrade(detail.trust_score?.risk_summary?.grade ?? null);
+  const gradeClass = getGradeClass(detail.trust_score?.risk_summary?.grade ?? null);
   const conclusion = detail.review_conclusion;
   const conclusionMeta = conclusion ? CONCLUSION_LABELS[conclusion] : null;
   const pageTitle = packageName
@@ -363,7 +357,9 @@ function StatusContent() {
                   <div key={key} className="trust-score-dim">
                     <span className="trust-score-dim-label">{key}</span>
                     <span className="trust-score-dim-value">
-                      {typeof val === 'number' ? val.toFixed(1) : String(val)}
+                       {typeof val === 'object' && val !== null
+                         ? JSON.stringify(val)
+                         : String(val)}
                     </span>
                   </div>
                 ))}

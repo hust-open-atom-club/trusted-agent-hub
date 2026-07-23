@@ -16,22 +16,24 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture(autouse=True)
 def reset_runtime_dependencies() -> Iterator[None]:
-    from src.dependencies import clear_runtime_dependencies
+    from src import dependencies
 
-    clear_runtime_dependencies()
+    dependencies.clear_runtime_dependencies()
+    dependencies._bearer_token_verifier = None
     yield
-    clear_runtime_dependencies()
+    dependencies._bearer_token_verifier = None
+    dependencies.clear_runtime_dependencies()
 
 
-def test_repository_uses_json_mock_without_database_url(
+def test_repository_requires_database_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from src.dependencies import get_package_repository
-    from src.repositories.mock import JsonPackageRepository
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
-    assert isinstance(get_package_repository(), JsonPackageRepository)
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        get_package_repository()
 
 
 @pytest.mark.parametrize(
@@ -156,11 +158,14 @@ def test_sqlite_memory_url_variants_use_static_pool(database_url: str) -> None:
 def test_insecure_user_header_is_rejected_without_explicit_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from src.dependencies import get_package_repository
     from src.main import create_app
 
     monkeypatch.delenv("CONSUMER_ALLOW_INSECURE_USER_HEADER", raising=False)
+    app = create_app()
+    app.dependency_overrides[get_package_repository] = lambda: object()
 
-    with TestClient(create_app()) as client:
+    with TestClient(app) as client:
         response = client.post(
             "/api/v0/installs",
             headers={"X-User-Id": "spoofed-user"},
@@ -178,31 +183,32 @@ def test_insecure_user_header_is_rejected_without_explicit_flag(
 
 
 def test_default_bearer_verifier_rejects_tokens_with_canonical_401() -> None:
-    from src.main import create_app
+    from fastapi.security import HTTPAuthorizationCredentials
 
-    with TestClient(create_app()) as client:
-        response = client.post(
-            "/api/v0/installs",
-            headers={"Authorization": "Bearer invalid-token"},
-            json={
-                "package_name": "code-review-skill",
-                "version": "1.0.0",
-                "client": "claude-code",
-                "install_path": "~/.claude/skills/code-review-skill",
-                "integrity_verified": True,
-            },
+    from src.dependencies import get_current_user
+    from src.errors import ConsumerAPIError
+    from src.settings import Settings
+
+    with pytest.raises(ConsumerAPIError) as error:
+        get_current_user(
+            credentials=HTTPAuthorizationCredentials(
+                scheme="Bearer",
+                credentials="invalid-token",
+            ),
+            x_user_id=None,
+            settings=Settings(),
         )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "authentication_required"
-    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert error.value.status_code == 401
+    assert error.value.code == "authentication_required"
+    assert error.value.headers == {"WWW-Authenticate": "Bearer"}
 
 
 def test_invalid_bearer_contract_is_translated_to_canonical_401() -> None:
     from src.dependencies import (
         BearerTokenInvalid,
-        get_bearer_token_verifier,
         get_current_user,
+        set_bearer_token_verifier,
     )
     from src.main import create_app
 
@@ -211,13 +217,12 @@ def test_invalid_bearer_contract_is_translated_to_canonical_401() -> None:
     def reject_token(_token: str):
         raise BearerTokenInvalid("expired token")
 
-    app.dependency_overrides[get_bearer_token_verifier] = lambda: reject_token
-
     @app.get("/_test/current-user")
     def current_user(current_user=Depends(get_current_user)) -> dict[str, str]:
         return {"id": current_user.id}
 
     with TestClient(app) as client:
+        set_bearer_token_verifier(reject_token)
         response = client.get(
             "/_test/current-user",
             headers={"Authorization": "Bearer expired-token"},
@@ -229,7 +234,7 @@ def test_invalid_bearer_contract_is_translated_to_canonical_401() -> None:
 
 
 def test_unexpected_bearer_verifier_error_remains_internal_error() -> None:
-    from src.dependencies import get_bearer_token_verifier, get_current_user
+    from src.dependencies import get_current_user, set_bearer_token_verifier
     from src.main import create_app
 
     app = create_app()
@@ -237,15 +242,12 @@ def test_unexpected_bearer_verifier_error_remains_internal_error() -> None:
     def fail_verification(_token: str):
         raise RuntimeError("identity provider unavailable")
 
-    app.dependency_overrides[get_bearer_token_verifier] = (
-        lambda: fail_verification
-    )
-
     @app.get("/_test/current-user")
     def current_user(current_user=Depends(get_current_user)) -> dict[str, str]:
         return {"id": current_user.id}
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        set_bearer_token_verifier(fail_verification)
         response = client.get(
             "/_test/current-user",
             headers={"Authorization": "Bearer any-token"},
@@ -254,11 +256,11 @@ def test_unexpected_bearer_verifier_error_remains_internal_error() -> None:
     assert response.status_code == 500
 
 
-def test_bearer_token_verifier_dependency_can_be_overridden() -> None:
+def test_bearer_token_verifier_can_be_registered() -> None:
     from src.dependencies import (
         CurrentUser,
-        get_bearer_token_verifier,
         get_current_user,
+        set_bearer_token_verifier,
     )
     from src.main import create_app
 
@@ -268,8 +270,6 @@ def test_bearer_token_verifier_dependency_can_be_overridden() -> None:
         assert token == "valid-token"
         return CurrentUser(id="bearer-user")
 
-    app.dependency_overrides[get_bearer_token_verifier] = lambda: verify_token
-
     @app.get("/_test/current-user")
     def current_user(
         current_user=Depends(get_current_user),
@@ -277,6 +277,7 @@ def test_bearer_token_verifier_dependency_can_be_overridden() -> None:
         return {"id": current_user.id}
 
     with TestClient(app) as client:
+        set_bearer_token_verifier(verify_token)
         response = client.get(
             "/_test/current-user",
             headers={"Authorization": "Bearer valid-token"},
@@ -297,7 +298,6 @@ def test_insecure_user_header_is_allowed_only_with_explicit_flag() -> None:
     with pytest.raises(ConsumerAPIError) as error:
         get_current_user(
             credentials=None,
-            verifier=lambda _token: None,
             x_user_id="development-user",
             settings=rejected,
         )
@@ -305,7 +305,6 @@ def test_insecure_user_header_is_allowed_only_with_explicit_flag() -> None:
     assert getattr(error.value, "status_code", None) == 401
     assert get_current_user(
         credentials=None,
-        verifier=lambda _token: None,
         x_user_id="development-user",
         settings=allowed,
     ).id == "development-user"
@@ -313,8 +312,13 @@ def test_insecure_user_header_is_allowed_only_with_explicit_flag() -> None:
 
 def test_current_user_dependency_can_be_overridden_for_authenticated_writes(
     monkeypatch: pytest.MonkeyPatch,
+    repository,
 ) -> None:
-    from src.dependencies import CurrentUser, get_current_user
+    from src.dependencies import (
+        CurrentUser,
+        get_current_user,
+        get_package_repository,
+    )
     from src.main import create_app
 
     monkeypatch.delenv("CONSUMER_ALLOW_INSECURE_USER_HEADER", raising=False)
@@ -322,6 +326,7 @@ def test_current_user_dependency_can_be_overridden_for_authenticated_writes(
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(
         id="test-user"
     )
+    app.dependency_overrides[get_package_repository] = lambda: repository
 
     with TestClient(app) as client:
         response = client.post(

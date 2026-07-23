@@ -22,6 +22,7 @@ from src.models.packages import (
     PackagePage,
     PackageStats,
     PackageSummary,
+    RiskSummary,
     TrustScore,
     VersionDetail,
     VersionSummary,
@@ -36,8 +37,7 @@ from src.services.errors import (
 from src.services.packages import PackageService
 
 
-ROOT = Path(__file__).resolve().parents[3]
-MOCK = ROOT / "packages" / "schema" / "mock"
+MOCK = Path(__file__).resolve().parent / "fixtures" / "mock"
 
 
 class FakeRepository:
@@ -82,6 +82,45 @@ class FakeRepository:
         )
 
 
+def grade_document(grade: str, level: str = "low_risk") -> TrustScore:
+    return TrustScore(
+        model_version="grade-v1",
+        risk_summary=RiskSummary(
+            level=level,
+            grade=grade,
+            top_risks=[],
+            install_recommendation="safe",
+        ),
+    )
+
+
+def test_trust_score_model_drops_legacy_numeric_scores_from_public_output() -> None:
+    document = TrustScore.model_validate(
+        {
+            "score": 92,
+            "model_version": "legacy-v1",
+            "dimensions": {
+                "provenance": {
+                    "score": 88,
+                    "weight": 0.25,
+                    "details": {},
+                }
+            },
+            "risk_summary": {
+                "level": "low_risk",
+                "grade": "A",
+                "top_risks": [],
+                "install_recommendation": "safe",
+            },
+        }
+    )
+
+    public_document = document.model_dump(mode="json")
+    assert "score" not in public_document
+    assert "score" not in public_document["dimensions"]["provenance"]
+    assert public_document["risk_summary"]["grade"] == "A"
+
+
 @pytest.fixture
 def fake_repository() -> FakeRepository:
     packages = (
@@ -94,7 +133,6 @@ def fake_repository() -> FakeRepository:
             category="development",
             latest_version="2.0.0",
             status="published",
-            trust_score=90,
             install_count=100,
             avg_rating=4.5,
             updated_at="2026-02-01T00:00:00Z",
@@ -108,7 +146,6 @@ def fake_repository() -> FakeRepository:
             category="documentation",
             latest_version="1.0.0",
             status="published",
-            trust_score=None,
             install_count=50,
             avg_rating=None,
             updated_at=None,
@@ -122,7 +159,6 @@ def fake_repository() -> FakeRepository:
             category="development",
             latest_version="1.0.0",
             status="published",
-            trust_score=75,
             install_count=100,
             avg_rating=4.5,
             updated_at="2025-01-01T00:00:00+00:00",
@@ -136,7 +172,6 @@ def fake_repository() -> FakeRepository:
             category="development",
             latest_version="1.0.0",
             status="draft",
-            trust_score=100,
             install_count=999,
             avg_rating=5,
             updated_at="2027-01-01T00:00:00Z",
@@ -151,7 +186,7 @@ def fake_repository() -> FakeRepository:
             compatibility=["claude-code"],
             submitted_at="2026-01-31T00:00:00Z",
             created_at="2026-01-30T00:00:00Z",
-            trust_score=TrustScore(score=91, model_version="v2"),
+            trust_score=grade_document("B"),
         ),
         VersionDetail(
             id="v-alpha-draft",
@@ -159,7 +194,7 @@ def fake_repository() -> FakeRepository:
             version="3.0.0",
             status="draft",
             compatibility=["codex"],
-            trust_score=TrustScore(score=99),
+            trust_score=grade_document("A", "trusted"),
         ),
         VersionDetail(
             id="v-beta-published",
@@ -175,7 +210,7 @@ def fake_repository() -> FakeRepository:
             version="1.0.0",
             status="published",
             compatibility=["codex"],
-            trust_score=TrustScore(score=70),
+            trust_score=grade_document("C", "medium_risk"),
         ),
         VersionDetail(
             id="v-private-published",
@@ -183,7 +218,7 @@ def fake_repository() -> FakeRepository:
             version="1.0.0",
             status="published",
             compatibility=["claude-code"],
-            trust_score=TrustScore(score=100),
+            trust_score=grade_document("A", "trusted"),
         ),
     )
     return FakeRepository(packages, versions)
@@ -193,7 +228,7 @@ def test_package_query_defaults_are_public_and_canonical() -> None:
     query = PackageListQuery()
     assert query.q is None
     assert query.status == "published"
-    assert query.sort_by is SortField.TRUST_SCORE
+    assert query.sort_by is SortField.UPDATED_AT
     assert query.order is SortOrder.DESC
     assert query.page == 1
     assert query.page_size == 20
@@ -267,7 +302,7 @@ def test_list_excludes_non_public_packages(fake_repository: FakeRepository) -> N
     assert "private-package" not in {item.name for item in page.items}
 
 
-@pytest.mark.parametrize("field", [SortField.TRUST_SCORE, SortField.AVG_RATING])
+@pytest.mark.parametrize("field", [SortField.AVG_RATING])
 @pytest.mark.parametrize("order", [SortOrder.ASC, SortOrder.DESC])
 def test_null_numeric_sort_values_are_always_last(
     fake_repository: FakeRepository,
@@ -317,8 +352,8 @@ def test_list_filters_public_packages(
 @pytest.mark.parametrize(
     ("field", "order", "expected"),
     [
-        (SortField.TRUST_SCORE, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
-        (SortField.TRUST_SCORE, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
+        (SortField.GRADE, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
+        (SortField.GRADE, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
         (SortField.INSTALL_COUNT, SortOrder.ASC, ["beta-package", "alpha-package", "Gamma-package"]),
@@ -472,7 +507,6 @@ def test_public_package_detail_uses_explicit_published_latest_version(
         status="published",
         submitted_at="2026-01-31T00:00:00Z",
         created_at="2026-01-30T00:00:00Z",
-        trust_score=91,
     )
 
 
@@ -534,7 +568,6 @@ def test_list_public_versions_returns_only_explicit_published_summaries(
             status="published",
             submitted_at="2026-01-31T00:00:00Z",
             created_at="2026-01-30T00:00:00Z",
-            trust_score=91,
         )
     ]
 
@@ -583,12 +616,12 @@ def test_get_public_version_by_id_hides_invalid_or_non_public_versions(
     assert caught.value.code == "version_not_found"
 
 
-def test_get_trust_score_returns_full_public_score(
+def test_get_trust_score_returns_public_grade_document(
     fake_repository: FakeRepository,
 ) -> None:
     score = PackageService(fake_repository).get_trust_score("v-alpha-published")
 
-    assert score == TrustScore(score=91, model_version="v2")
+    assert score == grade_document("B")
 
 
 def test_get_trust_score_reports_absent_score(
