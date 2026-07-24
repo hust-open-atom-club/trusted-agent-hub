@@ -56,6 +56,7 @@ export type UpdateStatus =
   | 'not_installed'
   | 'modified'
   | 'legacy_record'
+  | 'record_invalid'
   | 'unsafe_path'
   | 'unsafe_content'
   | 'unsupported_client'
@@ -458,38 +459,9 @@ export class UpdateExecutor {
       );
     }
 
-    // 11b. Content race check — re-compute the directory digest and compare
-    //      with the snapshot taken during initial inspection.  If the content
-    //      has changed since manifest fetch, abort.
-    try {
-      const recheck = await this.inspector.inspect(packageName, clientType);
-      if (recheck.contentState !== inspectResult.contentState) {
-        return makeUpdateResult(
-          'update_failed',
-          packageName,
-          clientType,
-          `Installation state changed during update (was: ${inspectResult.contentState}, now: ${recheck.contentState}) — update aborted.`,
-          { localVersion: record.version, remoteVersion, installPath: record.install_path },
-        );
-      }
-      if (recheck.actualContentSha256 !== oldContentDigest) {
-        return makeUpdateResult(
-          'update_failed',
-          packageName,
-          clientType,
-          'Installed content was modified during the update check — update aborted.',
-          { localVersion: record.version, remoteVersion, installPath: record.install_path },
-        );
-      }
-    } catch (err: unknown) {
-      return makeUpdateResult(
-        'update_failed',
-        packageName,
-        clientType,
-        `Cannot re-verify installed content: ${err instanceof Error ? err.message : String(err)}`,
-        { localVersion: record.version, remoteVersion, installPath: record.install_path },
-      );
-    }
+    // 11b. Content race check moved to beforeActivate hook — see step 12.
+    //      The hook fires inside InstallExecutor right before the target→backup
+    //      rename, which is the latest possible moment before activation.
 
     // 12. Execute the update via InstallExecutor.installWithManifest().
     //     This handles the full pipeline: download → verify → extract →
@@ -499,9 +471,35 @@ export class UpdateExecutor {
     //     internal rollback that restores the backup).  We verify that
     //     post-failure and report rollback_failed if it isn't.
 
+    // 12. Final TOCTOU check: re-verify the live target directory identity and
+    //     content digest right before the backup→rename activation.  This fires
+    //     AFTER download/verify/extract/staging are complete — the latest
+    //     possible moment before the old installation is moved aside.
+    const capturedContentDigest = oldContentDigest;
+    const capturedRecordPath = record.install_path;
+    const beforeActivate = async (_targetDir: string): Promise<void> => {
+      const recheck = await this.inspector.inspect(packageName, clientType);
+      if (recheck.contentState !== inspectResult.contentState) {
+        throw new InstallError(
+          `Installation state changed during update (was: ${inspectResult.contentState}, now: ${recheck.contentState})`,
+          'content_race',
+        );
+      }
+      if (recheck.actualContentSha256 !== capturedContentDigest) {
+        throw new InstallError(
+          'Installed content was modified during the update — aborting to preserve changes.',
+          'content_race',
+        );
+      }
+    };
+
     let installResult: Awaited<ReturnType<InstallExecutor['installWithManifest']>>;
     try {
-      const installExecutor = new InstallExecutor(this.apiClient, { homeDir: this.homeDir, fetchFn: this.fetchFn });
+      const installExecutor = new InstallExecutor(this.apiClient, {
+        homeDir: this.homeDir,
+        fetchFn: this.fetchFn,
+        beforeActivate,
+      });
       installResult = await installExecutor.installWithManifest(manifest, clientType, {
         yes: options.yes,
         force: options.force,
@@ -510,7 +508,11 @@ export class UpdateExecutor {
     } catch (err: unknown) {
       // The InstallExecutor's internal rollback should have restored the
       // old version.  Verify that the old target still exists and is intact.
-      const oldIntact = await this.verifyOldVersionIntact(oldRecordSnapshot, oldExpectedDigest);
+      // Use oldContentDigest (the actual digest at update start) not
+      // oldExpectedDigest (from the install record).  For --force updates
+      // on modified content, the record digest won't match the actual
+      // content — we want to verify the actual content is preserved.
+      const oldIntact = await this.verifyOldVersionIntact(oldRecordSnapshot, oldContentDigest);
 
       if (err instanceof InstallBlockedError) {
         return makeUpdateResult(
@@ -523,6 +525,16 @@ export class UpdateExecutor {
       }
 
       if (err instanceof InstallError) {
+        // content_race is our own hook — installation was not touched
+        if (err.code === 'content_race') {
+          return makeUpdateResult(
+            'update_failed',
+            packageName,
+            clientType,
+            `Installed content changed during update: ${err.message}`,
+            { localVersion: record.version, remoteVersion, installPath: record.install_path },
+          );
+        }
         if (!oldIntact) {
           return makeUpdateResult(
             'rollback_failed',

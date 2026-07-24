@@ -107,6 +107,11 @@ export interface InstallOptions {
   /** Test hook: called after copy to staging but before content digest; can throw or
    *  corrupt the staging directory to simulate digest failure */
   beforeDigest?: (stagingDir: string) => void;
+  /** Safety hook: called immediately before activating the new version (backup →
+   *  rename).  Receives the live target directory path.  Throw to abort the
+   *  activation without touching the existing installation.  Used by UpdateExecutor
+   *  for a final TOCTOU check. */
+  beforeActivate?: (targetDir: string) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +138,7 @@ export class InstallExecutor {
   private readonly downloadFetch: typeof fetch;
   private readonly beforeSaveRecord?: () => void;
   private readonly beforeDigest?: (stagingDir: string) => void;
+  private readonly beforeActivate?: (targetDir: string) => void | Promise<void>;
   private readonly recordStore: LocalInstallStore;
 
   constructor(
@@ -147,6 +153,7 @@ export class InstallExecutor {
     this.downloadFetch = options.fetchFn || fetch;
     this.beforeSaveRecord = options.beforeSaveRecord;
     this.beforeDigest = options.beforeDigest;
+    this.beforeActivate = options.beforeActivate;
     this.recordStore = new LocalInstallStore(this.homeDir);
   }
 
@@ -323,6 +330,13 @@ export class InstallExecutor {
       //    live target.  If this fails the old target is still intact —
       //    no backup has been made yet.
       const contentDigest = await computeDirectoryDigest(stagingDir);
+
+      // 7a. Final safety hook — allows callers (e.g. UpdateExecutor) to
+      //     re-verify the live target identity/content before activation.
+      //     Throw to abort without touching the existing installation.
+      if (this.beforeActivate) {
+        await this.beforeActivate(targetDir);
+      }
 
       // 8. Backup existing target if present (digest succeeded — staging is valid)
       if (fs.existsSync(targetDir)) {
