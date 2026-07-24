@@ -2,27 +2,38 @@
  * TrustedAgentHub Update Executor — safe, atomic package updates.
  *
  * Design principles:
- *   - Default fail-closed: modified content, legacy records, or integrity
- *     anomalies block the update unless `--force` is explicitly passed.
+ *   - Default fail-closed: ANY non-clean inspection state (modified, legacy,
+ *     unsafe_path, unsafe_content, record_invalid) blocks the update unless
+ *     --force is explicitly passed for recoverable states (modified, legacy).
+ *   - Unsafe structural states (unsafe_path, unsafe_content, record_invalid)
+ *     are ALWAYS blocked — --force cannot override filesystem integrity.
  *   - Staging → backup → atomic replace via InstallExecutor — never
  *     `uninstall + install` which could leave the user with no working version.
  *   - Any failure before the atomic commit preserves the old version.
+ *   - Double race detection: both the JSON record AND the filesystem content
+ *     are rechecked immediately before the install pipeline runs.
  *   - If the atomic commit succeeds, the update is committed even if
  *     follow-up steps (record patching, API reporting) fail — the new
  *     version is functional and the CLI warns about non-fatal issues.
- *   - Race detection: snapshots the install record before the update and
- *     verifies it hasn't changed before calling into the install pipeline.
  *
  * Flow:
- *   inspect → fetch latest manifest → validate → version compare →
- *   grade gate → race check → installWithManifest (download/verify/extract/
- *   staging/backup/atomic-replace/record-save) → patch record (preserve
- *   installed_at, add updated_at) → report API
+ *   inspect → [fail-closed gate: block all non-clean states] →
+ *   fetch latest manifest → validate → version compare → grade gate →
+ *   [race check: record + content digest] →
+ *   installWithManifest (download/verify/extract/staging/backup/
+ *   atomic-replace/record-save) →
+ *   [verify old version after failure → rollback_failed if needed] →
+ *   patch record (preserve installed_at, add updated_at) →
+ *   report API
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 
 import { LocalInstallInspector } from './local-install-inspector';
+import type { InspectResult } from './local-install-inspector';
 import type { LocalInstallRecord } from './local-install-store';
 import { LocalInstallStore } from './local-install-store';
 import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
@@ -31,6 +42,7 @@ import type { InstallManifest } from './manifest-types';
 import { checkInstall, resolveGrade } from './grade-gate';
 import { compareVersions, isValidVersion } from './version-policy';
 import { CLIENT_INSTALL_ROOTS } from './client-paths';
+import { computeDirectoryDigest, ContentIntegrityError } from './content-integrity';
 import { sanitizeOutput } from './safe-output';
 import { ApiError } from './api-client';
 
@@ -63,7 +75,9 @@ export interface UpdateResult {
   status: UpdateStatus;
   packageName: string;
   client: string;
+  /** The version BEFORE the update (the installed version). */
   localVersion?: string;
+  /** The version AFTER the update (the remote manifest version). */
   remoteVersion?: string;
   installPath?: string;
   artifactSha256?: string;
@@ -110,6 +124,24 @@ function makeUpdateResult(
     backupPath: extras.backupPath ? sanitizeOutput(extras.backupPath) : undefined,
   };
 }
+
+/**
+ * Inspection states that are structural / integrity issues — always fail-closed,
+ * even with --force.  These represent filesystem tampering, not user edits.
+ */
+const STRUCTURAL_FAIL_STATES = new Set<string>([
+  'unsafe_path',
+  'unsafe_content',
+  'record_invalid',
+]);
+
+/**
+ * Inspection states that are recoverable with --force (user edits).
+ */
+const RECOVERABLE_STATES = new Set<string>([
+  'modified',
+  'legacy_record',
+]);
 
 // ---------------------------------------------------------------------------
 // Executor
@@ -163,6 +195,7 @@ export class UpdateExecutor {
       );
     }
 
+    // No record at all → fail closed
     if (!inspectResult.record) {
       const statusMap: Record<string, UpdateStatus> = {
         record_invalid: 'update_failed',
@@ -176,29 +209,61 @@ export class UpdateExecutor {
 
     const record = inspectResult.record;
 
-    // 3. Fail-closed: modified or legacy → block unless --force
-    if (inspectResult.contentState === 'modified' && !options.force) {
+    // ── 3. Fail-closed gate: ALL non-clean states must be explicitly handled ──
+
+    // Structural issues → ALWAYS blocked (--force cannot override)
+    if (STRUCTURAL_FAIL_STATES.has(inspectResult.contentState)) {
       return makeUpdateResult(
-        'modified',
+        inspectResult.contentState as UpdateStatus,
         packageName,
         clientType,
-        `Installed content has been modified. Use --force to overwrite with the latest version.`,
+        `Cannot update: ${inspectResult.message} Reinstall with \`tah install ${packageName}\` to repair.`,
         { localVersion: record.version, installPath: record.install_path },
       );
     }
 
-    if (inspectResult.contentState === 'legacy_record' && !options.force) {
+    // Missing directory but record exists → blocked
+    if (inspectResult.contentState === 'missing') {
       return makeUpdateResult(
-        'legacy_record',
+        'update_failed',
         packageName,
         clientType,
-        `Legacy install record without content digest. Use --force to overwrite with the latest version.`,
+        `Installed directory no longer exists. Reinstall with \`tah install ${packageName}\`.`,
         { localVersion: record.version, installPath: record.install_path },
       );
     }
 
-    // 4. Snapshot old record fields for race detection
+    // Recoverable states (modified, legacy) → blocked unless --force
+    if (RECOVERABLE_STATES.has(inspectResult.contentState) && !options.force) {
+      const label = inspectResult.contentState === 'legacy_record' ? 'Legacy record' : 'Modified content';
+      return makeUpdateResult(
+        inspectResult.contentState as UpdateStatus,
+        packageName,
+        clientType,
+        `${label} detected. Use --force to overwrite with the latest version.`,
+        { localVersion: record.version, installPath: record.install_path },
+      );
+    }
+
+    // At this point, contentState MUST be 'clean' (or recoverable + --force).
+    // Any unexpected state falls through to here — fail closed.
+    if (inspectResult.contentState !== 'clean') {
+      const allowed = new Set([...STRUCTURAL_FAIL_STATES, ...RECOVERABLE_STATES, 'missing', 'clean']);
+      if (!allowed.has(inspectResult.contentState)) {
+        return makeUpdateResult(
+          'update_failed',
+          packageName,
+          clientType,
+          `Unknown inspection state "${inspectResult.contentState}" — update blocked as a safety precaution.`,
+          { localVersion: record.version, installPath: record.install_path },
+        );
+      }
+    }
+
+    // 4. Snapshot old record fields and content digest for race detection
     const oldRecordSnapshot: LocalInstallRecord = { ...record };
+    const oldContentDigest = inspectResult.actualContentSha256;
+    const oldExpectedDigest = inspectResult.expectedContentSha256;
 
     // 5. Fetch latest published install manifest
     let rawManifest: unknown;
@@ -350,8 +415,12 @@ export class UpdateExecutor {
       );
     }
 
-    // 11. Race detection: re-read records and compare key fields before the
-    //     install pipeline touches the filesystem.
+    // 11. Dual race detection: re-check both the JSON record AND the
+    //     filesystem content BEFORE calling the install pipeline.
+    //     The manifest fetch + validation may have taken seconds; a user
+    //     or another process could have modified the install in that window.
+
+    // 11a. Record race check
     try {
       const currentRecord = this.store.find(packageName, clientType);
       if (!currentRecord) {
@@ -389,16 +458,46 @@ export class UpdateExecutor {
       );
     }
 
+    // 11b. Content race check — re-compute the directory digest and compare
+    //      with the snapshot taken during initial inspection.  If the content
+    //      has changed since manifest fetch, abort.
+    try {
+      const recheck = await this.inspector.inspect(packageName, clientType);
+      if (recheck.contentState !== inspectResult.contentState) {
+        return makeUpdateResult(
+          'update_failed',
+          packageName,
+          clientType,
+          `Installation state changed during update (was: ${inspectResult.contentState}, now: ${recheck.contentState}) — update aborted.`,
+          { localVersion: record.version, remoteVersion, installPath: record.install_path },
+        );
+      }
+      if (recheck.actualContentSha256 !== oldContentDigest) {
+        return makeUpdateResult(
+          'update_failed',
+          packageName,
+          clientType,
+          'Installed content was modified during the update check — update aborted.',
+          { localVersion: record.version, remoteVersion, installPath: record.install_path },
+        );
+      }
+    } catch (err: unknown) {
+      return makeUpdateResult(
+        'update_failed',
+        packageName,
+        clientType,
+        `Cannot re-verify installed content: ${err instanceof Error ? err.message : String(err)}`,
+        { localVersion: record.version, remoteVersion, installPath: record.install_path },
+      );
+    }
+
     // 12. Execute the update via InstallExecutor.installWithManifest().
     //     This handles the full pipeline: download → verify → extract →
     //     staging → backup old → atomic replace → save record → cleanup.
     //
     //     If it throws, the old version is preserved (InstallExecutor has
-    //     internal rollback that restores the backup).
-    //
-    //     If it succeeds, the new version is live on disk and a fresh record
-    //     has been saved.  We then patch the record to preserve installed_at
-    //     and add updated_at.
+    //     internal rollback that restores the backup).  We verify that
+    //     post-failure and report rollback_failed if it isn't.
 
     let installResult: Awaited<ReturnType<InstallExecutor['installWithManifest']>>;
     try {
@@ -409,7 +508,10 @@ export class UpdateExecutor {
         acceptHighRisk: options.acceptHighRisk,
       });
     } catch (err: unknown) {
-      // InstallExecutor's internal rollback should have restored the old version.
+      // The InstallExecutor's internal rollback should have restored the
+      // old version.  Verify that the old target still exists and is intact.
+      const oldIntact = await this.verifyOldVersionIntact(oldRecordSnapshot, oldExpectedDigest);
+
       if (err instanceof InstallBlockedError) {
         return makeUpdateResult(
           'update_blocked',
@@ -419,15 +521,47 @@ export class UpdateExecutor {
           { localVersion: record.version, remoteVersion, installPath: record.install_path },
         );
       }
+
       if (err instanceof InstallError) {
+        if (!oldIntact) {
+          return makeUpdateResult(
+            'rollback_failed',
+            packageName,
+            clientType,
+            `Rollback failed after update error (${err.code}). ` +
+            `Check install path: ${oldRecordSnapshot.install_path}`,
+            {
+              localVersion: record.version,
+              remoteVersion,
+              installPath: oldRecordSnapshot.install_path,
+            },
+          );
+        }
+        // Put "preserved" first so it survives sanitizeOutput truncation
         return makeUpdateResult(
           'update_failed',
           packageName,
           clientType,
-          `Update failed (${err.code}): ${err.message}`,
+          `Previous version preserved. Update failed (${err.code}): ${err.message}`,
           { localVersion: record.version, remoteVersion, installPath: record.install_path },
         );
       }
+
+      if (!oldIntact) {
+        return makeUpdateResult(
+          'rollback_failed',
+          packageName,
+          clientType,
+          `Unexpected error during update and the previous version could not be verified. ` +
+          `Check the install path manually: ${oldRecordSnapshot.install_path}`,
+          {
+            localVersion: record.version,
+            remoteVersion,
+            installPath: oldRecordSnapshot.install_path,
+          },
+        );
+      }
+
       return makeUpdateResult(
         'update_failed',
         packageName,
@@ -466,12 +600,38 @@ export class UpdateExecutor {
       clientType,
       `Updated "${packageName}" from v${oldRecordSnapshot.version} to v${manifest.version}.`,
       {
-        localVersion: manifest.version,
+        localVersion: oldRecordSnapshot.version,
         remoteVersion: manifest.version,
         installPath: installResult.targetDir,
         artifactSha256: installResult.sha256,
       },
     );
+  }
+
+  // -----------------------------------------------------------------------
+  // Private: verify old version is still intact after a failed install
+  // -----------------------------------------------------------------------
+
+  private async verifyOldVersionIntact(
+    oldRecord: LocalInstallRecord,
+    expectedContentDigest?: string,
+  ): Promise<boolean> {
+    try {
+      // Check the old install path still exists and is a directory
+      if (!fs.existsSync(oldRecord.install_path)) return false;
+      const stat = fs.lstatSync(oldRecord.install_path);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+
+      // If we have an expected digest, verify content hasn't been corrupted
+      if (expectedContentDigest) {
+        const digest = await computeDirectoryDigest(oldRecord.install_path);
+        if (digest.digest !== expectedContentDigest) return false;
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // -----------------------------------------------------------------------
