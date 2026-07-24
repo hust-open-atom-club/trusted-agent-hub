@@ -477,7 +477,18 @@ export class UpdateExecutor {
     //     possible moment before the old installation is moved aside.
     const capturedContentDigest = oldContentDigest;
     const capturedRecordPath = record.install_path;
-    const beforeActivate = async (_targetDir: string): Promise<void> => {
+    const beforeActivate = async (targetDir: string): Promise<void> => {
+      // Guard: the new manifest must target the same directory as the
+      // existing installation.  A manifest that redirects to a different
+      // path would orphan the old directory and overwrite the record.
+      if (path.resolve(targetDir) !== path.resolve(capturedRecordPath)) {
+        throw new InstallError(
+          `Manifest target path "${targetDir}" does not match installed path "${capturedRecordPath}". ` +
+          'The update manifest must target the same directory.',
+          'invalid_manifest',
+        );
+      }
+
       const recheck = await this.inspector.inspect(packageName, clientType);
       if (recheck.contentState !== inspectResult.contentState) {
         throw new InstallError(
@@ -525,7 +536,16 @@ export class UpdateExecutor {
       }
 
       if (err instanceof InstallError) {
-        // content_race is our own hook — installation was not touched
+        // Hooks from beforeActivate
+        if (err.code === 'invalid_manifest') {
+          return makeUpdateResult(
+            'invalid_manifest',
+            packageName,
+            clientType,
+            err.message,
+            { localVersion: record.version, remoteVersion, installPath: record.install_path },
+          );
+        }
         if (err.code === 'content_race') {
           return makeUpdateResult(
             'update_failed',

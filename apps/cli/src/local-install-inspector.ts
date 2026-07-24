@@ -279,8 +279,20 @@ export class LocalInstallInspector {
       );
     }
 
-    // 7. Legacy record check
+    // 7. Legacy record check — still compute the actual content digest so
+    //    callers (esp. UpdateExecutor) have a snapshot for TOCTOU detection.
     if (!hasHash) {
+      let actualDigest: string | undefined;
+      try {
+        const digest = await computeDirectoryDigest(record.install_path, {
+          maxFiles: this.maxFiles,
+          maxBytes: this.maxBytes,
+        });
+        actualDigest = digest.digest;
+      } catch {
+        // If we can't compute the digest (e.g. unreadable files), leave
+        // it undefined — the caller can still gate on legacy_record.
+      }
       return makeResult(
         record,
         'legacy_record',
@@ -288,7 +300,7 @@ export class LocalInstallInspector {
         {
           clientRoot,
           expectedContentSha256: undefined,
-          actualContentSha256: undefined,
+          actualContentSha256: actualDigest,
         },
       );
     }
