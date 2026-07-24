@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -53,16 +54,12 @@ export default function ReviewHistoryPage() {
     setLoading(true);
     setError(null);
     const offset = page * pageSize;
-    fetch(
+    apiFetch<ReviewRecord[]>(
       `${API_BASE}/api/v0/producer/reviews?reviewer_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`,
       {
         headers: { Authorization: `Bearer ${token}` },
       },
     )
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
       .then((data) => setRecords(data))
       .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
       .finally(() => setLoading(false));

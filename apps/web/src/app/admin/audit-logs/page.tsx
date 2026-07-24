@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -96,13 +97,9 @@ export default function AdminAuditLogsPage() {
     params.set('limit', String(pageSize));
     params.set('offset', String(page * pageSize));
 
-    fetch(`${API_BASE}/api/v0/producer/audit-logs?${params.toString()}`, {
+    apiFetch<AuditLogEntry[]>(`${API_BASE}/api/v0/producer/audit-logs?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
-        if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
-        return res.json();
-      })
       .then((data: AuditLogEntry[]) => {
         setLogs(data);
         setTotalCount(data.length);
