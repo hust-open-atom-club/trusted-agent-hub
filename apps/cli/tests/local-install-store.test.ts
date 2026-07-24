@@ -445,6 +445,7 @@ async function main() {
     const full = makeRecord({
       content_hash_algorithm: 'sha256-tree-v1',
       content_sha256: 'b'.repeat(64),
+      updated_at: '2026-07-22T01:00:00.000Z',
     });
     const recordKeys = Object.keys(full).sort();
     const fieldKeys = [...RECORD_COMPARE_FIELDS].sort();
