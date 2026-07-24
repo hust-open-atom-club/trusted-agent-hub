@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -47,7 +48,7 @@ function formatDate(iso: string | null): string {
 
 export default function MySubmissionsPage() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, token, loading: authLoading } = useAuth();
   const [items, setItems] = useState<VersionItem[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -60,11 +61,9 @@ export default function MySubmissionsPage() {
     if (!user) return;
     setLoading(true);
     const offset = page * pageSize;
-    fetch(`${API_BASE}/api/v0/producer/versions?submitter_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
+    apiFetch<VersionItem[]>(`${API_BASE}/api/v0/producer/versions?submitter_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then((data: VersionItem[]) => {
         setItems(data);
         setTotalCount(data.length >= pageSize ? (page + 2) * pageSize : (page * pageSize) + data.length);

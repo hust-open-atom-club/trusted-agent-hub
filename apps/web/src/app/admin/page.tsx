@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -34,13 +35,9 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     if (authLoading || !user || !token) return;
 
-    fetch(`${API_BASE}/api/v0/producer/stats/dashboard`, {
+    apiFetch<DashboardStats>(`${API_BASE}/api/v0/producer/stats/dashboard`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
       .then((data) => setStats(data))
       .catch(() => {})
       .finally(() => setLoading(false));

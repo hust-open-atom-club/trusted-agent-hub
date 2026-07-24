@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -244,38 +245,28 @@ export default function ReviewDetailPage() {
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const [vRes] = await Promise.all([
-          fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
+        const vData = await apiFetch<VersionDetail>(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
 
         if (cancelled) return;
 
-        if (!vRes.ok) {
-          const err = await vRes.json().catch(() => ({ detail: '加载失败' }));
-          throw new Error(err.detail || `HTTP ${vRes.status}`);
-        }
-
-        const vData: VersionDetail = await vRes.json();
-
         // 获取包详情
         if (vData.package_id) {
-          const pRes = await fetch(`${API_BASE}/api/v0/producer/packages/${vData.package_id}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (pRes.ok) {
-            setPkg(await pRes.json());
-          }
+          try {
+            const pkgData = await apiFetch<PackageDetail>(`${API_BASE}/api/v0/producer/packages/${vData.package_id}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            setPkg(pkgData);
+          } catch { /* ignore */ }
         }
 
         setVersion(vData);
 
         // 获取审核历史
-        fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
+        apiFetch<ReviewRecord[]>(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
           headers: { Authorization: `Bearer ${token}` },
         })
-          .then((res) => res.ok ? res.json() : [])
           .then((data) => { if (!cancelled) setReviewHistory(data); })
           .catch(() => {});
 

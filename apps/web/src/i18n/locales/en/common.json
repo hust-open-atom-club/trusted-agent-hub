@@ -11,10 +11,10 @@
     "theme_dark": "Switch to Dark Mode"
   },
   "home": {
-    "chip": "Trusted Agent Capability Hub",
+    "chip": "Trusted Agent Hub",
     "title": "Discover & Install",
     "title_accent": "Trusted AI Agent Skills",
-    "desc": "A secure registry for AI agent capability packages — Skills, MCP Servers, Plugins, Commands, and Prompts. Every package is scanned and scored for safety before you install.",
+    "desc": "Trusted Agent Hub platform — covering Skills, MCP Servers, Plugins, Commands, and Prompts. Each package undergoes security scanning and trust scoring before installation.",
     "stat_packages": "Packages",
     "stat_published": "Published",
     "stat_top_rated": "Top Rated",

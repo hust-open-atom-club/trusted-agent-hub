@@ -11,7 +11,7 @@
     "theme_dark": "切换深色模式"
   },
   "home": {
-    "chip": "Trusted Agent Hub 中心",
+    "chip": "Trusted Agent Hub ",
     "title": "发现并安装",
     "title_accent": "可以信任的  AI Agent Skills",
     "desc": "Trusted Agent Hub平台 — 涵盖 Skills、MCP Servers、Plugins、Commands、Prompts。每个包在安装前都经过安全扫描和信任评分。",

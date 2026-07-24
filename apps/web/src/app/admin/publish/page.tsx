@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -62,13 +63,9 @@ export default function AdminPublishPage() {
     setLoading(true);
     setError(null);
 
-    fetch(`${API_BASE}/api/v0/producer/versions?status=approved`, {
+    apiFetch<PublishItem[]>(`${API_BASE}/api/v0/producer/versions?status=approved`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
-        if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
-        return res.json();
-      })
       .then((data) => setItems(data))
       .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
       .finally(() => setLoading(false));
@@ -105,6 +102,7 @@ export default function AdminPublishPage() {
       setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 发布成功`);
       setShowModal(false);
       setSelectedItem(null);
+      clearFetchCache('versions');
       fetchItems();
 
       setTimeout(() => setSuccessMsg(null), 3000);

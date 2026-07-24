@@ -30,11 +30,6 @@ export default function PackageCard({ pkg }: PackageCardProps) {
       <div className="card-header">
         <h3 className="card-name">{pkg.name}</h3>
         <div className="card-header-right">
-          {pkg.grade && (
-            <span className={`card-grade grade-${pkg.grade.toLowerCase()}`} title={`Trust Grade ${pkg.grade}`}>
-              {pkg.grade}
-            </span>
-          )}
           <ScoreBadge grade={pkg.grade} />
         </div>
       </div>

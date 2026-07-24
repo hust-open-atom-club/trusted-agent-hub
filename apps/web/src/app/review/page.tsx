@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -65,18 +66,13 @@ export default function ReviewPage() {
 
     const fetchItems = async () => {
       try {
-        const res = await fetch(
+        const data = await apiFetch(
           `${API_BASE}/api/v0/producer/versions?status=pending_review`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },
         );
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: '加载失败' }));
-          throw new Error(err.detail || `HTTP ${res.status}`);
-        }
-        const data: ReviewItem[] = await res.json();
-        setItems(data);
+        setItems(data as ReviewItem[]);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : '加载失败');
       } finally {

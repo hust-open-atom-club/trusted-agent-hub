@@ -25,11 +25,8 @@ export default function Navbar() {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem('tah-theme');
-    if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      setTheme('dark');
-      document.documentElement.setAttribute('data-theme', 'dark');
-    }
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    setTheme(isDark ? 'dark' : 'light');
     window.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => window.removeEventListener('scroll', handleScroll);
@@ -43,12 +40,14 @@ export default function Navbar() {
     const next = i18n.language === 'zh' ? 'en' : 'zh';
     i18n.changeLanguage(next);
     localStorage.setItem('tah-lang', next);
+    document.cookie = `tah-lang=${next}; path=/; max-age=31536000; SameSite=Lax`;
   };
 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
     localStorage.setItem('tah-theme', next);
+    document.cookie = `tah-theme=${next}; path=/; max-age=31536000; SameSite=Lax`;
     if (next === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');
     } else {

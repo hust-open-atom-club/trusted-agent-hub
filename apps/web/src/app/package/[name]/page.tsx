@@ -43,6 +43,7 @@ export default function PackageDetailPage() {
   useEffect(() => {
     fetchPackage(name)
       .then(setPkg)
+      .catch(() => setPkg(null))
       .finally(() => setLoading(false));
   }, [name]);
 
@@ -105,9 +106,11 @@ export default function PackageDetailPage() {
           <TypeBadge type={pkg.type} />
           <StatusBadge status={pkg.status} />
         </div>
-        <p className="detail-owner">
-          by <strong>{pkg.owner.display_name}</strong> (@{pkg.owner.username})
-        </p>
+        {pkg.owner && (
+          <p className="detail-owner">
+            by <strong>{pkg.owner.display_name}</strong> (@{pkg.owner.username})
+          </p>
+        )}
         <p className="detail-description">{pkg.description}</p>
 
         <div className="detail-meta-grid">

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -66,17 +67,11 @@ export default function AdminYankPage() {
     setError(null);
 
     Promise.all([
-      fetch(`${API_BASE}/api/v0/producer/versions?status=published`, {
+      apiFetch<YankItem[]>(`${API_BASE}/api/v0/producer/versions?status=published`, {
         headers: { Authorization: `Bearer ${token}` },
-      }).then((res) => {
-        if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
-        return res.json();
       }),
-      fetch(`${API_BASE}/api/v0/producer/versions?status=yanked`, {
+      apiFetch<YankItem[]>(`${API_BASE}/api/v0/producer/versions?status=yanked`, {
         headers: { Authorization: `Bearer ${token}` },
-      }).then((res) => {
-        if (!res.ok) return res.json().then((e) => { throw new Error(e.detail || `HTTP ${res.status}`); });
-        return res.json();
       }),
     ])
       .then(([published, yanked]) => {
@@ -125,6 +120,7 @@ export default function AdminYankPage() {
       setShowModal(false);
       setSelectedItem(null);
       setReason('');
+      clearFetchCache('versions');
       fetchItems();
 
       setTimeout(() => setSuccessMsg(null), 3000);
@@ -150,6 +146,7 @@ export default function AdminYankPage() {
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       setSuccessMsg(`${item.package_name} v${item.version} 已重新发布`);
+      clearFetchCache('versions');
       fetchItems();
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
