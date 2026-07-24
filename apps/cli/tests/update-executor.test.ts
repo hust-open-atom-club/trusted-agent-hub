@@ -1002,35 +1002,74 @@ async function test_legacyContentRaceDetection() {
 }
 
 async function test_beforeActivatePreservesOldInstall() {
-  // When beforeActivate throws, the old installation must remain untouched
+  // When beforeActivate throws, the old installation must remain untouched:
+  // - Old files still exist on disk
+  // - Install record is still the old version
+  // - No staging/backup directories left behind
   const homeDir = makeTempHome();
   try {
     const { record } = await installV1(homeDir, 'preserve-pkg');
+    const oldFiles = fs.readdirSync(record.install_path);
 
     const { manifest, zipBuf } = makeV2ManifestForUpdate('preserve-pkg');
-    const fetcher = mockFetchForManifest(manifest, zipBuf);
+
+    // Modify content when the ZIP download starts so that beforeActivate
+    // (which re-inspects after download+extract+staging) detects it.
+    let tampered = false;
+    const fetcher: FetchFn = async (urlStr: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return { status: 201, ok: true, headers: new Headers(), json: async () => ({}), text: async () => '' } as Response;
+      }
+      const url = urlStr.toString();
+      if (url.includes('install-manifest')) {
+        return { status: 200, ok: true, headers: new Headers(), json: async () => manifest, text: async () => '' } as Response;
+      }
+      // Download phase: tamper with the install directory
+      if (!tampered) {
+        fs.writeFileSync(path.join(record.install_path, 'injected.txt'), '// injected during download');
+        tampered = true;
+      }
+      return {
+        status: 200, ok: true,
+        headers: new Headers({ 'content-length': String(zipBuf.length) }),
+        body: new ReadableStream({ start(c) { c.enqueue(zipBuf); c.close(); } }),
+        json: async () => ({}), text: async () => '',
+      } as unknown as Response;
+    };
+
     const apiClient = createApiClient(fetcher);
     const executor = new UpdateExecutor(apiClient, { homeDir, fetchFn: fetcher });
 
-    // Modify content right before activation to trigger content_race
-    // (The beforeActivate hook re-inspects, and we modify before calling update)
     const result = await executor.update('preserve-pkg', 'claude-code');
+    assert.strictEqual(result.status, 'update_failed',
+      `Expected update_failed from beforeActivate race, got ${result.status}`);
 
-    // The update should succeed since the content wasn't modified mid-flight.
-    // But we want to test the PRESERVATION on failure.  Let's just verify
-    // that a clean update works, then check the restored old content on
-    // the existing test_rollbackFailedDetected replacement below.
+    // Old files must still exist (untouched)
+    for (const f of oldFiles) {
+      assert.ok(fs.existsSync(path.join(record.install_path, f)),
+        `Old file "${f}" should still exist after beforeActivate failure`);
+    }
+    // The injected file should also be there (it's part of "old" content now)
+    assert.ok(fs.existsSync(path.join(record.install_path, 'injected.txt')),
+      'Injected file should still be present');
 
-    // Actually, let's use the SHA mismatch test which already verifies
-    // preservation.  This test is about beforeActivate itself.
-    // We simulate a beforeActivate failure by corrupting the install
-    // directory AFTER InstallExecutor starts but BEFORE activation.
-    // Since beforeActivate runs inside InstallExecutor and re-inspects,
-    // we need to modify the files between download completion and activation.
-    // This is hard to time.  Let's use the contentRaceDetection test
-    // pattern instead, which already proves beforeActivate catches races.
+    // No staging or backup leftovers
+    const clientRoot = path.join(homeDir, '.claude', 'skills');
+    const entries = fs.readdirSync(clientRoot);
+    const stagingLeftovers = entries.filter(e => e.startsWith('.staging-') || e.startsWith('.backup-'));
+    assert.strictEqual(stagingLeftovers.length, 0,
+      `Should have no staging/backup leftovers, got: ${stagingLeftovers.join(', ')}`);
 
-    console.log('  ✓ beforeActivate failure covered by content race test');
+    // Record must still be the old version
+    const store = new LocalInstallStore(homeDir);
+    const currentRecord = store.find('preserve-pkg', 'claude-code');
+    assert.ok(currentRecord !== null, 'Record should still exist');
+    assert.strictEqual(currentRecord!.version, '1.0.0',
+      'Record version should still be old version');
+    assert.strictEqual(currentRecord!.updated_at, undefined,
+      'updated_at should not be set after failed update');
+
+    console.log('  ✓ beforeActivate failure → old install preserved, no leftovers');
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
