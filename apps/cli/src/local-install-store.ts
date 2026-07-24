@@ -43,7 +43,8 @@ export interface LocalInstallRecord {
   install_path: string;
   sha256: string;            // artifact SHA-256
   integrity_verified: boolean;
-  installed_at: string;       // ISO 8601
+  installed_at: string;       // ISO 8601 — original install time
+  updated_at?: string;        // ISO 8601 — last update time (absent for first install)
   manifest_version: string;
   content_hash_algorithm?: 'sha256-tree-v1';
   content_sha256?: string;      // installed content digest (may be absent for legacy records)
@@ -60,6 +61,7 @@ export const RECORD_COMPARE_FIELDS: readonly (keyof LocalInstallRecord)[] = [
   'sha256',
   'integrity_verified',
   'installed_at',
+  'updated_at',
   'manifest_version',
   'content_hash_algorithm',
   'content_sha256',
@@ -165,6 +167,18 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
     );
   }
 
+  // Validate updated_at if present (optional ISO 8601 string)
+  let updated_at: string | undefined;
+  if (r.updated_at !== undefined && r.updated_at !== null) {
+    if (typeof r.updated_at !== 'string' || r.updated_at.length === 0) {
+      throw new RecordStoreError(
+        `Record at index ${index}: "updated_at" must be a non-empty string if present`,
+        'record_invalid',
+      );
+    }
+    updated_at = r.updated_at as string;
+  }
+
   let content_hash_algorithm: 'sha256-tree-v1' | undefined;
   let content_sha256: string | undefined;
 
@@ -194,6 +208,7 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
     sha256: r.sha256 as string,
     integrity_verified: r.integrity_verified as boolean,
     installed_at: r.installed_at as string,
+    updated_at,
     manifest_version: r.manifest_version as string,
     content_hash_algorithm,
     content_sha256,

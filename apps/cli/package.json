@@ -7,17 +7,19 @@
     "build": "tsc",
     "dev": "ts-node src/cli.ts",
     "pretest": "npm run build",
-    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts && tsx tests/client-paths.test.ts && tsx tests/content-integrity.test.ts && tsx tests/local-install-store.test.ts && tsx tests/install-executor.test.ts && tsx tests/safe-output.test.ts && tsx tests/confirm.test.ts && tsx tests/uninstall-executor.test.ts && tsx tests/verify-executor.test.ts && tsx tests/cli-verify.test.ts && tsx tests/cli-uninstall.test.ts && tsx tests/cli-parsing.test.ts"
+    "test": "tsx tests/grade-gate.test.ts && tsx tests/api-client.test.ts && tsx tests/client-paths.test.ts && tsx tests/content-integrity.test.ts && tsx tests/local-install-store.test.ts && tsx tests/install-executor.test.ts && tsx tests/safe-output.test.ts && tsx tests/confirm.test.ts && tsx tests/version-policy.test.ts && tsx tests/local-install-inspector.test.ts && tsx tests/uninstall-executor.test.ts && tsx tests/verify-executor.test.ts && tsx tests/update-executor.test.ts && tsx tests/cli-verify.test.ts && tsx tests/cli-uninstall.test.ts && tsx tests/cli-parsing.test.ts && tsx tests/cli-update.test.ts"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
-    "ora": "^5.4.1"
+    "ora": "^5.4.1",
+    "semver": "^7.8.5"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.11.0",
+    "@types/semver": "^7.7.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.23.1",
     "typescript": "^5.3.3"

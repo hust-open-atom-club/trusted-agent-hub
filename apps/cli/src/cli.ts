@@ -9,6 +9,8 @@ import { VerifyExecutor } from './verify-executor';
 import type { VerifyResult } from './verify-executor';
 import { UninstallExecutor } from './uninstall-executor';
 import type { UninstallResult } from './uninstall-executor';
+import { UpdateExecutor } from './update-executor';
+import type { UpdateResult } from './update-executor';
 import { createTerminalConfirm } from './confirm';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest } from './manifest-types';
@@ -411,6 +413,102 @@ program
       confirm,
     });
     printUninstallResult(result);
+    if (!result.ok) process.exitCode = 1;
+  });
+
+// ── update ────────────────────────────────────────────────────────────────
+
+/**
+ * Print an update result with a stable, machine-parseable status line.
+ * Never leaks file content, tokens, or response bodies.
+ */
+function printUpdateResult(result: UpdateResult): void {
+  const icon =
+    result.ok ? chalk.green('✓')
+    : chalk.red('✗');
+
+  console.log('');
+  console.log(
+    `  ${icon} ${chalk.bold(result.packageName)}  ${chalk.dim(`[${result.status}]`)}`,
+  );
+  console.log(`  ${chalk.dim('Client:')}         ${result.client}`);
+  if (result.localVersion) {
+    console.log(`  ${chalk.dim('Local version:')}  ${result.localVersion}`);
+  }
+  if (result.remoteVersion) {
+    console.log(`  ${chalk.dim('Remote version:')} ${result.remoteVersion}`);
+  }
+  if (result.installPath) {
+    console.log(`  ${chalk.dim('Install path:')}   ${result.installPath}`);
+  }
+  if (result.artifactSha256) {
+    console.log(`  ${chalk.dim('Artifact SHA:')}   ${result.artifactSha256.slice(0, 16)}…`);
+  }
+  if (result.backupPath) {
+    console.log(`  ${chalk.yellow('Recovery path:')} ${result.backupPath}`);
+  }
+  console.log('');
+  console.log(`  ${result.ok ? chalk.green(result.message) : chalk.yellow(result.message)}`);
+
+  // Machine-parseable status line
+  console.log('');
+  console.log(`UPDATE_STATUS=${result.status}`);
+  console.log('');
+}
+
+program
+  .command('update <name>')
+  .description('Update an installed package to the latest version')
+  .option('-c, --client <client>', 'Target client', 'claude-code')
+  .option('-f, --force', 'Overwrite modified or legacy content')
+  .option('-y, --yes', 'Skip confirmation prompts (Grade C)')
+  .option('--accept-high-risk', 'Second explicit consent for high-risk updates (Grade D, required with --force)')
+  .action(async (
+    name: string,
+    options: {
+      client?: string;
+      force?: boolean;
+      yes?: boolean;
+      acceptHighRisk?: boolean;
+    },
+  ) => {
+    const clientType = options.client || 'claude-code';
+
+    console.log('');
+    console.log(`  ${chalk.dim('Package:')}  ${chalk.cyan(name)}`);
+    console.log(`  ${chalk.dim('Client:')}   ${chalk.cyan(clientType)}`);
+    if (options.force) {
+      console.log(`  ${chalk.yellow('Force:')}    ${chalk.yellow('Will overwrite modified or legacy content')}`);
+    }
+    console.log('');
+
+    const spinner = ora('Checking for updates…').start();
+
+    const executor = new UpdateExecutor(client);
+    let result: UpdateResult;
+    try {
+      result = await executor.update(name, clientType, {
+        force: options.force,
+        yes: options.yes,
+        acceptHighRisk: options.acceptHighRisk,
+      });
+    } catch (err: unknown) {
+      spinner.stop();
+      console.log('');
+      console.log(chalk.red.bold('  ✗ Update failed'));
+      console.log(chalk.red(`    ${err instanceof Error ? err.message : String(err)}`));
+      console.log('');
+      process.exit(1);
+    }
+
+    spinner.stop();
+
+    if (result.status === 'updated') {
+      console.log(chalk.green(`  ✓ Updated ${name} from v${result.localVersion} → v${result.remoteVersion}`));
+    }
+
+    printUpdateResult(result);
+
     if (!result.ok) process.exitCode = 1;
   });
 
