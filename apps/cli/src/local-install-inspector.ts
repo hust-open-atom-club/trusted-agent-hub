@@ -281,6 +281,8 @@ export class LocalInstallInspector {
 
     // 7. Legacy record check — still compute the actual content digest so
     //    callers (esp. UpdateExecutor) have a snapshot for TOCTOU detection.
+    //    If the digest cannot be computed, fail-closed: undefined === undefined
+    //    would be a false positive in race detection.
     if (!hasHash) {
       let actualDigest: string | undefined;
       try {
@@ -289,9 +291,23 @@ export class LocalInstallInspector {
           maxBytes: this.maxBytes,
         });
         actualDigest = digest.digest;
-      } catch {
-        // If we can't compute the digest (e.g. unreadable files), leave
-        // it undefined — the caller can still gate on legacy_record.
+      } catch (err: unknown) {
+        // Cannot compute digest — fail closed rather than risk a
+        // silent TOCTOU bypass (undefined === undefined).
+        if (err instanceof ContentIntegrityError) {
+          return makeResult(
+            record,
+            'unsafe_content',
+            `Cannot verify legacy content: ${err.message}. Reinstall to enable content verification.`,
+            { clientRoot },
+          );
+        }
+        return makeResult(
+          record,
+          'modified',
+          `Cannot read legacy content: ${err instanceof Error ? err.message : String(err)}. Reinstall to enable content verification.`,
+          { clientRoot },
+        );
       }
       return makeResult(
         record,

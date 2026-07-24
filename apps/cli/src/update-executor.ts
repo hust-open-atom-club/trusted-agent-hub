@@ -98,6 +98,8 @@ export interface UpdateOptions {
   homeDir?: string;
   /** Custom fetch implementation (for testing). */
   fetchFn?: typeof fetch;
+  /** Test hook: passed through to InstallExecutor.beforeSaveRecord. */
+  _beforeInstallSaveRecord?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +155,7 @@ export class UpdateExecutor {
   private readonly inspector: LocalInstallInspector;
   private readonly store: LocalInstallStore;
   private readonly fetchFn?: typeof fetch;
+  private readonly beforeInstallSaveRecord?: () => void;
 
   constructor(
     private apiClient: ReturnType<typeof import('./api-client').createApiClient>,
@@ -162,6 +165,7 @@ export class UpdateExecutor {
     this.inspector = new LocalInstallInspector({ homeDir: this.homeDir });
     this.store = new LocalInstallStore(this.homeDir);
     this.fetchFn = options.fetchFn;
+    this.beforeInstallSaveRecord = options._beforeInstallSaveRecord;
   }
 
   // -----------------------------------------------------------------------
@@ -510,6 +514,7 @@ export class UpdateExecutor {
         homeDir: this.homeDir,
         fetchFn: this.fetchFn,
         beforeActivate,
+        beforeSaveRecord: this.beforeInstallSaveRecord,
       });
       installResult = await installExecutor.installWithManifest(manifest, clientType, {
         yes: options.yes,
