@@ -3,18 +3,9 @@
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth';
 import Navbar from '@/components/Navbar';
-import '@/i18n/i18n';
+import { initI18n } from '@/i18n/i18n';
 
 function ThemeProvider({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    const saved = localStorage.getItem('tah-theme');
-    if (saved === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-      document.documentElement.removeAttribute('data-theme');
-    }
-  }, []);
-
   return <>{children}</>;
 }
 
@@ -40,7 +31,9 @@ function RevealProvider({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-export function ClientLayout({ children }: { children: React.ReactNode }) {
+export function ClientLayout({ children, serverLang }: { children: React.ReactNode; serverLang?: string }) {
+  initI18n(serverLang || 'zh');
+
   return (
     <AuthProvider>
       <ThemeProvider>
