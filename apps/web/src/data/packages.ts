@@ -1,8 +1,8 @@
 export interface Owner {
   id: string;
-  username: string;
   display_name: string;
   role: string;
+  email?: string | null;
 }
 
 export interface Package {

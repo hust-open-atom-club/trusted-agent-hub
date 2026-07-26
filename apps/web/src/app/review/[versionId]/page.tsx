@@ -432,7 +432,7 @@ export default function ReviewDetailPage() {
         <button onClick={() => router.push('/review')} className="link-btn">
           ← 返回待审核列表
         </button>
-        <span className="review-detail-nav-user">{user?.username}</span>
+        <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
 
       {/* ── 版本信息栏 ── */}

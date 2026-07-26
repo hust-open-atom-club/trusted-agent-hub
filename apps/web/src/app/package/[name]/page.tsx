@@ -153,7 +153,7 @@ export default function PackageDetailPage() {
         </div>
         {pkg.owner && (
           <p className="detail-owner">
-            by <strong>{pkg.owner.display_name}</strong> (@{pkg.owner.username})
+            by <strong>{pkg.owner.display_name}</strong>
           </p>
         )}
         <p className="detail-description">{pkg.description}</p>

@@ -60,9 +60,9 @@ def _get_jwt_secret() -> str:
     return _JWT_SECRET
 
 
-def create_access_token(user_id: str, role: str) -> str:
+def create_access_token(user_id: str, role: str, *, email: str = "", display_name: str = "") -> str:
     """签发 access token（2h 有效）。"""
-    return _create_token(user_id, role, _ACCESS_TOKEN_TTL)
+    return _create_token(user_id, role, _ACCESS_TOKEN_TTL, email=email, display_name=display_name)
 
 
 def create_refresh_token(user_id: str, role: str) -> str:
@@ -70,11 +70,13 @@ def create_refresh_token(user_id: str, role: str) -> str:
     return _create_token(user_id, role, _REFRESH_TOKEN_TTL)
 
 
-def _create_token(user_id: str, role: str, ttl: timedelta) -> str:
+def _create_token(user_id: str, role: str, ttl: timedelta, *, email: str = "", display_name: str = "") -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "role": role,
+        "email": email,
+        "display_name": display_name,
         "iat": now,
         "exp": now + ttl,
     }

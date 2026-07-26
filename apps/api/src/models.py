@@ -21,9 +21,9 @@ class Owner(BaseModel):
     """Package owner / author summary."""
 
     id: str
-    username: str
     display_name: str
     role: str
+    email: Optional[str] = None
 
 
 class Author(BaseModel):

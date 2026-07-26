@@ -151,7 +151,7 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
           <form className="scanner-form" onSubmit={handleSubmit}>
             <div className="scanner-input-row">
               <input type="url" className="scanner-url-input"
-                placeholder="https://github.com/username/agent-package"
+                placeholder="https://github.com/owner/repo"
                 value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)}
                 disabled={isBusy} required />
               <button type="submit" className="scanner-submit-btn" disabled={isBusy || !repoUrl.trim()}>

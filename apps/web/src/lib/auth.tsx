@@ -6,10 +6,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface AuthUser {
   id: string;
-  username: string;
+  email: string;
   role: 'user' | 'submitter' | 'reviewer' | 'admin';
-  email: string | null;
-  display_name: string | null;
+  display_name: string;
 }
 
 interface AuthState {
@@ -19,14 +18,14 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, email?: string, display_name?: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, display_name?: string) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function parseJwt(token: string): { sub: string; role: string; exp: number } | null {
+function parseJwt(token: string): { sub: string; role: string; email: string; display_name: string; exp: number } | null {
   try {
     const payload = token.split('.')[1];
     return JSON.parse(atob(payload));
@@ -35,39 +34,21 @@ function parseJwt(token: string): { sub: string; role: string; exp: number } | n
   }
 }
 
-function deriveUser(token: string, extra?: { email?: string | null; display_name?: string | null }): AuthUser | null {
+function deriveUser(token: string): AuthUser | null {
   const payload = parseJwt(token);
   if (!payload) return null;
 
-  const username =
-    typeof (payload as Record<string, unknown>).username === 'string'
-      ? (payload as Record<string, unknown>).username as string
-      : payload.sub;
-
   return {
     id: payload.sub,
-    username,
+    email: payload.email || '',
     role: (payload.role as AuthUser['role']) || 'user',
-    email: extra?.email ?? null,
-    display_name: extra?.display_name ?? null,
+    display_name: payload.display_name || '',
   };
 }
 
-function storeSession(token: string, user: { email: string | null; display_name: string | null }) {
+function storeSession(token: string) {
   localStorage.setItem('tah_token', token);
-  localStorage.setItem('tah_user', JSON.stringify({ email: user.email, display_name: user.display_name }));
   document.cookie = `tah_token=${token}; path=/; max-age=${2 * 60 * 60}; SameSite=Lax`;
-}
-
-function restoreUser(token: string): AuthUser | null {
-  const user = deriveUser(token);
-  if (!user) return null;
-  try {
-    const saved = JSON.parse(localStorage.getItem('tah_user') || '{}');
-    user.email = saved.email ?? null;
-    user.display_name = saved.display_name ?? null;
-  } catch { /* ignore */ }
-  return user;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -76,7 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const saved = localStorage.getItem('tah_token');
     if (saved) {
-      const user = restoreUser(saved);
+      const user = deriveUser(saved);
       if (user) {
         if (!document.cookie.includes('tah_token=')) {
           document.cookie =
@@ -86,18 +67,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       localStorage.removeItem('tah_token');
-      localStorage.removeItem('tah_user');
     }
     setState((s) => ({ ...s, loading: false }));
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}/api/v0/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, password }),
       });
     } catch {
       throw new Error(`无法连接到后端服务，请确认 API 已启动 (${API_BASE})`);
@@ -110,22 +90,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const data = await res.json();
     const token: string = data.access_token;
-    const respUser = data.user || {};
-    const user = deriveUser(token, { email: respUser.email, display_name: respUser.display_name });
+    const user = deriveUser(token);
     if (!user) throw new Error('Token 解析失败');
 
-    storeSession(token, { email: user.email, display_name: user.display_name });
+    storeSession(token);
     setState({ user, token, loading: false });
   }, []);
 
   const register = useCallback(async (
-    username: string,
+    email: string,
     password: string,
-    email?: string,
     display_name?: string,
   ) => {
-    const body: Record<string, string> = { username, password };
-    if (email) body.email = email;
+    const body: Record<string, string> = { email, password };
     if (display_name) body.display_name = display_name;
 
     let res: Response;
@@ -146,17 +123,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const data = await res.json();
     const token: string = data.access_token;
-    const respUser = data.user || {};
-    const user = deriveUser(token, { email: respUser.email, display_name: respUser.display_name });
+    const user = deriveUser(token);
     if (!user) throw new Error('Token 解析失败');
 
-    storeSession(token, { email: user.email, display_name: user.display_name });
+    storeSession(token);
     setState({ user, token, loading: false });
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('tah_token');
-    localStorage.removeItem('tah_user');
     document.cookie = 'tah_token=; path=/; max-age=0';
     setState({ user: null, token: null, loading: false });
   }, []);

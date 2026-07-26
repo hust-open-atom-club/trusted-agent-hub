@@ -265,11 +265,12 @@ def _run_scan_task(
             "trust_score": trust_score_result,
         }
 
-        # Step 5: 更新内存状态（完整报告已在 PostgreSQL 中）
+        # Step 5: 更新内存状态
         _scans[scan_id].update({
             "status": "complete",
             "finished_at": full_report["finished_at"],
             "full_report": full_report,
+            "package_metadata": package_metadata,
             "summary": scan_report.get("summary", {}),
             "trust_score": {
                 "level": trust_score_result.get("risk_summary", {}).get("level"),
@@ -633,6 +634,43 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
             "status": info["status"],
             "message": "Scan is still in progress. Poll /scan/{scan_id} for status updates.",
         }
+
+
+# ---------------------------------------------------------------------------
+# GET /scan/{scan_id}/metadata
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scan/{scan_id}/metadata")
+def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
+    """获取扫描过程中提取的完整元数据（供提交页自动填充使用）。"""
+    info = _scans.get(scan_id)
+    if not info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scan '{scan_id}' not found.",
+        )
+    if info["status"] != "complete":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Scan is not complete yet. Current status: {info['status']}",
+        )
+
+    metadata = info.get("package_metadata")
+    if not metadata:
+        full_report = info.get("full_report", {})
+        scan_report = full_report.get("scan_report", {})
+        metadata = {
+            "name": scan_report.get("package_name", "unknown"),
+            "version": scan_report.get("version", "0.1.0"),
+            "description": "",
+            "license": "UNKNOWN",
+        }
+
+    return {
+        "scan_id": scan_id,
+        "metadata": metadata,
+    }
 
 
 # ---------------------------------------------------------------------------
