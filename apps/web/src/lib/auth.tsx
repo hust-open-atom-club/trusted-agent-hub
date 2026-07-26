@@ -1,6 +1,7 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { setOnUnauthorized } from './api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -37,6 +38,7 @@ function parseJwt(token: string): { sub: string; role: string; email: string; di
 function deriveUser(token: string): AuthUser | null {
   const payload = parseJwt(token);
   if (!payload) return null;
+  if (payload.exp * 1000 < Date.now()) return null;
 
   return {
     id: payload.sub,
@@ -53,6 +55,18 @@ function storeSession(token: string) {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, token: null, loading: true });
+  const wasAuthenticated = useRef(false);
+
+  useEffect(() => {
+    if (state.loading) return;
+    if (!state.user && wasAuthenticated.current) {
+      window.location.href = '/login';
+      return;
+    }
+    if (state.user) {
+      wasAuthenticated.current = true;
+    }
+  }, [state.user, state.loading]);
 
   useEffect(() => {
     const saved = localStorage.getItem('tah_token');
@@ -135,6 +149,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     document.cookie = 'tah_token=; path=/; max-age=0';
     setState({ user: null, token: null, loading: false });
   }, []);
+
+  useEffect(() => {
+    setOnUnauthorized(logout);
+    return () => setOnUnauthorized(null);
+  }, [logout]);
 
   return (
     <AuthContext.Provider value={{ ...state, login, register, logout }}>

@@ -997,24 +997,7 @@ h3 {
 }
 
 .detail-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 1rem;
-  border-radius: var(--radius-pill);
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: var(--color-ink-2);
   margin-bottom: 1.5rem;
-  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
-  min-height: 44px;
-  border: 1px solid var(--color-rule);
-  background: var(--color-paper-2);
-}
-
-.detail-back:hover {
-  color: var(--color-ink);
-  background: var(--color-paper-3);
 }
 
 .detail-header {
@@ -1803,6 +1786,63 @@ h3 {
 .login-footer {
   margin-top: 1.5rem;
   text-align: center;
+}
+
+/* ============================================================
+   File Viewer — 完整文件代码查看页
+   ============================================================ */
+
+.file-viewer-page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 4rem;
+}
+
+.file-viewer-nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.file-viewer-file-name {
+  font-family: var(--font-jetbrains);
+  font-size: 0.85rem;
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.file-viewer-info {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  margin-left: auto;
+}
+
+.file-viewer-code {
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  max-height: calc(100vh - 140px);
+  padding: 0.5rem 0;
+}
+
+.file-viewer-code pre {
+  margin: 0;
+  padding: 0;
+}
+
+.file-viewer-code code {
+  font-family: var(--font-jetbrains);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--color-ink);
+}
+
+.file-viewer-code .code-line-content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .login-hint {
@@ -2934,9 +2974,6 @@ h3 {
   background: var(--color-paper);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-md);
-  position: sticky;
-  top: 80px;
-  z-index: 10;
 }
 
 .review-detail-bar-main {
@@ -3378,6 +3415,135 @@ h3 {
   font-size: 0.78rem;
   line-height: 1.5;
   color: var(--color-ink);
+}
+
+.finding-snippet-expanded {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.finding-snippet-info {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  padding: 0.25rem 0.4rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  background: var(--color-paper-2);
+  z-index: 2;
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.finding-full-file-toggle {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-accent);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  text-decoration: none;
+}
+
+.finding-full-file-toggle:hover {
+  background: var(--color-paper-3);
+  text-decoration: none;
+}
+
+.code-line {
+  display: flex;
+  line-height: 1.5;
+}
+
+.code-line-target {
+  background: oklch(70% 0.12 70 / 0.2);
+  border-left: 2px solid var(--color-accent);
+}
+
+[data-theme="dark"] .code-line-target {
+  background: oklch(70% 0.12 70 / 0.15);
+}
+
+.code-line-num {
+  flex-shrink: 0;
+  width: 2.5rem;
+  text-align: right;
+  padding-right: 0.75rem;
+  color: var(--color-muted);
+  user-select: none;
+}
+
+.code-line-content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: break-word;
+  color: var(--color-ink);
+}
+
+.finding-evidence-line {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  margin-bottom: 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.finding-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.finding-code-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background 150ms, color 150ms;
+}
+
+.finding-code-toggle:hover {
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+}
+
+.finding-meta-pills {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.finding-meta-pill {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  cursor: default;
+  background: var(--color-paper-2);
+  color: var(--color-muted);
+}
+
+.finding-meta-pill.cwe {
+  border: 1px solid oklch(65% 0.06 250);
+  color: oklch(45% 0.08 250);
+}
+
+.finding-meta-pill.remediation {
+  border: 1px solid oklch(65% 0.06 130);
+  color: oklch(40% 0.08 130);
 }
 
 .finding-details {
@@ -3929,7 +4095,7 @@ h3 {
   margin-bottom: 1.5rem;
 }
 
-.admin-nav .link-btn {
+.link-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -3943,9 +4109,11 @@ h3 {
   background: var(--color-paper-2);
   cursor: pointer;
   font-family: var(--font-sans);
+  text-decoration: none;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
 }
 
-.admin-nav .link-btn:hover {
+.link-btn:hover {
   color: var(--color-ink);
   background: var(--color-paper-3);
 }

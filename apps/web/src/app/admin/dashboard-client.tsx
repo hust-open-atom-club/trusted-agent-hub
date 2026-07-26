@@ -1,6 +1,10 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface DashboardStats {
   total_packages: number;
@@ -20,49 +24,65 @@ interface StatCard {
   path: string;
 }
 
-interface AdminDashboardClientProps {
-  initialStats: DashboardStats | null;
-}
-
-export default function AdminDashboardClient({ initialStats }: AdminDashboardClientProps) {
+export default function AdminDashboardClient() {
   const router = useRouter();
+  const { user, token, loading: authLoading } = useAuth();
+
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !token) {
+      setLoading(false);
+      return;
+    }
+
+    fetch(`${API_BASE}/api/v0/producer/stats/dashboard`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => { if (data) setStats(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [user, token, authLoading]);
 
   const cards: StatCard[] = [
     {
       title: '总包数',
-      count: initialStats?.total_packages ?? null,
+      count: stats?.total_packages ?? null,
       description: '已入库的能力包总数',
-      path: '/admin',
+      path: '/admin/packages',
     },
     {
       title: '待审核',
-      count: initialStats?.pending_review ?? null,
+      count: stats?.pending_review ?? null,
       description: '等待审核员处理的版本',
       path: '/review',
     },
     {
       title: '今日提交',
-      count: initialStats?.today_submissions ?? null,
+      count: stats?.today_submissions ?? null,
       description: '今天新提交的版本',
-      path: '/admin',
+      path: '/admin/submissions/today',
     },
     {
       title: '审核通过',
-      count: initialStats?.approved ?? null,
+      count: stats?.approved ?? null,
       description: '已审核通过，等待发布上线',
       path: '/admin/publish',
     },
     {
       title: '已发布',
-      count: initialStats?.published ?? null,
+      count: stats?.published ?? null,
       description: '已上线运行的版本',
       path: '/admin/yank',
     },
     {
       title: '已驳回',
-      count: initialStats?.rejected ?? null,
+      count: stats?.rejected ?? null,
       description: '审核未通过的版本',
-      path: '/admin',
+      path: '/admin/rejected',
     },
   ];
 
@@ -82,7 +102,7 @@ export default function AdminDashboardClient({ initialStats }: AdminDashboardCli
               onClick={() => router.push(card.path)}
             >
               <span className="admin-stat-count">
-                {card.count !== null ? card.count : '—'}
+                {loading ? '—' : card.count !== null ? card.count : '—'}
               </span>
               <span className="admin-stat-title">{card.title}</span>
               <span className="admin-stat-desc">{card.description}</span>

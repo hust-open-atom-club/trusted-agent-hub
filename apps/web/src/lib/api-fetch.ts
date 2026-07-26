@@ -2,6 +2,12 @@ const CACHE_TTL = 60_000;
 const cache = new Map<string, { data: unknown; ts: number }>();
 const pending = new Map<string, Promise<unknown>>();
 
+let _onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(callback: (() => void) | null): void {
+  _onUnauthorized = callback;
+}
+
 function buildKey(url: string, init?: RequestInit): string {
   const method = init?.method ?? 'GET';
   const auth = (init?.headers as Record<string, string>)?.Authorization ?? '';
@@ -31,6 +37,9 @@ export async function apiFetch<T = unknown>(url: string, init?: RequestInit): Pr
 
   const promise = fetch(url, init)
     .then(async (res) => {
+      if (res.status === 401 && _onUnauthorized) {
+        _onUnauthorized();
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
         throw new Error(err.detail || `HTTP ${res.status}`);

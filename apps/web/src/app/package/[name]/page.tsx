@@ -99,7 +99,7 @@ export default function PackageDetailPage() {
   if (loading) {
     return (
       <div className="detail-page">
-        <button className="detail-back" onClick={() => router.push('/')}>
+        <button className="link-btn detail-back" onClick={() => router.push('/')}>
           &larr; Back to packages
         </button>
         <DetailSkeleton />
@@ -110,7 +110,7 @@ export default function PackageDetailPage() {
   if (!pkg) {
     return (
       <div className="detail-page">
-        <button className="detail-back" onClick={() => router.push('/')}>
+        <button className="link-btn detail-back" onClick={() => router.push('/')}>
           &larr; Back to packages
         </button>
         <div className="empty-state">
@@ -141,7 +141,7 @@ export default function PackageDetailPage() {
 
   return (
     <div className="detail-page">
-      <button className="detail-back" onClick={() => router.push('/')}>
+      <button className="link-btn detail-back" onClick={() => router.push('/')}>
         &larr; Back to packages
       </button>
 
