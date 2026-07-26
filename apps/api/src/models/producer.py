@@ -30,6 +30,10 @@ class CreatePackageRequest(StrictContractModel):
     installation: Installation | None = None
     source: Source | None = None
     compatibility: list[str] = Field(default_factory=list)
+    field_source: dict[str, str] | None = Field(
+        default=None,
+        description="字段来源标记：key 为字段名，value 为 'auto'（自动提取）或 'manual'（用户补充）",
+    )
 
 
 class CreateVersionRequest(StrictContractModel):
@@ -40,6 +44,10 @@ class CreateVersionRequest(StrictContractModel):
     description: str | None = None
     installation: Installation | None = None
     source: Source | None = None
+    field_source: dict[str, str] | None = Field(
+        default=None,
+        description="字段来源标记：key 为字段名，value 为 'auto'（自动提取）或 'manual'（用户补充）",
+    )
 
 
 class SubmitResponse(StrictContractModel):

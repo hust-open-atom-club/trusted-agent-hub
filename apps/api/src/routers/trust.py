@@ -84,6 +84,7 @@ def _load_scanner():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load scanner from {_SCANNER_PATH}")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["risk_scanner"] = mod
     spec.loader.exec_module(mod)
     return mod.RiskScanner
 
@@ -313,8 +314,8 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
                 "extract_skills", str(_EXTRACTOR_PATH))
             if spec and spec.loader:
                 mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
                 sys.modules["extract_skills"] = mod
+                spec.loader.exec_module(mod)
 
         extract_single_skill = sys.modules["extract_skills"].extract_single_skill
         data = extract_single_skill(target, repo_url=repo_url)
