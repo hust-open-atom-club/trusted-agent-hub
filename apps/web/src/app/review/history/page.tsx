@@ -39,6 +39,37 @@ function formatDate(iso: string | null): string {
   }
 }
 
+function SkeletonTable() {
+  return (
+    <div className="admin-table-wrapper">
+      <table className="admin-table">
+        <thead>
+          <tr>
+            <th>结论</th>
+            <th>包名称</th>
+            <th>版本</th>
+            <th>当前状态</th>
+            <th>意见</th>
+            <th>审核时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <tr key={i}>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '3rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '4rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function ReviewHistoryPage() {
   const router = useRouter();
   const { user, token, loading: authLoading } = useAuth();
@@ -56,9 +87,7 @@ export default function ReviewHistoryPage() {
     const offset = page * pageSize;
     apiFetch<ReviewRecord[]>(
       `${API_BASE}/api/v0/producer/reviews?reviewer_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      },
+      { headers: { Authorization: `Bearer ${token}` } },
     )
       .then((data) => setRecords(data))
       .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
@@ -75,16 +104,7 @@ export default function ReviewHistoryPage() {
     fetchRecords();
   }, [user, token, authLoading, page]);
 
-  if (authLoading || loading) {
-    return (
-      <div className="review-detail-page">
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
-        </div>
-      </div>
-    );
-  }
+  const isFirstLoad = loading && records.length === 0;
 
   return (
     <div className="review-detail-page">
@@ -105,10 +125,15 @@ export default function ReviewHistoryPage() {
           <div className="empty-state-icon">&#x26A0;</div>
           <h3>加载失败</h3>
           <p>{error}</p>
+          <button className="btn btn-secondary btn-sm" style={{ marginTop: '1rem' }} onClick={fetchRecords}>
+            重试
+          </button>
         </div>
       )}
 
-      {!error && records.length === 0 && (
+      {!error && isFirstLoad && <SkeletonTable />}
+
+      {!error && !isFirstLoad && records.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4CB;</div>
           <h3>暂无审核记录</h3>
@@ -116,7 +141,7 @@ export default function ReviewHistoryPage() {
         </div>
       )}
 
-      {!error && records.length > 0 && (
+      {!error && !isFirstLoad && records.length > 0 && (
         <>
           <div className="admin-table-wrapper">
             <table className="admin-table">

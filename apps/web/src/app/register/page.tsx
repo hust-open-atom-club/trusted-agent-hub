@@ -21,6 +21,7 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,6 +50,7 @@ export default function RegisterPage() {
         email.trim() || undefined,
         displayName.trim() || undefined,
       );
+      setSuccess(true);
       const token = localStorage.getItem('tah_token');
       if (token) {
         try {
@@ -62,9 +64,8 @@ export default function RegisterPage() {
         router.push('/');
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '注册失败，请重试');
-    } finally {
       setSubmitting(false);
+      setError(err instanceof Error ? err.message : '注册失败，请重试');
     }
   };
 
@@ -148,7 +149,7 @@ export default function RegisterPage() {
           </div>
 
           <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting ? '注册中...' : '注册'}
+            {success ? '注册成功，正在跳转...' : submitting ? '注册中...' : '注册'}
           </button>
         </form>
 

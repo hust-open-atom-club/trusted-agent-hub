@@ -46,6 +46,40 @@ function formatDate(iso: string | null): string {
   }
 }
 
+function SkeletonCard() {
+  return (
+    <div
+      style={{
+        background: 'var(--color-paper-2)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '1.25rem 1.5rem',
+        marginBottom: '0.75rem',
+        border: '1px solid var(--color-rule)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '0.75rem',
+      }}
+    >
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="skeleton" style={{ marginBottom: '0.5rem' }}>
+          <div className="skeleton-bar" style={{ width: '40%', height: '1.2rem' }} />
+        </div>
+        <div className="skeleton">
+          <div className="skeleton-bar" style={{ width: '60%' }} />
+        </div>
+        <div className="skeleton" style={{ marginTop: '0.4rem' }}>
+          <div className="skeleton-bar" style={{ width: '30%' }} />
+        </div>
+      </div>
+      <div className="skeleton">
+        <div className="skeleton-bar" style={{ width: '5rem', height: '2rem', borderRadius: 'var(--radius-pill)' }} />
+      </div>
+    </div>
+  );
+}
+
 export default function MySubmissionsPage() {
   const router = useRouter();
   const { user, token, loading: authLoading } = useAuth();
@@ -54,19 +88,18 @@ export default function MySubmissionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
-  const [totalCount, setTotalCount] = useState(0);
   const pageSize = 20;
 
   const fetchItems = () => {
     if (!user) return;
     setLoading(true);
+    setError(null);
     const offset = page * pageSize;
     apiFetch<VersionItem[]>(`${API_BASE}/api/v0/producer/versions?submitter_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data: VersionItem[]) => {
         setItems(data);
-        setTotalCount(data.length >= pageSize ? (page + 2) * pageSize : (page * pageSize) + data.length);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -91,6 +124,7 @@ export default function MySubmissionsPage() {
     : items;
 
   const hasResults = filtered.length > 0;
+  const isFirstLoad = loading && items.length === 0;
 
   return (
     <div className="status-page">
@@ -123,115 +157,114 @@ export default function MySubmissionsPage() {
         </form>
       </div>
 
-      {loading && (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
-        </div>
-      )}
+      <div style={{ maxWidth: '720px', margin: '0 auto' }}>
+        {error && (
+          <div className="empty-state">
+            <div className="empty-state-icon">&#x26A0;</div>
+            <h3>加载失败</h3>
+            <p>{error}</p>
+            <button className="btn btn-secondary btn-sm" style={{ marginTop: '1rem' }} onClick={fetchItems}>
+              重试
+            </button>
+          </div>
+        )}
 
-      {error && !loading && (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
-          <p>{error}</p>
-        </div>
-      )}
+        {!error && isFirstLoad && (
+          Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)
+        )}
 
-      {!loading && !error && !hasResults && (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x1F4E6;</div>
-          <h3>还没有提交记录</h3>
-          <p>你还没有提交过任何能力包，去提交一个吧！</p>
-          <Link href="/submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-            前往提交
-          </Link>
-        </div>
-      )}
+        {!error && !isFirstLoad && !hasResults && (
+          <div className="empty-state">
+            <div className="empty-state-icon">&#x1F4E6;</div>
+            <h3>还没有提交记录</h3>
+            <p>你还没有提交过任何能力包，去提交一个吧！</p>
+            <Link href="/submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
+              前往提交
+            </Link>
+          </div>
+        )}
 
-      {!loading && !error && hasResults && (
-        <div style={{ maxWidth: '720px', margin: '0 auto' }}>
-          {filtered.map((item) => {
-            const st = STATUS_LABELS[item.status] || { label: item.status, className: 'status-unknown' };
-            const statusUrl = `/packages/${encodeURIComponent(item.package_name)}/versions/${encodeURIComponent(item.version)}/status?vid=${encodeURIComponent(item.version_id)}`;
-            return (
-              <div
-                key={item.version_id}
-                className="submission-card"
-                style={{
-                  background: 'var(--color-paper-2)',
-                  borderRadius: 'var(--radius-lg)',
-                  padding: '1.25rem 1.5rem',
-                  marginBottom: '0.75rem',
-                  border: '1px solid var(--color-rule)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '0.75rem',
-                }}
-              >
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-                    <strong style={{ fontSize: '1.05rem', color: 'var(--color-ink)' }}>
-                      {item.package_name}
-                    </strong>
-                    <span className={`status-badge ${st.className}`} style={{
-                      display: 'inline-block',
-                      padding: '0.15rem 0.6rem',
-                      borderRadius: 'var(--radius-pill)',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                    }}>
-                      {st.label}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '0.82rem', color: 'var(--color-muted)', fontFamily: 'var(--font-mono)' }}>
-                    <span>v{item.version}</span>
-                    <span style={{ margin: '0 0.5rem', opacity: 0.4 }}>|</span>
-                    <span title={item.version_id} style={{ fontSize: '0.75rem', opacity: 0.7 }}>
-                      {item.version_id.slice(0, 12)}...
-                    </span>
-                  </div>
-                  {item.submitted_at && (
-                    <div style={{ fontSize: '0.78rem', color: 'var(--color-muted)', marginTop: '0.3rem' }}>
-                      {formatDate(item.submitted_at)}
-                    </div>
-                  )}
-                </div>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => router.push(statusUrl)}
-                  style={{ flexShrink: 0 }}
+        {!isFirstLoad && hasResults && (
+          <>
+            {filtered.map((item) => {
+              const st = STATUS_LABELS[item.status] || { label: item.status, className: 'status-unknown' };
+              const statusUrl = `/packages/${encodeURIComponent(item.package_name)}/versions/${encodeURIComponent(item.version)}/status?vid=${encodeURIComponent(item.version_id)}`;
+              return (
+                <div
+                  key={item.version_id}
+                  className="submission-card"
+                  style={{
+                    background: 'var(--color-paper-2)',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '1.25rem 1.5rem',
+                    marginBottom: '0.75rem',
+                    border: '1px solid var(--color-rule)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.75rem',
+                  }}
                 >
-                  查看状态
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                      <strong style={{ fontSize: '1.05rem', color: 'var(--color-ink)' }}>
+                        {item.package_name}
+                      </strong>
+                      <span className={`status-badge ${st.className}`} style={{
+                        display: 'inline-block',
+                        padding: '0.15rem 0.6rem',
+                        borderRadius: 'var(--radius-pill)',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                      }}>
+                        {st.label}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--color-muted)', fontFamily: 'var(--font-mono)' }}>
+                      <span>v{item.version}</span>
+                      <span style={{ margin: '0 0.5rem', opacity: 0.4 }}>|</span>
+                      <span title={item.version_id} style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                        {item.version_id.slice(0, 12)}...
+                      </span>
+                    </div>
+                    {item.submitted_at && (
+                      <div style={{ fontSize: '0.78rem', color: 'var(--color-muted)', marginTop: '0.3rem' }}>
+                        {formatDate(item.submitted_at)}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => router.push(statusUrl)}
+                    style={{ flexShrink: 0 }}
+                  >
+                    查看状态
+                  </button>
+                </div>
+              );
+            })}
 
-      {/* 分页 */}
-      {!loading && !error && hasResults && (
-        <div className="pagination" style={{ maxWidth: '720px', margin: '1.5rem auto 0', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={page === 0}
-          >
-            上一页
-          </button>
-          <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>第 {page + 1} 页</span>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setPage((p) => p + 1)}
-            disabled={items.length < pageSize}
-          >
-            下一页
-          </button>
-        </div>
-      )}
+            <div className="pagination" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', marginTop: '1.5rem' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+              >
+                上一页
+              </button>
+              <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>第 {page + 1} 页</span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={items.length < pageSize}
+              >
+                下一页
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

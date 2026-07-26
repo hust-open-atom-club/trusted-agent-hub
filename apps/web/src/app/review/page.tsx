@@ -48,6 +48,35 @@ function formatDate(iso: string | null): string {
   }
 }
 
+function SkeletonRows() {
+  return (
+    <table className="review-table">
+      <thead>
+        <tr>
+          <th>包名称</th>
+          <th>版本</th>
+          <th>风险</th>
+          <th>问题数</th>
+          <th>提交时间</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <tr key={i}>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem', height: '1.5rem', borderRadius: 'var(--radius-sm)' }} /></div></td>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem' }} /></div></td>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '1rem' }} /></div></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export default function ReviewPage() {
   const router = useRouter();
   const { user, token, loading: authLoading } = useAuth();
@@ -64,23 +93,15 @@ export default function ReviewPage() {
       return;
     }
 
-    const fetchItems = async () => {
-      try {
-        const data = await apiFetch(
-          `${API_BASE}/api/v0/producer/versions?status=pending_review`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-        setItems(data as ReviewItem[]);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : '加载失败');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchItems();
+    setLoading(true);
+    setError(null);
+    apiFetch(
+      `${API_BASE}/api/v0/producer/versions?status=pending_review`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+      .then((data) => setItems(data as ReviewItem[]))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false));
   }, [user, token, authLoading]);
 
   const filtered = useMemo(() => {
@@ -88,7 +109,6 @@ export default function ReviewPage() {
     return items.filter((item) => item.grade === gradeFilter);
   }, [items, gradeFilter]);
 
-  // 统计各等级数量
   const gradeCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const item of items) {
@@ -99,6 +119,7 @@ export default function ReviewPage() {
   }, [items]);
 
   const hasResults = filtered.length > 0;
+  const isFirstLoad = loading && items.length === 0;
 
   return (
     <div className="review-page">
@@ -117,41 +138,29 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* 筛选栏 */}
-      {!loading && !error && (
-        <div className="review-toolbar">
-          <div className="review-filter">
-            <label htmlFor="grade-filter">风险等级：</label>
-            <select
-              id="grade-filter"
-              value={gradeFilter}
-              onChange={(e) => setGradeFilter(e.target.value)}
-              className="review-select"
-            >
-              {GRADE_OPTIONS.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                  {g !== '全部' && gradeCounts[g]
-                    ? ` (${gradeCounts[g]})`
-                    : g === '全部'
-                      ? ` (${items.length})`
-                      : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div className="review-toolbar">
+        <div className="review-filter">
+          <label htmlFor="grade-filter">风险等级：</label>
+          <select
+            id="grade-filter"
+            value={gradeFilter}
+            onChange={(e) => setGradeFilter(e.target.value)}
+            className="review-select"
+          >
+            {GRADE_OPTIONS.map((g) => (
+              <option key={g} value={g}>
+                {g}
+                {g !== '全部' && gradeCounts[g]
+                  ? ` (${gradeCounts[g]})`
+                  : g === '全部'
+                    ? ` (${items.length})`
+                    : ''}
+              </option>
+            ))}
+          </select>
         </div>
-      )}
+      </div>
 
-      {/* 加载态 */}
-      {loading && (
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
-        </div>
-      )}
-
-      {/* 错误态 */}
       {error && !loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
@@ -160,8 +169,13 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {/* 空态 */}
-      {!loading && !error && !hasResults && (
+      {!error && isFirstLoad && (
+        <div className="review-table-wrapper">
+          <SkeletonRows />
+        </div>
+      )}
+
+      {!error && !isFirstLoad && !hasResults && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x2705;</div>
           <h3>暂无待审核版本</h3>
@@ -173,8 +187,7 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {/* 表格列表 */}
-      {!loading && !error && hasResults && (
+      {!error && !isFirstLoad && hasResults && (
         <div className="review-table-wrapper">
           <table className="review-table">
             <thead>

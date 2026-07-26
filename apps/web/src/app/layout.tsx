@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
-import { ClientLayout } from './client-layout';
+import { ClientProviders } from './client-providers';
+import Navbar from '@/components/Navbar';
 import './globals.css';
 
 const jakarta = Plus_Jakarta_Sans({
@@ -47,7 +48,11 @@ export default function RootLayout({
     <html lang={lang} className={`${jakarta.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body style={{ fontFamily: 'var(--font-jakarta), var(--font-sans)' }}>
         <script dangerouslySetInnerHTML={{ __html: INIT_SCRIPT }} />
-        <ClientLayout serverLang={lang}>{children}</ClientLayout>
+        <ClientProviders serverLang={lang}>
+          <Navbar />
+          <div className="nav-spacer" />
+          <main>{children}</main>
+        </ClientProviders>
       </body>
     </html>
   );
