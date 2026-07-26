@@ -25,11 +25,10 @@ class UserRow(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    username: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(256), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(32), index=True)
-    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now
     )

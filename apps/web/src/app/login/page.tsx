@@ -14,7 +14,7 @@ const ROLE_REDIRECT: Record<string, string> = {
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -22,12 +22,12 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
+    if (!email.trim() || !password.trim()) return;
 
     setError('');
     setSubmitting(true);
     try {
-      await login(username.trim(), password);
+      await login(email.trim(), password);
       setSuccess(true);
       const token = localStorage.getItem('tah_token');
       if (token) {
@@ -59,14 +59,14 @@ export default function LoginPage() {
 
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="form-field">
-            <label htmlFor="username">用户名</label>
+            <label htmlFor="email">邮箱</label>
             <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="输入用户名"
-              autoComplete="username"
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="your@email.com"
+              autoComplete="email"
               disabled={submitting}
               required
             />
@@ -93,7 +93,7 @@ export default function LoginPage() {
 
         <div className="login-footer">
           <p className="login-hint">
-            测试账号：submitter / submit123
+            测试账号：submitter@local.dev / submit123
           </p>
           <a href="/register" className="login-register-link">
             没有账号？注册

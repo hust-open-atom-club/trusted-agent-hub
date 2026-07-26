@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
 const ROLE_REDIRECT: Record<string, string> = {
   admin: '/admin',
   reviewer: '/review',
@@ -14,7 +16,6 @@ const ROLE_REDIRECT: Record<string, string> = {
 export default function RegisterPage() {
   const router = useRouter();
   const { register } = useAuth();
-  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -27,8 +28,13 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
 
-    if (!username.trim() || !password.trim()) {
-      setError('用户名和密码为必填');
+    if (!email.trim() || !password.trim()) {
+      setError('邮箱和密码为必填');
+      return;
+    }
+
+    if (!EMAIL_RE.test(email.trim())) {
+      setError('请输入有效的邮箱地址');
       return;
     }
 
@@ -45,9 +51,8 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(
-        username.trim(),
+        email.trim(),
         password,
-        email.trim() || undefined,
         displayName.trim() || undefined,
       );
       setSuccess(true);
@@ -81,29 +86,16 @@ export default function RegisterPage() {
 
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="form-field">
-            <label htmlFor="username">用户名 *</label>
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="2-64 个字符"
-              autoComplete="username"
-              disabled={submitting}
-              required
-            />
-          </div>
-
-          <div className="form-field">
-            <label htmlFor="email">邮箱</label>
+            <label htmlFor="email">邮箱 *</label>
             <input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="选填"
+              placeholder="your@email.com"
               autoComplete="email"
               disabled={submitting}
+              required
             />
           </div>
 
@@ -114,7 +106,7 @@ export default function RegisterPage() {
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="选填，默认自动生成"
+              placeholder={`选填，默认取邮箱前缀（如 ${email ? email.split('@')[0] : 'name'}）`}
               autoComplete="name"
               disabled={submitting}
             />

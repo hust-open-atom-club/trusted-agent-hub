@@ -50,9 +50,9 @@ class PackageListQuery(BaseModel):
 
 class Owner(StrictContractModel):
     id: str
-    username: str
     display_name: str
     role: str
+    email: str | None = None
 
 
 T = TypeVar("T")

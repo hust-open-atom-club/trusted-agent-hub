@@ -337,7 +337,6 @@ class ProducerRepository:
                     ReviewRecordRow.conclusion,
                     ReviewRecordRow.comment,
                     ReviewRecordRow.created_at,
-                    UserRow.username.label("reviewer_name"),
                     UserRow.display_name.label("reviewer_display_name"),
                 )
                 .outerjoin(UserRow, UserRow.id == ReviewRecordRow.reviewer_id)
@@ -350,7 +349,7 @@ class ProducerRepository:
                     "id": row.id,
                     "version_id": row.version_id,
                     "reviewer_id": row.reviewer_id,
-                    "reviewer_name": row.reviewer_name,
+                    "reviewer_name": row.reviewer_display_name,
                     "reviewer_display_name": row.reviewer_display_name,
                     "conclusion": row.conclusion,
                     "comment": row.comment,
@@ -451,7 +450,7 @@ class ProducerRepository:
                 AuditLogRow.operator_id,
                 AuditLogRow.timestamp,
                 AuditLogRow.detail,
-                UserRow.username.label("operator_name"),
+                UserRow.display_name.label("operator_name"),
             ).outerjoin(UserRow, UserRow.id == AuditLogRow.operator_id)
             if target_type:
                 stmt = stmt.where(AuditLogRow.target_type == target_type)

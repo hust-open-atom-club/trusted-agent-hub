@@ -112,7 +112,7 @@ export default function ReviewHistoryPage() {
         <button onClick={() => router.push('/review')} className="link-btn">
           ← 返回待审核列表
         </button>
-        <span className="review-detail-nav-user">{user?.username}</span>
+        <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
 
       <div className="admin-section-header">

@@ -103,29 +103,30 @@ def seed_users() -> int:
     session = create_session_factory(engine)()
 
     users = [
-        ("admin", "admin123", "admin"),
-        ("reviewer", "review123", "reviewer"),
-        ("submitter", "submit123", "submitter"),
+        ("admin@local.dev", "admin123", "admin", "admin"),
+        ("reviewer@local.dev", "review123", "reviewer", "reviewer"),
+        ("submitter@local.dev", "submit123", "submitter", "submitter"),
     ]
 
     count = 0
     try:
-        for username, password, role in users:
+        for email, password, role, display_name in users:
             existing = session.scalar(
-                select(UserRow).where(UserRow.username == username)
+                select(UserRow).where(UserRow.email == email)
             )
             if existing is not None:
-                print(f"[seed]   用户 {username} 已存在，跳过")
+                print(f"[seed]   用户 {email} 已存在，跳过")
                 continue
             user = UserRow(
                 id=f"user-{uuid.uuid4().hex}",
-                username=username,
+                email=email,
                 password_hash=hash_password(password),
                 role=role,
+                display_name=display_name,
             )
             session.add(user)
             count += 1
-            print(f"[seed]   创建用户: {username} (role={role})")
+            print(f"[seed]   创建用户: {email} (role={role})")
         session.commit()
     finally:
         session.close()
