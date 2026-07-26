@@ -182,6 +182,23 @@ def submit_version(
     )
 
 
+# ── GET /packages ─────────────────────────────────────────
+
+@router.get(
+    "/packages",
+    responses={400: {"model": ErrorEnvelope}},
+)
+def list_packages(
+    limit: int = Query(default=200, ge=1, le=500, description="每页数量"),
+    offset: int = Query(default=0, ge=0, description="偏移量"),
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> list[dict[str, object]]:
+    """列出所有能力包（不限状态，仅 admin 可查看）。"""
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    return service.list_all_packages(limit=limit, offset=offset)
+
+
 # ── GET /packages/{package_id} ────────────────────────────
 
 @router.get(
@@ -250,6 +267,8 @@ def list_versions(
     submitter_id: str | None = Query(default=None, description="提交者用户 ID"),
     status: str | None = Query(default=None, description="按状态筛选，逗号分隔多个"),
     grade: str | None = Query(default=None, description="按风险等级筛选（A/B/C/D/E/F）"),
+    since: str | None = Query(default=None, description="提交时间起始（ISO 格式）"),
+    until: str | None = Query(default=None, description="提交时间截止（ISO 格式）"),
     limit: int = Query(default=50, ge=1, le=200, description="每页数量"),
     offset: int = Query(default=0, ge=0, description="偏移量"),
     _user: CurrentUser = Depends(require_role("submitter")),
@@ -259,6 +278,7 @@ def list_versions(
     支持两种查询模式：
     - 按提交者筛选：?submitter_id=xxx
     - 按状态筛选：?status=pending_review（审核员用）
+    - 按时间范围筛选：?since=...&until=...
     - 组合筛选：?status=pending_review&grade=D
     """
     repo = _get_producer_repository()
@@ -267,10 +287,12 @@ def list_versions(
     if submitter_id is not None:
         return service.list_my_versions(submitter_id, limit=limit, offset=offset)
 
-    if status is not None:
+    if status is not None or since is not None or until is not None:
         return service.list_versions_by_status(
             status=status,
             grade=grade,
+            since=since,
+            until=until,
         )
 
     return service.list_versions_by_status()

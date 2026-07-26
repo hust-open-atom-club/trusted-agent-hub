@@ -123,7 +123,18 @@ export default function ReviewPage() {
 
   return (
     <div className="review-page">
-      <div className="review-header">
+      <nav className="admin-nav" style={{ display: 'flex', gap: '0.75rem' }}>
+        {user?.role === 'admin' && (
+          <button onClick={() => router.push('/admin')} className="link-btn">
+            ← 返回管理面板
+          </button>
+        )}
+        <Link href="/review/history" className="link-btn">
+          查看审核历史 →
+        </Link>
+      </nav>
+
+      <div className="admin-section-header">
         <h1>待审核列表</h1>
         <p>
           共 {items.length} 个版本等待审核
@@ -131,11 +142,6 @@ export default function ReviewPage() {
             <span>（已筛选 {gradeFilter} 级）</span>
           )}
         </p>
-        <div style={{ marginTop: '0.5rem' }}>
-          <Link href="/review/history" className="link-btn" style={{ fontSize: '0.85rem' }}>
-            查看审核历史 →
-          </Link>
-        </div>
       </div>
 
       <div className="review-toolbar">
@@ -204,7 +210,7 @@ export default function ReviewPage() {
               {filtered.map((item) => (
                 <tr
                   key={item.version_id}
-                  onClick={() => router.push(`/review/${item.version_id}`)}
+                  onClick={() => router.push(`/review/${item.version_id}?returnTo=/review`)}
                   className="review-row"
                 >
                   <td className="review-pkg-name" data-label="包名称">

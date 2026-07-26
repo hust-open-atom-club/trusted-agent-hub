@@ -255,6 +255,7 @@ class RiskScanner:
             "scanner_version": SCANNER_VERSION,
             "duration_ms": duration_ms,
             "findings": self.findings,
+            "file_contents": dict(self._file_contents),
             "summary": {
                 "total": total,
                 "critical": severity_counts["critical"],

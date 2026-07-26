@@ -55,7 +55,7 @@ export function middleware(request: NextRequest) {
   }
 
   const payload = parseJwt(token);
-  if (!payload) {
+  if (!payload || payload.exp * 1000 < Date.now()) {
     const loginUrl = new URL('/login', request.url);
     return NextResponse.redirect(loginUrl);
   }

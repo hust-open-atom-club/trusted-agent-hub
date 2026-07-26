@@ -1,7 +1,7 @@
 export default function ReviewLoading() {
   return (
     <div className="review-page">
-      <div className="review-header">
+      <div className="admin-section-header">
         <div className="skeleton">
           <div className="skeleton-bar" style={{ width: '12rem', height: '2rem' }} />
         </div>

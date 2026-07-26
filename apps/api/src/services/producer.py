@@ -243,6 +243,7 @@ class ProducerService:
             if isinstance(scan_json, dict):
                 version["scan_summary"] = scan_json.get("summary", {})
                 version["findings"] = scan_json.get("findings", [])
+                version["scan_file_contents"] = scan_json.get("file_contents", {})
                 version["trust_score"] = version.get("trust_score") or {
                     "risk_summary": None,
                 }
@@ -267,15 +268,23 @@ class ProducerService:
         self,
         status: str | list[str] | None = None,
         grade: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> list[dict[str, object]]:
-        """按状态/风险等级筛选版本列表（审核员视图用）。"""
+        """按状态/风险等级/时间范围筛选版本列表（审核员视图用）。"""
         items = self.repository.list_versions_by_status(
-            status=status, grade=grade
+            status=status, grade=grade, since=since, until=until,
         )
         for item in items:
             g = item.get("grade")
             item["grade_label"] = self._GRADE_LABELS.get(str(g)) if g else None
         return items
+
+    def list_all_packages(
+        self, limit: int = 200, offset: int = 0
+    ) -> list[dict[str, object]]:
+        """列出所有能力包（不限状态），供管理员查看。"""
+        return self.repository.list_all_packages(limit=limit, offset=offset)
 
     def diff_versions(
         self, version_id: str, base_version_id: str | None = None

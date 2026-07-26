@@ -154,6 +154,42 @@ class ProducerRepository:
             session.commit()
             return True
 
+    def list_all_packages(
+        self,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """列出所有能力包（不限状态），含版本数和最新版本。"""
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(
+                    PackageRow.id,
+                    PackageRow.name,
+                    PackageRow.status,
+                    PackageRow.latest_version,
+                    PackageRow.data,
+                )
+                .order_by(PackageRow.data["created_at"].as_string().desc().nullslast())
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        packages: list[dict[str, object]] = []
+        for row in rows:
+            pkg_data = row.data or {}
+            packages.append({
+                "package_id": row.id,
+                "package_name": row.name,
+                "package_type": pkg_data.get("type"),
+                "description": pkg_data.get("description"),
+                "status": row.status,
+                "latest_version": row.latest_version,
+                "submitter_id": pkg_data.get("submitter_id"),
+                "created_at": pkg_data.get("created_at"),
+                "updated_at": pkg_data.get("updated_at"),
+            })
+        return packages
+
     def list_package_versions(
         self, package_id: str
     ) -> list[dict[str, object]]:
@@ -615,12 +651,14 @@ class ProducerRepository:
         *,
         status: str | list[str] | None = None,
         grade: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict[str, object]]:
         """按状态筛选版本列表（审核员视图用），带包名和扫描摘要。
 
-        支持逗号分隔的多状态筛选、风险等级过滤。
+        支持逗号分隔的多状态筛选、风险等级过滤、提交时间范围过滤。
         返回字段：version_id / package_id / package_name / package_type /
         version / status / submitted_at / grade / findings_count。
         """
@@ -650,6 +688,15 @@ class ProducerRepository:
                     statuses = status
                 if statuses:
                     stmt = stmt.where(PackageVersionRow.status.in_(statuses))
+
+            if since:
+                stmt = stmt.where(
+                    PackageVersionRow.data["submitted_at"].as_string() >= since
+                )
+            if until:
+                stmt = stmt.where(
+                    PackageVersionRow.data["submitted_at"].as_string() <= until
+                )
 
             stmt = stmt.order_by(
                 PackageVersionRow.data["submitted_at"]

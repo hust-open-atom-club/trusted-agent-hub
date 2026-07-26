@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -62,6 +62,7 @@ interface VersionDetail {
   description?: string;
   scan_summary?: ScanSummary;
   findings?: Finding[];
+  scan_file_contents?: Record<string, string>;
   trust_score?: TrustScore;
   review_conclusion?: string | null;
   submitted_at?: string | null;
@@ -201,13 +202,91 @@ function shortUrl(url: string): string {
   }
 }
 
+/* ── 代码上下文展示组件 ── */
+
+const CODE_CONTEXT_RANGE = 50;
+
+function FindingCodeView({
+  finding,
+  fileContents,
+  versionId,
+}: {
+  finding: Finding;
+  fileContents?: Record<string, string>;
+  versionId: string;
+}) {
+  const targetRef = useRef<HTMLDivElement>(null);
+  const fileContent = fileContents?.[finding.location?.file || ''];
+
+  useEffect(() => {
+    if (targetRef.current) {
+      targetRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, []);
+
+  if (!fileContent) {
+    return finding.location?.snippet ? (
+      <div className="finding-snippet">
+        <pre><code>{finding.location.snippet}</code></pre>
+      </div>
+    ) : null;
+  }
+
+  const lines = fileContent.split('\n');
+  const targetLine = finding.location?.line || 1;
+  const displayStart = Math.max(1, targetLine - CODE_CONTEXT_RANGE);
+  const displayEnd = Math.min(lines.length, targetLine + CODE_CONTEXT_RANGE);
+  const displayLines = lines.slice(displayStart - 1, displayEnd);
+  const lineNumWidth = String(displayEnd).length;
+  const filePath = finding.location?.file || '';
+
+  return (
+    <div className="finding-snippet finding-snippet-expanded">
+      <div className="finding-snippet-info">
+        <span>第 {displayStart}–{displayEnd} 行 / 共 {lines.length} 行</span>
+        <a
+          className="finding-full-file-toggle"
+          href={`/review/files?versionId=${encodeURIComponent(versionId)}&path=${encodeURIComponent(filePath)}&line=${targetLine}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          查看完整文件
+        </a>
+      </div>
+      <pre><code>
+        {displayLines.map((line, i) => {
+          const lineNum = displayStart + i;
+          const isTarget = lineNum === targetLine;
+          return (
+            <div
+              key={lineNum}
+              ref={isTarget ? targetRef : undefined}
+              className={`code-line ${isTarget ? 'code-line-target' : ''}`}
+            >
+              <span className="code-line-num">{String(lineNum).padStart(lineNumWidth, ' ')}</span>
+              <span className="code-line-content">{line}</span>
+            </div>
+          );
+        })}
+      </code></pre>
+    </div>
+  );
+}
+
 /* ── 组件 ── */
+
+const RETURN_LABELS: Record<string, string> = {
+  '/admin/rejected': '返回已驳回列表',
+  '/review': '返回待审核列表',
+};
 
 export default function ReviewDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, token, loading: authLoading } = useAuth();
   const versionId = params.versionId as string;
+  const returnTo = searchParams.get('returnTo') || '/review';
 
   /* ── 状态 ── */
   const [version, setVersion] = useState<VersionDetail | null>(null);
@@ -220,6 +299,9 @@ export default function ReviewDetailPage() {
 
   // Finding 折叠：key = file path，value = 是否展开
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // 单个 finding 代码展开
+  const [showCodeFor, setShowCodeFor] = useState<Record<string, boolean>>({});
 
   // Modal
   const [showModal, setShowModal] = useState(false);
@@ -429,8 +511,8 @@ export default function ReviewDetailPage() {
     <div className="review-detail-page">
       {/* ── 返回导航 ── */}
       <nav className="review-detail-nav">
-        <button onClick={() => router.push('/review')} className="link-btn">
-          ← 返回待审核列表
+        <button onClick={() => router.push(returnTo)} className="link-btn">
+          ← {RETURN_LABELS[returnTo] || '返回上级'}
         </button>
         <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
@@ -708,7 +790,7 @@ export default function ReviewDetailPage() {
                           (SEVERITY_ORDER[b.severity] ?? 99),
                       )
                       .map((finding) => (
-                        <div key={finding.id} className={`finding-card ${finding.severity}`}>
+                         <div key={finding.id} className={`finding-card ${finding.severity}`}>
                           <div className="finding-card-left" />
                           <div className="finding-card-body">
                             <div className="finding-card-header">
@@ -722,32 +804,41 @@ export default function ReviewDetailPage() {
                               )}
                             </div>
 
-                            {finding.location?.snippet && (
-                              <div className="finding-snippet">
-                                <pre><code>{finding.location.snippet}</code></pre>
-                              </div>
+                            {finding.evidence && (
+                              <div className="finding-evidence-line">{finding.evidence}</div>
                             )}
 
-                            <div className="finding-details">
-                              {finding.evidence && (
-                                <div className="finding-detail-row">
-                                  <span className="finding-detail-label">证据</span>
-                                  <span className="finding-detail-value">{finding.evidence}</span>
-                                </div>
+                            <div className="finding-actions">
+                              {finding.location?.snippet && (
+                                <button
+                                  className="finding-code-toggle"
+                                  onClick={() => {
+                                    setShowCodeFor((prev) => ({
+                                      ...prev,
+                                      [finding.id]: !prev[finding.id],
+                                    }));
+                                  }}
+                                >
+                                  {showCodeFor[finding.id] ? '▾ 收起代码' : '▸ 查看代码上下文'}
+                                </button>
                               )}
-                              {finding.cwe_id && (
-                                <div className="finding-detail-row">
-                                  <span className="finding-detail-label">CWE</span>
-                                  <span className="finding-detail-value">{finding.cwe_id}</span>
-                                </div>
-                              )}
-                              {finding.remediation && (
-                                <div className="finding-detail-row">
-                                  <span className="finding-detail-label">修复建议</span>
-                                  <span className="finding-detail-value">{finding.remediation}</span>
-                                </div>
-                              )}
+                              <div className="finding-meta-pills">
+                                {finding.cwe_id && (
+                                  <span className="finding-meta-pill cwe" title={finding.cwe_id}>CWE</span>
+                                )}
+                                {finding.remediation && (
+                                  <span className="finding-meta-pill remediation" title={finding.remediation}>修复建议</span>
+                                )}
+                              </div>
                             </div>
+
+                            {showCodeFor[finding.id] && (
+                              <FindingCodeView
+                                finding={finding}
+                                fileContents={version?.scan_file_contents}
+                                versionId={versionId}
+                              />
+                            )}
                           </div>
                         </div>
                       ))}
