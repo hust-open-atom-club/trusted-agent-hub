@@ -45,6 +45,12 @@ class ProducerService:
         if not data.description:
             raise ProducerServiceError("包描述不能为空")
 
+        # 检查包名重复
+        if self.repository.package_name_exists(data.name.strip()):
+            raise ProducerServiceError(
+                f"包名 '{data.name.strip()}' 已存在，请使用其他名称"
+            )
+
         result = self.repository.create_package(
             name=data.name.strip(),
             type=data.type.value,
@@ -60,6 +66,7 @@ class ProducerService:
             installation=data.installation.model_dump() if data.installation else None,
             source=data.source.model_dump() if data.source else None,
             compatibility=data.compatibility,
+            field_source=data.field_source,
         )
         return PackageResponse(
             id=result["id"],
@@ -100,6 +107,7 @@ class ProducerService:
             description=data.description,
             installation=data.installation.model_dump() if data.installation else None,
             source=data.source.model_dump() if data.source else None,
+            field_source=data.field_source,
         )
         return result
 
@@ -399,7 +407,7 @@ class ProducerService:
         version_id: str,
         operator_id: str = "system",
     ) -> "ReviewResponse":
-        """管理员发布上线：approved → published。"""
+        """管理员发布上线：approved → published，同时将包状态同步为 published。"""
         from src.models.producer import ReviewResponse
         from schema.constants import AuditAction
 
@@ -411,11 +419,21 @@ class ProducerService:
         target = "published"
         validate_transition(current, target)
 
+        package_id = version.get("package_id", "")
+        pkg_version = version.get("version", "")
+
         self.repository.update_version_status(version_id, target)
         self.repository.update_version_data(
             version_id,
             {"published_at": datetime.now(timezone.utc).isoformat()},
         )
+
+        # 同步更新包状态和最新版本号
+        if package_id:
+            self.repository.update_package_status(
+                package_id, "published", latest_version=pkg_version,
+            )
+
         self.repository.create_audit_log(
             action=AuditAction.PUBLISH.value,
             target_type="version",

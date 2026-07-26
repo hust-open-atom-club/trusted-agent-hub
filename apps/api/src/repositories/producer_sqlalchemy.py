@@ -70,6 +70,7 @@ class ProducerRepository:
         installation: dict[str, object] | None = None,
         source: dict[str, object] | None = None,
         compatibility: list[str] | None = None,
+        field_source: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """创建能力包，返回包基本信息。"""
         pkg_id = f"pkg-{uuid4().hex}"
@@ -89,6 +90,7 @@ class ProducerRepository:
             "permissions": permissions,
             "installation": installation,
             "source": source,
+            "field_source": field_source,
             "compatibility": compatibility or [],
             "latest_version": "0.0.0",
             "status": "draft",
@@ -111,6 +113,15 @@ class ProducerRepository:
             )
             session.commit()
         return data
+
+    def package_name_exists(self, name: str) -> bool:
+        """检查包名是否已存在。"""
+        with self.session_factory() as session:
+            return session.scalar(
+                select(func.count())
+                .select_from(PackageRow)
+                .where(PackageRow.name == name)
+            ) > 0
 
     def get_package(self, package_id: str) -> dict[str, object] | None:
         with self.session_factory() as session:
@@ -166,6 +177,7 @@ class ProducerRepository:
         description: str | None = None,
         installation: dict[str, object] | None = None,
         source: dict[str, object] | None = None,
+        field_source: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """创建新版本，返回版本信息。"""
         version_id = f"ver-{uuid4().hex}"
@@ -179,6 +191,7 @@ class ProducerRepository:
             "source": source or {"type": "git", "repository_url": repo_url or "", "ref": "", "commit_hash": ""},
             "description": description,
             "installation": installation,
+            "field_source": field_source,
             "submitted_at": None,
             "trust_score": None,
             "created_at": _serialize_dt(now),
@@ -250,6 +263,24 @@ class ProducerRepository:
                 return
             data = dict(row.data) if row.data else {}
             data.update(updates)
+            row.data = data
+            session.commit()
+
+    def update_package_status(
+        self, package_id: str, new_status: str, latest_version: str | None = None
+    ) -> None:
+        """更新包状态，同步数据 JSON。"""
+        with self.session_factory() as session:
+            row = session.get(PackageRow, package_id)
+            if row is None:
+                return
+            row.status = new_status
+            if latest_version:
+                row.latest_version = latest_version
+            data = dict(row.data) if row.data else {}
+            data["status"] = new_status
+            if latest_version:
+                data["latest_version"] = latest_version
             row.data = data
             session.commit()
 

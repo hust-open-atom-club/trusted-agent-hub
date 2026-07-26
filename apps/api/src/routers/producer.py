@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import Field
 
 from src.database import (
     create_session_factory,
@@ -20,7 +21,7 @@ from src.database import (
 )
 from src.auth import require_role
 from src.dependencies import CurrentUser
-from src.models.common import ErrorEnvelope
+from src.models.common import ErrorEnvelope, StrictContractModel
 from src.models.producer import (
     CreatePackageRequest,
     CreateVersionRequest,
@@ -101,6 +102,15 @@ def create_version(
 
 # ── POST /versions/{version_id}/submit ────────────────────
 
+
+class SubmitVersionRequest(StrictContractModel):
+    """POST /versions/{id}/submit 可选请求体。"""
+    initial_scan_id: str | None = Field(
+        default=None,
+        description='初次扫描的 scan_id。若提供且扫描已完成，则复用其结果，不再重新 clone+scan',
+    )
+
+
 @router.post(
     "/versions/{version_id}/submit",
     response_model=SubmitResponse,
@@ -109,10 +119,12 @@ def create_version(
 def submit_version(
     version_id: str,
     background_tasks: BackgroundTasks,
+    body: SubmitVersionRequest | None = None,
     _user: CurrentUser = Depends(require_role("submitter")),
 ) -> SubmitResponse:
     """提交审核（需登录）：状态变更 → scanning，自动触发安全扫描。
     扫描在后台执行，完成后自动回调更新版本状态为 pending_review。
+    若传入 initial_scan_id 且对应扫描已完成，直接复用结果跳过重复扫描。
     """
     repo = _get_producer_repository()
     service = ProducerService(repo)
@@ -121,8 +133,6 @@ def submit_version(
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # 对于 draft → submitted 的两跳路径，router 继续置为 scanning；
-    # 对于 resubmitted / changes_requested / error 已在 service 层直达 scanning，跳过。
     if next_status != "scanning":
         repo.update_version_status(version_id, "scanning")
 
@@ -135,7 +145,26 @@ def submit_version(
         elif report is not None:
             service.handle_scan_complete(version_id, report)
 
-    # 延迟导入 _run_scan_task 并注入回调
+    # ── 检查是否可以复用初始扫描结果 ──
+    initial_sid = body.initial_scan_id if body else None
+    if initial_sid:
+        from src.routers.trust import _scans
+        initial_info = _scans.get(initial_sid)
+        if initial_info and initial_info.get("status") == "complete":
+            full_report = initial_info.get("full_report")
+            if full_report:
+                # 创建新的 service 实例（避免闭包引用问题）
+                _repo = _get_producer_repository()
+                _svc = ProducerService(_repo)
+                _svc.handle_scan_complete(version_id, full_report)
+                return SubmitResponse(
+                    version_id=version_id,
+                    status="pending_review",
+                    scan_id=initial_sid,
+                    message="复用初次扫描结果，已跳过重复扫描",
+                )
+
+    # 否则正常启动后台扫描
     from src.routers.trust import _run_scan_task
 
     background_tasks.add_task(
