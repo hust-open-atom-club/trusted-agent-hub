@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 
@@ -10,6 +11,7 @@ const SCROLL_THRESHOLD = 60;
 
 export default function Navbar() {
   const { t, i18n } = useTranslation();
+  const router = useRouter();
   const { user, loading, logout } = useAuth();
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [scrolled, setScrolled] = useState(false);
@@ -115,7 +117,7 @@ export default function Navbar() {
             <span className="nav-pill__username" title={`角色: ${user.role}`}>
               {user.display_name || user.username}
             </span>
-            <button className="nav-pill__logout" onClick={logout}>
+            <button className="nav-pill__logout" onClick={() => { logout(); router.push('/'); }}>
               {t('nav.logout')}
             </button>
           </div>

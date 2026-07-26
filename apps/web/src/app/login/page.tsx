@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +28,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(username.trim(), password);
-      // 从 localStorage 读 token 解析 role 决定跳转
+      setSuccess(true);
       const token = localStorage.getItem('tah_token');
       if (token) {
         try {
@@ -41,9 +42,8 @@ export default function LoginPage() {
         router.push('/');
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '登录失败，请重试');
-    } finally {
       setSubmitting(false);
+      setError(err instanceof Error ? err.message : '登录失败，请重试');
     }
   };
 
@@ -87,7 +87,7 @@ export default function LoginPage() {
           </div>
 
           <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting ? '登录中...' : '登录'}
+            {success ? '登录成功，正在跳转...' : submitting ? '登录中...' : '登录'}
           </button>
         </form>
 

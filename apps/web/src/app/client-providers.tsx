@@ -2,7 +2,6 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth';
-import Navbar from '@/components/Navbar';
 import { initI18n } from '@/i18n/i18n';
 
 function ThemeProvider({ children }: { children: ReactNode }) {
@@ -31,16 +30,14 @@ function RevealProvider({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-export function ClientLayout({ children, serverLang }: { children: React.ReactNode; serverLang?: string }) {
+export function ClientProviders({ children, serverLang }: { children: React.ReactNode; serverLang?: string }) {
   initI18n(serverLang || 'zh');
 
   return (
     <AuthProvider>
       <ThemeProvider>
         <RevealProvider>
-          <Navbar />
-          <div className="nav-spacer" />
-          <main>{children}</main>
+          {children}
         </RevealProvider>
       </ThemeProvider>
     </AuthProvider>

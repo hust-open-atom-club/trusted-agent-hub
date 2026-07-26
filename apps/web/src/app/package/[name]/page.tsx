@@ -32,6 +32,53 @@ function getGradeClass(grade: string | null): string {
   return 'danger';
 }
 
+function DetailSkeleton() {
+  return (
+    <div className="detail-page">
+      <div className="skeleton" style={{ marginBottom: '1.5rem' }}>
+        <div className="skeleton-bar" style={{ width: '10rem' }} />
+      </div>
+
+      <div className="detail-header">
+        <div className="detail-title-row">
+          <div className="skeleton" style={{ flex: 1 }}>
+            <div className="skeleton-bar" style={{ width: '16rem', height: '2rem' }} />
+          </div>
+        </div>
+        <div className="skeleton" style={{ marginTop: '0.5rem' }}>
+          <div className="skeleton-bar" style={{ width: '12rem' }} />
+        </div>
+        <div className="skeleton" style={{ marginTop: '0.75rem' }}>
+          <div className="skeleton-bar" style={{ width: '100%' }} />
+          <div className="skeleton-bar" style={{ width: '60%', marginTop: '0.25rem' }} />
+        </div>
+        <div className="detail-meta-grid" style={{ marginTop: '1rem' }}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div className="detail-meta-item" key={i}>
+              <div className="skeleton">
+                <div className="skeleton-bar" style={{ width: '3rem', marginBottom: '0.25rem' }} />
+                <div className="skeleton-bar" style={{ width: '5rem' }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {['Trust Score', 'Keywords', 'Permissions', 'Installation', 'Versions'].map((section) => (
+        <div className="detail-section" key={section}>
+          <div className="skeleton" style={{ marginBottom: '0.75rem' }}>
+            <div className="skeleton-bar" style={{ width: '8rem', height: '1.25rem' }} />
+          </div>
+          <div className="skeleton">
+            <div className="skeleton-bar" style={{ width: '70%' }} />
+            <div className="skeleton-bar" style={{ width: '50%', marginTop: '0.3rem' }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function PackageDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -41,6 +88,8 @@ export default function PackageDetailPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
+    setPkg(undefined);
     fetchPackage(name)
       .then(setPkg)
       .catch(() => setPkg(null))
@@ -53,10 +102,7 @@ export default function PackageDetailPage() {
         <button className="detail-back" onClick={() => router.push('/')}>
           &larr; Back to packages
         </button>
-        <div className="empty-state">
-          <div className="empty-state-icon">&#x23F3;</div>
-          <h3>Loading...</h3>
-        </div>
+        <DetailSkeleton />
       </div>
     );
   }
@@ -99,7 +145,6 @@ export default function PackageDetailPage() {
         &larr; Back to packages
       </button>
 
-      {/* Header */}
       <div className="detail-header">
         <div className="detail-title-row">
           <h1 className="detail-name">{pkg.name}</h1>
@@ -141,7 +186,6 @@ export default function PackageDetailPage() {
         </div>
       </div>
 
-      {/* Trust Score Section */}
       <div className="detail-section">
         <h2>Trust Score</h2>
         <div className={`trust-level ${gradeClass}`}>
@@ -155,7 +199,6 @@ export default function PackageDetailPage() {
         </div>
       </div>
 
-      {/* Keywords Section */}
       <div className="detail-section">
         <h2>Keywords</h2>
         <div className="keyword-list">
@@ -167,7 +210,6 @@ export default function PackageDetailPage() {
         </div>
       </div>
 
-      {/* Permissions Section */}
       <div className="detail-section">
         <h2>Permissions</h2>
         <p>
@@ -184,7 +226,6 @@ export default function PackageDetailPage() {
         </ul>
       </div>
 
-      {/* Installation Section */}
       <div className="detail-section">
         <h2>Installation</h2>
         <p style={{ marginBottom: 12 }}>
@@ -209,7 +250,6 @@ export default function PackageDetailPage() {
         )}
       </div>
 
-      {/* Versions Section */}
       <div className="detail-section">
         <h2>Versions</h2>
         <ul>
