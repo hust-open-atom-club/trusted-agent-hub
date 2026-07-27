@@ -3573,6 +3573,22 @@ h3 {
 
 /* ── Modal ── */
 
+@keyframes modal-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes modal-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -3583,6 +3599,7 @@ h3 {
   z-index: 100;
   padding: 1rem;
   backdrop-filter: blur(2px);
+  animation: modal-overlay-in 0.2s ease-out both;
 }
 
 .modal-dialog {
@@ -3594,6 +3611,7 @@ h3 {
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
+  animation: modal-dialog-in 0.25s ease-out both;
 }
 
 .modal-header {
@@ -3618,6 +3636,13 @@ h3 {
   color: var(--color-muted);
   padding: 0.25rem 0.4rem;
   border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
 }
 
 .modal-close:hover {
