@@ -1,7 +1,10 @@
 """Published-only package and version queries for the Consumer API."""
 
+import logging
 import math
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from src.models.common import PackageListQuery, SortField, SortOrder
 from src.models.packages import (
@@ -48,9 +51,16 @@ class PackageService:
             for package in self.repository.list_packages()
             if package.status == "published"
         ]
+        valid_items: list[PackageSummary] = []
         for package in items:
-            self._get_public_latest(package)
+            try:
+                self._get_public_latest(package)
+            except RepositoryDataError:
+                logger.warning("Skipping package %s: latest_version is not published", package.name)
+                continue
             self._enrich_grade(package)
+            valid_items.append(package)
+        items = valid_items
 
         if query.q:
             needle = query.q.casefold()

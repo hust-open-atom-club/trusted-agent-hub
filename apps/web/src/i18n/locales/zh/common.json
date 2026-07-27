@@ -22,7 +22,9 @@
     "load_error": "加载失败",
     "no_results": "未找到包",
     "no_results_hint": "尝试调整搜索条件或筛选器。",
-    "results_count": "找到 {{count}} 个包"
+    "results_count": "找到 {{count}} 个包",
+    "prev": "上一页",
+    "next": "下一页"
   },
   "search": {
     "placeholder": "按名称、关键词或描述搜索...",

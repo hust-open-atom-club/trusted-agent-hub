@@ -223,7 +223,8 @@ export default function AdminPublishPage() {
             </div>
 
             <div className="modal-body">
-              <p>
+              <div className="modal-confirm-icon">&#x1F680;</div>
+              <p className="modal-confirm-title">
                 确认将 <strong>{selectedItem.package_name}</strong> v{selectedItem.version} 发布上线？
               </p>
               <p className="modal-hint">发布后将立即对用户可见，消费侧可查询到该版本。</p>

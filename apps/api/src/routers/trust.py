@@ -9,13 +9,18 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time as _time
+import urllib.request
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional
@@ -123,6 +128,106 @@ def _load_scorer():
 
 
 # ---------------------------------------------------------------------------
+# 远程仓库获取：Phase A git clone → Phase B ZIP 下载
+# ---------------------------------------------------------------------------
+
+
+def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
+    """Phase A：用 GitHub Token 认证的 git clone，重试 max_attempts 次。"""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        clone_url = f"https://{token}@github.com/{parsed['owner']}/{parsed['repo']}.git"
+        print(f"[TAH-trust]     git clone 使用 Token 认证")
+    else:
+        clone_url = f"https://github.com/{parsed['owner']}/{parsed['repo']}.git"
+        print(f"[TAH-trust]     git clone 无 Token（匿名）")
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"[TAH-trust]     git clone (attempt {attempt}/{max_attempts}) --depth 1 ...")
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", clone_url, tmp_dir],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            print(f"[TAH-trust]     git clone OK (attempt {attempt})")
+            return True
+        last_err = result.stderr[:500].replace("\n", " ")
+        print(f"[TAH-trust]     clone attempt {attempt} failed: {last_err}")
+        if attempt < max_attempts:
+            _time.sleep(3)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            os.makedirs(tmp_dir, exist_ok=True)
+    return False
+
+
+def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
+    """Phase B：通过 GitHub API 下载 ZIP 包，解压到 tmp_dir。"""
+    token = os.environ.get("GITHUB_TOKEN", "")
+    api_url = (
+        f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
+        f"/zipball/{parsed['ref']}"
+    )
+    headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        print(f"[TAH-trust]     ZIP 下载使用 Token 认证")
+    else:
+        print(f"[TAH-trust]     ZIP 下载无 Token（匿名）")
+
+    for attempt in range(1, max_attempts + 1):
+        print(f"[TAH-trust]     ZIP download (attempt {attempt}/{max_attempts}) {api_url}")
+        try:
+            req = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                zip_data = resp.read()
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                zf.extractall(tmp_dir)
+            print(f"[TAH-trust]     ZIP download OK (attempt {attempt})")
+            return True
+        except Exception as exc:
+            print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
+            if attempt < max_attempts:
+                _time.sleep(3)
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                os.makedirs(tmp_dir, exist_ok=True)
+    return False
+
+
+def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str]:
+    """级联获取代码：Phase A git clone → Phase B ZIP 下载。
+
+    Returns:
+        (repo_root, source_method) — repo_root 是仓库内容根目录路径，
+        source_method 为 "git" 或 "zip"。
+        失败返回 (None, "")。
+    """
+    tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
+
+    print(f"[TAH-trust] === Phase A: git clone ===")
+    if _git_clone_with_retries(parsed, tmp_dir):
+        return tmp_dir, "git"
+
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
+    print(f"[TAH-trust] === Phase B: ZIP download ===")
+    if _download_zipball(parsed, tmp_dir):
+        # ZIP 解压后内容在一层子目录中 {owner}-{repo}-{hash}/
+        entries = os.listdir(tmp_dir)
+        if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
+            inner = os.path.join(tmp_dir, entries[0])
+            # 将内层目录内容移到 tmp_dir
+            for item in os.listdir(inner):
+                shutil.move(os.path.join(inner, item), os.path.join(tmp_dir, item))
+            os.rmdir(inner)
+        return tmp_dir, "zip"
+
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    return None, ""
+
+
+# ---------------------------------------------------------------------------
 # 后台扫描任务
 # ---------------------------------------------------------------------------
 
@@ -134,7 +239,7 @@ def _run_scan_task(
     is_local: bool = False,
     on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
 ) -> None:
-    """后台执行扫描流水线：clone → scan → score → save。
+    """后台执行扫描流水线：acquire → scan → score → save。
 
     此函数在 BackgroundTasks 中异步运行。
     """
@@ -142,52 +247,51 @@ def _run_scan_task(
         print(f"\n[TAH-trust] >>> _run_scan_task 开始 scan_id={scan_id}")
         print(f"[TAH-trust]     source = {source}, is_local = {is_local}")
 
+        parsed = _parse_github_url(source) if not is_local else None
+        if not is_local and parsed:
+            print(f"[TAH-trust]     owner={parsed['owner']}, repo={parsed['repo']}, "
+                  f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+
         if is_local:
-            # 本地模式：直接使用本地目录
             tmp_dir = source
+            repo_root = source
             if not os.path.isdir(tmp_dir):
                 raise FileNotFoundError(f"Local path not found: {tmp_dir}")
             print(f"[TAH-trust]     本地目录: {tmp_dir}")
         else:
             _scans[scan_id]["status"] = "cloning"
 
-            # Step 1: git clone --depth 1（最多重试 3 次应对网络抖动）
-            tmp_dir = tempfile.mkdtemp(prefix=f"tah_scan_{scan_id}_")
-            clone_ok = False
-            last_err = ""
-            for attempt in range(1, 4):
-                print(f"[TAH-trust]     git clone (attempt {attempt}/3) --depth 1 {source} ...")
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", source, tmp_dir],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.returncode == 0:
-                    clone_ok = True
-                    print(f"[TAH-trust]     git clone OK (attempt {attempt})")
-                    break
-                last_err = result.stderr[:500]
-                print(f"[TAH-trust]     clone attempt {attempt} failed, {'retrying in 3s...' if attempt < 3 else 'giving up'}")
-                if attempt < 3:
-                    import time as _time
-                    _time.sleep(3)
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                    tmp_dir = tempfile.mkdtemp(prefix=f"tah_scan_{scan_id}_")
-            if not clone_ok:
+            repo_root, method = _acquire_repo_source(parsed)
+            if repo_root is None:
                 _scans[scan_id]["status"] = "error"
-                _scans[scan_id]["error"] = f"Git clone failed after 3 attempts ({source}). If GitHub is unreachable, try using a local path."
-                print(f"[TAH-trust] *** git clone FAILED after 3 attempts")
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+                _scans[scan_id]["error"] = (
+                    "无法获取仓库（Git clone + ZIP 下载均失败）。"
+                    "请检查 GitHub 连接或尝试使用本地路径。"
+                )
+                print(f"[TAH-trust] *** 获取仓库失败（git + zip 均失败）")
                 if on_complete:
                     on_complete(scan_id, None, _scans[scan_id]["error"])
                 return
+            tmp_dir = repo_root
+            print(f"[TAH-trust]     仓库获取方式: {method}")
+
+        # ── 确定扫描目标目录（子目录优先） ──
+        subdir = parsed.get("subdir") if parsed else None
+        if subdir:
+            scan_dir = os.path.join(repo_root, subdir)
+            if not os.path.isdir(scan_dir):
+                print(f"[TAH-trust]     子目录不存在: {scan_dir}, 回退到根目录")
+                scan_dir = repo_root
+            else:
+                print(f"[TAH-trust]     扫描子目录: {subdir}")
+        else:
+            scan_dir = repo_root
 
         # Step 2: 运行扫描器
         _scans[scan_id]["status"] = "scanning"
-        print(f"[TAH-trust]     加载扫描器...")
+        print(f"[TAH-trust]     加载扫描器, scan_dir={scan_dir}")
         RiskScanner = _load_scanner()
-        scanner = RiskScanner(tmp_dir)
+        scanner = RiskScanner(scan_dir)
         scan_report = scanner.scan()
 
         pkg_name = scan_report.get("package_name", "unknown")
@@ -244,8 +348,8 @@ def _run_scan_task(
         print(f"[TAH-trust]     加载评分引擎...")
         calculate_trust_score = _load_scorer()
 
-        # 构建 package_metadata（从扫描器的 metadata 或 scan_report 中提取）
-        package_metadata = _build_package_metadata(scan_report, tmp_dir, repo_url=source)
+        repo_url = parsed["base_url"] if parsed else source
+        package_metadata = _build_package_metadata(scan_report, scan_dir, repo_url=repo_url, subdirectory=subdir)
 
         trust_score_result = calculate_trust_score(
             package_metadata=package_metadata,
@@ -257,7 +361,7 @@ def _run_scan_task(
         _scans[scan_id]["status"] = "saving"
         full_report: Dict[str, Any] = {
             "scan_id": scan_id,
-            "repo_url": source,
+            "repo_url": repo_url,
             "package_name": pkg_name,
             "version": pkg_version,
             "created_at": _scans[scan_id]["created_at"],
@@ -298,7 +402,7 @@ def _run_scan_task(
         if on_complete:
             on_complete(scan_id, None, str(exc))
 
-def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_url: str = "") -> Dict[str, Any]:
+def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_url: str = "", subdirectory: str | None = None) -> Dict[str, Any]:
     """从扫描报告和目标目录构建 package_metadata 用于评分引擎。
 
     优先使用 extract_skills 模块进行完整提取（11 个必填字段、依赖解析、
@@ -318,7 +422,7 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
                 spec.loader.exec_module(mod)
 
         extract_single_skill = sys.modules["extract_skills"].extract_single_skill
-        data = extract_single_skill(target, repo_url=repo_url)
+        data = extract_single_skill(target, repo_url=repo_url, subdirectory=subdirectory)
         if data:
             print(f"[TAH-trust]     extract_skills 成功提取: name={data.get('name')}, "
                   f"version={data.get('version')}, category={data.get('category')}")
@@ -424,33 +528,49 @@ def _parse_frontmatter(content: str) -> Dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_github_url(url: str) -> str:
-    """将 GitHub URL 规范化为纯仓库根地址。
+def _parse_github_url(url: str) -> dict[str, Any]:
+    """解析 GitHub URL，提取 owner / repo / ref / subdir。
 
     处理以下格式:
         https://github.com/owner/repo
         https://github.com/owner/repo.git
-        https://github.com/owner/repo/tree/main/subdir
-        https://github.com/owner/repo/tree/v1.0.0
+        https://github.com/owner/repo/tree/main
+        https://github.com/owner/repo/tree/main/subdir/path
 
     返回:
-        https://github.com/owner/repo
+        {
+            "base_url": "https://github.com/owner/repo",
+            "owner": "owner",
+            "repo": "repo",
+            "ref": "main",
+            "subdir": "skills/hallmark" | None,
+        }
     """
-    import re
-
     url = url.strip().rstrip("/")
-
-    # 去掉 .git 后缀
     if url.endswith(".git"):
         url = url[:-4]
 
-    # 去掉 /tree/... 路径（GitHub 网页目录浏览）
-    # 匹配 /tree/<ref>/<optional-subpath>
-    tree_match = re.search(r"^(https://github\.com/[^/]+/[^/]+)/tree/", url)
-    if tree_match:
-        url = tree_match.group(1)
+    m = re.search(
+        r"^https://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?$", url
+    )
+    if not m:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid GitHub URL format: {url}",
+        )
 
-    return url
+    owner = m.group(1)
+    repo = m.group(2)
+    ref = m.group(3) or "main"
+    subdir = m.group(4) or None
+
+    return {
+        "base_url": f"https://github.com/{owner}/{repo}",
+        "owner": owner,
+        "repo": repo,
+        "ref": ref,
+        "subdir": subdir,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +636,10 @@ async def submit_scan(
                 detail="Only https://github.com/... URLs are supported at this time.",
             )
 
-        # 规范化 URL：去掉 /tree/... 路径、.git 后缀等
-        url = _normalize_github_url(url)
-        print(f"[TAH-trust]     normalized url = {url!r}")
+        # 解析 URL
+        parsed = _parse_github_url(url)
+        print(f"[TAH-trust]     parsed: owner={parsed['owner']}, repo={parsed['repo']}, "
+              f"ref={parsed['ref']}, subdir={parsed['subdir']}")
 
         source = url
         is_local = False

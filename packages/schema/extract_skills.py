@@ -283,40 +283,56 @@ def detect_license(spdx_text: str) -> str:
     return "UNLICENSED"
 
 
+def _get_parent_dirs(start: Path) -> list[Path]:
+    """向上遍历获取父目录列表（最多 10 层）。"""
+    parents: list[Path] = []
+    current = start.resolve().parent
+    for _ in range(10):
+        parents.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return parents
+
+
 def extract_license(result: ScanResult) -> str:
-    """从目录中提取 license 信息。"""
-    # 1) 先查 LICENSE 文件
-    for fname in ("LICENSE", "LICENSE.md", "LICENSE.txt"):
-        lic_path = result.directory_path / fname
-        if lic_path.exists():
+    """从目录及其父目录中提取 license 信息。"""
+    search_dirs = [result.directory_path] + _get_parent_dirs(result.directory_path)
+
+    for search_dir in search_dirs:
+        # 1) LICENSE 文件
+        for fname in ("LICENSE", "LICENSE.md", "LICENSE.txt"):
+            lic_path = search_dir / fname
+            if lic_path.exists():
+                try:
+                    text = lic_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                spdx = detect_license(text)
+                if spdx != "UNLICENSED":
+                    return spdx
+
+        # 2) package.json
+        pkg_path = search_dir / "package.json"
+        if pkg_path.exists():
             try:
-                text = lic_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            spdx = detect_license(text)
-            if spdx != "UNLICENSED":
-                return spdx
+                pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+                if "license" in pkg:
+                    return str(pkg["license"])
+            except (json.JSONDecodeError, OSError):
+                pass
 
-    # 2) 从 package.json 提取
-    pkg_path = result.directory_path / "package.json"
-    if pkg_path.exists():
-        try:
-            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-            if "license" in pkg:
-                return str(pkg["license"])
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # 3) 从 pyproject.toml 提取
-    ppt_path = result.directory_path / "pyproject.toml"
-    if ppt_path.exists():
-        try:
-            text = ppt_path.read_text(encoding="utf-8")
-            m = re.search(r'license\s*=\s*"([^"]+)"', text)
-            if m:
-                return m.group(1)
-        except OSError:
-            pass
+        # 3) pyproject.toml
+        ppt_path = search_dir / "pyproject.toml"
+        if ppt_path.exists():
+            try:
+                text = ppt_path.read_text(encoding="utf-8")
+                m = re.search(r'license\s*=\s*"([^"]+)"', text)
+                if m:
+                    return m.group(1)
+            except OSError:
+                pass
 
     return "UNLICENSED"
 
@@ -1004,6 +1020,7 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
 def extract_single_skill(
     source_dir: str | Path,
     repo_url: str = "",
+    subdirectory: str | None = None,
 ) -> dict[str, Any]:
     """提取单个 Skill 目录的完整 agent-package 元数据。
 
@@ -1032,7 +1049,7 @@ def extract_single_skill(
 
     git_root = _find_git_root(source_path)
 
-    data = build_metadata_json(result, repo_url=repo_url, git_root=git_root)
+    data = build_metadata_json(result, repo_url=repo_url, git_root=git_root, subdirectory=subdirectory)
     issues = validate_metadata(data, result.directory_name)
     if issues:
         log.warning("[%s] 校验发现 %d 个问题: %s",
@@ -1045,6 +1062,7 @@ def build_metadata_json(
     result: ScanResult,
     repo_url: str = "",
     git_root: Path | None = None,
+    subdirectory: str | None = None,
 ) -> dict[str, Any]:
     """根据 ScanResult 构建完整的 agent-package JSON 对象。
 
@@ -1070,6 +1088,28 @@ def build_metadata_json(
     fm_author = result.frontmatter.get("author")
     fm_email = result.frontmatter.get("email")
     fm_url = result.frontmatter.get("url")
+
+    # ── 回退：从父目录 package.json 提取 author ──
+    if not fm_author:
+        for parent_dir in _get_parent_dirs(result.directory_path):
+            pkg_path = parent_dir / "package.json"
+            if pkg_path.exists():
+                try:
+                    pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+                    pkg_author = pkg.get("author")
+                    if pkg_author:
+                        if isinstance(pkg_author, str):
+                            fm_author = pkg_author
+                        elif isinstance(pkg_author, dict):
+                            fm_author = pkg_author.get("name", str(pkg_author))
+                            if not fm_email and pkg_author.get("email"):
+                                fm_email = pkg_author["email"]
+                            if not fm_url and pkg_author.get("url"):
+                                fm_url = pkg_author["url"]
+                    if fm_author:
+                        break
+                except (json.JSONDecodeError, OSError):
+                    pass
 
     author: dict[str, str] = {
         "name": str(fm_author) if fm_author else "UNKNOWN",
@@ -1134,6 +1174,8 @@ def build_metadata_json(
         data["dependencies"] = dependencies
     if entry_points:
         data["entry_points"] = entry_points
+    if subdirectory:
+        data["source"]["subdirectory"] = subdirectory
 
     return data
 

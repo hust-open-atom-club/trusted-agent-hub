@@ -23,7 +23,9 @@
     "no_results": "No packages found",
     "no_results_hint": "Try adjusting your search or filter criteria.",
     "results_count": "{{count}} package found",
-    "results_count_plural": "{{count}} packages found"
+    "results_count_plural": "{{count}} packages found",
+    "prev": "Previous",
+    "next": "Next"
   },
   "search": {
     "placeholder": "Search packages by name, keyword, or description...",

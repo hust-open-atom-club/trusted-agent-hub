@@ -219,6 +219,7 @@ class ProducerService:
     def handle_scan_error(self, version_id: str, error: str) -> None:
         """扫描失败回调。"""
         self.repository.update_version_status(version_id, "error")
+        self.repository.update_version_data(version_id, {"scan_error": error})
         self.repository.create_audit_log(
             action=AuditAction.SCAN_COMPLETE.value,
             target_type="version",
@@ -476,6 +477,7 @@ class ProducerService:
         validate_transition(current, target)
 
         self.repository.update_version_status(version_id, target)
+        self.repository.update_version_data(version_id, {"yank_reason": reason} if reason else {})
         self.repository.create_audit_log(
             action=AuditAction.YANK.value,
             target_type="version",
@@ -520,6 +522,35 @@ class ProducerService:
             version_id=version_id,
             new_status=target,
             message="版本已撤销下架，恢复为已发布",
+        )
+
+    def delete_version(
+        self,
+        *,
+        version_id: str,
+        operator_id: str = "system",
+    ) -> "ReviewResponse":
+        """管理员删除版本（不可逆）。"""
+        from src.models.producer import ReviewResponse
+        from schema.constants import AuditAction
+
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+
+        self.repository.delete_version(version_id)
+        self.repository.create_audit_log(
+            action="delete_version",
+            target_type="version",
+            target_id=version_id,
+            operator_id=operator_id,
+            detail={"version": version.get("version", ""), "package_name": version.get("package_name", "")},
+        )
+
+        return ReviewResponse(
+            version_id=version_id,
+            new_status="deleted",
+            message="版本已删除",
         )
 
 

@@ -19,6 +19,7 @@ interface YankItem {
   grade: string | null;
   grade_label: string | null;
   findings_count: number;
+  yank_reason?: string | null;
 }
 
 const PACKAGE_TYPE_LABELS: Record<string, string> = {
@@ -60,6 +61,7 @@ export default function AdminYankPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchItems = () => {
     if (!token) return;
@@ -151,6 +153,30 @@ export default function AdminYankPage() {
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : '撤销失败');
+    }
+  };
+
+  const handleDelete = async (item: YankItem) => {
+    if (!token) return;
+    if (!confirm(`确定要删除 ${item.package_name} v${item.version}？此操作不可恢复。`)) return;
+    setDeletingId(item.version_id);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v0/producer/versions/${item.version_id}`,
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: '删除失败' }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setSuccessMsg(`${item.package_name} v${item.version} 已删除`);
+      clearFetchCache('versions');
+      fetchItems();
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -264,6 +290,7 @@ export default function AdminYankPage() {
                 <th>包名称</th>
                 <th>版本</th>
                 <th>类型</th>
+                <th>下架原因</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -283,13 +310,25 @@ export default function AdminYankPage() {
                       </span>
                     )}
                   </td>
+                  <td data-label="下架原因" style={{ fontSize: '0.85rem', color: 'var(--color-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.yank_reason || '—'}
+                  </td>
                   <td data-label="操作">
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => handleUnyank(item)}
-                    >
-                      重新发布
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleUnyank(item)}
+                      >
+                        重新发布
+                      </button>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={() => handleDelete(item)}
+                        disabled={deletingId === item.version_id}
+                      >
+                        {deletingId === item.version_id ? '删除中...' : '删除'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -313,7 +352,8 @@ export default function AdminYankPage() {
             </div>
 
             <div className="modal-body">
-              <p>
+              <div className="modal-confirm-icon">&#x26A0;</div>
+              <p className="modal-confirm-title">
                 确认下架 <strong>{selectedItem.package_name}</strong> v{selectedItem.version}？
               </p>
               <p className="modal-hint">下架后该版本将不再对用户可见。</p>
