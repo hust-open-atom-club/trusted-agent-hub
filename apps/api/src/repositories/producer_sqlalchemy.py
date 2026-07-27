@@ -154,6 +154,16 @@ class ProducerRepository:
             session.commit()
             return True
 
+    def delete_version(self, version_id: str) -> bool:
+        """删除指定版本。"""
+        with self.session_factory() as session:
+            ver = session.get(PackageVersionRow, version_id)
+            if ver is None:
+                return False
+            session.delete(ver)
+            session.commit()
+            return True
+
     def list_all_packages(
         self,
         *,
@@ -642,6 +652,7 @@ class ProducerRepository:
                     "version": row.version,
                     "status": row.status,
                     "submitted_at": (row.data or {}).get("submitted_at"),
+                    "yank_reason": (row.data or {}).get("yank_reason"),
                 }
                 for row in rows
             ]
@@ -739,6 +750,7 @@ class ProducerRepository:
                 "published_at": data.get("published_at"),
                 "grade": grade_val,
                 "findings_count": findings_count,
+                "yank_reason": data.get("yank_reason"),
             })
 
         if grade:

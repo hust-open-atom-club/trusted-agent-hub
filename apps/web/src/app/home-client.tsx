@@ -6,15 +6,19 @@ import type { Package } from '@/data/packages';
 import SearchBar from '@/components/SearchBar';
 import PackageCard from '@/components/PackageCard';
 
+const PAGE_SIZE = 18;
+
 interface HomeClientProps {
   initialPackages: Package[];
+  totalPackages: number;
 }
 
-export default function HomeClient({ initialPackages }: HomeClientProps) {
+export default function HomeClient({ initialPackages, totalPackages }: HomeClientProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
   const [packages] = useState<Package[]>(initialPackages);
+  const [page, setPage] = useState(1);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -36,6 +40,24 @@ export default function HomeClient({ initialPackages }: HomeClientProps) {
     });
   }, [query, activeType, packages]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageItems = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  const publishedCount = useMemo(
+    () => packages.filter(p => p.status === 'published').length,
+    [packages],
+  );
+  const topRatedCount = useMemo(
+    () => packages.filter(p => p.grade === 'A' || p.grade === 'B').length,
+    [packages],
+  );
+
+  const handlePageChange = (next: number) => {
+    setPage(next);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <>
       <section className="hero">
@@ -49,21 +71,17 @@ export default function HomeClient({ initialPackages }: HomeClientProps) {
           <p className="hero-desc">{t('home.desc')}</p>
           <div className="hero-stats">
             <div className="hero-stat">
-              <span className="hero-stat-num">{packages.length}</span>
+              <span className="hero-stat-num">{totalPackages}</span>
               <span className="hero-stat-label">{t('home.stat_packages')}</span>
             </div>
             <div className="hero-stat-divider" />
             <div className="hero-stat">
-              <span className="hero-stat-num">
-                {packages.filter(p => p.status === 'published').length}
-              </span>
+              <span className="hero-stat-num">{publishedCount}</span>
               <span className="hero-stat-label">{t('home.stat_published')}</span>
             </div>
             <div className="hero-stat-divider" />
             <div className="hero-stat">
-              <span className="hero-stat-num">
-                {packages.filter(p => p.grade === 'A' || p.grade === 'B').length}
-              </span>
+              <span className="hero-stat-num">{topRatedCount}</span>
               <span className="hero-stat-label">{t('home.stat_top_rated')}</span>
             </div>
           </div>
@@ -74,8 +92,8 @@ export default function HomeClient({ initialPackages }: HomeClientProps) {
         <SearchBar
           query={query}
           activeType={activeType}
-          onQueryChange={setQuery}
-          onTypeChange={setActiveType}
+          onQueryChange={(v) => { setQuery(v); setPage(1); }}
+          onTypeChange={(v) => { setActiveType(v); setPage(1); }}
         />
 
         <p className="results-meta">
@@ -92,11 +110,35 @@ export default function HomeClient({ initialPackages }: HomeClientProps) {
             <p>{t('home.no_results_hint')}</p>
           </div>
         ) : (
-          <div className="package-grid">
-            {filtered.map((pkg) => (
-              <PackageCard key={pkg.id} pkg={pkg} />
-            ))}
-          </div>
+          <>
+            <div className="package-grid">
+              {pageItems.map((pkg) => (
+                <PackageCard key={pkg.id} pkg={pkg} />
+              ))}
+            </div>
+
+            {totalPages > 1 && (
+              <div className="package-pagination">
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={safePage <= 1}
+                  onClick={() => handlePageChange(safePage - 1)}
+                >
+                  ← {t('home.prev')}
+                </button>
+                <span className="package-pagination-info">
+                  {safePage} / {totalPages}
+                </span>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={safePage >= totalPages}
+                  onClick={() => handlePageChange(safePage + 1)}
+                >
+                  {t('home.next')} →
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </>

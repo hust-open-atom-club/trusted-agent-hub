@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trustedagenthub.com';
 
 interface VersionItem {
   version_id: string;
@@ -15,6 +16,7 @@ interface VersionItem {
   version: string;
   status: string;
   submitted_at: string | null;
+  yank_reason?: string | null;
 }
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
@@ -231,6 +233,18 @@ export default function MySubmissionsPage() {
                     {item.submitted_at && (
                       <div style={{ fontSize: '0.78rem', color: 'var(--color-muted)', marginTop: '0.3rem' }}>
                         {formatDate(item.submitted_at)}
+                      </div>
+                    )}
+                    {item.status === 'yanked' && (
+                      <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: 'var(--color-danger-light)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--color-ink-2)', lineHeight: 1.5 }}>
+                        {item.yank_reason && (
+                          <div style={{ marginBottom: '0.25rem' }}>
+                            <strong>下架原因：</strong>{item.yank_reason}
+                          </div>
+                        )}
+                        <div style={{ color: 'var(--color-muted)', fontSize: '0.75rem' }}>
+                          如有任何疑问，请联系 {SUPPORT_EMAIL}
+                        </div>
                       </div>
                     )}
                   </div>

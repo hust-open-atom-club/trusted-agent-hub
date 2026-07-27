@@ -5,9 +5,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trustedagenthub.com';
 
 const POLL_INTERVAL_MS = 10_000;
-const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error']);
+const MAX_SCAN_POLLS = 18; // 18 × 10s = 3 分钟超时
+const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error', 'scan_failed']);
 
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
@@ -20,6 +22,7 @@ const STATUS_LABELS: Record<string, string> = {
   rejected: '已驳回',
   changes_requested: '需要修改',
   scan_failed: '扫描失败',
+  error: '扫描错误',
 };
 
 const STATUS_ORDER = [
@@ -29,8 +32,13 @@ const STATUS_ORDER = [
 
 const TERMINAL_BAD: Record<string, string> = {
   rejected: '已驳回',
+  changes_requested: '需要修改',
   scan_failed: '扫描失败',
+  error: '扫描错误',
+  yanked: '已下架',
 };
+
+const BAD_STOP_AT = 'pending_review';
 
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'severity-critical',
@@ -99,8 +107,18 @@ interface VersionDetail {
   scan_summary?: ScanSummary | null;
   trust_score?: TrustScore | null;
   review_conclusion?: string | null;
+  yank_reason?: string | null;
+  scan_error?: string | null;
   submitted_at?: string;
   created_at?: string;
+}
+
+interface ReviewRecord {
+  id: string;
+  reviewer_id: string;
+  conclusion: string;
+  comment?: string | null;
+  created_at: string;
 }
 
 function StatusContent() {
@@ -111,14 +129,18 @@ function StatusContent() {
 
   const [detail, setDetail] = useState<VersionDetail | null>(null);
   const [packageName, setPackageName] = useState<string | null>(null);
+  const [reviewComment, setReviewComment] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [scanTimedOut, setScanTimedOut] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef(0);
 
   const fetchDetail = useCallback(async () => {
     try {
       setError(null);
+      setScanTimedOut(false);
       const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`);
       if (!res.ok) {
         if (res.status === 404) throw new Error('版本不存在');
@@ -135,6 +157,17 @@ function StatusContent() {
             setPackageName(pkgData.name || null);
           }
         } catch { /* 包名获取失败不影响主流程 */ }
+      }
+
+      if (data.status === 'rejected' || data.status === 'changes_requested') {
+        try {
+          const reviewsRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`);
+          if (reviewsRes.ok) {
+            const reviews: ReviewRecord[] = await reviewsRes.json();
+            const latest = reviews[0];
+            if (latest?.comment) setReviewComment(latest.comment);
+          }
+        } catch { /* 审核意见获取失败不影响主流程 */ }
       }
 
       return data;
@@ -165,7 +198,16 @@ function StatusContent() {
 
     if (intervalRef.current) return;
 
+    pollRef.current = 0;
+
     intervalRef.current = setInterval(async () => {
+      pollRef.current += 1;
+      if (pollRef.current >= MAX_SCAN_POLLS) {
+        clearInterval(intervalRef.current!);
+        intervalRef.current = null;
+        setScanTimedOut(true);
+        return;
+      }
       const latest = await fetchDetail();
       if (latest && TERMINAL_STATUSES.has(latest.status)) {
         if (intervalRef.current) {
@@ -192,35 +234,40 @@ function StatusContent() {
   const buildTimeline = () => {
     if (!detail) return [];
     const current = detail.status;
-    const stages: { key: string; label: string; phase: 'done' | 'active' | 'pending' | 'rejected' }[] = [];
+    const stages: { key: string; label: string; phase: 'done' | 'active' | 'pending' | 'rejected'; num: number }[] = [];
+    const stopIdx = STATUS_ORDER.indexOf(BAD_STOP_AT);
 
     for (const s of STATUS_ORDER) {
       const idx = STATUS_ORDER.indexOf(s);
       const curIdx = STATUS_ORDER.indexOf(current);
       let phase: 'done' | 'active' | 'pending' | 'rejected' = 'pending';
 
-      if (current === s) phase = 'active';
-      else if (curIdx > idx) phase = 'done';
-      else if (TERMINAL_BAD[current] && idx <= STATUS_ORDER.indexOf('pending_review')) {
-        if (idx < curIdx || (curIdx === -1 && idx < STATUS_ORDER.indexOf('pending_review'))) phase = 'done';
+      if (current === 'yanked') {
+        phase = 'done';
+      } else if (current === s) {
+        phase = 'active';
+      } else if (curIdx > idx) {
+        phase = 'done';
+      } else if (TERMINAL_BAD[current] && idx <= stopIdx) {
+        phase = 'done';
       }
 
-      stages.push({ key: s, label: STATUS_LABELS[s] || s, phase });
+      stages.push({ key: s, label: STATUS_LABELS[s] || s, phase, num: idx + 1 });
     }
 
     if (TERMINAL_BAD[current]) {
       stages.push({
         key: current,
-        label: TERMINAL_BAD[current],
+        label: STATUS_LABELS[current] || current,
         phase: 'rejected',
+        num: stages.length + 1,
       });
-    }
-
-    if (!STATUS_ORDER.includes(current) && !TERMINAL_BAD[current]) {
+    } else if (!STATUS_ORDER.includes(current)) {
       stages.push({
         key: current,
         label: STATUS_LABELS[current] || current,
         phase: 'active',
+        num: stages.length + 1,
       });
     }
 
@@ -298,31 +345,71 @@ function StatusContent() {
         </button>
       </div>
 
+      {detail.status === 'yanked' && (
+        <div className="status-alert">
+          <div className="status-alert-title">&#x26A0; 该版本已被管理员下架</div>
+          {detail.yank_reason && (
+            <div className="status-alert-detail">
+              <strong>下架原因：</strong>{detail.yank_reason}
+            </div>
+          )}
+          <div className="status-alert-contact">
+            如有任何疑问，请联系 {SUPPORT_EMAIL}
+          </div>
+        </div>
+      )}
+
+      {detail.status === 'error' && (
+        <div className="status-alert">
+          <div className="status-alert-title">&#x26A0; 扫描失败</div>
+          {detail.scan_error && (
+            <div className="status-alert-detail">
+              {detail.scan_error}
+            </div>
+          )}
+          <div className="status-alert-contact">
+            请检查仓库链接是否有效，确认后在提交页面重新提交
+          </div>
+        </div>
+      )}
+
       <div className="timeline">
         {timeline.map((stage) => (
           <div key={stage.key} className={`timeline-stage ${stage.key === detail.status ? `timeline-stage-${stage.key}` : ''}`}>
             <div className={`timeline-dot ${stage.phase}`} />
             <div className="timeline-stage-header">
               <span className="timeline-stage-number">
-                {STATUS_ORDER.indexOf(stage.key) >= 0
-                  ? `${STATUS_ORDER.indexOf(stage.key) + 1}.0`
-                  : '\u00B7\u00B7'}
+                {stage.num}.0
               </span>
               <span className="timeline-stage-label">{stage.label}</span>
             </div>
             {stage.phase === 'active' && isScanning && (
               <div className="scanning-block">
-                <div className="scanning-animation">
-                  <span className="scanning-dot" />
-                  <span className="scanning-dot" />
-                  <span className="scanning-dot" />
-                </div>
-                <p className="timeline-stage-desc">
-                  系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
-                </p>
-                <p className="scanning-estimate">
-                  预计耗时 30–90 秒 · 页面每 10 秒自动刷新
-                </p>
+                {scanTimedOut ? (
+                  <div className="status-alert">
+                    <div className="status-alert-title">&#x23F0; 扫描超时</div>
+                    <div className="status-alert-detail">
+                      扫描已超过 3 分钟未完成，可能出现了异常。
+                    </div>
+                    <div className="status-alert-contact">
+                      请稍后点击"刷新状态"查看结果，或联系 {SUPPORT_EMAIL}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="scanning-animation">
+                      <span className="scanning-dot" />
+                      <span className="scanning-dot" />
+                      <span className="scanning-dot" />
+                    </div>
+                    <p className="timeline-stage-desc">
+                      系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
+                    </p>
+                    <p className="scanning-estimate">
+                      预计耗时 30–90 秒 · 页面每 10 秒自动刷新
+                    </p>
+                  </>
+                )}
               </div>
             )}
             {stage.phase === 'active' && detail.status === 'pending_review' && (
@@ -333,6 +420,16 @@ function StatusContent() {
             {stage.phase === 'active' && detail.status === 'approved' && (
               <p className="timeline-stage-desc">
                 审核已通过，等待管理员发布。
+              </p>
+            )}
+            {stage.phase === 'rejected' && detail.status === 'changes_requested' && (
+              <p className="timeline-stage-hint">
+                修改后在提交页面重新提交即可
+              </p>
+            )}
+            {stage.phase === 'rejected' && detail.status === 'rejected' && (
+              <p className="timeline-stage-hint">
+                该提交已被驳回，如有疑问请联系 {SUPPORT_EMAIL}
               </p>
             )}
           </div>
@@ -405,15 +502,23 @@ function StatusContent() {
       )}
 
       {(!detail.scan_summary || !detail.scan_summary.findings) && isScanning && (
-        <div className="scanning-block scanning-block-large">
-          <div className="scanning-animation">
-            <span className="scanning-dot" />
-            <span className="scanning-dot" />
-            <span className="scanning-dot" />
+        scanTimedOut ? (
+          <div className="empty-state">
+            <div className="empty-state-icon">&#x23F0;</div>
+            <h3>扫描超时</h3>
+            <p>扫描已超过 3 分钟未完成，请点击上方"刷新状态"按钮重试</p>
           </div>
-          <p>扫描进行中，完成后将自动展示发现详情。</p>
-          <p className="scanning-estimate">预计耗时 30–90 秒 · 页面每 10 秒自动刷新</p>
-        </div>
+        ) : (
+          <div className="scanning-block scanning-block-large">
+            <div className="scanning-animation">
+              <span className="scanning-dot" />
+              <span className="scanning-dot" />
+              <span className="scanning-dot" />
+            </div>
+            <p>扫描进行中，完成后将自动展示发现详情。</p>
+            <p className="scanning-estimate">预计耗时 30–90 秒 · 页面每 10 秒自动刷新</p>
+          </div>
+        )
       )}
 
       {conclusionMeta && (
@@ -421,6 +526,11 @@ function StatusContent() {
           <div className="review-conclusion-header">
             <span className="review-conclusion-badge">{conclusionMeta.text}</span>
           </div>
+          {reviewComment && (
+            <div className="review-conclusion-comment">
+              <strong>审核意见：</strong>{reviewComment}
+            </div>
+          )}
         </div>
       )}
 

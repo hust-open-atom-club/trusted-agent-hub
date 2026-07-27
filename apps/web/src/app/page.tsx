@@ -11,17 +11,17 @@ interface PackageListResponse {
   total_pages: number;
 }
 
-async function fetchPackagesServer(): Promise<Package[]> {
-  const res = await fetch(`${API_BASE}/api/v0/packages`, { cache: 'no-store' });
+async function fetchPackagesServer(): Promise<{ items: Package[]; total: number }> {
+  const res = await fetch(`${API_BASE}/api/v0/packages?page_size=100`, { cache: 'no-store' });
   if (!res.ok) {
-    return [];
+    return { items: [], total: 0 };
   }
   const data: PackageListResponse = await res.json();
-  return data.items;
+  return { items: data.items, total: data.total };
 }
 
 export default async function HomePage() {
-  const packages = await fetchPackagesServer();
+  const { items, total } = await fetchPackagesServer();
 
-  return <HomeClient initialPackages={packages} />;
+  return <HomeClient initialPackages={items} totalPackages={total} />;
 }

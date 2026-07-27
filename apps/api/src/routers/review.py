@@ -181,6 +181,30 @@ def unyank_version(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# ── DELETE /versions/{version_id} ──────────────────────────
+
+@router.delete(
+    "/versions/{version_id}",
+    response_model=ReviewResponse,
+    status_code=200,
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def delete_version(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> ReviewResponse:
+    """管理员删除版本（不可逆操作）。"""
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    try:
+        return service.delete_version(
+            version_id=version_id,
+            operator_id=_user.id,
+        )
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ── GET /audit-logs ───────────────────────────────────────
 
 @router.get(
