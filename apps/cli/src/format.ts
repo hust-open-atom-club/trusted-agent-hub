@@ -215,7 +215,7 @@ export function formatPackageDetail(
 
   // Owner
   const ownerStr = pkg.owner
-    ? `${pkg.owner.display_name} (@${pkg.owner.username})`
+    ? pkg.owner.display_name
     : 'N/A';
   lines.push(
     `  ${chalk.dim('Owner:')}       ${ownerStr}`,

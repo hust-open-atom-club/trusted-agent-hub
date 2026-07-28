@@ -12,7 +12,6 @@
 
 export interface PackageOwner {
   id: string;
-  username: string;
   display_name: string;
   role: string;
 }
@@ -183,7 +182,6 @@ function validateOwner(val: unknown): PackageOwner | null {
   const o = val as Record<string, unknown>;
   return {
     id: requireString(o.id, 'id', 'owner'),
-    username: requireString(o.username, 'username', 'owner'),
     display_name: requireString(o.display_name, 'display_name', 'owner'),
     role: requireString(o.role, 'role', 'owner'),
   };
