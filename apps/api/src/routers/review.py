@@ -181,6 +181,30 @@ def unyank_version(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+# ── POST /versions/{version_id}/re-review ───────────────────
+
+@router.post(
+    "/versions/{version_id}/re-review",
+    response_model=ReviewResponse,
+    status_code=200,
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def re_review_version(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("admin")),
+) -> ReviewResponse:
+    """管理员将已发布版本退回审核队列：published → pending_review。"""
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    try:
+        return service.re_review_version(
+            version_id=version_id,
+            operator_id=_user.id,
+        )
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 # ── DELETE /versions/{version_id} ──────────────────────────
 
 @router.delete(

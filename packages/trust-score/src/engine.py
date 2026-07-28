@@ -37,7 +37,7 @@ from .intent import (
 from .community import assess_manual_review, assess_author_history
 from .derived_score import derive_score, get_recommendation
 from .explainer import generate_explanations, extract_top_risks
-from scanners.risk_scanner.weights import SEVERITY_POINTS
+from scanners.risk_scanner.weights import SEVERITY_POINTS, LEVEL_TO_GRADE
 
 # Level ordering for upgrade/downgrade (index 0 = best)
 _LEVEL_ORDER: tuple[str, ...] = (
@@ -647,7 +647,7 @@ def rate(
     # --- Install recommendation ---
     recommendation = get_recommendation(final_level)
 
-    grade = _to_grade(final_level)
+    grade = LEVEL_TO_GRADE.get(final_level, "C")
     return {
         "score": score,
         "package_name": package_metadata.get("name", "unknown"),
@@ -663,16 +663,3 @@ def rate(
             "install_recommendation": recommendation,
         },
     }
-
-
-_LEVEL_TO_GRADE: dict[str, str] = {
-    "trusted": "A",
-    "low_risk": "B",
-    "medium_risk": "C",
-    "high_risk": "D",
-    "untrusted": "E",
-}
-
-
-def _to_grade(level: str) -> str:
-    return _LEVEL_TO_GRADE.get(level, "C")

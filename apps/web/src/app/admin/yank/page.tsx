@@ -57,6 +57,7 @@ export default function AdminYankPage() {
 
   const [showModal, setShowModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<YankItem | null>(null);
+  const [actionType, setActionType] = useState<'yank' | 're-review'>('yank');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -97,7 +98,7 @@ export default function AdminYankPage() {
   const handleYank = async () => {
     if (!selectedItem || !token) return;
 
-    if (!reason.trim()) {
+    if (actionType === 'yank' && !reason.trim()) {
       setSubmitError('下架原因不能为空');
       return;
     }
@@ -106,28 +107,44 @@ export default function AdminYankPage() {
     setSubmitting(true);
 
     try {
-      const res = await fetch(
-        `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/yank?reason=${encodeURIComponent(reason.trim())}`,
-        {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: '下架失败' }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+      if (actionType === 're-review') {
+        const res = await fetch(
+          `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/re-review`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: '操作失败' }));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 已退回审核队列`);
+      } else {
+        const res = await fetch(
+          `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/yank?reason=${encodeURIComponent(reason.trim())}`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: '下架失败' }));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 已下架`);
       }
 
-      setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 已下架`);
       setShowModal(false);
       setSelectedItem(null);
       setReason('');
+      setActionType('yank');
       clearFetchCache('versions');
       fetchItems();
 
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : '下架失败');
+      setSubmitError(err instanceof Error ? err.message : '操作失败');
     } finally {
       setSubmitting(false);
     }
@@ -261,6 +278,7 @@ export default function AdminYankPage() {
                       className="btn btn-danger btn-sm"
                       onClick={() => {
                         setSelectedItem(item);
+                        setActionType('yank');
                         setReason('');
                         setSubmitError(null);
                         setShowModal(true);
@@ -341,7 +359,7 @@ export default function AdminYankPage() {
         <div className="modal-overlay" onClick={() => !submitting && setShowModal(false)}>
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>确认下架</h3>
+              <h3>{actionType === 're-review' ? '退回审核' : '确认下架'}</h3>
               <button
                 className="modal-close"
                 onClick={() => setShowModal(false)}
@@ -354,26 +372,52 @@ export default function AdminYankPage() {
             <div className="modal-body">
               <div className="modal-confirm-icon">&#x26A0;</div>
               <p className="modal-confirm-title">
-                确认下架 <strong>{selectedItem.package_name}</strong> v{selectedItem.version}？
+                <strong>{selectedItem.package_name}</strong> v{selectedItem.version}
               </p>
-              <p className="modal-hint">下架后该版本将不再对用户可见。</p>
 
-              <div className="form-field modal-form-field">
-                <label className="modal-comment-label">
-                  下架原因 <span className="required-star">*</span>
+              <div className="form-field modal-form-field" style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem 0' }}>
+                  <input
+                    type="radio"
+                    name="actionType"
+                    value="yank"
+                    checked={actionType === 'yank'}
+                    onChange={() => { setActionType('yank'); setSubmitError(null); }}
+                    disabled={submitting}
+                  />
+                  <span>直接下架 — 该版本不再对用户可见</span>
                 </label>
-                <textarea
-                  className="modal-comment-textarea"
-                  rows={3}
-                  placeholder="请填写下架原因..."
-                  value={reason}
-                  onChange={(e) => {
-                    setReason(e.target.value);
-                    setSubmitError(null);
-                  }}
-                  disabled={submitting}
-                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem 0' }}>
+                  <input
+                    type="radio"
+                    name="actionType"
+                    value="re-review"
+                    checked={actionType === 're-review'}
+                    onChange={() => { setActionType('re-review'); setSubmitError(null); }}
+                    disabled={submitting}
+                  />
+                  <span>退回审核 — 版本回到审核队列重新审查</span>
+                </label>
               </div>
+
+              {actionType === 'yank' && (
+                <div className="form-field modal-form-field">
+                  <label className="modal-comment-label">
+                    下架原因 <span className="required-star">*</span>
+                  </label>
+                  <textarea
+                    className="modal-comment-textarea"
+                    rows={3}
+                    placeholder="请填写下架原因..."
+                    value={reason}
+                    onChange={(e) => {
+                      setReason(e.target.value);
+                      setSubmitError(null);
+                    }}
+                    disabled={submitting}
+                  />
+                </div>
+              )}
             </div>
 
             {submitError && <div className="modal-error">{submitError}</div>}
@@ -389,9 +433,9 @@ export default function AdminYankPage() {
               <button
                 className="btn btn-danger"
                 onClick={handleYank}
-                disabled={submitting || !reason.trim()}
+                disabled={submitting || (actionType === 'yank' && !reason.trim())}
               >
-                {submitting ? '下架中...' : '确认下架'}
+                {submitting ? '处理中...' : actionType === 're-review' ? '确认退回' : '确认下架'}
               </button>
             </div>
           </div>

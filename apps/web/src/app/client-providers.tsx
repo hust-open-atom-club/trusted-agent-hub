@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth';
 import { initI18n } from '@/i18n/i18n';
+import { Toaster } from 'sonner';
 
 function ThemeProvider({ children }: { children: ReactNode }) {
   return <>{children}</>;
@@ -37,6 +38,7 @@ export function ClientProviders({ children, serverLang }: { children: React.Reac
     <AuthProvider>
       <ThemeProvider>
         <RevealProvider>
+          <Toaster position="top-right" richColors duration={3000} />
           {children}
         </RevealProvider>
       </ThemeProvider>

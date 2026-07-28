@@ -4,14 +4,17 @@
 import json, uuid, sys, os
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+
 REPO = r"E:\open source internship program\TrustedAgentHub"
+load_dotenv(os.path.join(REPO, "apps", "api", ".env"))
+DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/trusted_agent_hub")
 sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "packages"))
 sys.path.insert(0, os.path.join(REPO, "apps", "api"))
 
 from src.database import create_engine_from_url, create_session_factory
 
-DB_URL = "postgresql://postgres:293021@localhost:5432/trusted_agent_hub"
 engine = create_engine_from_url(DB_URL)
 SessionFactory = create_session_factory(engine)
 

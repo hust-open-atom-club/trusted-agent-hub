@@ -44,6 +44,7 @@ export const VERSION_STATUSES = [
   'published',
   'yanked',
   'resubmitted',
+  'changes_requested',
 ] as const;
 export type VersionStatus = (typeof VERSION_STATUSES)[number];
 
@@ -58,6 +59,7 @@ export const VERSION_STATUS_LABELS: Record<VersionStatus, string> = {
   published: '已发布',
   yanked: '已下架',
   resubmitted: '已重新提交',
+  changes_requested: '需修改',
 };
 
 /**
@@ -68,12 +70,13 @@ export const STATUS_TRANSITIONS: Record<VersionStatus, VersionStatus[]> = {
   submitted: ['scanning'],
   scanning: ['pending_review', 'error'],
   error: ['submitted'],
-  pending_review: ['approved', 'rejected'],
+  pending_review: ['approved', 'rejected', 'changes_requested'],
   approved: ['published', 'rejected'],
   rejected: ['resubmitted'],
-  published: ['yanked'],
+  published: ['yanked', 'pending_review'],
   yanked: ['published'],
   resubmitted: ['scanning'],
+  changes_requested: ['scanning'],
 };
 
 /**

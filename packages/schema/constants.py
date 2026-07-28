@@ -73,7 +73,7 @@ STATUS_TRANSITIONS: Final[dict[str, list[str]]] = {
     "pending_review": ["approved", "rejected", "changes_requested"],
     "approved": ["published", "rejected"],
     "rejected": ["resubmitted"],
-    "published": ["yanked"],
+    "published": ["yanked", "pending_review"],
     "yanked": ["published"],
     "resubmitted": ["scanning"],
     "changes_requested": ["scanning"],

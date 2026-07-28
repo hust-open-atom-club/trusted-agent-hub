@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
+import { toast } from 'sonner';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -460,6 +461,14 @@ export default function ReviewDetailPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: '提交失败' }));
         throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+
+      if (conclusion === 'approved') {
+        toast.success('审核通过', { description: '该版本已通过审核' });
+      } else if (conclusion === 'rejected') {
+        toast.error('已驳回', { description: '该版本已被驳回' });
+      } else if (conclusion === 'changes_requested') {
+        toast('已发送修改要求', { description: '已通知提交者进行修改' });
       }
 
       setShowModal(false);
