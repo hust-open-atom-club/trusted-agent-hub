@@ -66,6 +66,16 @@ const samplePackage = {
   created_at: '2026-01-01', updated_at: '2026-06-01',
 };
 
+const apiOwnerPackage = {
+  ...samplePackage,
+  owner: {
+    id: 'o1',
+    display_name: 'Dev',
+    role: 'submitter',
+    email: null,
+  },
+};
+
 const sampleVersion = {
   id: 'v1', package_id: '1', version: '1.0.0', status: 'published',
   author: { name: 'Dev', email: 'dev@test.com' },
@@ -275,6 +285,29 @@ async function test_nullOwner_accepted() {
   console.log('  ✓ null owner accepted');
 }
 
+async function test_ownerWithoutUsername_searchPackages() {
+  const fetchFn = mockFetchFn([{ status: 200, ok: true, body: { items: [apiOwnerPackage], total: 1, page: 1, page_size: 20, total_pages: 1 } }]);
+  const c = createApiClient(fetchFn);
+  const result = await c.searchPackages({ q: 'test' });
+  assert.strictEqual(result.items.length, 1);
+  assert.strictEqual(result.items[0].owner?.id, 'o1');
+  assert.strictEqual(result.items[0].owner?.display_name, 'Dev');
+  assert.strictEqual(result.items[0].owner?.role, 'submitter');
+  assert.strictEqual(result.items[0].owner?.username, undefined);
+  console.log('  ✓ owner without username - searchPackages');
+}
+
+async function test_ownerWithoutUsername_getPackage() {
+  const fetchFn = mockFetchFn([{ status: 200, ok: true, body: apiOwnerPackage }]);
+  const c = createApiClient(fetchFn);
+  const pkg = await c.getPackage('test-skill');
+  assert.strictEqual(pkg.owner?.id, 'o1');
+  assert.strictEqual(pkg.owner?.display_name, 'Dev');
+  assert.strictEqual(pkg.owner?.role, 'submitter');
+  assert.strictEqual(pkg.owner?.username, undefined);
+  console.log('  ✓ owner without username - getPackage');
+}
+
 async function test_versionDetail_500_propagates() {
   // 500 on version detail should NOT be silently swallowed
   const fetchFn = mockFetchFn([{ status: 500, ok: false, body: { error: { message: 'Server error' } } }]);
@@ -322,6 +355,8 @@ async function test_nullCreatedAt_accepted() {
   await test_pageSize_clamped();
   await test_strictPage_rejects_missing_fields();
   await test_nullOwner_accepted();
+  await test_ownerWithoutUsername_searchPackages();
+  await test_ownerWithoutUsername_getPackage();
   await test_versionDetail_500_propagates();
   await test_nullCreatedAt_accepted();
 
