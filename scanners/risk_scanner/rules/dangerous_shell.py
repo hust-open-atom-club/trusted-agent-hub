@@ -8,26 +8,39 @@ from typing import Any
 from scanners.risk_scanner.patterns import DANGEROUS_SHELL_PATTERNS
 
 
+def _classify_severity(matched_text: str, default_severity: str) -> str:
+    lower = matched_text.lower()
+    if any(kw in lower for kw in ("rm -rf", "sudo", "mkfs", "dd if=", "/dev/tcp")):
+        return "critical"
+    if "|" in lower and "sh" in lower:
+        return "critical"
+    if any(kw in lower for kw in ("fork bomb", "pipe shell")):
+        return "critical"
+    if any(kw in lower for kw in ("> /dev/sda",)):
+        return "high"
+    return default_severity
+
+
 def run(scanner: Any) -> None:
     rule_id = "SR-002"
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
-        for pattern, desc in DANGEROUS_SHELL_PATTERNS:
+        for pattern, desc, default_severity in DANGEROUS_SHELL_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])
+                matched_text = match.group()
 
-                if any(kw in pattern for kw in ("rm -rf", "sudo", "mkfs", "dd if=")):
-                    severity = "critical"
-                elif "|" in pattern and "sh" in pattern:
-                    severity = "critical"
-                else:
-                    severity = "high"
+                severity = _classify_severity(matched_text, default_severity)
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity == "critical" else "low"
 
                 scanner._add_finding(
                     rule_id=rule_id,
@@ -36,7 +49,7 @@ def run(scanner: Any) -> None:
                     title=f"危险 Shell 命令: {desc}",
                     description=f"在 {fname} 中发现危险 Shell 命令：{desc}",
                     location={"file": fname, "line": line_no, "snippet": snippet[:300]},
-                    evidence=f"匹配模式: {pattern}",
+                    evidence=f"匹配模式: {matched_text[:120]}",
                     remediation="避免在 Skill 中使用危险 Shell 命令。如需执行 Shell，请使用命令白名单限制。",
                     cwe_id="CWE-78",
                 )

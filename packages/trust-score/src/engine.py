@@ -37,6 +37,7 @@ from .intent import (
 from .community import assess_manual_review, assess_author_history
 from .derived_score import derive_score, get_recommendation
 from .explainer import generate_explanations, extract_top_risks
+from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 # Level ordering for upgrade/downgrade (index 0 = best)
 _LEVEL_ORDER: tuple[str, ...] = (
@@ -507,7 +508,6 @@ def _count_permission_categories(permissions: dict[str, Any]) -> int:
 
 
 def _compute_pass_rate(i2_disc: dict[str, Any]) -> float:
-    """Compute a rough scan pass rate 0-100."""
     critical = i2_disc.get("critical_count", 0)
     high = i2_disc.get("high_count", 0)
     medium = i2_disc.get("medium_count", 0)
@@ -515,7 +515,10 @@ def _compute_pass_rate(i2_disc: dict[str, Any]) -> float:
     total = critical + high + medium + low
     if total == 0:
         return 100.0
-    penalty = critical * 20 + high * 10 + medium * 5 + low * 2
+    penalty = (critical * SEVERITY_POINTS.get("critical", 25)
+               + high * SEVERITY_POINTS.get("high", 15)
+               + medium * SEVERITY_POINTS.get("medium", 8)
+               + low * SEVERITY_POINTS.get("low", 3))
     return max(0.0, round(100.0 - penalty, 1))
 
 

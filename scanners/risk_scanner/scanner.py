@@ -1,25 +1,25 @@
 """
-Risk Scanner — 自动风险扫描器 v0.2.0
+Risk Scanner — 自动风险扫描器 v0.3.0
 
 遍历目标目录，运行 17 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
 
 规则列表:
-  SR-001:  提示注入检测
-  SR-001b: 反拒绝机制检测
+  SR-001:  提示注入 + 反拒绝机制检测 (合并)
   SR-002:  危险 Shell 命令
   SR-003:  凭据访问
   SR-004:  硬编码密钥
-  SR-005:  远程代码执行
-  SR-006:  过度权限声明
+  SR-005:  远程代码执行 (正则层)
+  SR-005b: 远程代码执行 (AST 行为分析层)
+  SR-006:  过度权限声明 + 自主决策检测
   SR-007:  网络访问无白名单
-  SR-008:  供应链风险
+  SR-008:  供应链风险 (+ Typosquatting + OSV CVE)
   SR-009:  来源完整性
   SR-010:  元数据质量 + 结构校验
   SR-011:  输出处理风险
   SR-012:  系统提示泄漏
   SR-013:  记忆投毒
-  SR-014:  SSRF
+  SR-014:  SSRF (+ 防御上下文过滤)
   SR-015:  Agent 窥探
   SR-016:  工具滥用
   SR-017:  MCP 安全 (占位符)
@@ -32,8 +32,10 @@ Risk Scanner — 自动风险扫描器 v0.2.0
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
+import logging
 import os
 import re
 import uuid
@@ -41,16 +43,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scanners.risk_scanner.common import DANGEROUS_EXTENSIONS, REQUIRED_FILES_BY_TYPE
+from scanners.risk_scanner.common import (
+    CODE_EXAMPLE_INDICATORS,
+    DANGEROUS_EXTENSIONS,
+    REQUIRED_FILES_BY_TYPE,
+    SKIP_READ_EXTENSIONS,
+    SUSPICIOUS_EXTENSIONS,
+)
+
+logger = logging.getLogger(__name__)
 
 
 _RULE_MODULES: list[str] = [
     "scanners.risk_scanner.rules.prompt_injection",
-    "scanners.risk_scanner.rules.anti_refusal",
     "scanners.risk_scanner.rules.dangerous_shell",
     "scanners.risk_scanner.rules.credential_access",
     "scanners.risk_scanner.rules.hardcoded_secrets",
     "scanners.risk_scanner.rules.rce",
+    "scanners.risk_scanner.rules.behavioral_ast",
     "scanners.risk_scanner.rules.excessive_permissions",
     "scanners.risk_scanner.rules.network",
     "scanners.risk_scanner.rules.supply_chain",
@@ -65,7 +75,7 @@ _RULE_MODULES: list[str] = [
     "scanners.risk_scanner.rules.mcp_placeholder",
 ]
 
-SCANNER_VERSION = "0.2.0"
+SCANNER_VERSION = "0.3.0"
 
 
 class RiskScanner:
@@ -92,7 +102,9 @@ class RiskScanner:
                 mod = importlib.import_module(rule_module)
                 mod.run(self)
             except (ModuleNotFoundError, AttributeError) as e:
-                pass
+                logger.warning("Rule module %s failed to load: %s", rule_module, e)
+
+        self._deduplicate_findings()
 
         end = datetime.now(timezone.utc)
         duration_ms = int((end - start).total_seconds() * 1000)
@@ -104,18 +116,15 @@ class RiskScanner:
             dirs[:] = [d for d in dirs if d != ".git"]
             for fname in files:
                 fpath = Path(root) / fname
-                if fpath.suffix.lower() in DANGEROUS_EXTENSIONS:
-                    try:
-                        self.scanned_files.append(str(fpath.relative_to(self.target_dir)))
-                    except ValueError:
-                        pass
+                ext = fpath.suffix.lower()
+                if ext in SKIP_READ_EXTENSIONS:
                     continue
                 try:
+                    rel_path = str(fpath.relative_to(self.target_dir)).replace("\\", "/")
+                    self.scanned_files.append(rel_path)
                     content = fpath.read_text(encoding="utf-8", errors="ignore")
                     if len(content) == 0:
                         continue
-                    rel_path = str(fpath.relative_to(self.target_dir)).replace("\\", "/")
-                    self.scanned_files.append(rel_path)
                     self._file_contents[rel_path] = content
                 except (OSError, UnicodeDecodeError):
                     continue
@@ -158,6 +167,25 @@ class RiskScanner:
         except OSError:
             return ""
 
+    def _is_code_example(self, file_path: str, line_no: int) -> bool:
+        content = self._read_file_content(file_path)
+        if not content:
+            return False
+        ext = Path(file_path).suffix.lower()
+        if ext not in (".md", ".markdown", ".txt", ".rst"):
+            return False
+        lines = content.split("\n")
+        context_start = max(0, line_no - 6)
+        context_end = min(len(lines), line_no + 5)
+        context = "\n".join(lines[context_start:context_end])
+        lower_context = context.lower()
+        if "```" in context:
+            return True
+        for indicator in CODE_EXAMPLE_INDICATORS:
+            if indicator in lower_context:
+                return True
+        return False
+
     def _add_finding(
         self,
         rule_id: str,
@@ -188,6 +216,48 @@ class RiskScanner:
             finding["cwe_id"] = cwe_id
 
         self.findings.append(finding)
+
+    def _deduplicate_findings(self) -> None:
+        _SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+        seen: dict[tuple, int] = {}
+
+        for i, f in enumerate(self.findings):
+            rule_id = f.get("rule_id", "")
+            loc = f.get("location", {}) or {}
+            fname = loc.get("file", "")
+            evidence = f.get("evidence", "")
+            matched_text = (evidence[evidence.rfind(":") + 1:] if ":" in evidence else evidence)[:80]
+            key = (rule_id, fname, matched_text)
+            if key in seen:
+                existing_idx = seen[key]
+                existing_sev = self.findings[existing_idx].get("severity", "info")
+                current_sev = f.get("severity", "info")
+                if _SEVERITY_RANK.get(current_sev, 0) > _SEVERITY_RANK.get(existing_sev, 0):
+                    self.findings[existing_idx] = f
+            else:
+                seen[key] = i
+
+        cross_seen: dict[tuple, int] = {}
+        for i, f in enumerate(self.findings):
+            rule_id = f.get("rule_id", "")
+            evidence = f.get("evidence", "")
+            matched_text = (evidence[evidence.rfind(":") + 1:] if ":" in evidence else evidence)[:80]
+            if not matched_text:
+                continue
+            key = (rule_id, matched_text)
+            if key in cross_seen:
+                existing_idx = cross_seen[key]
+                existing_sev = self.findings[existing_idx].get("severity", "info")
+                current_sev = f.get("severity", "info")
+                if _SEVERITY_RANK.get(current_sev, 0) <= _SEVERITY_RANK.get(existing_sev, 0):
+                    f["severity"] = "info"
+                    f["title"] = f["title"] + " [跨文件重复]"
+                else:
+                    self.findings[existing_idx]["severity"] = "info"
+                    self.findings[existing_idx]["title"] = self.findings[existing_idx]["title"] + " [跨文件重复]"
+                    cross_seen[key] = i
+            else:
+                cross_seen[key] = i
 
     def _build_report(self, start_time: datetime, duration_ms: int) -> dict[str, Any]:
         severity_counts: dict[str, int] = {
@@ -246,6 +316,14 @@ class RiskScanner:
             "unlocked_versions": 0,
             "suspicious_packages": [],
         }
+        if self._package_metadata:
+            deps = self._package_metadata.get("dependencies", {})
+            if isinstance(deps, dict):
+                for deps_list in deps.values():
+                    if isinstance(deps_list, list):
+                        dependency_check["total_dependencies"] += len(deps_list)
+        cve_findings = [f for f in self.findings if "CVE" in f.get("title", "")]
+        dependency_check["known_vulnerabilities"] = len(cve_findings)
 
         return {
             "scan_id": f"scan-{uuid.uuid4().hex[:12]}",
@@ -255,7 +333,6 @@ class RiskScanner:
             "scanner_version": SCANNER_VERSION,
             "duration_ms": duration_ms,
             "findings": self.findings,
-            "file_contents": dict(self._file_contents),
             "summary": {
                 "total": total,
                 "critical": severity_counts["critical"],

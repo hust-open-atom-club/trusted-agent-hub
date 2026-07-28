@@ -15,6 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from scanners.risk_scanner.weights import (
+    LLM_LABEL_SEVERITY_ADJUST,
+    SEVERITY_ORDER,
+    SEVERITY_POINTS,
+)
+
 # ---------------------------------------------------------------------------
 # Well-known package types and their typical permission profiles
 # ---------------------------------------------------------------------------
@@ -55,6 +61,27 @@ _DANGEROUS_CATEGORIES = frozenset({
     "agent_snooping",
     "tool_misuse",
 })
+
+
+def _adjust_severity(severity: str, llm_label: str) -> str:
+    delta = LLM_LABEL_SEVERITY_ADJUST.get(llm_label, 0)
+    if delta == 0:
+        return severity
+    try:
+        idx = SEVERITY_ORDER.index(severity)
+    except ValueError:
+        return severity
+    new_idx = max(0, min(len(SEVERITY_ORDER) - 1, idx + delta))
+    return SEVERITY_ORDER[new_idx]
+
+
+def _compute_i2_score(findings: list[dict[str, Any]], adjusted_severities: dict[str, str]) -> int:
+    total_penalty = 0
+    for f in findings:
+        fid = f.get("id", "")
+        sev = adjusted_severities.get(fid, f.get("severity", "info"))
+        total_penalty += SEVERITY_POINTS.get(sev, 0)
+    return max(0, 100 - total_penalty)
 
 
 def _is_broad_path(path: str) -> bool:
@@ -267,14 +294,28 @@ def assess_prompt_safety(
 
     evidence: list[str] = []
 
-    # Check for dangerous-category findings at critical/high severity
+    adjusted_severities: dict[str, str] = {}
+    for f in findings:
+        fid = f.get("id", "")
+        raw_sev = f.get("severity", "")
+        llm_label = f.get("llm_label", "")
+        adj_sev = _adjust_severity(raw_sev, llm_label)
+        adjusted_severities[fid] = adj_sev
+
     dangerous_findings: list[str] = []
     for f in findings:
-        severity = f.get("severity", "")
+        fid = f.get("id", "")
+        sev = adjusted_severities.get(fid, f.get("severity", ""))
         category = f.get("category", "")
-        if severity in ("critical", "high") and category in _DANGEROUS_CATEGORIES:
+        if sev in ("critical", "high") and category in _DANGEROUS_CATEGORIES:
+            llm_note = ""
+            llm_label = f.get("llm_label", "")
+            if llm_label == "llm:likely-benign":
+                llm_note = " [LLM:likely-benign, downgraded]"
+            elif llm_label == "llm:suspected-malicious":
+                llm_note = " [LLM:suspected-malicious, upgraded]"
             dangerous_findings.append(
-                f"[{severity}] {f.get('title', 'Unknown')} ({category})"
+                f"[{sev}] {f.get('title', 'Unknown')} ({category}){llm_note}"
             )
 
     if dangerous_findings:
@@ -283,7 +324,7 @@ def assess_prompt_safety(
             f"Found {len(dangerous_findings)} critical/high finding(s) in dangerous categories"
         )
         evidence.extend(dangerous_findings)
-        score = max(0, 20 - len(dangerous_findings) * 5)
+        score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
             "score": score,
@@ -295,13 +336,12 @@ def assess_prompt_safety(
             "scan_available": True,
         }
     elif critical_count > 0 or high_count > 0:
-        # Critical/high but not in the most dangerous categories
         level = "suspicious"
         evidence.append(
             f"Found {critical_count} critical, {high_count} high finding(s) "
             f"(non-dangerous categories)"
         )
-        score = 50
+        score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
             "score": score,
@@ -315,7 +355,7 @@ def assess_prompt_safety(
     elif medium_count > 2 or low_count > 5:
         level = "suspicious"
         evidence.append(f"Multiple medium/low findings: {medium_count} medium, {low_count} low")
-        score = 60
+        score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
             "score": score,
@@ -336,7 +376,7 @@ def assess_prompt_safety(
                 f"Only {total_findings} minor finding(s): "
                 f"{medium_count} medium, {low_count} low"
             )
-        score = max(85, 100 - total_findings * 3)
+        score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
             "score": score,

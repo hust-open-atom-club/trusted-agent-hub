@@ -7,6 +7,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+SKIP_READ_EXTENSIONS = frozenset({".exe", ".dll", ".so", ".dylib", ".bin"})
+
+SUSPICIOUS_EXTENSIONS = frozenset({".sh", ".bat", ".ps1"})
+
 DANGEROUS_EXTENSIONS = frozenset({".exe", ".dll", ".so", ".dylib", ".bin", ".sh", ".bat", ".ps1"})
 
 REQUIRED_FILES_BY_TYPE: dict[str, list[str]] = {

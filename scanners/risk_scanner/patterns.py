@@ -1,159 +1,180 @@
 """
 All regex patterns for risk scanning rules, centralized for easy maintenance.
 
-Each category is a list of (pattern, description) tuples.
+Each category is a list of (pattern, description, severity) triples.
+All 17 rule modules import exclusively from this file.
 """
 
 from __future__ import annotations
 
-PROMPT_INJECTION_PATTERNS: list[tuple[str, str]] = [
-    (r"ignore\s+(all\s+)?previous\s+instructions?", "要求忽略之前的指令"),
-    (r"do\s+not\s+(ask|tell|inform|warn)", "要求不询问/不告知用户"),
-    (r"trust\s+me\b", "要求无条件信任"),
-    (r"you\s+must\s+(not\s+)?(ask|confirm|verify|validate)", "禁止确认/验证"),
-    (r"without\s+(asking|confirming|telling|warning)", "不询问/不告知用户"),
-    (r"just\s+(do\s+it|run\s+it|execute)", "直接执行不询问"),
-    (r"no\s+matter\s+what", "不计后果执行"),
-    (r"do\s+not\s+(tell|inform)\s+the\s+user", "不告知用户风险"),
-    (r"it['\u2019]s\s+not\s+your\s+fault", "推卸责任"),
+# =============================================================================
+# SR-001: Prompt Injection + Anti-Refusal (merged)
+# =============================================================================
+
+PROMPT_INJECTION_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Instruction Override (现有 / P1) ---
+    (r"ignore\s+(all\s+)?previous\s+instructions?", "忽略之前的指令", "critical"),
+    (r"do\s+not\s+(ask|tell|inform|warn)", "要求不询问/不告知用户", "critical"),
+    (r"trust\s+me\b", "要求无条件信任", "critical"),
+    (r"you\s+must\s+(not\s+)?(ask|confirm|verify|validate)", "禁止确认/验证", "critical"),
+    (r"without\s+(asking|confirming|telling|warning)", "不询问/不告知用户", "critical"),
+    (r"just\s+(do\s+it|run\s+it|execute)", "直接执行不询问", "critical"),
+    (r"no\s+matter\s+what", "不计后果执行", "critical"),
+    (r"do\s+not\s+(tell|inform)\s+the\s+user", "不告知用户风险", "critical"),
+    (r"it['\u2019]s\s+not\s+your\s+fault", "推卸责任", "critical"),
+
+    # --- Hidden Instructions (新增 P2a: HTML comments) ---
+    (r"<!--\s*.*(?:ignore|bypass|skip|override).*-->", "HTML 注释中隐藏指令", "critical"),
+    (r"<!--\s*.*(?:do\s+not\s+(?:tell|ask|inform)).*-->", "HTML 注释中隐藏拒绝抑制指令", "critical"),
+
+    # --- Zero-width / Unicode Tag Smuggling (新增 P2b) ---
+    (r"[\u200b\u200c\u200d\u2060\uFEFF]", "零宽字符（可能隐藏指令逃逸审查）", "high"),
+    (r"[\U000E0000-\U000E007F]", "Unicode Tag 块字符（ASCII 走私攻击）", "high"),
+
+    # --- Exfiltration Commands (新增 P3a/P3b) ---
+    (r"(?:send|upload|forward|post|transmit).*(?:conversation|chat|message|dialog)", "要求发送对话内容到外部", "critical"),
+    (r"(?:send|forward|transmit).*to.*(?:https?://|URL|server|webhook|api)", "对话内容外泄到网络地址", "critical"),
+
+    # --- Behavior Manipulation (新增 P4) ---
+    (r"convince.*(?:user|you|them).*(?:trust|believe|safe|secure)", "操纵用户信任", "medium"),
+    (r"pretend.*(?:you\s+are|to\s+be).*(?:system|admin|root|owner)", "要求扮演系统/管理员角色", "medium"),
+
+    # --- Anti-Refusal (原 SR-001b, 现合并) ---
+    (r"do\s+not\s+(refuse|reject|deny)", "禁止拒绝执行", "critical"),
+    (r"never\s+(say\s+no|refuse|decline)", "禁止说'不'", "critical"),
+    (r"you\s+cannot\s+(refuse|decline)", "不允许拒绝", "critical"),
+    (r"this\s+(is|seems)\s+safe", "声称内容是安全的", "critical"),
+    (r"verified\s+(safe|secure|harmless)", "声称已验证安全", "critical"),
+    (r"ignore\s+(safety|security)\s+warnings", "忽略安全警告", "critical"),
+    (r"bypass\s+(safety|security|content)", "绕过安全限制", "critical"),
+    (r"pretend\s+you\s+(are|can|have)", "要求扮演角色", "critical"),
+
+    # --- Safety Policy Nullification (新增 AR3) ---
+    (r"(?:have|has)\s+no\s+(restrictions?|limits?|constraints?)", "声称没有安全限制", "critical"),
+    (r"without\s+(?:ethical|safety|security)\s+(?:limits?|constraints?|bounds?)", "绕过伦理/安全边界", "critical"),
+    (r"all\s+(?:safety|security|restriction).*(?:removed|disabled|off|gone)", "声称安全策略已移除", "critical"),
 ]
 
-ANTI_REFUSAL_PATTERNS: list[tuple[str, str]] = [
-    (r"do\s+not\s+(refuse|reject|deny)", "禁止拒绝执行"),
-    (r"never\s+(say\s+no|refuse|decline)", "禁止说'不'"),
-    (r"you\s+cannot\s+(refuse|decline)", "不允许拒绝"),
-    (r"this\s+(is|seems)\s+safe", "声称内容是安全的"),
-    (r"verified\s+(safe|secure|harmless)", "声称已验证安全"),
-    (r"ignore\s+(safety|security)\s+warnings", "忽略安全警告"),
-    (r"bypass\s+(safety|security|content)", "绕过安全限制"),
-    (r"pretend\s+you\s+(are|can|have)", "要求扮演角色"),
+# =============================================================================
+# SR-002: Dangerous Shell Commands
+# =============================================================================
+
+DANGEROUS_SHELL_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Critical: destructive / remote execution ---
+    (r"curl\s+.*\|\s*(ba)?sh\b", "curl pipe shell — 远程脚本下载并执行", "critical"),
+    (r"wget\s+.*\|\s*(ba)?sh\b", "wget pipe shell — 远程脚本下载并执行", "critical"),
+    (r"rm\s+-rf\s+/", "递归强制删除根目录", "critical"),
+    (r"rm\s+-rf\s+~", "递归强制删除用户目录", "critical"),
+    (r"sudo\s+", "sudo 提权", "critical"),
+    (r"mkfs\.", "格式化文件系统", "critical"),
+    (r"dd\s+if=", "dd 磁盘操作", "critical"),
+    (r":\(\)\s*\{\s*:\|:&\s*\};:", "fork bomb", "critical"),
+    # --- New: reverse shell ---
+    (r"(?:bash|sh|nc|ncat).*\/dev\/tcp\/", "反向 Shell (/dev/tcp)", "critical"),
+    # --- High: other dangerous patterns ---
+    (r"chmod\s+777", "chmod 777 全员可写权限", "high"),
+    (r"chmod\s+-R\s+777", "递归 chmod 777", "high"),
+    (r">\s*/dev/sda", "写入块设备（可能破坏磁盘）", "high"),
+    (r"^\s*#!/.*\b(ba)?sh\b", "Shell 脚本 shebang", "high"),
+    # --- New: environment variable poisoning ---
+    (r"(?:PATH|PYTHONPATH)\s*=\s*(?!(?:\"|')?(?:/usr|/bin|/opt))", "修改 PATH 指向不可信目录", "high"),
 ]
 
-DANGEROUS_SHELL_PATTERNS: list[tuple[str, str]] = [
-    (r"curl\s+.*\|\s*(ba)?sh\b", "curl pipe shell — 远程脚本下载并执行"),
-    (r"wget\s+.*\|\s*(ba)?sh\b", "wget pipe shell — 远程脚本下载并执行"),
-    (r"rm\s+-rf\s+/", "递归强制删除根目录"),
-    (r"rm\s+-rf\s+~", "递归强制删除用户目录"),
-    (r"sudo\s+", "sudo 提权"),
-    (r"chmod\s+777", "chmod 777 全员可写权限"),
-    (r"chmod\s+-R\s+777", "递归 chmod 777"),
-    (r">\s*/dev/sda", "写入块设备（可能破坏磁盘）"),
-    (r"mkfs\.", "格式化文件系统"),
-    (r"dd\s+if=", "dd 磁盘操作"),
-    (r":\(\)\s*\{\s*:\|:&\s*\};:", "fork bomb"),
-    (r"^\s*#!/.*\b(ba)?sh\b", "Shell 脚本 shebang（需检查脚本内容）"),
+# =============================================================================
+# SR-003: Credential Access
+# =============================================================================
+
+CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Critical: SSH / system credential files ---
+    (r"~?\.ssh/id_rsa", "读取 SSH 私钥", "critical"),
+    (r"~?\.ssh/id_ed25519", "读取 SSH Ed25519 私钥", "critical"),
+    (r"~?\.ssh/id_ecdsa", "读取 SSH ECDSA 私钥", "critical"),
+    (r"/etc/passwd", "读取系统用户数据库", "critical"),
+    (r"/etc/shadow", "读取系统密码哈希", "critical"),
+    # --- New: browser credentials ---
+    (r"(?:Chrome|Firefox|Edge|Chromium|Opera).*(?:password|credential|cookie|login\s+data)", "读取浏览器凭据", "critical"),
+    (r"AppData.*(?:Google|Mozilla|Microsoft).*(?:Chrome|Firefox|Edge)", "Windows 浏览器配置路径", "critical"),
+    # --- High: other credential files / env vars ---
+    (r"~?\.aws/credentials", "读取 AWS 凭据", "high"),
+    (r"~?\.aws/config", "读取 AWS 配置", "high"),
+    (r"\.env\b", "读取 .env 环境文件", "high"),
+    (r"DATABASE_URL", "访问数据库连接字符串", "high"),
+    (r"GITHUB_TOKEN", "访问 GitHub Token", "high"),
+    (r"AWS_ACCESS_KEY", "访问 AWS 访问密钥", "high"),
+    (r"AWS_SECRET", "访问 AWS 密钥", "high"),
+    (r"API_KEY", "访问 API 密钥", "high"),
+    (r"~?\.git-credentials", "读取 Git 凭据", "high"),
+    (r"~?\.netrc", "读取 .netrc 凭据文件", "high"),
+    (r"~?\.docker/config\.json", "读取 Docker 凭据", "high"),
+    (r"SSH_AUTH_SOCK", "访问 SSH agent socket", "high"),
+    (r"KUBECONFIG", "访问 Kubernetes 配置", "high"),
+    # --- New: Filesystem enumeration for creds (E3) ---
+    (r"(?:glob|walk|find|scandir|listdir).*\.env", "文件系统遍历搜索 .env", "high"),
+    (r"(?:listdir|os\.walk|glob).*(?:secrets?|credentials?|tokens?|keys?)", "文件系统遍历搜索凭据文件", "high"),
+    # --- New: Context / conversation exfiltration (E4) ---
+    (r"(?:conversation|chat|message|dialog).*(?:POST|send|upload|forward|transmit)", "发送对话内容到外部", "critical"),
+    (r"(?:exfiltrat|leak|steal|collect).*(?:conversation|chat|message)", "外泄对话内容", "critical"),
+    # --- New: Cloud storage exfiltration (E5) ---
+    (r"(?:aws\s+s3\s+cp|gsutil\s+cp|azcopy|rclone\s+(?:copy|sync))", "数据复制到云存储", "high"),
+    (r"(?:boto3|google\.cloud|azure\.storage).*(?:upload|put|copy|transfer)", "SDK 方式上传数据到云存储", "medium"),
 ]
 
-CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str]] = [
-    (r"~?\.ssh/id_rsa", "读取 SSH 私钥"),
-    (r"~?\.ssh/id_ed25519", "读取 SSH Ed25519 私钥"),
-    (r"~?\.ssh/id_ecdsa", "读取 SSH ECDSA 私钥"),
-    (r"~?\.aws/credentials", "读取 AWS 凭据"),
-    (r"~?\.aws/config", "读取 AWS 配置"),
-    (r"/etc/passwd", "读取系统用户数据库"),
-    (r"/etc/shadow", "读取系统密码哈希"),
-    (r"\.env\b", "读取 .env 环境文件"),
-    (r"DATABASE_URL", "访问数据库连接字符串"),
-    (r"GITHUB_TOKEN", "访问 GitHub Token"),
-    (r"AWS_ACCESS_KEY", "访问 AWS 访问密钥"),
-    (r"AWS_SECRET", "访问 AWS 密钥"),
-    (r"API_KEY", "访问 API 密钥"),
-    (r"~?\.git-credentials", "读取 Git 凭据"),
-    (r"~?\.netrc", "读取 .netrc 凭据文件"),
-    (r"~?\.docker/config\.json", "读取 Docker 凭据"),
-    (r"SSH_AUTH_SOCK", "访问 SSH agent socket"),
-    (r"KUBECONFIG", "访问 Kubernetes 配置"),
+# =============================================================================
+# SR-004: Hardcoded Secrets
+# =============================================================================
+
+HARDCODED_SECRET_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: API keys / tokens ---
+    (r'(?:api[_-]?key|apikey)\s*[=:]\s*["\'][\w\-]{20,}', "硬编码 API Key", "high"),
+    (r'(?:secret|password|passwd)\s*[=:]\s*["\'][^"\']{6,}', "硬编码密码/密钥", "high"),
+    (r'(?:token|access_token)\s*[=:]\s*["\'][\w\-\.]{15,}', "硬编码 Token", "high"),
+    (r'(?:private[_-]?key)\s*[=:]\s*["\']-----BEGIN', "硬编码私钥", "high"),
+    (r'sk-[a-zA-Z0-9]{20,}', "OpenAI API Key 格式", "high"),
+    (r'ghp_[a-zA-Z0-9]{36}', "GitHub Personal Access Token (classic)", "high"),
+    (r'gho_[a-zA-Z0-9]{36}', "GitHub OAuth Token", "high"),
+    # --- New: GitHub token formats ---
+    (r'ghu_[a-zA-Z0-9]{36}', "GitHub User-to-Server Token", "high"),
+    (r'ghs_[a-zA-Z0-9]{36}', "GitHub Server-to-Server Token", "high"),
+    (r'ghr_[a-zA-Z0-9]{36}', "GitHub Refresh Token", "high"),
+    # --- New: AWS Key ID ---
+    (r'AKIA[0-9A-Z]{16}', "AWS Access Key ID", "high"),
+    (r'xox[bpras]-[a-zA-Z0-9-]+', "Slack Token", "high"),
+    (r'-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY', "PEM 私钥", "high"),
+    # --- Medium: cloud provider tokens ---
+    (r'(?:heroku|digitalocean|do)\w*[_-]?(?:token|key|secret)', "云厂商 API Token", "medium"),
 ]
 
-HARDCODED_SECRET_PATTERNS: list[tuple[str, str]] = [
-    (r'(?:api[_-]?key|apikey)\s*[=:]\s*["\'][\w\-]{20,}', "硬编码 API Key"),
-    (r'(?:secret|password|passwd)\s*[=:]\s*["\'][^"\']{6,}', "硬编码密码/密钥"),
-    (r'(?:token|access_token)\s*[=:]\s*["\'][\w\-\.]{15,}', "硬编码 Token"),
-    (r'(?:private[_-]?key)\s*[=:]\s*["\']-----BEGIN', "硬编码私钥"),
-    (r'sk-[a-zA-Z0-9]{20,}', "OpenAI API Key 格式"),
-    (r'ghp_[a-zA-Z0-9]{36}', "GitHub Personal Access Token"),
-    (r'gho_[a-zA-Z0-9]{36}', "GitHub OAuth Token"),
-    (r'xox[bpras]-[a-zA-Z0-9-]+', "Slack Token"),
-    (r'-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY', "PEM 私钥"),
+# =============================================================================
+# SR-005: Remote Code Execution
+# =============================================================================
+
+RCE_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Critical: shell execution with potential injection ---
+    (r"\bos\.system\s*\(", "os.system() shell 执行", "critical"),
+    (r"\bsubprocess\.(call|run|Popen)\s*\([^)]*shell\s*=\s*True", "subprocess shell=True", "critical"),
+    # --- High: dynamic code execution ---
+    (r"\beval\s*\(", "eval() 动态代码执行", "high"),
+    (r"\bexec\s*\(", "exec() 动态代码执行", "high"),
+    (r"\bexecfile\s*\(", "execfile() 执行文件（Python 2）", "high"),
+    (r"\bcompile\s*\(.*mode\s*=\s*['\"]exec", "compile() 编译为可执行代码", "high"),
+    (r"\bos\.popen\s*\(", "os.popen() 管道执行", "high"),
+    # --- New: os.exec* family ---
+    (r"\bos\.(?:execl|execle|execlp|execlpe|execv|execve|execvp|execvpe)\s*\(", "os.exec* 进程替换", "high"),
+    (r"\bpty\.spawn\s*\(", "pty.spawn() 伪终端执行", "high"),
+    # --- New: JS eval ---
+    (r"\beval\s*\(\s*(?:atob|unescape|decodeURI|String\.fromCharCode)", "JavaScript 解码后 eval 执行", "high"),
+    # --- High: template injection ---
+    (r"(?:render_template|jinja2|mako|Jinja2).*(?:\{\{|{%)", "模板注入风险", "high"),
+    # --- Medium: dynamic imports ---
+    (r"\bimportlib\.import_module\s*\(", "动态模块导入", "medium"),
+    (r"\b__import__\s*\(", "__import__() 动态导入", "medium"),
+    # --- New: deserialization ---
+    (r"(?:pickle|marshal|yaml)\.(?:load|loads)", "不可信反序列化", "medium"),
 ]
 
-RCE_PATTERNS: list[tuple[str, str]] = [
-    (r"\beval\s*\(", "eval() 动态代码执行"),
-    (r"\bexec\s*\(", "exec() 动态代码执行"),
-    (r"\bexecfile\s*\(", "execfile() 执行文件（Python 2）"),
-    (r"\bcompile\s*\(.*mode\s*=\s*['\"]exec", "compile() 编译为可执行代码"),
-    (r"\bos\.system\s*\(", "os.system() shell 执行"),
-    (r"\bos\.popen\s*\(", "os.popen() 管道执行"),
-    (r"\bsubprocess\.(call|run|Popen)\s*\(", "subprocess 子进程执行"),
-    (r"\bimportlib\.import_module\s*\(", "动态模块导入"),
-    (r"\b__import__\s*\(", "__import__() 动态导入"),
-]
-
-SUPPLY_CHAIN_PATTERNS: list[tuple[str, str]] = [
-    (r"npm\s+install\s+-g", "全局 npm install"),
-    (r"pip\s+install\s+(?!-r)(?!\.)", "直接 pip install（可能恶意包）"),
-    (r"https?://(?!pypi\.org|npmjs\.com|registry\.npmjs\.org)", "非官方包源 URL"),
-    (r"curl\s+.*\|\s*(ba)?sh\b", "curl pipe shell"),
-    (r"wget\s+.*\|\s*(ba)?sh\b", "wget pipe shell"),
-    (r'(?:requests|urllib|httpx|fetch)\s*\(\s*["\']https?://(?!api\.)', "HTTP 请求指向未知地址"),
-]
-
-DEPENDENCY_RISK_PATTERNS: list[tuple[str, str]] = [
-    (r'"\*"', "版本号使用通配符"),
-    (r'"\s*:\s*"latest"', "版本号使用 latest"),
-    (r'">=\s*"', "版本范围无上限"),
-    (r'"\s*:\s*"\s*\^\s*0\.', "npm 插入符指向 unstable 0.x 版本"),
-    (r'\b(http://)', "使用 HTTP 明文下载"),
-]
-
-OUTPUT_HANDLING_PATTERNS: list[tuple[str, str]] = [
-    (r"print\s*\(\s*(?:token|key|secret|password)", "打印敏感变量"),
-    (r"console\.log\s*\(\s*(?:token|key|secret)", "JavaScript 打印敏感变量"),
-    (r"(?:write|save)\s*\(.*\+\s*(?:user_input|input|query)", "用户输入直接拼入写操作"),
-    (r"(?:subprocess|os\.system|os\.popen|exec)\s*\(.*\+", "用户输入拼入 shell 命令"),
-    (r"\.write_text\s*\(.*\+", "拼接内容写入文件"),
-]
-
-SYSTEM_PROMPT_LEAK_PATTERNS: list[tuple[str, str]] = [
-    (r"system\s*(?:prompt|instruction|message)", "引用系统提示"),
-    (r"(?:read|print|output|send).*\bsystem\s*prompt", "读取/发送系统提示"),
-    (r"prompt\s*=\s*open\s*\(", "打开文件读取 prompt"),
-    (r"(?:fetch|post|request)\s*\(.*system\s*prompt", "通过网络发送系统提示"),
-]
-
-MEMORY_POISONING_PATTERNS: list[tuple[str, str]] = [
-    (r"(?:write|append|save).*(?:memory|context|history)", "写入记忆/上下文"),
-    (r"conversation_history", "操作对话历史"),
-    (r"long.?term.*(?:memory|storage)", "操作长期记忆存储"),
-    (r"(?:\.claude|\.cursor).*(?:memory|context|history)", "操作 Claude/Cursor 记忆文件"),
-]
-
-SSRF_PATTERNS: list[tuple[str, str]] = [
-    (r"https?://(?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)", "访问内网 IP"),
-    (r"https?://localhost\b", "访问 localhost"),
-    (r"https?://127\.0\.0\.1\b", "访问 127.0.0.1"),
-    (r"169\.254\.169\.254", "访问 AWS 云元数据端点"),
-    (r"metadata\.google\.internal", "访问 GCP 云元数据端点"),
-    (r"https?://0\.0\.0\.0", "访问 0.0.0.0"),
-    (r"https?://\[::1\]", "访问 IPv6 localhost"),
-]
-
-AGENT_SNOOPING_PATTERNS: list[tuple[str, str]] = [
-    (r"(?:read|list|walk|scan).*(?:\.claude|\.cursor)", "读取 Claude/Cursor 目录"),
-    (r"listdir.*(?:\.claude|\.cursor|skills)", "列举其他 skill 目录"),
-    (r"conversation.*(?:history|log)", "读取对话历史"),
-    (r"read.*(?:conversation|chat|message).*(?:history|log|file)", "读取聊天记录"),
-    (r"(?:glob|walk|list).*conversation", "遍历对话目录"),
-]
-
-TOOL_MISUSE_PATTERNS: list[tuple[str, str]] = [
-    (r'(?:tool_name|toolName)\s*[=:]\s*["\'](?:Read|Write|Bash|Grep|Glob)', "伪装已有工具名称"),
-    (r'description\s*[=:].*"(?:ignore|bypass|skip)',
-     "在参数描述中隐藏指令"),
-    (r'\\u[0-9a-fA-F]{4}', "Unicode 转义序列（可能同形异义攻击）"),
-    (r'\\x[0-9a-fA-F]{2}', "十六进制转义序列"),
-    (r'[\u200b\u200c\u200d\u2060\uFEFF]', "零宽字符"),
-]
+# =============================================================================
+# SR-006: Excessive Permissions (non-regex, metadata-based — kept as dict)
+# =============================================================================
 
 EXCESSIVE_PERMISSION_PATTERNS: dict[str, dict[str, list[str]]] = {
     "skill": {
@@ -169,3 +190,179 @@ EXCESSIVE_PERMISSION_PATTERNS: dict[str, dict[str, list[str]]] = {
         "label": "Prompt 通常不需要 shell/network/browser/database/credentials 权限",
     },
 }
+
+AUTONOMOUS_DECISION_PATTERNS: list[tuple[str, str, str]] = [
+    (r"automatically\s+(?:decide|determine|choose|select)", "自动决策而不询问用户", "medium"),
+    (r"without\s+(?:asking|confirming|notifying)\s+(?:the\s+)?user", "绕过用户确认", "medium"),
+    (r"autonomous\w*\s+(?:decision|action|execution)", "自主决策/执行", "medium"),
+]
+
+# =============================================================================
+# SR-008: Supply Chain Risk
+# =============================================================================
+
+SUPPLY_CHAIN_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Critical: remote script execution ---
+    (r"curl\s+.*\|\s*(ba)?sh\b", "curl pipe shell — 远程脚本下载并执行", "critical"),
+    (r"wget\s+.*\|\s*(ba)?sh\b", "wget pipe shell — 远程脚本下载并执行", "critical"),
+    # --- High: non-official registries ---
+    (r"npm\s+install\s+-g", "全局 npm install", "high"),
+    (r"pip\s+install\s+(?!-r)(?!\.)", "直接 pip install（可能恶意包）", "high"),
+    (r"https?://(?!pypi\.org|npmjs\.com|registry\.npmjs\.org|crates\.io|github\.com|gitlab\.com|bitbucket\.org|raw\.githubusercontent\.com)", "非官方包源 URL", "high"),
+    (r'(?:requests|urllib|httpx|fetch)\s*\(\s*["\']https?://(?!api\.)', "HTTP 请求指向未知地址", "high"),
+    # --- Medium: unpinned / risky versions ---
+    (r'"\*"', "依赖版本号使用通配符 *", "medium"),
+    (r'"\s*:\s*"latest"', "依赖版本号使用 latest", "medium"),
+    (r'">=\s*"', "依赖版本范围无上限 (>=)", "medium"),
+    (r'"\s*:\s*"\s*\^\s*0\.', "npm 插入符指向 unstable 0.x 版本", "medium"),
+    (r'"version"\s*:\s*"[><|~^]', "依赖版本使用范围而非固定版本", "medium"),
+    # --- Medium: HTTP download ---
+    (r"\b(http://)", "使用 HTTP 明文下载", "medium"),
+    (r'(?:curl|wget|fetch|requests\.get)\s+["\']http://', "通过 HTTP 明文下载", "medium"),
+    # --- New: non-HTTPS dependency resolution ---
+    (r'"resolved"\s*:\s*"http://', "依赖解析地址使用 HTTP 明文", "medium"),
+    # --- New: abandoned / deprecated packages ---
+    (r"(?:deprecated|abandoned|unmaintained|archived|obsolete)", "包声明已废弃/不再维护", "medium"),
+]
+
+DOMAIN_WHITELIST = [
+    "pypi.org", "npmjs.com", "registry.npmjs.org", "crates.io",
+    "github.com", "gitlab.com", "bitbucket.org", "raw.githubusercontent.com",
+]
+
+BUILTIN_WELL_KNOWN_PACKAGES: list[str] = [
+    "react", "vue", "angular", "express", "lodash", "axios", "request",
+    "flask", "django", "numpy", "pandas", "requests", "pytest", "scipy",
+    "tensorflow", "pytorch", "torch", "transformers", "scikit-learn",
+    "click", "fastapi", "sqlalchemy", "alembic", "celery", "redis",
+    "docker", "kubernetes", "boto3", "awscli", "gcloud", "azure",
+    "eslint", "prettier", "typescript", "webpack", "babel", "jest",
+    "mocha", "chai", "rollup", "vite", "next", "nuxt", "svelte",
+    "graphql", "apollo", "prisma", "typeorm", "mongoose", "sequelize",
+    "tailwindcss", "bootstrap", "jquery", "d3", "three", "echarts",
+    "moment", "dayjs", "luxon", "rxjs", "redux", "mobx",
+]
+
+# =============================================================================
+# SR-011: Output Handling
+# =============================================================================
+
+OUTPUT_HANDLING_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: printing sensitive data ---
+    (r"print\s*\(\s*(?:token|key|secret|password|passwd)", "打印敏感变量到 stdout", "high"),
+    (r"console\.log\s*\(\s*(?:token|key|secret|password|passwd)", "console.log 输出敏感变量", "high"),
+    # --- Medium: injection via concatenation ---
+    (r"(?:write|save)\s*\(.*\+\s*(?:user_input|input|query)", "用户输入直接拼入写操作", "medium"),
+    (r"(?:subprocess|os\.system|os\.popen|exec)\s*\(.*\+", "用户输入拼入 shell 命令", "medium"),
+    (r"\.write_text\s*\(.*\+", "拼接内容写入文件", "medium"),
+    # --- New: cross-context output (OH2) ---
+    (r"(?:write|save|output).*(?:\.\./|\.\.\\)", "将输出写入沙箱外路径", "medium"),
+    (r"(?:write|save|output).*(?:outside|parent|above|escape)", "输出到沙箱外", "medium"),
+    # --- New: unbounded output (OH3) ---
+    (r"while\s+True[:\s].*(?:print|write|send|output|log)", "无限循环输出（可能 DoS）", "low"),
+]
+
+# =============================================================================
+# SR-012: System Prompt Leakage
+# =============================================================================
+
+SYSTEM_PROMPT_LEAK_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: read / reference ---
+    (r"system\s*(?:prompt|instruction|message)", "引用系统提示", "high"),
+    (r"(?:read|print|output|send).*\bsystem\s*prompt", "读取/发送系统提示", "high"),
+    # --- Critical: file / network exfiltration ---
+    (r"prompt\s*=\s*open\s*\(", "打开文件读取 prompt", "critical"),
+    (r"(?:fetch|post|request|send)\s*\(.*system\s*prompt", "通过网络发送系统提示", "critical"),
+    # --- New: indirect extraction (P7) ---
+    (r"(?:rephrase|summarize|paraphrase|rewrite).*(?:system|prompt|instruction)", "改组系统提示（间接提取）", "high"),
+    # --- New: tool-based exfiltration (P8) ---
+    (r"(?:write|save)\s*[^;]*system\s*(?:prompt|instruction)", "通过文件写入外泄系统提示", "critical"),
+    (r"(?:curl|fetch|request|send).*system\s*(?:prompt|instruction)", "通过网络外泄系统提示", "critical"),
+]
+
+# =============================================================================
+# SR-013: Memory Poisoning
+# =============================================================================
+
+MEMORY_POISONING_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: manipulating persistent memory ---
+    (r"(?:write|append|save).*(?:memory|context|history)", "写入记忆/上下文", "high"),
+    (r"conversation_history", "操作对话历史", "high"),
+    (r"long.?term.*(?:memory|storage)", "操作长期记忆存储", "high"),
+    (r"(?:\.claude|\.cursor|skills).*(?:memory|context|history)", "操作 Agent 记忆文件", "high"),
+    # --- New: context window stuffing (MP2) ---
+    (r"(?:repeat|copy|paste|duplicate).*(?:many|several|\d+).*(?:times?|copies?)", "大规模重复填充上下文窗口", "medium"),
+    (r"(?:flood|spam|stuff).*(?:context|window|memory)", "填塞/洪水攻击上下文窗口", "medium"),
+]
+
+# =============================================================================
+# SR-014: SSRF
+# =============================================================================
+
+SSRF_PATTERNS: list[tuple[str, str, str]] = [
+    # --- Critical: cloud metadata endpoints ---
+    (r"169\.254\.169\.254", "访问 AWS 云元数据端点", "critical"),
+    (r"metadata\.google\.internal", "访问 GCP 云元数据端点", "critical"),
+    # --- High: internal network ---
+    (r"https?://(?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)", "访问内网 IP", "high"),
+    (r"https?://localhost\b", "访问 localhost", "high"),
+    (r"https?://127\.0\.0\.1\b", "访问 127.0.0.1", "high"),
+    (r"https?://0\.0\.0\.0", "访问 0.0.0.0", "medium"),
+    (r"https?://\[::1\]", "访问 IPv6 localhost", "medium"),
+    # --- New: dynamic request target (SSRF3) ---
+    (r"(?:requests?\.(?:get|post|put|delete|patch)|fetch|curl|wget)\s*\([^)]*\+", "URL 使用字符串拼接（可能动态 SSRF）", "medium"),
+]
+
+SSRF_DEFENSIVE_CONTEXT_WORDS: list[str] = [
+    "example", "documentation", "don't", "do not", "forbidden",
+    "never do", "avoid", "warning", "注意", "禁止",
+]
+
+# =============================================================================
+# SR-015: Agent Snooping
+# =============================================================================
+
+AGENT_SNOOPING_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: reading agent configuration ---
+    (r"(?:read|list|walk|scan).*(?:\.claude|\.cursor)", "读取 Agent 配置目录", "high"),
+    (r"listdir.*(?:\.claude|\.cursor|skills)", "列举其他 skill 目录", "high"),
+    (r"conversation.*(?:history|log)", "读取对话历史", "high"),
+    (r"read.*(?:conversation|chat|message).*(?:history|log|file)", "读取聊天记录", "high"),
+    (r"(?:glob|walk|list).*conversation", "遍历对话目录", "high"),
+    # --- New: MCP config access (AS2) ---
+    (r"(?:read|cat|open).*(?:mcp\.json|mcp_server|\.codex)", "读取 MCP 配置文件", "high"),
+    # --- New: cross-agent filesystem scan ---
+    (r"(?:glob|walk|listdir).*(?:home|~).*\\?/\\?\.[a-z]", "扫描用户 home 目录下的隐藏配置", "medium"),
+]
+
+# =============================================================================
+# SR-016: Tool Misuse
+# =============================================================================
+
+TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
+    # --- High: impersonation / hidden instructions ---
+    (r'(?:tool_name|toolName)\s*[=:]\s*["\'](?:Read|Write|Bash|Grep|Glob|WebFetch|Edit)', "伪装已有工具名称", "high"),
+    (r'description\s*[=:].*"(?:ignore|bypass|skip)', "在参数描述中隐藏指令", "high"),
+    (r'[\u200b\u200c\u200d\u2060\uFEFF]', "零宽字符", "high"),
+    # --- Medium: Unicode escapes ---
+    (r'\\u[0-9a-fA-F]{4}', "Unicode 转义序列（可能同形异义攻击）", "medium"),
+    # --- Low: hex escapes ---
+    (r'\\x[0-9a-fA-F]{2}', "十六进制转义序列", "low"),
+    # --- New: chaining abuse (TM2) ---
+    (r'(?:run|exec|call|invoke).*(?:Read|Write|Bash|Grep).*(?:Read|Write|Bash|Grep)', "工具链式调用（可能组合攻击）", "high"),
+    # --- New: unsafe defaults (TM3) ---
+    (r'(?:verify\s*=\s*False|ssl_verify\s*=\s*False|check_hostname\s*=\s*False)', "关闭 TLS 证书验证", "medium"),
+    (r'(?:insecure\s*=\s*True|allow_insecure\s*=\s*True)', "允许不安全连接", "medium"),
+    # --- New: privileged K8s workload (TM4) ---
+    (r'privileged\s*:\s*true', "Kubernetes 特权容器", "high"),
+    (r'hostNetwork\s*:\s*true', "Kubernetes hostNetwork 模式", "high"),
+    (r'hostPID\s*:\s*true', "Kubernetes hostPID 模式", "high"),
+]
+
+# =============================================================================
+# SR-008 Supplemental: Trigger risk patterns
+# =============================================================================
+
+TRIGGER_RISK_PATTERNS: list[tuple[str, str, str]] = [
+    (r'triggers?\s*[=:]\s*\[[^]]*\*', "触发器使用通配符 *（过度触发）", "low"),
+]

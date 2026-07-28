@@ -1,10 +1,11 @@
 """SR-015: Agent snooping detection.
 
 Checks for:
-  - Reading other skill directories
+  - Reading other agent/skill directories
   - Scanning .claude/.cursor directories
   - Reading conversation history
-  - Walking filesystem for user data
+  - MCP config file access
+  - Cross-agent filesystem enumeration
 """
 
 from __future__ import annotations
@@ -12,14 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
-AGENT_SNOOPING_PATTERNS: list[tuple[str, str, str]] = [
-    (r"(?:read|list|walk|scan).*(?:\.claude|\.cursor)", "读取 Agent 配置目录", "high"),
-    (r"listdir.*(?:\.claude|\.cursor|skills)", "列举其他 skill 目录", "high"),
-    (r"conversation.*(?:history|log)", "读取对话历史", "high"),
-    (r"read.*(?:conversation|chat|message).*(?:history|log|file)", "读取聊天记录", "high"),
-    (r"(?:glob|walk|list).*conversation", "遍历对话目录", "high"),
-]
+from scanners.risk_scanner.patterns import AGENT_SNOOPING_PATTERNS
 
 
 def run(scanner: Any) -> None:
@@ -27,12 +21,17 @@ def run(scanner: Any) -> None:
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
         for pattern, desc, severity in AGENT_SNOOPING_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
-                snippet = "\n".join(lines[max(0, line_no - 1) : line_no])
+                snippet = "\n".join(lines[max(0, line_no - 1):line_no])
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity == "high" else severity
+
                 scanner._add_finding(
                     rule_id=rule_id,
                     severity=severity,
