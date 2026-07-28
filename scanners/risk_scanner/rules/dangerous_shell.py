@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from scanners.risk_scanner.patterns import DANGEROUS_SHELL_PATTERNS
@@ -25,13 +26,19 @@ def run(scanner: Any) -> None:
     rule_id = "SR-002"
 
     for fname in scanner.scanned_files:
+        ext = Path(fname).suffix.lower()
+        if ext in (".html", ".htm", ".css", ".svg"):
+            continue
+
         content = scanner._read_file_content(fname)
         if not content:
             continue
         lines = content.split("\n")
 
         for pattern, desc, default_severity in DANGEROUS_SHELL_PATTERNS:
-            for match in re.finditer(pattern, content, re.IGNORECASE):
+            flags = 0 if "PATH" in pattern else re.IGNORECASE
+
+            for match in re.finditer(pattern, content, flags):
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)

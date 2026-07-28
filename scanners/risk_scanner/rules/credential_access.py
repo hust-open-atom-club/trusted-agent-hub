@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
+from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
 from scanners.risk_scanner.patterns import CREDENTIAL_ACCESS_PATTERNS
 
 
 _SYSTEM_CRITICAL_KW = ("ssh", "passwd", "shadow", "browser", "chrome", "firefox", "edge")
+
+_CODE_ONLY_PATTERNS = frozenset({
+    "文件系统遍历搜索 .env",
+    "文件系统遍历搜索凭据文件",
+})
+
+
+def _is_code_file(fname: str) -> bool:
+    ext = Path(fname).suffix.lower()
+    return ext in CODE_FILE_EXTENSIONS
 
 
 def _classify_severity(matched_text: str, default_severity: str) -> str:
@@ -31,6 +43,9 @@ def run(scanner: Any) -> None:
 
         for pattern, desc, default_severity in CREDENTIAL_ACCESS_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
+                if desc in _CODE_ONLY_PATTERNS and not _is_code_file(fname):
+                    continue
+
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)

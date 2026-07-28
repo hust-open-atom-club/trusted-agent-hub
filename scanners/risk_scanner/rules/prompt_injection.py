@@ -2,17 +2,38 @@
 
 Checks ALL files in the package for prompt injection and anti-refusal patterns.
 Uses is_code_example() to reduce false positives in documentation code blocks.
+For ambiguous patterns (do not ask, without asking), checks surrounding context
+for flow/step signals to distinguish skill operation instructions from attacks.
 """
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from scanners.risk_scanner.patterns import PROMPT_INJECTION_PATTERNS
 
 
 _SEVERITY_ORDER = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+
+_AMBIGUOUS_PATTERN_DESCS = frozenset({
+    "要求不询问/不告知用户",
+    "不询问/不告知用户",
+    "要求发送对话内容到外部",
+})
+
+_SKIP_EXTENSIONS = frozenset({".css", ".html", ".htm", ".svg"})
+
+
+def _should_skip_file(fname: str) -> bool:
+    ext = Path(fname).suffix.lower()
+    return ext in _SKIP_EXTENSIONS
+
+_FLOW_SIGNALS = re.compile(
+    r"(\d+\.\s|→|\-\>|Step\b|Continue to|Do not pause|default to|catalog\b|\bflow\b)",
+    re.IGNORECASE,
+)
 
 
 def _downgrade_severity(severity: str) -> str:
@@ -25,10 +46,24 @@ def _downgrade_severity(severity: str) -> str:
     return "info"
 
 
+def _has_flow_context(lines: list[str], line_no: int) -> bool:
+    start = max(0, line_no - 11)
+    end = min(len(lines), line_no + 10)
+    context = "\n".join(lines[start:end])
+    return bool(_FLOW_SIGNALS.search(context))
+
+
+def _is_skill_md(fname: str) -> bool:
+    ext = Path(fname).suffix.lower()
+    return ext in (".md", ".markdown", ".txt", ".rst")
+
+
 def run(scanner: Any) -> None:
     rule_id = "SR-001"
 
     for fname in scanner.scanned_files:
+        if _should_skip_file(fname):
+            continue
         content = scanner._read_file_content(fname)
         if not content:
             continue
@@ -42,6 +77,11 @@ def run(scanner: Any) -> None:
                 snippet = "\n".join(lines[start_line : end_line + 1])
 
                 severity = default_severity
+
+                is_ambiguous = desc in _AMBIGUOUS_PATTERN_DESCS
+                if is_ambiguous and _is_skill_md(fname) and _has_flow_context(lines, line_no):
+                    severity = "info"
+
                 if scanner._is_code_example(fname, line_no):
                     severity = _downgrade_severity(severity)
 
