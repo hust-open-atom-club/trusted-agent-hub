@@ -2854,6 +2854,10 @@ h3 {
   color: var(--color-muted);
 }
 
+.grade-manual {
+  border: 2px dashed var(--color-accent);
+}  
+
 /* 问题数 */
 .review-findings-danger {
   color: var(--color-danger);
@@ -3367,6 +3371,7 @@ h3 {
   flex: 1;
   padding: 0.75rem 1rem;
   min-width: 0;
+  overflow: hidden;
 }
 
 .finding-card-header {
@@ -3523,9 +3528,8 @@ h3 {
   font-size: 0.78rem;
   color: var(--color-muted);
   margin-bottom: 0.4rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
   max-width: 100%;
 }
 

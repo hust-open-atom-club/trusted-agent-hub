@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from src.repositories.orm import (
     PackageRow,
     PackageVersionRow,
+    TrustLevelRow,
 )
 from src.repositories.orm_producer import (
     AuditLogRow,
@@ -260,7 +261,16 @@ class ProducerRepository:
             row = session.get(PackageVersionRow, version_id)
             if row is None:
                 return None
-            return dict(row.data)
+            data = dict(row.data) if row.data else {}
+            data["manual_grade"] = row.manual_grade
+            data["manual_grade_by"] = row.manual_grade_by
+            data["manual_grade_at"] = _serialize_dt(row.manual_grade_at) if row.manual_grade_at else None
+            data["manual_grade_reason"] = row.manual_grade_reason
+            if row.manual_grade_by:
+                user_row = session.get(UserRow, row.manual_grade_by)
+                if user_row:
+                    data["manual_grade_by_name"] = user_row.display_name or user_row.email
+            return data
 
     def get_previous_version(
         self, version_id: str
@@ -312,6 +322,27 @@ class ProducerRepository:
             row.data = data
             session.commit()
 
+    def set_manual_grade(
+        self,
+        *,
+        version_id: str,
+        grade: str | None,
+        operator_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        with self.session_factory() as session:
+            row = session.get(PackageVersionRow, version_id)
+            if row is None:
+                return
+            row.manual_grade = grade
+            row.manual_grade_by = operator_id if grade else None
+            row.manual_grade_at = _utc_now() if grade else None
+            row.manual_grade_reason = reason if grade else None
+            session.commit()
+
+    def clear_manual_grade(self, version_id: str) -> None:
+        self.set_manual_grade(version_id=version_id, grade=None)
+
     def update_package_status(
         self, package_id: str, new_status: str, latest_version: str | None = None
     ) -> None:
@@ -328,6 +359,40 @@ class ProducerRepository:
             if latest_version:
                 data["latest_version"] = latest_version
             row.data = data
+            session.commit()
+
+    def update_package_data(
+        self, package_id: str, updates: dict[str, object]
+    ) -> None:
+        with self.session_factory() as session:
+            row = session.get(PackageRow, package_id)
+            if row is None:
+                return
+            data = dict(row.data) if row.data else {}
+            data.update(updates)
+            row.data = data
+            session.commit()
+
+    def upsert_trust_level(
+        self,
+        *,
+        version_id: str,
+        level: str,
+        recommendation: str,
+    ) -> None:
+        with self.session_factory() as session:
+            existing = session.get(TrustLevelRow, version_id)
+            if existing:
+                existing.level = level
+                existing.install_recommendation = recommendation
+            else:
+                session.add(TrustLevelRow(
+                    version_id=version_id,
+                    level=level,
+                    install_recommendation=recommendation,
+                    top_risks=[],
+                    model_version="0.2.0",
+                ))
             session.commit()
 
     # ── 扫描报告 ──────────────────────────────────────────
@@ -681,6 +746,9 @@ class ProducerRepository:
                     PackageVersionRow.version,
                     PackageVersionRow.status,
                     PackageVersionRow.data,
+                    PackageVersionRow.manual_grade,
+                    PackageVersionRow.manual_grade_by,
+                    PackageVersionRow.manual_grade_reason,
                     PackageRow.name.label("package_name"),
                     PackageRow.data.label("package_data"),
                     ScanReportRow.scan_json,
@@ -719,6 +787,16 @@ class ProducerRepository:
             rows = session.execute(stmt).all()
 
         results: list[dict[str, object]] = []
+        user_ids = {row.manual_grade_by for row in rows if row.manual_grade_by}
+        user_names: dict[str, str] = {}
+        if user_ids:
+            with self.session_factory() as session:
+                user_rows = session.execute(
+                    select(UserRow.id, UserRow.display_name)
+                    .where(UserRow.id.in_(user_ids))
+                ).all()
+                user_names = {r.id: r.display_name or r.id for r in user_rows}
+
         for row in rows:
             data = row.data or {}
             trust_score = data.get("trust_score", {})
@@ -748,7 +826,12 @@ class ProducerRepository:
                 "status": row.status,
                 "submitted_at": data.get("submitted_at"),
                 "published_at": data.get("published_at"),
-                "grade": grade_val,
+                "auto_grade": grade_val,
+                "manual_grade": row.manual_grade,
+                "manual_grade_by": row.manual_grade_by,
+                "manual_grade_by_name": user_names.get(row.manual_grade_by or "") if row.manual_grade_by else None,
+                "manual_grade_reason": row.manual_grade_reason,
+                "grade": row.manual_grade or grade_val,
                 "findings_count": findings_count,
                 "yank_reason": data.get("yank_reason"),
             })

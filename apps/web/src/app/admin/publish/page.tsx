@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
+import GradeOverrideModal from '@/components/GradeOverrideModal';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -15,6 +16,11 @@ interface PublishItem {
   version: string;
   status: string;
   submitted_at: string | null;
+  auto_grade: string | null;
+  manual_grade: string | null;
+  manual_grade_by: string | null;
+  manual_grade_by_name: string | null;
+  manual_grade_reason: string | null;
   grade: string | null;
   grade_label: string | null;
   findings_count: number;
@@ -44,6 +50,13 @@ function formatDate(iso: string | null): string {
   }
 }
 
+function levelLabel(grade: string): string {
+  const m: Record<string, string> = {
+    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险', F: '严重风险',
+  };
+  return m[grade] ?? grade;
+}
+
 export default function AdminPublishPage() {
   const router = useRouter();
   const { user, token, loading: authLoading } = useAuth();
@@ -54,9 +67,13 @@ export default function AdminPublishPage() {
 
   const [showModal, setShowModal] = useState(false);
   const [selectedItem, setSelectedItem] = useState<PublishItem | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const [showGradeModal, setShowGradeModal] = useState(false);
+  const [gradeTarget, setGradeTarget] = useState<PublishItem | null>(null);
 
   const fetchItems = () => {
     if (!token) return;
@@ -102,6 +119,7 @@ export default function AdminPublishPage() {
       setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 发布成功`);
       setShowModal(false);
       setSelectedItem(null);
+      setConfirmed(false);
       clearFetchCache('versions');
       fetchItems();
 
@@ -111,6 +129,13 @@ export default function AdminPublishPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const openPublishModal = (item: PublishItem) => {
+    setSelectedItem(item);
+    setConfirmed(false);
+    setSubmitError(null);
+    setShowModal(true);
   };
 
   if (authLoading || loading) {
@@ -159,7 +184,8 @@ export default function AdminPublishPage() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>评分</th>
+                <th>自动评分</th>
+                <th>手动评级</th>
                 <th>包名称</th>
                 <th>版本</th>
                 <th>类型</th>
@@ -170,10 +196,22 @@ export default function AdminPublishPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.version_id}>
-                  <td data-label="评分">
-                    <span className={`grade-badge grade-${item.grade?.toLowerCase() || 'unknown'}`}>
-                      {item.grade || '—'}
+                  <td data-label="自动评分">
+                    <span className={`grade-badge grade-${item.auto_grade?.toLowerCase() || 'unknown'}`}>
+                      {item.auto_grade || '—'}
                     </span>
+                  </td>
+                  <td data-label="手动评级">
+                    {item.manual_grade ? (
+                      <span
+                        style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-ink)' }}
+                        title={`由 ${item.manual_grade_by_name || item.manual_grade_by || '未知'} 修改${item.manual_grade_reason ? '：' + item.manual_grade_reason : ''}`}
+                      >
+                        {item.manual_grade} *
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.78rem', color: 'var(--color-muted)' }}>—</span>
+                    )}
                   </td>
                   <td data-label="包名称" className="admin-pkg-name">
                     {item.package_name}
@@ -190,16 +228,33 @@ export default function AdminPublishPage() {
                   </td>
                   <td data-label="提交时间">{formatDate(item.submitted_at)}</td>
                   <td data-label="操作">
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => {
-                        setSelectedItem(item);
-                        setSubmitError(null);
-                        setShowModal(true);
-                      }}
-                    >
-                      发布上线
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        className="link-btn"
+                        style={{ fontSize: '0.78rem' }}
+                        onClick={() => router.push(`/review/${item.version_id}?returnTo=/admin/publish`)}
+                      >
+                        详情
+                      </button>
+                      {(user?.role === 'admin' || user?.role === 'reviewer') && (
+                        <button
+                          className="link-btn"
+                          style={{ fontSize: '0.78rem' }}
+                          onClick={() => {
+                            setGradeTarget(item);
+                            setShowGradeModal(true);
+                          }}
+                        >
+                          修改评级
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => openPublishModal(item)}
+                      >
+                        发布
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -210,46 +265,127 @@ export default function AdminPublishPage() {
 
       {showModal && selectedItem && (
         <div className="modal-overlay" onClick={() => !submitting && setShowModal(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
             <div className="modal-header">
               <h3>确认发布</h3>
-              <button
-                className="modal-close"
-                onClick={() => setShowModal(false)}
-                disabled={submitting}
-              >
+              <button className="modal-close" onClick={() => setShowModal(false)} disabled={submitting}>
                 ✕
               </button>
             </div>
 
-            <div className="modal-body">
-              <div className="modal-confirm-icon">&#x1F680;</div>
-              <p className="modal-confirm-title">
-                确认将 <strong>{selectedItem.package_name}</strong> v{selectedItem.version} 发布上线？
+            <div style={{ padding: '1.25rem' }}>
+              <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-ink)', marginBottom: '1rem' }}>
+                确认将 {selectedItem.package_name} v{selectedItem.version} 发布上线？
               </p>
-              <p className="modal-hint">发布后将立即对用户可见，消费侧可查询到该版本。</p>
-            </div>
 
-            {submitError && <div className="modal-error">{submitError}</div>}
+              <div style={{
+                padding: '1rem',
+                marginBottom: '1rem',
+                background: 'var(--color-paper-2)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-rule)',
+              }}>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: 'auto 1fr 1fr',
+                  gap: '0.4rem 0.75rem', fontSize: '0.82rem',
+                }}>
+                  <span style={{ color: 'var(--color-muted)' }}>自动评分</span>
+                  <span style={{ fontWeight: 600, color: 'var(--color-ink)' }}>
+                    {selectedItem.auto_grade ? `${selectedItem.auto_grade} (${levelLabel(selectedItem.auto_grade)})` : '—'}
+                  </span>
+                  <span></span>
 
-            <div className="modal-actions">
-              <button
-                className="btn btn-secondary"
-                onClick={() => setShowModal(false)}
-                disabled={submitting}
-              >
-                取消
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handlePublish}
-                disabled={submitting}
-              >
-                {submitting ? '发布中...' : '确认发布'}
-              </button>
+                  <span style={{ color: 'var(--color-muted)' }}>手动评级</span>
+                  <span style={{
+                    fontWeight: 600,
+                    color: selectedItem.manual_grade ? 'var(--color-accent)' : 'var(--color-muted)',
+                  }}>
+                    {selectedItem.manual_grade ? `${selectedItem.manual_grade} (${levelLabel(selectedItem.manual_grade)}) *` : '— (使用自动)'}
+                  </span>
+                  <span></span>
+
+                  <span style={{ color: 'var(--color-muted)', borderTop: '1px solid var(--color-rule)', paddingTop: '0.3rem' }}>
+                    生效评级
+                  </span>
+                  <span style={{
+                    fontWeight: 700, fontSize: '0.92rem',
+                    color: 'var(--color-ink)',
+                    borderTop: '1px solid var(--color-rule)', paddingTop: '0.3rem',
+                  }}>
+                    {selectedItem.grade ? `${selectedItem.grade} (${levelLabel(selectedItem.grade)})` : '—'}
+                  </span>
+                  <span></span>
+                </div>
+
+                {selectedItem.manual_grade_reason && (
+                  <div style={{
+                    marginTop: '0.75rem', fontSize: '0.75rem', color: 'var(--color-muted)',
+                    borderTop: '1px solid var(--color-rule)', paddingTop: '0.5rem',
+                  }}>
+                    修正理由: {selectedItem.manual_grade_reason}
+                    {selectedItem.manual_grade_by_name && <> · 由 {selectedItem.manual_grade_by_name} 修改</>}
+                  </div>
+                )}
+
+                {selectedItem.auto_grade && selectedItem.manual_grade &&
+                  Math.abs(['A','B','C','D','E','F'].indexOf(selectedItem.auto_grade) - ['A','B','C','D','E','F'].indexOf(selectedItem.manual_grade)) >= 3 && (
+                  <div style={{
+                    marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--color-danger)',
+                    fontWeight: 600,
+                  }}>
+                    自动评分与手动评级存在显著差异，请确认此操作。
+                  </div>
+                )}
+              </div>
+
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem',
+                cursor: 'pointer', fontSize: '0.82rem', color: 'var(--color-ink)',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  onChange={(e) => setConfirmed(e.target.checked)}
+                  disabled={submitting}
+                  style={{ width: '1rem', height: '1rem', cursor: 'pointer', accentColor: 'var(--color-accent)' }}
+                />
+                我确认发布此包，以生效评级 {selectedItem.grade || '—'} 为准。
+              </label>
+
+              <p style={{ fontSize: '0.8rem', color: 'var(--color-muted)', marginBottom: '1rem' }}>
+                发布后将立即对用户可见，消费侧可查询到该版本。
+              </p>
+
+              {submitError && <div className="modal-error">{submitError}</div>}
+
+              <div className="modal-actions">
+                <button className="btn btn-secondary" onClick={() => setShowModal(false)} disabled={submitting}>
+                  取消
+                </button>
+                <button className="btn btn-primary" onClick={handlePublish} disabled={submitting || !confirmed}>
+                  {submitting ? '发布中...' : '确认发布'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
+      )}
+
+      {showGradeModal && gradeTarget && token && (
+        <GradeOverrideModal
+          versionId={gradeTarget.version_id}
+          autoGrade={gradeTarget.auto_grade}
+          currentManualGrade={gradeTarget.manual_grade}
+          currentReason={gradeTarget.manual_grade_reason ?? null}
+          token={token}
+          onClose={() => { setShowGradeModal(false); setGradeTarget(null); }}
+          onComplete={() => {
+            setShowGradeModal(false);
+            setGradeTarget(null);
+            clearFetchCache('versions');
+            fetchItems();
+          }}
+        />
       )}
     </div>
   );

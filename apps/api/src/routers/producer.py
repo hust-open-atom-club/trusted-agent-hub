@@ -298,6 +298,66 @@ def list_versions(
     return service.list_versions_by_status()
 
 
+# ── PATCH /versions/{version_id}/grade ──────────────────────
+
+class GradeOverrideRequest(StrictContractModel):
+    grade: str | None = Field(default=None, description="手动评级: A/B/C/D/E/F, 或 null 恢复自动")
+    reason: str = Field(..., min_length=1, description="修改理由（必填）")
+
+
+@router.patch(
+    "/versions/{version_id}/grade",
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def override_grade(
+    version_id: str,
+    body: GradeOverrideRequest,
+    _user: CurrentUser = Depends(require_role("reviewer")),
+) -> dict[str, object]:
+    """手动覆盖 / 修改 / 清除评级（admin 和 reviewer 均可操作）。"""
+    repo = _get_producer_repository()
+    service = ProducerService(repo)
+    try:
+        return service.set_manual_grade(
+            version_id=version_id,
+            grade=body.grade,
+            reason=body.reason,
+            operator_id=_user.id,
+        )
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── GET /versions/{version_id}/grade-history ─────────────────
+
+@router.get(
+    "/versions/{version_id}/grade-history",
+    responses={404: {"model": ErrorEnvelope}},
+)
+def get_grade_history(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("reviewer")),
+) -> list[dict[str, object]]:
+    """查询手动评级修改历史（从 audit_logs 读取）。"""
+    repo = _get_producer_repository()
+    logs = repo.list_audit_logs(
+        target_type="version",
+        target_id=version_id,
+        action="grade_override",
+    )
+    return [
+        {
+            "grade": log.get("detail", {}).get("new_manual_grade") if isinstance(log.get("detail"), dict) else None,
+            "previous_grade": log.get("detail", {}).get("previous_manual_grade") if isinstance(log.get("detail"), dict) else None,
+            "auto_grade": log.get("detail", {}).get("auto_grade") if isinstance(log.get("detail"), dict) else None,
+            "operator_id": log.get("operator_id"),
+            "reason": log.get("detail", {}).get("reason") if isinstance(log.get("detail"), dict) else None,
+            "timestamp": log.get("timestamp"),
+        }
+        for log in logs
+    ]
+
+
 # ── DELETE /packages/{package_id} ──────────────────────────
 
 @router.delete(

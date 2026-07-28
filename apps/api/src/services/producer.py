@@ -145,6 +145,9 @@ class ProducerService:
         source = version.get("source", {})
         repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
 
+        # 重新提交时清除手动评级，以新的自动评分为准
+        self.repository.clear_manual_grade(version_id)
+
         if not repo_url:
             raise ProducerServiceError(
                 "版本缺少源码地址（source.repository_url），无法提交扫描"
@@ -175,20 +178,21 @@ class ProducerService:
         report_path = full_report.get("report_path", "")
 
         # 保存扫描报告
+        file_contents = full_report.get("file_contents", {})
+        scan_data: dict[str, object] = scan_report if isinstance(scan_report, dict) else {}
+        scan_data["file_contents"] = file_contents if isinstance(file_contents, dict) else {}
         self.repository.save_scan_report(
             version_id=version_id,
-            scan_json=scan_report if isinstance(scan_report, dict) else {},
+            scan_json=scan_data,
             report_path=str(report_path) if report_path else None,
         )
 
-        # 更新版本数据（附加信任评分信息 —— 只写入 grade 等级，不写入数字分数）
+        # 更新版本数据（附加完整信任评分信息）
+        trust_data: dict[str, object] = trust_score if isinstance(trust_score, dict) else {}
         self.repository.update_version_data(
             version_id,
             {
-                "trust_score": {
-                    "risk_summary": trust_score.get("risk_summary"),
-                    "calculated_at": full_report.get("finished_at"),
-                },
+                "trust_score": trust_data,
                 "submitted_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -207,7 +211,9 @@ class ProducerService:
                     if isinstance(scan_report, dict)
                     else 0
                 ),
-                "trust_grade": trust_score.get("risk_summary", {}).get("grade") if isinstance(trust_score, dict) else None,
+                "trust_grade": trust_score.get("risk_summary", {}).get("grade")
+                if isinstance(trust_score, dict)
+                else None,
                 "llm_review": (
                     scan_report.get("llm_review", {}).get("labels_summary")
                     if isinstance(scan_report, dict)
@@ -228,6 +234,97 @@ class ProducerService:
             detail={"error": error},
         )
 
+    # ── 手动评级 ────────────────────────────────────────────
+
+    def set_manual_grade(
+        self,
+        *,
+        version_id: str,
+        grade: str | None,
+        reason: str,
+        operator_id: str,
+    ) -> dict[str, object]:
+        """手动覆盖 / 修改 / 清除评级。
+
+        grade 为 null 表示恢复自动评分。
+        reason 必填。
+        """
+        if not reason or not reason.strip():
+            raise ProducerServiceError("手动评级修改理由不能为空")
+
+        valid_grades = {"A", "B", "C", "D", "E", "F"}
+        if grade is not None and grade.upper() not in valid_grades:
+            raise ProducerServiceError(f"无效的评级: {grade}，允许: A/B/C/D/E/F")
+
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+
+        trust_data = version.get("trust_score", {})
+        auto_grade = None
+        if isinstance(trust_data, dict):
+            risk_summary = trust_data.get("risk_summary", {})
+            if isinstance(risk_summary, dict):
+                auto_grade = risk_summary.get("grade")
+
+        old_manual = self.repository.get_version(version_id)
+        previous_manual_grade = None
+        if old_manual:
+            previous_manual_grade = old_manual.get("manual_grade")
+
+        normalized_grade = grade.upper() if grade else None
+
+        self.repository.set_manual_grade(
+            version_id=version_id,
+            grade=normalized_grade,
+            operator_id=operator_id,
+            reason=reason.strip(),
+        )
+
+        effective = normalized_grade or (auto_grade if isinstance(auto_grade, str) else None)
+
+        # 如果已发布，同步 consumer 侧数据
+        current_status = version.get("status", "")
+        if current_status == "published" and effective:
+            level = "medium_risk"
+            recommendation = "caution"
+            trust_data2 = version.get("trust_score", {})
+            if isinstance(trust_data2, dict):
+                rs = trust_data2.get("risk_summary", {})
+                if isinstance(rs, dict):
+                    level = rs.get("level", level)
+                    recommendation = rs.get("install_recommendation", recommendation)
+            pkg_id = version.get("package_id", "")
+            if pkg_id:
+                self.repository.update_package_data(pkg_id, {"grade": effective})
+            self.repository.upsert_trust_level(
+                version_id=version_id,
+                level=level if isinstance(level, str) else "medium_risk",
+                recommendation=recommendation if isinstance(recommendation, str) else "caution",
+            )
+
+        self.repository.create_audit_log(
+            action="grade_override",
+            target_type="version",
+            target_id=version_id,
+            operator_id=operator_id,
+            detail={
+                "previous_manual_grade": previous_manual_grade,
+                "new_manual_grade": normalized_grade,
+                "auto_grade": auto_grade,
+                "reason": reason.strip(),
+            },
+        )
+
+        return {
+            "version_id": version_id,
+            "auto_grade": auto_grade,
+            "manual_grade": normalized_grade,
+            "effective_grade": effective,
+            "manual_grade_by": operator_id,
+            "manual_grade_reason": reason.strip(),
+        }
+
     # ── 查询 ──────────────────────────────────────────────
 
     def get_package_detail(self, package_id: str) -> dict[str, object] | None:
@@ -245,9 +342,18 @@ class ProducerService:
                 version["scan_summary"] = scan_json.get("summary", {})
                 version["findings"] = scan_json.get("findings", [])
                 version["scan_file_contents"] = scan_json.get("file_contents", {})
-                version["trust_score"] = version.get("trust_score") or {
-                    "risk_summary": None,
-                }
+        # 确保 trust_score 存在
+        if not version.get("trust_score"):
+            version["trust_score"] = {"risk_summary": None}
+        # 计算生效评级
+        trust_data = version.get("trust_score", {})
+        auto_grade = None
+        if isinstance(trust_data, dict):
+            risk_summary = trust_data.get("risk_summary", {})
+            if isinstance(risk_summary, dict):
+                auto_grade = risk_summary.get("grade")
+        version["auto_grade"] = auto_grade
+        version["effective_grade"] = version.get("manual_grade") or auto_grade
         return version
 
     def list_my_versions(
@@ -438,10 +544,34 @@ class ProducerService:
             {"published_at": datetime.now(timezone.utc).isoformat()},
         )
 
+        # 计算生效评级并同步到 consumer 侧
+        level = "medium_risk"
+        recommendation = "caution"
+        trust_data = version.get("trust_score", {})
+        auto_grade = None
+        if isinstance(trust_data, dict):
+            risk_summary = trust_data.get("risk_summary", {})
+            if isinstance(risk_summary, dict):
+                auto_grade = risk_summary.get("grade")
+                level = risk_summary.get("level", level)
+                recommendation = risk_summary.get("install_recommendation", recommendation)
+        effective_grade = version.get("manual_grade") or auto_grade
+
         # 同步更新包状态和最新版本号
         if package_id:
             self.repository.update_package_status(
                 package_id, "published", latest_version=pkg_version,
+            )
+            # 同步 consumer 侧 packages.data.grade
+            if effective_grade:
+                self.repository.update_package_data(
+                    package_id, {"grade": effective_grade}
+                )
+            # 同步 consumer 侧 trust_levels
+            self.repository.upsert_trust_level(
+                version_id=version_id,
+                level=level if isinstance(level, str) else "medium_risk",
+                recommendation=recommendation if isinstance(recommendation, str) else "caution",
             )
 
         self.repository.create_audit_log(
