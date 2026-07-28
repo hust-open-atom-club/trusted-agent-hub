@@ -45,7 +45,9 @@ from typing import Any
 
 from scanners.risk_scanner.common import (
     CODE_EXAMPLE_INDICATORS,
+    CODE_FILE_EXTENSIONS,
     DANGEROUS_EXTENSIONS,
+    KNOWN_SAFE_FILES,
     REQUIRED_FILES_BY_TYPE,
     SKIP_READ_EXTENSIONS,
     SUSPICIOUS_EXTENSIONS,
@@ -118,6 +120,8 @@ class RiskScanner:
                 fpath = Path(root) / fname
                 ext = fpath.suffix.lower()
                 if ext in SKIP_READ_EXTENSIONS:
+                    continue
+                if fname in KNOWN_SAFE_FILES:
                     continue
                 try:
                     rel_path = str(fpath.relative_to(self.target_dir)).replace("\\", "/")
@@ -269,6 +273,9 @@ class RiskScanner:
                 severity_counts[sev] += 1
 
         total = len(self.findings)
+        effective_total = sum(
+            severity_counts[s] for s in ("critical", "high", "medium", "low")
+        )
 
         pkg_name = "unknown"
         pkg_version = "0.0.0"
@@ -335,6 +342,7 @@ class RiskScanner:
             "findings": self.findings,
             "summary": {
                 "total": total,
+                "effective_total": effective_total,
                 "critical": severity_counts["critical"],
                 "high": severity_counts["high"],
                 "medium": severity_counts["medium"],

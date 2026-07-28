@@ -10,6 +10,7 @@ Checks for:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from scanners.risk_scanner.patterns import MEMORY_POISONING_PATTERNS
@@ -19,6 +20,10 @@ def run(scanner: Any) -> None:
     rule_id = "SR-013"
 
     for fname in scanner.scanned_files:
+        ext = Path(fname).suffix.lower()
+        if ext in (".html", ".htm", ".css", ".svg"):
+            continue
+
         content = scanner._read_file_content(fname)
         if not content:
             continue

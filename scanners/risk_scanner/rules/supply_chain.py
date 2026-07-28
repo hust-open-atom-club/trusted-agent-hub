@@ -8,6 +8,9 @@ Checks for:
   - Abandoned / deprecated packages (medium)
   - Typosquatting (Levenshtein distance < 2)
   - Live CVE lookup via OSV.dev API
+
+URL-based patterns run only on code files (.py, .js, .ts, .sh, etc.)
+to avoid flagging normal hyperlinks in HTML/MD files.
 """
 
 from __future__ import annotations
@@ -17,8 +20,10 @@ import re
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import Any
 
+from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
 from scanners.risk_scanner.patterns import (
     BUILTIN_WELL_KNOWN_PACKAGES,
     DOMAIN_WHITELIST,
@@ -28,6 +33,34 @@ from scanners.risk_scanner.patterns import (
 
 _CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CVE_CACHE_TTL = 3600
+
+_URL_BASED_DESCS = frozenset({
+    "非官方包源 URL",
+    "HTTP 请求指向未知地址",
+    "使用 HTTP 明文下载",
+    "通过 HTTP 明文下载",
+    "依赖解析地址使用 HTTP 明文",
+    "全局 npm install",
+    "直接 pip install（可能恶意包）",
+    "curl pipe shell — 远程脚本下载并执行",
+    "wget pipe shell — 远程脚本下载并执行",
+})
+
+_DEPRECATION_BASED_DESCS = frozenset({
+    "包声明已废弃/不再维护",
+})
+
+
+def _is_code_file(fname: str) -> bool:
+    ext = Path(fname).suffix.lower()
+    return ext in CODE_FILE_EXTENSIONS
+
+
+def _is_inside_html_comment(lines: list[str], line_no: int) -> bool:
+    idx = max(0, line_no - 1)
+    line = lines[idx] if idx < len(lines) else ""
+    stripped = line.strip()
+    return "<!--" in stripped and "-->" in stripped
 
 
 def _levenshtein(s1: str, s2: str) -> int:
@@ -112,7 +145,6 @@ def _check_typosquatting(scanner: Any, meta: dict[str, Any]) -> None:
 def run(scanner: Any) -> None:
     rule_id = "SR-008"
 
-    # ── 1. Pattern-based checks across all files ──
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
         if not content:
@@ -120,17 +152,29 @@ def run(scanner: Any) -> None:
         lines = content.split("\n")
 
         for pattern, desc, severity in SUPPLY_CHAIN_PATTERNS:
+            is_url_based = desc in _URL_BASED_DESCS
+            is_deprecation = desc in _DEPRECATION_BASED_DESCS
+
+            if is_url_based and not _is_code_file(fname):
+                continue
+
+            if is_deprecation and not _is_code_file(fname):
+                continue
+
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 matched_url = match.group()
-                if "non-official" in desc.lower() or "non-official" in pattern.lower() or (
-                    "://" in matched_url and "whitelist" not in desc.lower()
-                ):
+
+                if is_url_based:
                     if "://" in matched_url:
                         domain = matched_url.split("://", 1)[-1].split("/")[0].split(":")[0]
                         if any(wl in domain for wl in DOMAIN_WHITELIST):
                             continue
 
                 line_no = content[: match.start()].count("\n") + 1
+
+                if is_deprecation and _is_inside_html_comment(lines, line_no):
+                    continue
+
                 snippet = "\n".join(lines[max(0, line_no - 1):line_no])
                 if scanner._is_code_example(fname, line_no):
                     severity = "medium" if severity == "critical" else "low"
@@ -146,7 +190,6 @@ def run(scanner: Any) -> None:
                     remediation="使用锁定的依赖管理器（npm/pip）并验证包完整性。仅使用官方源和 HTTPS。",
                 )
 
-    # ── 2. Trigger risk in metadata ──
     meta = scanner._package_metadata
     if meta:
         triggers = meta.get("triggers", meta.get("trigger", []))
@@ -176,10 +219,8 @@ def run(scanner: Any) -> None:
                     remediation="将通配符替换为具体关键词。",
                 )
 
-        # ── 3. Typosquatting check ──
         _check_typosquatting(scanner, meta)
 
-        # ── 4. OSV CVE query ──
         deps = meta.get("dependencies", {})
         if isinstance(deps, dict):
             for ecosystem, dep_list in deps.items():

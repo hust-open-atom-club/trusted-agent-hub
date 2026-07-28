@@ -228,6 +228,10 @@ SUPPLY_CHAIN_PATTERNS: list[tuple[str, str, str]] = [
 DOMAIN_WHITELIST = [
     "pypi.org", "npmjs.com", "registry.npmjs.org", "crates.io",
     "github.com", "gitlab.com", "bitbucket.org", "raw.githubusercontent.com",
+    "fonts.googleapis.com", "fonts.gstatic.com", "cdnjs.cloudflare.com",
+    "unpkg.com", "jsdelivr.net", "esm.sh", "skypack.dev",
+    "w3.org", "w3c.org",
+    "example.com", "example.org", "example.net",
 ]
 
 BUILTIN_WELL_KNOWN_PACKAGES: list[str] = [
