@@ -3,7 +3,8 @@
 Checks for:
   - Writing to persistent memory/context/history files
   - Manipulating conversation history
-  - Injecting into long-term memory storage
+  - Long-term memory storage injection
+  - Context window stuffing (massive repeated content)
 """
 
 from __future__ import annotations
@@ -11,26 +12,28 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from scanners.risk_scanner.patterns import MEMORY_POISONING_PATTERNS
+
 
 def run(scanner: Any) -> None:
     rule_id = "SR-013"
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
-        for pattern, desc in [
-            (r"(?:write|append|save).*(?:memory|context|history)", "写入记忆/上下文"),
-            (r"conversation_history", "操作对话历史"),
-            (r"long.?term.*(?:memory|storage)", "操作长期记忆存储"),
-            (r"(?:\.claude|\.cursor|skills).*(?:memory|context|history)", "操作 Agent 记忆文件"),
-        ]:
+        for pattern, desc, severity in MEMORY_POISONING_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
-                snippet = "\n".join(lines[max(0, line_no - 1) : line_no])
+                snippet = "\n".join(lines[max(0, line_no - 1):line_no])
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity == "high" else severity
+
                 scanner._add_finding(
                     rule_id=rule_id,
-                    severity="high",
+                    severity=severity,
                     category="memory_poisoning",
                     title=f"记忆投毒风险 — {desc}",
                     description=f"在 {fname} 中发现可能篡改持久化记忆/上下文的行为：{match.group()[:80]}",

@@ -4,6 +4,8 @@ Checks for:
   - Internal network IP access (192.168.x, 10.x, 172.16-31.x)
   - localhost / 127.0.0.1 / 0.0.0.0 / [::1] access
   - Cloud metadata endpoint access (AWS 169.254.169.254, GCP metadata.google.internal)
+  - Dynamic request target (string concatenation in URL)
+  - Defensive context filtering (documentation examples)
 """
 
 from __future__ import annotations
@@ -11,16 +13,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from scanners.risk_scanner.patterns import SSRF_DEFENSIVE_CONTEXT_WORDS, SSRF_PATTERNS
 
-SSRF_PATTERNS: list[tuple[str, str, str]] = [
-    (r"https?://(?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)", "访问内网 IP", "high"),
-    (r"https?://localhost\b", "访问 localhost", "high"),
-    (r"https?://127\.0\.0\.1\b", "访问 127.0.0.1", "high"),
-    (r"169\.254\.169\.254", "访问 AWS 云元数据端点", "critical"),
-    (r"metadata\.google\.internal", "访问 GCP 云元数据端点", "critical"),
-    (r"https?://0\.0\.0\.0", "访问 0.0.0.0", "medium"),
-    (r"https?://\[::1\]", "访问 IPv6 localhost", "medium"),
-]
+
+def _is_defensive_context(content: str, line_no: int) -> bool:
+    lines = content.split("\n")
+    start = max(0, line_no - 4)
+    end = min(len(lines), line_no + 3)
+    context = "\n".join(lines[start:end]).lower()
+    return any(kw in context for kw in SSRF_DEFENSIVE_CONTEXT_WORDS)
 
 
 def run(scanner: Any) -> None:
@@ -28,12 +29,20 @@ def run(scanner: Any) -> None:
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
         for pattern, desc, severity in SSRF_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
-                snippet = "\n".join(lines[max(0, line_no - 1) : line_no])
+                snippet = "\n".join(lines[max(0, line_no - 1):line_no])
+
+                if _is_defensive_context(content, line_no):
+                    severity = "info"
+                if scanner._is_code_example(fname, line_no):
+                    severity = "low" if severity in ("high", "critical") else severity
+
                 scanner._add_finding(
                     rule_id=rule_id,
                     severity=severity,

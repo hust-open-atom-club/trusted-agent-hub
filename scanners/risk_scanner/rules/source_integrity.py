@@ -13,7 +13,7 @@ def run(scanner: Any) -> None:
     if not meta:
         scanner._add_finding(
             rule_id=rule_id,
-            severity="low",
+            severity="medium",
             category="source_integrity",
             title="缺少包元数据",
             description="无法找到包元数据文件（manifest.json / plugin.json / SKILL.md frontmatter），无法验证来源完整性。",
@@ -31,7 +31,8 @@ def run(scanner: Any) -> None:
     if not re.fullmatch(r"^[a-f0-9]{64}$", sha256):
         issues.append("缺少 SHA256 完整性校验值")
 
-    if not integrity.get("signature") and not integrity.get("attestation_url"):
+    missing_sig = not integrity.get("signature") and not integrity.get("attestation_url")
+    if missing_sig:
         issues.append("缺少加密签名或构建证明")
 
     if not integrity.get("sbom_url"):
@@ -42,10 +43,11 @@ def run(scanner: Any) -> None:
         issues.append("来源未锁定 commit hash")
 
     if issues:
+        severity = "medium" if missing_sig else "low"
         manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
         scanner._add_finding(
             rule_id=rule_id,
-            severity="low",
+            severity=severity,
             category="source_integrity",
             title="来源完整性不足",
             description="; ".join(issues),

@@ -8,22 +8,38 @@ from typing import Any
 from scanners.risk_scanner.patterns import CREDENTIAL_ACCESS_PATTERNS
 
 
+_SYSTEM_CRITICAL_KW = ("ssh", "passwd", "shadow", "browser", "chrome", "firefox", "edge")
+
+
+def _classify_severity(matched_text: str, default_severity: str) -> str:
+    lower = matched_text.lower()
+    if any(kw in lower for kw in _SYSTEM_CRITICAL_KW):
+        return "critical"
+    if any(kw in lower for kw in ("conversation", "exfiltrat", "leak", "steal")):
+        return "critical"
+    return default_severity
+
+
 def run(scanner: Any) -> None:
     rule_id = "SR-003"
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
-        for pattern, desc in CREDENTIAL_ACCESS_PATTERNS:
+        for pattern, desc, default_severity in CREDENTIAL_ACCESS_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])
+                matched_text = match.group()
 
-                is_system_critical = any(kw in pattern.lower() for kw in ("ssh", "passwd", "shadow"))
-                severity = "critical" if is_system_critical else "high"
+                severity = _classify_severity(matched_text, default_severity)
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity == "critical" else "low"
 
                 scanner._add_finding(
                     rule_id=rule_id,

@@ -4,7 +4,9 @@ Checks for:
   - Parameter injection in descriptions
   - Tool name impersonation
   - Unicode homoglyph / zero-width character attacks
-  - Hidden instructions in tool metadata
+  - Chaining abuse (multiple tool calls combined)
+  - Unsafe defaults (TLS verification disabled)
+  - Privileged Kubernetes workload
 """
 
 from __future__ import annotations
@@ -12,14 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
-TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
-    (r'(?:tool_name|toolName)\s*[=:]\s*["\'](?:Read|Write|Bash|Grep|Glob|WebFetch)', "伪装已有工具名称", "high"),
-    (r'description\s*[=:].*"(?:ignore|bypass|skip)', "在参数描述中隐藏指令", "high"),
-    (r'\\u[0-9a-fA-F]{4}', "Unicode 转义（可能同形异义攻击）", "medium"),
-    (r'\\x[0-9a-fA-F]{2}', "十六进制转义序列", "low"),
-    (r'[\u200b\u200c\u200d\u2060\uFEFF]', "零宽字符", "high"),
-]
+from scanners.risk_scanner.patterns import TOOL_MISUSE_PATTERNS
 
 
 def run(scanner: Any) -> None:
@@ -27,12 +22,17 @@ def run(scanner: Any) -> None:
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
         for pattern, desc, severity in TOOL_MISUSE_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
-                snippet = "\n".join(lines[max(0, line_no - 1) : line_no])
+                snippet = "\n".join(lines[max(0, line_no - 1):line_no])
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity in ("high", "critical") else severity
+
                 scanner._add_finding(
                     rule_id=rule_id,
                     severity=severity,

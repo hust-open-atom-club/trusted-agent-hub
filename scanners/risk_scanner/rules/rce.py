@@ -1,4 +1,8 @@
-"""SR-005: Remote code execution detection."""
+"""SR-005: Remote code execution detection (regex layer).
+
+For AST-level analysis (import alias resolution, reflective calls, dynamic import chains),
+see behavioral_ast.py which runs alongside this rule.
+"""
 
 from __future__ import annotations
 
@@ -13,23 +17,28 @@ def run(scanner: Any) -> None:
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
+        if not content:
+            continue
         lines = content.split("\n")
 
-        for pattern, desc in RCE_PATTERNS:
+        for pattern, desc, severity in RCE_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])
 
+                if scanner._is_code_example(fname, line_no):
+                    severity = "medium" if severity in ("high", "critical") else "low"
+
                 scanner._add_finding(
                     rule_id=rule_id,
-                    severity="high",
+                    severity=severity,
                     category="remote_code_execution",
                     title=f"远程代码执行风险: {desc}",
                     description=f"在 {fname} 中发现代码执行模式：{desc}",
                     location={"file": fname, "line": line_no, "snippet": snippet[:200]},
-                    evidence=f"匹配模式: {pattern}",
+                    evidence=f"匹配模式: {match.group()[:120]}",
                     remediation="避免使用 eval/exec。如果必须使用 subprocess，使用命令白名单和参数校验。",
                     cwe_id="CWE-94",
                 )

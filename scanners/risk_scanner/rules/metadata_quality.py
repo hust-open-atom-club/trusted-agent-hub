@@ -42,6 +42,20 @@ def run(scanner: Any) -> None:
                 remediation="提供更详细的包描述（建议 10-200 字符）。",
             )
 
+        license_val = meta.get("license", "")
+        if not license_val or license_val.upper() in ("NONE", "UNLICENSED"):
+            manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
+            scanner._add_finding(
+                rule_id=rule_id,
+                severity="medium",
+                category="metadata_quality",
+                title="缺少有效许可证",
+                description=f"包未声明有效许可证 (当前值: '{license_val or '空'}')。",
+                location={"file": manifest_file},
+                evidence=f"License value: '{license_val}'",
+                remediation="选择并声明合适的开源许可证（如 MIT、Apache-2.0）。",
+            )
+
     _check_structure(scanner)
 
 

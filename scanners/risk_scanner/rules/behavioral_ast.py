@@ -1,0 +1,174 @@
+"""SR-005b: Behavioral AST analysis for RCE detection.
+
+Detects code execution patterns that regex cannot catch:
+  - import alias evasion (import os as o; o.system())
+  - reflective calls (getattr(os, 'system'))
+  - dynamic import chains (importlib.import_module(x).system())
+  - eval/exec/subprocess through variable indirection
+"""
+
+from __future__ import annotations
+
+import ast
+from typing import Any
+
+
+_DANGEROUS_CALLS: set[str] = {
+    "os.system", "os.popen",
+    "os.execl", "os.execle", "os.execlp", "os.execlpe",
+    "os.execv", "os.execve", "os.execvp", "os.execvpe",
+    "subprocess.call", "subprocess.run", "subprocess.Popen",
+    "subprocess.check_call", "subprocess.check_output",
+    "eval", "exec", "compile",
+}
+
+_DANGEROUS_MODULES: set[str] = {
+    "os", "subprocess", "builtins", "importlib", "pty",
+}
+
+
+def _resolve_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _resolve_name(node.value)
+        if base:
+            return f"{base}.{node.attr}"
+        return node.attr
+    return None
+
+
+def run(scanner: Any) -> None:
+    rule_id = "SR-005"
+    findings_map: dict[tuple, bool] = {}
+
+    for fname in scanner.scanned_files:
+        if not fname.endswith(".py"):
+            continue
+        content = scanner._read_file_content(fname)
+        if not content:
+            continue
+        try:
+            tree = ast.parse(content, filename=fname)
+        except SyntaxError:
+            continue
+
+        analyser = _ASTAnalyser(rule_id, scanner, fname, content, findings_map)
+        analyser.visit(tree)
+
+
+class _ASTAnalyser(ast.NodeVisitor):
+
+    def __init__(self, rule_id: str, scanner: Any, fname: str,
+                 content: str, findings_map: dict[tuple, bool]) -> None:
+        self.rule_id = rule_id
+        self.scanner = scanner
+        self.fname = fname
+        self.lines = content.split("\n")
+        self.findings_map = findings_map
+        self._import_alias: dict[str, str] = {}
+        self._var_alias: dict[str, str] = {}
+
+    # ── import tracking ──────────────────────────────────────────
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name in _DANGEROUS_MODULES:
+                key = alias.asname or alias.name
+                self._import_alias[key] = alias.name
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module in _DANGEROUS_MODULES:
+            for alias in node.names:
+                key = alias.asname or alias.name
+                self._import_alias[key] = f"{node.module}.{alias.name}"
+        self.generic_visit(node)
+
+    # ── variable assignment tracking (simple) ────────────────────
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        rhs_name = _resolve_name(node.value)
+        if rhs_name and rhs_name in self._import_alias:
+            for target in node.targets:
+                tgt_name = _resolve_name(target)
+                if tgt_name:
+                    self._var_alias[tgt_name] = self._import_alias[rhs_name]
+        self.generic_visit(node)
+
+    # ── call detection ───────────────────────────────────────────
+
+    def visit_Call(self, node: ast.Call) -> None:
+        called = _resolve_name(node.func)
+        resolved = self._resolve_full(called) if called else None
+        lineno = getattr(node, "lineno", 1)
+
+        if resolved and self._is_dangerous(resolved):
+            self._report(lineno, called or resolved,
+                         f"{called} 通过别名引用到危险函数 {resolved}",
+                         f"在 {self.fname} 中发现通过别名/变量间接调用危险函数：{called} -> {resolved}")
+
+        if called and (called.endswith(".import_module") or called == "import_module"):
+            self._report(lineno, called,
+                         f"动态导入: {called}()",
+                         f"在 {self.fname} 中发现 importlib.import_module() 动态加载模块")
+
+        if isinstance(node.func, ast.Call):
+            inner = _resolve_name(node.func.func)
+            if inner in ("getattr", "hasattr"):
+                args = node.func.args
+                if args:
+                    mod_name = _resolve_name(args[0])
+                    if mod_name in _DANGEROUS_MODULES:
+                        self._report(lineno, inner,
+                                     f"反射调用: {inner}() 访问危险模块 {mod_name}",
+                                     f"在 {self.fname} 中发现反射调用 getattr() 可能用于动态访问危险模块")
+            if inner == "globals":
+                self._report(lineno, "globals",
+                             "反射调用: globals() 可能用于动态访问危险函数",
+                             f"在 {self.fname} 中发现 globals() 反射调用")
+
+        self.generic_visit(node)
+
+    # ── helpers ──────────────────────────────────────────────────
+
+    def _resolve_full(self, name: str) -> str | None:
+        if name in self._import_alias:
+            return self._import_alias[name]
+        parts = name.rsplit(".", 1)
+        if len(parts) == 2:
+            base, attr = parts
+            if base in self._import_alias:
+                return f"{self._import_alias[base]}.{attr}"
+            if base in self._var_alias:
+                return f"{self._var_alias[base]}.{attr}"
+        return name if "." in name else None
+
+    def _is_dangerous(self, resolved: str) -> bool:
+        if resolved in _DANGEROUS_CALLS:
+            return True
+        for dc in _DANGEROUS_CALLS:
+            func_name = dc.rsplit(".", 1)[-1]
+            if resolved.endswith(f".{func_name}"):
+                module = dc.rsplit(".", 1)[0]
+                if resolved.startswith(module + "."):
+                    return True
+        return False
+
+    def _report(self, lineno: int, calling: str, title_detail: str, desc: str) -> None:
+        key = (self.rule_id, self.fname, calling, lineno)
+        if key in self.findings_map:
+            return
+        self.findings_map[key] = True
+        snippet = "\n".join(self.lines[max(0, lineno - 1):lineno])[:200]
+        self.scanner._add_finding(
+            rule_id=self.rule_id,
+            severity="high",
+            category="remote_code_execution",
+            title=f"AST 代码执行检测: {title_detail}",
+            description=desc,
+            location={"file": self.fname, "line": lineno, "snippet": snippet},
+            evidence=f"Resolved call: {calling}",
+            remediation="避免使用 import 别名隐藏危险调用。显式使用危险函数并使用参数校验和命令白名单。",
+            cwe_id="CWE-94",
+        )

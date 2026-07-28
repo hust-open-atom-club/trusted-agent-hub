@@ -5,12 +5,17 @@ Edit this file to adjust scoring behavior. No admin UI needed.
 All values are loaded at import time.
 
 Usage:
-    from scanners.risk_scanner.weights import SEVERITY_POINTS, GRADE_THRESHOLDS
+    from scanners.risk_scanner.weights import SEVERITY_POINTS, SEVERITY_ORDER
+
+Used by:
+    - intent.py (I2 prompt safety scoring)
+    - engine.py (_compute_pass_rate)
+    - llm_reviewer.py (label constants)
 """
 
 from __future__ import annotations
 
-SEVERITY_POINTS = {
+SEVERITY_POINTS: dict[str, int] = {
     "critical": 25,
     "high": 15,
     "medium": 8,
@@ -18,7 +23,17 @@ SEVERITY_POINTS = {
     "info": 0,
 }
 
-GRADE_THRESHOLDS: dict[str, int] = {
+SEVERITY_ORDER: list[str] = ["info", "low", "medium", "high", "critical"]
+
+LLM_LABEL_SEVERITY_ADJUST: dict[str, int] = {
+    "llm:likely-benign": -1,
+    "llm:suspected-malicious": +1,
+    "llm:suspected-negligent": 0,
+    "llm:uncertain": 0,
+    "llm:unavailable": 0,
+}
+
+GRADE_THRESHOLDS_REF: dict[str, int] = {
     "A": 80,
     "B": 60,
     "C": 40,
@@ -26,12 +41,6 @@ GRADE_THRESHOLDS: dict[str, int] = {
 }
 
 LLM_TRIGGER_MIN_FINDINGS = 1
-
-LAYER_DISCOUNT = {
-    "p1_opaque_to_intent": 0.7,
-    "p2_unsigned_to_intent": 0.85,
-    "intent_to_community": 0.8,
-}
 
 RISK_SEVERITY_BANDS: list[tuple[int, str]] = [
     (81, "CRITICAL"),
@@ -71,7 +80,7 @@ GRADE_RECOMMENDATION: dict[str, str] = {
     "E": "禁止安装",
 }
 
-LLM_REVIEW_LABELS = {
+LLM_REVIEW_LABELS: dict[str, str] = {
     "malicious": "llm:suspected-malicious",
     "negligent": "llm:suspected-negligent",
     "benign": "llm:likely-benign",

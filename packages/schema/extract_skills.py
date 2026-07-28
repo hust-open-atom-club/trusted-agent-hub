@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
 """
-Skills Schema 提取器 (v2.0 — 升级版) 
-将异构 Skill 目录统一转换为 TrustedAgentHub agent-package.schema.json 规范的 JSON 元数据。
+Skills Schema 提取器 (v2.0)
+将异构 Skill 目录统一转换为 TrustedAgentHub agent-package.schema.json 规范的元数据字典。
 
-升级内容（相较于旧版 60 行版本）:
-  ✅ 11 个必填字段全覆盖（name, version, type, description, author, license, 
-     source, integrity, compatibility, permissions, installation）
-  ✅ 依赖解析（npm/pip/docker/system）
-  ✅ 权限推断（filesystem/shell/network/environment/credentials/database）
-  ✅ 分类推断（12 个 category + 关键词匹配）
-  ✅ 类型判定（提示词工程类 vs 工具类）
-  ✅ 完整性校验 + 校验报告
+升级内容:
+  - 11 个必填字段全覆盖（name, version, type, description, author, license,
+    source, integrity, compatibility, permissions, installation）
+  - 依赖解析（npm/pip/docker/system）
+  - 权限推断（filesystem/shell/network/environment/credentials/database）
+  - 分类推断（12 个 category + 关键词匹配）
+  - 类型判定（提示词工程类 vs 工具类）
+  - 完整性校验
 
 基于:
-  - Skills_Schema提取标准与规范.md (v1.0, 778行)
+  - Skills_Schema提取标准与规范.md (v1.0)
   - agent-package.schema.json (JSON Schema 2020-12)
   - constants.py (枚举值 / 标签映射)
 
-输出:
-  - skills-meta/{name}.json     每个 skill 的独立 agent-package JSON
-  - skills-meta/all-skills.json  汇总索引文件
-  - skills-meta/validation-issues.txt  校验报告（如有问题）
-
-用法:
-  python extract_skills.py
+公共 API:
+  extract_single_skill(source_dir, repo_url, subdirectory) -> dict
+    由 API 扫描管道 (trust.py) 动态加载调用，返回符合 agent-package.schema.json 的元数据字典。
 
 Python >= 3.10，仅依赖标准库 + PyYAML。
 """
@@ -1269,150 +1265,4 @@ def validate_metadata(data: dict[str, Any], skill_name: str) -> list[str]:
     return issues
 
 
-# ═══════════════════════════════════════════════════════════════════
-# ── 主流程 ────────────────────────────────────────────────────────
-# ═══════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    # ── 日志配置（仅在 CLI 入口设置） ──
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    # 支持命令行参数：python extract_skills.py [skills_dir]
-    if len(sys.argv) > 1:
-        base_dir = Path(sys.argv[1]).resolve()
-    else:
-        base_dir = Path(__file__).resolve().parent
-
-    if not base_dir.is_dir():
-        log.error("目录不存在: %s", base_dir)
-        sys.exit(1)
-    output_dir = base_dir / "skills-meta"
-    output_dir.mkdir(exist_ok=True)
-
-    # 排除的文件/目录（非 skill）
-    exclude = {
-        ".git", ".codewhale", ".vscode", ".vscode-shared",
-        "__pycache__", "node_modules", "skills-meta",
-        "agent-package.schema.json", "constants.py", "constants.ts",
-        "extract_skills.py", "extract_skills_schema.py",
-        "extract_skills_old.py",
-        "Skills_Schema提取标准与规范.md",
-        "Schema对比分析_项目工程vs参考信息.md",
-        "skills-metadata.json",
-    }
-
-    log.info("扫描 Skill 目录: %s", base_dir)
-    all_results: list[ScanResult] = []
-    prompt_count = 0
-    tool_count = 0
-    skipped = 0
-
-    for entry in sorted(base_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name in exclude or entry.name.startswith("."):
-            continue
-
-        try:
-            result = scan_directory(entry)
-            if not result.has_skill_md:
-                log.warning("  [%s] 跳过：无任何 .md 文件", entry.name)
-                skipped += 1
-                continue
-            all_results.append(result)
-            if result.skill_type == "prompt":
-                prompt_count += 1
-            else:
-                tool_count += 1
-        except Exception:
-            log.exception("  [%s] 扫描失败", entry.name)
-            skipped += 1
-
-    log.info("扫描完毕: %d 提示词类 + %d 工具类 = %d 总计, %d 跳过",
-             prompt_count, tool_count, prompt_count + tool_count, skipped)
-
-    # 生成 JSON
-    summary: dict[str, Any] = {
-        "total_skills": len(all_results),
-        "prompt_skills_count": prompt_count,
-        "tool_skills_count": tool_count,
-        "skipped_count": skipped,
-        "schema_version": "https://trusted-agent-hub.dev/schemas/agent-package.schema.json",
-        "extracted_at": "",  # 用 ISO 8601 需要 shell，所以省略
-        "skills": [],
-    }
-
-    validation_errors: list[str] = []
-
-    for result in all_results:
-        try:
-            data = build_metadata_json(result)
-        except Exception:
-            log.exception("  [%s] 构建 JSON 失败", result.directory_name)
-            continue
-
-        # 校验
-        issues = validate_metadata(data, result.directory_name)
-        if issues:
-            for issue in issues:
-                validation_errors.append(f"[{result.directory_name}] {issue}")
-            log.warning("  [%s] 校验发现 %d 个问题", result.directory_name, len(issues))
-
-        # 写入独立文件
-        out_path = output_dir / f"{data['name']}.json"
-        out_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        # 加入汇总
-        summary["skills"].append({
-            "name": data["name"],
-            "directory": result.directory_name,
-            "type": result.skill_type,
-            "description": data["description"],
-            "file": f"{data['name']}.json",
-            "category": data.get("category", "other"),
-            "version": data["version"],
-        })
-
-    # 写入汇总文件
-    summary_path = output_dir / "all-skills.json"
-    summary_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    # 输出校验报告
-    if validation_errors:
-        report_path = output_dir / "validation-issues.txt"
-        report_path.write_text(
-            "\n".join(validation_errors),
-            encoding="utf-8",
-        )
-        log.warning("校验发现 %d 个问题，详见 %s", len(validation_errors), report_path)
-
-    # 向后兼容：也生成旧版 skills-metadata.json
-    legacy_path = base_dir / "skills-metadata.json"
-    legacy_path.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-    log.info("✅ 提取完成！")
-    log.info("   独立 JSON: %s/ (%d 个文件)", output_dir, len(all_results))
-    log.info("   汇总文件: %s", summary_path)
-    log.info("   兼容输出: %s", legacy_path)
-    log.info("   提示词类: %d, 工具类: %d", prompt_count, tool_count)
-    if skipped:
-        log.info("   跳过: %d 个（无 SKILL.md 或扫描失败）", skipped)
-    if validation_errors:
-        log.info("   校验问题: %d 个", len(validation_errors))
-
-
-if __name__ == "__main__":
-    main()
