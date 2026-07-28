@@ -16,6 +16,11 @@ interface ReviewItem {
   version: string;
   status: string;
   submitted_at: string | null;
+  auto_grade: string | null;
+  manual_grade: string | null;
+  manual_grade_by: string | null;
+  manual_grade_by_name: string | null;
+  manual_grade_reason: string | null;
   grade: string | null;
   grade_label: string | null;
   findings_count: number;
@@ -228,9 +233,11 @@ export default function ReviewPage() {
                   </td>
                   <td className="review-grade" data-label="风险">
                     <span
-                      className={`grade-badge grade-${item.grade || 'unknown'}`}
+                      className={`grade-badge grade-${item.grade?.toLowerCase() || 'unknown'}`}
+                      title={item.manual_grade ? `手动: ${item.manual_grade}${(item.manual_grade_by_name || item.manual_grade_by) ? ' 由 ' + (item.manual_grade_by_name || item.manual_grade_by) : ''}` : ''}
                     >
                       {item.grade || '—'}
+                      {item.manual_grade && '*'}
                     </span>
                   </td>
                   <td className="review-findings" data-label="问题数">

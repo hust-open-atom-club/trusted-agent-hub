@@ -106,6 +106,9 @@ interface VersionDetail {
   description?: string;
   scan_summary?: ScanSummary | null;
   trust_score?: TrustScore | null;
+  auto_grade?: string | null;
+  manual_grade?: string | null;
+  effective_grade?: string | null;
   review_conclusion?: string | null;
   yank_reason?: string | null;
   scan_error?: string | null;
@@ -302,8 +305,9 @@ function StatusContent() {
 
   const timeline = buildTimeline();
   const statusLabel = STATUS_LABELS[detail.status] || detail.status;
-  const grade = getGrade(detail.trust_score?.risk_summary?.grade ?? null);
-  const gradeClass = getGradeClass(detail.trust_score?.risk_summary?.grade ?? null);
+  const effectiveGrade = detail.effective_grade ?? detail.trust_score?.risk_summary?.grade ?? null;
+  const grade = getGrade(effectiveGrade);
+  const gradeClass = getGradeClass(effectiveGrade);
   const conclusion = detail.review_conclusion;
   const conclusionMeta = conclusion ? CONCLUSION_LABELS[conclusion] : null;
   const pageTitle = packageName
@@ -443,24 +447,25 @@ function StatusContent() {
           </div>
           <div className="trust-score-detail">
             <h3>信任评分</h3>
-            {detail.trust_score.recommendation && (
-              <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-2)', marginBottom: '0.75rem' }}>
-                {detail.trust_score.recommendation}
+            {detail.trust_score.score != null && (
+              <p style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-ink)', marginBottom: '0.3rem' }}>
+                {detail.trust_score.score} / 100
               </p>
             )}
-            {detail.trust_score.dimensions && (
-              <div className="trust-score-dimensions">
-                {Object.entries(detail.trust_score.dimensions).map(([key, val]) => (
-                  <div key={key} className="trust-score-dim">
-                    <span className="trust-score-dim-label">{key}</span>
-                    <span className="trust-score-dim-value">
-                       {typeof val === 'object' && val !== null
-                         ? JSON.stringify(val)
-                         : String(val)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+            {detail.trust_score.risk_summary?.level && (
+              <p style={{ fontSize: '0.82rem', color: 'var(--color-ink-2)', marginBottom: '0.3rem' }}>
+                风险等级: {detail.trust_score.risk_summary.level.replace(/_/g, ' ')}
+              </p>
+            )}
+            {detail.auto_grade && detail.manual_grade && detail.manual_grade !== detail.auto_grade && (
+              <p style={{ fontSize: '0.78rem', color: 'var(--color-accent)', marginBottom: '0.3rem' }}>
+                审核员已将评级从 {detail.auto_grade} 手动调整为 {detail.manual_grade}
+              </p>
+            )}
+            {detail.trust_score.risk_summary?.install_recommendation && (
+              <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-2)', marginBottom: '0.75rem' }}>
+                安装建议: {detail.trust_score.risk_summary.install_recommendation}
+              </p>
             )}
           </div>
         </div>

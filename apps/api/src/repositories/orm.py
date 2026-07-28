@@ -56,6 +56,18 @@ class PackageVersionRow(Base):
     version: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     data: Mapped[dict[str, object]] = mapped_column(JSON)
+    manual_grade: Mapped[str | None] = mapped_column(
+        String(2), nullable=True, index=True,
+    )
+    manual_grade_by: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+    )
+    manual_grade_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    manual_grade_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+    )
 
     package: Mapped[PackageRow] = relationship(back_populates="versions")
     trust_level: Mapped[TrustLevelRow | None] = relationship(

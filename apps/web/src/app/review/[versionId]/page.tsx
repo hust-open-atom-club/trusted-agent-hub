@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
+import TrustScoreDetail from '@/components/TrustScoreDetail';
+import GradeOverrideModal from '@/components/GradeOverrideModal';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -39,12 +41,15 @@ interface ScanSummary {
 }
 
 interface TrustScore {
+  score?: number;
   risk_summary?: {
     grade?: string;
     level?: string;
     top_risks?: string[];
     install_recommendation?: string;
   };
+  dimensions?: Record<string, { score: number; weight: number; details?: Record<string, unknown> }>;
+  explanations?: { dimension: string; message: string; deduction: number; evidence?: string }[];
   calculated_at?: string;
 }
 
@@ -64,6 +69,12 @@ interface VersionDetail {
   findings?: Finding[];
   scan_file_contents?: Record<string, string>;
   trust_score?: TrustScore;
+  auto_grade?: string | null;
+  manual_grade?: string | null;
+  manual_grade_by?: string | null;
+  manual_grade_by_name?: string | null;
+  manual_grade_reason?: string | null;
+  effective_grade?: string | null;
   review_conclusion?: string | null;
   submitted_at?: string | null;
   created_at?: string | null;
@@ -312,6 +323,12 @@ export default function ReviewDetailPage() {
 
   const [reviewHistory, setReviewHistory] = useState<ReviewRecord[]>([]);
 
+  const [showGradeModal, setShowGradeModal] = useState(false);
+  const [gradeRefreshKey, setGradeRefreshKey] = useState(0);
+
+  const canModifyGrade = (user?.role === 'admin' || user?.role === 'reviewer')
+    && version && !['draft', 'scanning', 'error'].includes(version.status);
+
   /* ── 登录检查 ── */
   useEffect(() => {
     if (authLoading) return;
@@ -457,7 +474,7 @@ export default function ReviewDetailPage() {
   /* ── 渲染帮助 ── */
 
   const isPending = version?.status === 'pending_review';
-  const grade = version?.trust_score?.risk_summary?.grade;
+  const grade = version?.effective_grade ?? version?.trust_score?.risk_summary?.grade;
   const gradeLabel = grade ? GRADE_LABELS[grade] : null;
 
   const reviewResultLabel = version?.review_conclusion
@@ -522,9 +539,10 @@ export default function ReviewDetailPage() {
         <div className="review-detail-bar-main">
           <div className="review-detail-bar-top">
             <h1 className="review-detail-bar-name">{pkg?.name || '(加载中…)'}</h1>
-            {grade && (
-              <span className={`grade-badge ${grade.toLowerCase()}`} title={gradeLabel || ''}>
-                {grade}
+            {version?.effective_grade && (
+              <span className={`grade-badge ${version.effective_grade.toLowerCase()}`} title={gradeLabel || ''}>
+                {version.effective_grade}
+                {version.manual_grade && '*'}
               </span>
             )}
             <span className={`status-badge ${version?.status}`}>
@@ -554,7 +572,7 @@ export default function ReviewDetailPage() {
           )}
           {gradeLabel && (
             <div className="review-detail-bar-grade-label">
-              风险等级：{grade} — {gradeLabel}
+              风险等级：{version?.effective_grade} — {gradeLabel}
             </div>
           )}
           {reviewResultLabel && (
@@ -586,6 +604,88 @@ export default function ReviewDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── 手动评级提示横幅 ── */}
+      {version?.manual_grade && version.auto_grade && version.manual_grade !== version.auto_grade && (
+        <div style={{
+          marginBottom: '1rem', padding: '0.85rem 1.25rem',
+          background: 'oklch(94% 0.03 85)',
+          borderLeft: '4px solid var(--color-accent)',
+          borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+          fontSize: '0.82rem', color: 'var(--color-ink)',
+          display: 'flex', alignItems: 'center', gap: '1rem',
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontWeight: 600 }}>
+            该包的评级已被手动修正：{version.auto_grade} (auto) → {version.manual_grade} (manual)
+          </span>
+          {version.manual_grade_reason && (
+            <span style={{ color: 'var(--color-muted)', fontSize: '0.76rem' }}>
+              理由：{version.manual_grade_reason}
+            </span>
+          )}
+          {version.manual_grade_by && (
+            <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>
+              由 {version.manual_grade_by_name || version.manual_grade_by} 修改
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── 信任评分 + 手动评级 ── */}
+      {version?.trust_score && (
+        <section className="review-detail-section">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+            <h2 className="review-detail-section-title" style={{ margin: 0 }}>信任评分</h2>
+            {canModifyGrade && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowGradeModal(true)}
+              >
+                修改手动评级
+              </button>
+            )}
+          </div>
+
+          <div style={{
+            display: 'flex', gap: '1.5rem', marginBottom: '1rem', flexWrap: 'wrap',
+            padding: '0.75rem 1rem',
+            background: 'var(--color-paper-2)',
+            borderRadius: 'var(--radius-md)',
+          }}>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>自动评分</span>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
+                {version.auto_grade ? (
+                  <span className={`grade-badge ${version.auto_grade.toLowerCase()}`}>{version.auto_grade}</span>
+                ) : '—'}
+              </div>
+            </div>
+            <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>→</div>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>
+                手动评级 {version.manual_grade ? '' : '(未设置)'}
+              </span>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
+                {version.manual_grade ? (
+                  <span style={{ color: 'var(--color-ink)' }}>{version.manual_grade} *</span>
+                ) : <span style={{ color: 'var(--color-muted)' }}>自动</span>}
+              </div>
+            </div>
+            <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>=</div>
+            <div>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>生效评级</span>
+              <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
+                {version.effective_grade ? (
+                  <span className={`grade-badge ${version.effective_grade.toLowerCase()}`}>{version.effective_grade}</span>
+                ) : '—'}
+              </div>
+            </div>
+          </div>
+
+          <TrustScoreDetail trustScore={version.trust_score} />
+        </section>
+      )}
 
       {/* ── 审核历史时间线 ── */}
       {reviewHistory.length > 0 && (
@@ -945,6 +1045,22 @@ export default function ReviewDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── 手动评级 Modal ── */}
+      {showGradeModal && token && version && (
+        <GradeOverrideModal
+          versionId={versionId}
+          autoGrade={version.auto_grade ?? null}
+          currentManualGrade={version.manual_grade ?? null}
+          currentReason={version.manual_grade_reason ?? null}
+          token={token}
+          onClose={() => setShowGradeModal(false)}
+          onComplete={() => {
+            setShowGradeModal(false);
+            window.location.reload();
+          }}
+        />
       )}
     </div>
   );

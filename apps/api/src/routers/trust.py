@@ -368,6 +368,7 @@ def _run_scan_task(
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "scan_report": scan_report,
             "trust_score": trust_score_result,
+            "file_contents": scanner._file_contents,
         }
 
         # Step 5: 更新内存状态
