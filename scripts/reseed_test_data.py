@@ -2,12 +2,17 @@
 用法: python scripts/reseed_test_data.py
 """
 import json
+import os
 import uuid
 import sys
 from typing import Set
 from datetime import datetime, timezone
 
-DB_URL = "postgresql://postgres:293021@localhost:5432/trusted_agent_hub"
+from dotenv import load_dotenv
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(REPO, "apps", "api", ".env"))
+DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/trusted_agent_hub")
 
 # ============================================================
 # 固定参数
@@ -35,16 +40,7 @@ def _ver(uid: str) -> str:
             _used_ids.add(vid)
             return vid
 
-# ============================================================
-# 等级映射
-# ============================================================
-RISK_TO_GRADE = {
-    "trusted":     "A",
-    "low_risk":    "B",
-    "medium_risk": "C",
-    "high_risk":   "D",
-    "untrusted":   "E",
-}
+from scanners.risk_scanner.weights import LEVEL_TO_GRADE
 
 # ============================================================
 # 50 条包定义 — 覆盖全部状态 / 类型 / 等级组合
@@ -221,7 +217,7 @@ def _build_packages():
 
 def main():
     import psycopg2
-    conn = psycopg2.connect(host='localhost', port=5432, dbname='trusted_agent_hub', user='postgres', password='293021')
+    conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
 
     # ── 清理旧数据（按依赖顺序：先子后父） ──

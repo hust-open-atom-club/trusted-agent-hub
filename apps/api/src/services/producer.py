@@ -641,6 +641,7 @@ class ProducerService:
         validate_transition(current, target)
 
         self.repository.update_version_status(version_id, target)
+        self.repository.update_version_data(version_id, {"yank_reason": None})
         self.repository.create_audit_log(
             action=AuditAction.UNYANK.value if hasattr(AuditAction, 'UNYANK') else "unyank",
             target_type="version",
@@ -652,6 +653,38 @@ class ProducerService:
             version_id=version_id,
             new_status=target,
             message="版本已撤销下架，恢复为已发布",
+        )
+
+    def re_review_version(
+        self,
+        *,
+        version_id: str,
+        operator_id: str = "system",
+    ) -> "ReviewResponse":
+        """管理员将已发布版本退回审核队列：published → pending_review。"""
+        from src.models.producer import ReviewResponse
+
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+
+        current = version.get("status", "")
+        target = "pending_review"
+        validate_transition(current, target)
+
+        self.repository.update_version_status(version_id, target)
+        self.repository.update_version_data(version_id, {"yank_reason": None})
+        self.repository.create_audit_log(
+            action="re_review",
+            target_type="version",
+            target_id=version_id,
+            operator_id=operator_id,
+        )
+
+        return ReviewResponse(
+            version_id=version_id,
+            new_status=target,
+            message="版本已退回审核队列",
         )
 
     def delete_version(

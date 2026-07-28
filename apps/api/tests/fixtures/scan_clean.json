@@ -1,0 +1,22 @@
+{
+  "scan_id": "scan-clean-000000000001",
+  "package_name": "test-package",
+  "version": "1.0.0",
+  "scanned_at": "2026-07-28T00:00:00Z",
+  "scanner_version": "0.3.0",
+  "duration_ms": 100,
+  "findings": [],
+  "summary": {
+    "total": 0,
+    "effective_total": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "metadata_validation": { "valid": true, "errors": [] },
+  "structure_check": { "valid": true, "missing_files": [], "extra_files": [] },
+  "dependency_check": { "total_dependencies": 0, "known_vulnerabilities": 0, "unlocked_versions": 0, "suspicious_packages": [] },
+  "file_contents": {}
+}
