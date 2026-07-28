@@ -1,31 +1,6 @@
 'use client';
 
-interface DimensionItem {
-  score: number;
-  weight: number;
-  details?: Record<string, unknown>;
-}
-
-interface ExplanationItem {
-  dimension: string;
-  message: string;
-  deduction: number;
-  evidence?: string;
-}
-
-interface TrustScoreData {
-  score?: number;
-  risk_summary?: {
-    level?: string;
-    grade?: string;
-    top_risks?: string[];
-    install_recommendation?: string;
-  };
-  dimensions?: Record<string, DimensionItem>;
-  explanations?: ExplanationItem[];
-  calculated_at?: string;
-  model_version?: string;
-}
+import type { TrustScore, TrustScoreDimension, TrustScoreExplanation } from '@/types';
 
 const DIM_LABELS: Record<string, string> = {
   source_trust: '来源可信度',
@@ -140,7 +115,7 @@ function levelLabel(level: string | undefined): string {
 export default function TrustScoreDetail({
   trustScore,
 }: {
-  trustScore: TrustScoreData | null | undefined;
+  trustScore: TrustScore | null | undefined;
 }) {
   if (!trustScore) return null;
 

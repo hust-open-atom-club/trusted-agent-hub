@@ -4,18 +4,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
+import type { Finding, VersionDetail } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-interface Finding {
-  id: string;
-  location?: { file?: string; line?: number };
-}
-
-interface VersionDetail {
-  scan_file_contents?: Record<string, string>;
-  findings?: Finding[];
-}
 
 export default function FileViewerPage() {
   const router = useRouter();

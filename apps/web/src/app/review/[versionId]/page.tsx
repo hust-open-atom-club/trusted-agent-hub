@@ -7,121 +7,12 @@ import { apiFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 import { toast } from 'sonner';
+import type {
+  Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord,
+  PackagePermissions, PackageAuthor, PackageDetail, FindingLocation,
+} from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-/* ── 类型定义 ── */
-
-interface Location {
-  file?: string;
-  line?: number;
-  snippet?: string;
-}
-
-interface Finding {
-  id: string;
-  rule_id: string;
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
-  category: string;
-  title: string;
-  description: string;
-  location?: Location;
-  evidence?: string;
-  remediation?: string;
-  cwe_id?: string;
-}
-
-interface ScanSummary {
-  total?: number;
-  critical?: number;
-  high?: number;
-  medium?: number;
-  low?: number;
-  info?: number;
-  pass_rate?: number;
-}
-
-interface TrustScore {
-  score?: number;
-  risk_summary?: {
-    grade?: string;
-    level?: string;
-    top_risks?: string[];
-    install_recommendation?: string;
-  };
-  dimensions?: Record<string, { score: number; weight: number; details?: Record<string, unknown> }>;
-  explanations?: { dimension: string; message: string; deduction: number; evidence?: string }[];
-  calculated_at?: string;
-}
-
-interface VersionDetail {
-  id: string;
-  package_id: string;
-  version: string;
-  status: string;
-  source?: {
-    type?: string;
-    repository_url?: string;
-    ref?: string;
-    commit_hash?: string;
-  };
-  description?: string;
-  scan_summary?: ScanSummary;
-  findings?: Finding[];
-  scan_file_contents?: Record<string, string>;
-  trust_score?: TrustScore;
-  auto_grade?: string | null;
-  manual_grade?: string | null;
-  manual_grade_by?: string | null;
-  manual_grade_by_name?: string | null;
-  manual_grade_reason?: string | null;
-  effective_grade?: string | null;
-  review_conclusion?: string | null;
-  submitted_at?: string | null;
-  created_at?: string | null;
-}
-
-interface ReviewRecord {
-  id: string;
-  version_id: string;
-  reviewer_id: string;
-  reviewer_name: string | null;
-  reviewer_display_name: string | null;
-  conclusion: string;
-  comment: string | null;
-  created_at: string;
-}
-
-interface Permissions {
-  filesystem?: string;
-  shell?: string;
-  network?: string;
-  env?: string;
-  credentials?: string;
-  [key: string]: string | undefined;
-}
-
-interface Author {
-  name?: string;
-  email?: string;
-  url?: string;
-}
-
-interface PackageDetail {
-  id: string;
-  name: string;
-  type: string;
-  description: string;
-  license?: string | null;
-  keywords?: string[];
-  category?: string | null;
-  homepage?: string | null;
-  icon_url?: string | null;
-  author?: Author | null;
-  permissions?: Permissions | null;
-  installation?: Record<string, unknown> | null;
-  compatibility?: string[];
-}
 
 interface FileGroup {
   file: string;
@@ -899,7 +790,7 @@ export default function ReviewDetailPage() {
                           (SEVERITY_ORDER[b.severity] ?? 99),
                       )
                       .map((finding) => (
-                         <div key={finding.id} className={`finding-card ${finding.severity}`}>
+                         <div key={finding.id!} className={`finding-card ${finding.severity}`}>
                           <div className="finding-card-left" />
                           <div className="finding-card-body">
                             <div className="finding-card-header">
@@ -924,11 +815,11 @@ export default function ReviewDetailPage() {
                                   onClick={() => {
                                     setShowCodeFor((prev) => ({
                                       ...prev,
-                                      [finding.id]: !prev[finding.id],
+                                      [finding.id!!]: !prev[finding.id!!],
                                     }));
                                   }}
                                 >
-                                  {showCodeFor[finding.id] ? '▾ 收起代码' : '▸ 查看代码上下文'}
+                                  {showCodeFor[finding.id!!] ? '▾ 收起代码' : '▸ 查看代码上下文'}
                                 </button>
                               )}
                               <div className="finding-meta-pills">
@@ -941,7 +832,7 @@ export default function ReviewDetailPage() {
                               </div>
                             </div>
 
-                            {showCodeFor[finding.id] && (
+                            {showCodeFor[finding.id!] && (
                               <FindingCodeView
                                 finding={finding}
                                 fileContents={version?.scan_file_contents}
