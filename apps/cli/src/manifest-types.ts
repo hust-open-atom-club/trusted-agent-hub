@@ -109,6 +109,9 @@ export interface ManifestRiskSummary {
   grade: 'A' | 'B' | 'C' | 'D' | 'E';
   top_risks?: string[];
   install_recommendation: string;
+  auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
 }
 
 // ---------------------------------------------------------------------------

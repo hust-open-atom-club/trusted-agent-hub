@@ -153,11 +153,15 @@ export default function PackageDetailPage() {
   const trustAdvice =
     pkg.grade === null
       ? 'This package has not been evaluated yet.'
-      : pkg.grade === 'A' || pkg.grade === 'B'
+      : pkg.grade === 'A'
         ? 'This package has passed all security scans and is safe to install.'
-        : pkg.grade === 'C'
-          ? 'This package has medium trust. Review the details before installing.'
-          : 'This package has low trust. Installation is not recommended without thorough review.';
+        : pkg.grade === 'B'
+          ? 'Low risk. Review permissions before installing.'
+          : pkg.grade === 'C'
+            ? 'Medium risk. Review the details and confirm before installing.'
+            : pkg.grade === 'D'
+              ? 'High risk. Installation is not recommended without thorough review.'
+              : 'Untrusted. Installation is blocked by safety policy.';
 
   const source = versionDetail?.source;
   const install = versionDetail?.installation;

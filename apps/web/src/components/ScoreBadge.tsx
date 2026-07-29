@@ -10,7 +10,7 @@ function getGradeClass(grade: string | null): string {
   const g = grade.toUpperCase();
   if (g === 'A' || g === 'B') return 'trusted';
   if (g === 'C') return 'caution';
-  if (g === 'D' || g === 'E' || g === 'F') return 'danger';
+  if (g === 'D' || g === 'E') return 'danger';
   return 'unknown';
 }
 

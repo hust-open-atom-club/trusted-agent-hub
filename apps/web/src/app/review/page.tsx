@@ -26,7 +26,7 @@ interface ReviewItem {
   findings_count: number;
 }
 
-const GRADE_OPTIONS = ['全部', 'A', 'B', 'C', 'D', 'E', 'F'];
+const GRADE_OPTIONS = ['全部', 'A', 'B', 'C', 'D', 'E'];
 
 const PACKAGE_TYPE_LABELS: Record<string, string> = {
   skill: 'Skill',

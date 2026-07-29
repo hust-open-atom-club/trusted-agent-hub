@@ -52,7 +52,7 @@ function formatDate(iso: string | null): string {
 
 function levelLabel(grade: string): string {
   const m: Record<string, string> = {
-    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险', F: '严重风险',
+    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险',
   };
   return m[grade] ?? grade;
 }
@@ -328,7 +328,7 @@ export default function AdminPublishPage() {
                 )}
 
                 {selectedItem.auto_grade && selectedItem.manual_grade &&
-                  Math.abs(['A','B','C','D','E','F'].indexOf(selectedItem.auto_grade) - ['A','B','C','D','E','F'].indexOf(selectedItem.manual_grade)) >= 3 && (
+                  Math.abs(['A','B','C','D','E'].indexOf(selectedItem.auto_grade) - ['A','B','C','D','E'].indexOf(selectedItem.manual_grade)) >= 3 && (
                   <div style={{
                     marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--color-danger)',
                     fontWeight: 600,

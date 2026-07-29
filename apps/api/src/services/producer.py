@@ -252,9 +252,9 @@ class ProducerService:
         if not reason or not reason.strip():
             raise ProducerServiceError("手动评级修改理由不能为空")
 
-        valid_grades = {"A", "B", "C", "D", "E", "F"}
+        valid_grades = {"A", "B", "C", "D", "E"}
         if grade is not None and grade.upper() not in valid_grades:
-            raise ProducerServiceError(f"无效的评级: {grade}，允许: A/B/C/D/E/F")
+            raise ProducerServiceError(f"无效的评级: {grade}，允许: A/B/C/D/E")
 
         version = self.repository.get_version(version_id)
         if version is None:
@@ -368,7 +368,7 @@ class ProducerService:
 
     _GRADE_LABELS: dict[str, str] = {
         "A": "高度可信", "B": "可信", "C": "需注意",
-        "D": "有风险", "E": "高风险", "F": "严重风险",
+        "D": "有风险", "E": "高风险",
     }
 
     def list_versions_by_status(

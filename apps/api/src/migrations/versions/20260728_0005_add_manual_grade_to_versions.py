@@ -19,8 +19,8 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("package_versions", sa.Column(
-        "manual_grade", sa.String(2), nullable=True, index=True,
-        comment="手动评级: A/B/C/D/E/F, null=使用自动评分",
+        "manual_grade", sa.String(2), nullable=True,
+        comment="手动评级: A/B/C/D/E, null=使用自动评分",
     ))
     op.add_column("package_versions", sa.Column(
         "manual_grade_by", sa.String(64), nullable=True,

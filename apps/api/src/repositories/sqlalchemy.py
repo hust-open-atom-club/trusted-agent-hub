@@ -421,7 +421,35 @@ def _package_from_row(row: PackageRow) -> PackageSummary:
 
 
 def _version_from_row(row: PackageVersionRow) -> VersionDetail:
-    return _safe_validate(VersionDetail, row.data)
+    data = dict(row.data)
+
+    # Extract auto_grade from trust_score.risk_summary.grade (auto scan result)
+    auto_grade = None
+    trust_score = data.get("trust_score", {})
+    if isinstance(trust_score, dict):
+        risk_summary = trust_score.get("risk_summary", {})
+        if isinstance(risk_summary, dict):
+            auto_grade = risk_summary.get("grade")
+
+    # Read manual_grade from dedicated DB columns
+    # Backward compat: treat legacy "F" as None (F is no longer a valid grade)
+    manual_grade = (
+        row.manual_grade if row.manual_grade and row.manual_grade != "F" else None
+    )
+
+    # effective_grade = manual_grade ?? auto_grade
+    effective_grade = manual_grade if manual_grade else auto_grade
+
+    data["auto_grade"] = auto_grade
+    data["manual_grade"] = manual_grade
+    data["effective_grade"] = effective_grade
+    data["manual_grade_by"] = row.manual_grade_by
+    data["manual_grade_reason"] = row.manual_grade_reason
+    data["manual_grade_at"] = (
+        _serialize_datetime(row.manual_grade_at) if row.manual_grade_at else None
+    )
+
+    return _safe_validate(VersionDetail, data)
 
 
 def _serialize_datetime(value: datetime) -> str:
