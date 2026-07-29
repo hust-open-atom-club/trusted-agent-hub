@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import type { ReviewRecord } from '@/types';
@@ -13,12 +14,6 @@ interface HistoryReviewRecord extends ReviewRecord {
   version_status: string;
   package_name: string;
 }
-
-const CONCLUSION_LABELS: Record<string, string> = {
-  approved: '通过',
-  rejected: '驳回',
-  changes_requested: '需修改',
-};
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -35,39 +30,9 @@ function formatDate(iso: string | null): string {
   }
 }
 
-function SkeletonTable() {
-  return (
-    <div className="admin-table-wrapper">
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>结论</th>
-            <th>包名称</th>
-            <th>版本</th>
-            <th>当前状态</th>
-            <th>意见</th>
-            <th>审核时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Array.from({ length: 5 }).map((_, i) => (
-            <tr key={i}>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '3rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '4rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
-              <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export default function ReviewHistoryPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [records, setRecords] = useState<HistoryReviewRecord[]>([]);
@@ -75,6 +40,12 @@ export default function ReviewHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const pageSize = 20;
+
+  const conclusionLabels: Record<string, string> = {
+    approved: t('review.conclusion.approved'),
+    rejected: t('review.conclusion.rejected'),
+    changes_requested: t('review.conclusion.changes_requested'),
+  };
 
   const fetchRecords = () => {
     if (!token || !user) return;
@@ -86,7 +57,7 @@ export default function ReviewHistoryPage() {
       { headers: { Authorization: `Bearer ${token}` } },
     )
       .then((data) => setRecords(data))
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   };
 
@@ -94,7 +65,7 @@ export default function ReviewHistoryPage() {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录审核员账号');
+      setError(t('review.auth_required'));
       return;
     }
     fetchRecords();
@@ -106,34 +77,61 @@ export default function ReviewHistoryPage() {
     <div className="review-detail-page">
       <nav className="review-detail-nav">
         <button onClick={() => router.push('/review')} className="link-btn">
-          ← 返回待审核列表
+          {t('review.history.back_to_review')}
         </button>
         <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
 
       <div className="admin-section-header">
-        <h1>审核历史</h1>
-        <p>共 {records.length}+ 条审核记录</p>
+        <h1>{t('review.history.title')}</h1>
+        <p>{t('review.history.subtitle', { count: records.length })}</p>
       </div>
 
       {error && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
           <button className="btn btn-secondary btn-sm" style={{ marginTop: '1rem' }} onClick={fetchRecords}>
-            重试
+            {t('common.retry')}
           </button>
         </div>
       )}
 
-      {!error && isFirstLoad && <SkeletonTable />}
+      {!error && isFirstLoad && (
+        <div className="admin-table-wrapper">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>{t('review.history.table.conclusion')}</th>
+                <th>{t('review.history.table.package_name')}</th>
+                <th>{t('review.history.table.version')}</th>
+                <th>{t('review.history.table.status')}</th>
+                <th>{t('review.history.table.comment')}</th>
+                <th>{t('review.history.table.time')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '3rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '4rem', height: '1.4rem', borderRadius: 'var(--radius-pill)' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {!error && !isFirstLoad && records.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4CB;</div>
-          <h3>暂无审核记录</h3>
-          <p>你还没有审核过任何版本</p>
+          <h3>{t('review.history.empty')}</h3>
+          <p>{t('review.history.empty_hint')}</p>
         </div>
       )}
 
@@ -143,37 +141,37 @@ export default function ReviewHistoryPage() {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>结论</th>
-                  <th>包名称</th>
-                  <th>版本</th>
-                  <th>当前状态</th>
-                  <th>意见</th>
-                  <th>审核时间</th>
+                  <th>{t('review.history.table.conclusion')}</th>
+                  <th>{t('review.history.table.package_name')}</th>
+                  <th>{t('review.history.table.version')}</th>
+                  <th>{t('review.history.table.status')}</th>
+                  <th>{t('review.history.table.comment')}</th>
+                  <th>{t('review.history.table.time')}</th>
                 </tr>
               </thead>
               <tbody>
                 {records.map((r) => (
                   <tr key={r.id}>
-                    <td data-label="结论">
+                    <td data-label={t('review.history.table.conclusion')}>
                       <span className={`status-badge ${r.conclusion}`}>
-                        {CONCLUSION_LABELS[r.conclusion] || r.conclusion}
+                        {conclusionLabels[r.conclusion] || r.conclusion}
                       </span>
                     </td>
-                    <td data-label="包名称" className="admin-pkg-name">
+                    <td data-label={t('review.history.table.package_name')} className="admin-pkg-name">
                       {r.package_name}
                     </td>
-                    <td data-label="版本">
+                    <td data-label={t('review.history.table.version')}>
                       <code>v{r.version}</code>
                     </td>
-                    <td data-label="当前状态">
+                    <td data-label={t('review.history.table.status')}>
                       <span className={`status-badge ${r.version_status}`}>
                         {r.version_status}
                       </span>
                     </td>
-                    <td data-label="意见" style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <td data-label={t('review.history.table.comment')} style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {r.comment || '—'}
                     </td>
-                    <td data-label="审核时间">{formatDate(r.created_at)}</td>
+                    <td data-label={t('review.history.table.time')}>{formatDate(r.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -186,15 +184,15 @@ export default function ReviewHistoryPage() {
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
             >
-              上一页
+              {t('review.history.prev')}
             </button>
-            <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>第 {page + 1} 页</span>
+            <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>{t('review.history.page_num', { page: page + 1 })}</span>
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setPage((p) => p + 1)}
               disabled={records.length < pageSize}
             >
-              下一页
+              {t('review.history.next')}
             </button>
           </div>
         </>

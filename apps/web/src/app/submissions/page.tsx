@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -18,19 +19,6 @@ interface VersionItem {
   submitted_at: string | null;
   yank_reason?: string | null;
 }
-
-const STATUS_LABELS: Record<string, { label: string; className: string }> = {
-  draft:        { label: '草稿',     className: 'draft' },
-  submitted:    { label: '已提交',   className: 'submitted' },
-  scanning:     { label: '扫描中',   className: 'scanning' },
-  pending_review: { label: '等待审核', className: 'pending_review' },
-  approved:     { label: '审核通过', className: 'approved' },
-  published:    { label: '已发布',   className: 'published' },
-  rejected:     { label: '已驳回',   className: 'rejected' },
-  changes_requested: { label: '需修改', className: 'changes_requested' },
-  error:        { label: '错误',     className: 'error' },
-  yanked:       { label: '已下架',   className: 'yanked' },
-};
 
 function formatDate(iso: string | null): string {
   if (!iso) return '\u2014';
@@ -48,42 +36,9 @@ function formatDate(iso: string | null): string {
   }
 }
 
-function SkeletonCard() {
-  return (
-    <div
-      style={{
-        background: 'var(--color-paper-2)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '1.25rem 1.5rem',
-        marginBottom: '0.75rem',
-        border: '1px solid var(--color-rule)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '0.75rem',
-      }}
-    >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div className="skeleton" style={{ marginBottom: '0.5rem' }}>
-          <div className="skeleton-bar" style={{ width: '40%', height: '1.2rem' }} />
-        </div>
-        <div className="skeleton">
-          <div className="skeleton-bar" style={{ width: '60%' }} />
-        </div>
-        <div className="skeleton" style={{ marginTop: '0.4rem' }}>
-          <div className="skeleton-bar" style={{ width: '30%' }} />
-        </div>
-      </div>
-      <div className="skeleton">
-        <div className="skeleton-bar" style={{ width: '5rem', height: '2rem', borderRadius: 'var(--radius-pill)' }} />
-      </div>
-    </div>
-  );
-}
-
 export default function MySubmissionsPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
   const [items, setItems] = useState<VersionItem[]>([]);
   const [search, setSearch] = useState('');
@@ -91,6 +46,19 @@ export default function MySubmissionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const pageSize = 20;
+
+  const statusLabels: Record<string, { label: string; className: string }> = {
+    draft:        { label: t('submissions.status.draft'),     className: 'draft' },
+    submitted:    { label: t('submissions.status.draft'),   className: 'submitted' },
+    scanning:     { label: t('submissions.status.scanning'),   className: 'scanning' },
+    pending_review: { label: t('submissions.status.pending_review'), className: 'pending_review' },
+    approved:     { label: t('submissions.status.approved'), className: 'approved' },
+    published:    { label: t('submissions.status.published'),   className: 'published' },
+    rejected:     { label: t('submissions.status.rejected'),   className: 'rejected' },
+    changes_requested: { label: t('submissions.status.changes_requested'), className: 'changes_requested' },
+    error:        { label: t('submissions.status.scan_failed'),     className: 'error' },
+    yanked:       { label: t('submissions.status.yanked'),   className: 'yanked' },
+  };
 
   const fetchItems = () => {
     if (!user) return;
@@ -111,7 +79,7 @@ export default function MySubmissionsPage() {
     if (authLoading) return;
     if (!user) {
       setLoading(false);
-      setError('请先登录');
+      setError(t('submissions.login_required'));
       return;
     }
     fetchItems();
@@ -131,8 +99,8 @@ export default function MySubmissionsPage() {
   return (
     <div className="status-page">
       <div className="status-header">
-        <h1>我的提交</h1>
-        <p>查看你提交的所有能力包及其审核状态</p>
+        <h1>{t('submissions.title')}</h1>
+        <p>{t('submissions.subtitle')}</p>
       </div>
 
       <div style={{ maxWidth: '640px', margin: '0 auto 2rem' }}>
@@ -143,7 +111,7 @@ export default function MySubmissionsPage() {
           <input
             type="text"
             className="scanner-url-input"
-            placeholder="搜索版本 ID 或包名..."
+            placeholder={t('submissions.search_placeholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
@@ -154,7 +122,7 @@ export default function MySubmissionsPage() {
             }}
           />
           <Link href="/submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
-            + 提交新包
+            {t('submissions.submit_new')}
           </Link>
         </form>
       </div>
@@ -163,25 +131,56 @@ export default function MySubmissionsPage() {
         {error && (
           <div className="empty-state">
             <div className="empty-state-icon">&#x26A0;</div>
-            <h3>加载失败</h3>
+            <h3>{t('admin.dashboard.load_failed')}</h3>
             <p>{error}</p>
             <button className="btn btn-secondary btn-sm" style={{ marginTop: '1rem' }} onClick={fetchItems}>
-              重试
+              {t('common.retry')}
             </button>
           </div>
         )}
 
         {!error && isFirstLoad && (
-          Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)
+          Array.from({ length: 5 }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                background: 'var(--color-paper-2)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '1.25rem 1.5rem',
+                marginBottom: '0.75rem',
+                border: '1px solid var(--color-rule)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '0.75rem',
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="skeleton" style={{ marginBottom: '0.5rem' }}>
+                  <div className="skeleton-bar" style={{ width: '40%', height: '1.2rem' }} />
+                </div>
+                <div className="skeleton">
+                  <div className="skeleton-bar" style={{ width: '60%' }} />
+                </div>
+                <div className="skeleton" style={{ marginTop: '0.4rem' }}>
+                  <div className="skeleton-bar" style={{ width: '30%' }} />
+                </div>
+              </div>
+              <div className="skeleton">
+                <div className="skeleton-bar" style={{ width: '5rem', height: '2rem', borderRadius: 'var(--radius-pill)' }} />
+              </div>
+            </div>
+          ))
         )}
 
         {!error && !isFirstLoad && !hasResults && (
           <div className="empty-state">
             <div className="empty-state-icon">&#x1F4E6;</div>
-            <h3>还没有提交记录</h3>
-            <p>你还没有提交过任何能力包，去提交一个吧！</p>
+            <h3>{t('submissions.empty')}</h3>
+            <p>{t('submissions.empty_hint')}</p>
             <Link href="/submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-              前往提交
+              {t('submissions.go_submit')}
             </Link>
           </div>
         )}
@@ -189,7 +188,7 @@ export default function MySubmissionsPage() {
         {!isFirstLoad && hasResults && (
           <>
             {filtered.map((item) => {
-              const st = STATUS_LABELS[item.status] || { label: item.status, className: 'status-unknown' };
+              const st = statusLabels[item.status] || { label: item.status, className: 'status-unknown' };
               const statusUrl = `/packages/${encodeURIComponent(item.package_name)}/versions/${encodeURIComponent(item.version)}/status?vid=${encodeURIComponent(item.version_id)}`;
               return (
                 <div
@@ -239,11 +238,11 @@ export default function MySubmissionsPage() {
                       <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: 'var(--color-danger-light)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--color-ink-2)', lineHeight: 1.5 }}>
                         {item.yank_reason && (
                           <div style={{ marginBottom: '0.25rem' }}>
-                            <strong>下架原因：</strong>{item.yank_reason}
+                            <strong>{t('submissions.yank_reason_label')}</strong>{item.yank_reason}
                           </div>
                         )}
                         <div style={{ color: 'var(--color-muted)', fontSize: '0.75rem' }}>
-                          如有任何疑问，请联系 {SUPPORT_EMAIL}
+                          {t('submissions.contact_support', { email: SUPPORT_EMAIL })}
                         </div>
                       </div>
                     )}
@@ -253,7 +252,7 @@ export default function MySubmissionsPage() {
                     onClick={() => router.push(statusUrl)}
                     style={{ flexShrink: 0 }}
                   >
-                    查看状态
+                    {t('submissions.view_status')}
                   </button>
                 </div>
               );
@@ -265,15 +264,15 @@ export default function MySubmissionsPage() {
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
               >
-                上一页
+                {t('submissions.prev')}
               </button>
-              <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>第 {page + 1} 页</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>{t('submissions.page_num', { page: page + 1 })}</span>
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => setPage((p) => p + 1)}
                 disabled={items.length < pageSize}
               >
-                下一页
+                {t('submissions.next')}
               </button>
             </div>
           </>

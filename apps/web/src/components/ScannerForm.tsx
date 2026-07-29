@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import ScoreBadge from './ScoreBadge';
 
@@ -55,6 +56,7 @@ interface ScannerFormProps {
 }
 
 export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
+  const { t } = useTranslation();
   const router = useRouter();
   const { user } = useAuth();
   const [repoUrl, setRepoUrl] = useState('');
@@ -140,10 +142,10 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
         <div className="scanner-header">
           <h2 className="scanner-title">
             <svg className="scanner-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Submit a Package for Trust Scan
+            {t('scanner.title')}
           </h2>
           <p className="scanner-desc">
-            Paste a GitHub URL or pick a built-in local skill to scan for security risks.
+            {t('scanner.desc')}
           </p>
         </div>
 
@@ -151,19 +153,19 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
           <form className="scanner-form" onSubmit={handleSubmit}>
             <div className="scanner-input-row">
               <input type="url" className="scanner-url-input"
-                placeholder="https://github.com/owner/repo"
+                placeholder={t('scanner.url_placeholder')}
                 value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)}
                 disabled={isBusy} required />
               <button type="submit" className="scanner-submit-btn" disabled={isBusy || !repoUrl.trim()}>
-                {isBusy ? 'Scanning...' : 'Start Scan'}
+                {isBusy ? t('scanner.scanning') : t('scanner.scan_btn')}
               </button>
             </div>
-            <p className="scanner-hint">Only public GitHub repositories (HTTPS URL).</p>
+            <p className="scanner-hint">{t('scanner.hint')}</p>
 
             {/* Local skills quick-access */}
-            <div className="scanner-test-area">
-              <span className="scanner-test-label">Or pick a built-in local skill to test:</span>
-            </div>
+              <div className="scanner-test-area">
+                  <span className="scanner-test-label">{t('scanner.local_label')}</span>
+                </div>
             <div className="local-skills-grid">
               {LOCAL_SKILLS.map((skill) => (
                 <button type="button" key={skill.name}
@@ -183,7 +185,7 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
           <div className="scanner-status scanner-status-busy">
             <div className="scanner-spinner" />
             <div>
-              <p className="scanner-status-title">Scan in Progress</p>
+              <p className="scanner-status-title">{t('scanner.status_scanning')}</p>
               <p className="scanner-status-msg">{statusMessage}</p>
             </div>
           </div>
@@ -195,10 +197,10 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
             </div>
             <div>
-              <p className="scanner-status-title">Scan Failed</p>
-              <p className="scanner-status-msg">{scanResult.error || 'Unknown error'}</p>
+              <p className="scanner-status-title">{t('scanner.status_failed')}</p>
+              <p className="scanner-status-msg">{scanResult.error || t('scanner.unknown_error')}</p>
             </div>
-            <button className="scanner-retry-btn" onClick={handleReset}>Try Again</button>
+            <button className="scanner-retry-btn" onClick={handleReset}>{t('scanner.retry')}</button>
           </div>
         )}
 
@@ -207,11 +209,11 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
           <div className="scanner-result">
             <div className="scanner-result-header">
               <div className="scanner-result-score">
-                <span className="scanner-result-label">Trust Score</span>
+                <span className="scanner-result-label">{t('scanner.trust_score')}</span>
                 <ScoreBadge grade={scanResult.trust_score?.grade ?? null} size="lg" />
                 {scanResult.trust_score?.grade && (
                   <span className={`scanner-result-grade grade-${scanResult.trust_score.grade.toLowerCase()}`}>
-                    Grade {scanResult.trust_score.grade}
+                    {t('scanner.grade')} {scanResult.trust_score.grade}
                   </span>
                 )}
                 {scanResult.trust_score?.level && (
@@ -222,9 +224,9 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
                 <span className="scanner-result-pkg">{scanResult.package_name}</span>
                 {scanResult.trust_score?.recommendation && (
                   <span className="scanner-result-recommendation">
-                    {scanResult.trust_score.recommendation === 'safe' ? 'Safe to install'
-                      : scanResult.trust_score.recommendation === 'review_recommended' ? 'Review recommended'
-                      : scanResult.trust_score.recommendation === 'blocked' ? 'Blocked'
+                    {scanResult.trust_score.recommendation === 'safe' ? t('scanner.safe')
+                      : scanResult.trust_score.recommendation === 'review_recommended' ? t('scanner.review_recommended')
+                      : scanResult.trust_score.recommendation === 'blocked' ? t('scanner.blocked')
                       : scanResult.trust_score.recommendation}
                   </span>
                 )}
@@ -233,7 +235,7 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
                 <div className="scanner-result-llm">
                   <span className="llm-review-badge" title={`LLM reviewed ${scanResult.llm_review.findings_reviewed} findings`}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    LLM Review: {scanResult.llm_review.findings_reviewed} findings
+                    {t('scanner.llm_review')}: {scanResult.llm_review.findings_reviewed} {t('scanner.findings')}
                   </span>
                   {scanResult.llm_review.labels_summary && (
                     <div className="llm-labels-summary">
@@ -266,7 +268,7 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
 
             {scanResult.summary && (
               <div className="scanner-result-findings">
-                <h4>Security Findings</h4>
+                <h4>{t('scanner.findings')}</h4>
                 <div className="findings-grid">
                   {(['critical','high','medium','low','info'] as const).map((sev) => (
                     <div key={sev} className={`finding-item ${sev}`}>
@@ -275,7 +277,7 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
                     </div>
                   ))}
                 </div>
-                <div className="findings-pass-rate">Pass Rate: {scanResult.summary.pass_rate}%</div>
+                <div className="findings-pass-rate">{t('scanner.pass_rate')}: {scanResult.summary.pass_rate}%</div>
               </div>
             )}
 
@@ -297,16 +299,16 @@ export default function ScannerForm({ onRepoScanned }: ScannerFormProps) {
                       )
                     }
                   >
-                    提交入库审核
+{t('scanner.submit_btn')}
                   </button>
                 )
               ) : (
                 <p className="scanner-login-hint">
-                  <a href="/login">登录</a>后即可提交入库审核
+                  <a href="/login">{t('scanner.login_hint_prefix')}</a>{t('scanner.login_hint_suffix')}
                 </p>
               )}
               <button className="scanner-reset-btn" onClick={handleReset}>
-                Scan Another Package
+                {t('scanner.reset')}
               </button>
             </div>
           </div>

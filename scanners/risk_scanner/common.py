@@ -39,6 +39,7 @@ REQUIRED_FILES_BY_TYPE: dict[str, list[str]] = {
     "skill": ["SKILL.md"],
     "mcp_server": ["manifest.json"],
     "plugin": ["plugin.json"],
+    "subagent": ["agent.json"],
     "command": ["SKILL.md"],
     "prompt": ["SKILL.md"],
 }

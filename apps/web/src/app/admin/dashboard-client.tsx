@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -26,6 +27,7 @@ interface StatCard {
 
 export default function AdminDashboardClient() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -49,39 +51,39 @@ export default function AdminDashboardClient() {
 
   const cards: StatCard[] = [
     {
-      title: '总包数',
+      title: t('admin.dashboard.total_packages'),
       count: stats?.total_packages ?? null,
-      description: '已入库的能力包总数',
+      description: t('admin.dashboard.total_packages_desc'),
       path: '/admin/packages',
     },
     {
-      title: '待审核',
+      title: t('admin.dashboard.pending_review'),
       count: stats?.pending_review ?? null,
-      description: '等待审核员处理的版本',
+      description: t('admin.dashboard.pending_review_desc'),
       path: '/review',
     },
     {
-      title: '今日提交',
+      title: t('admin.dashboard.today_submissions'),
       count: stats?.today_submissions ?? null,
-      description: '今天新提交的版本',
+      description: t('admin.dashboard.today_submissions_desc'),
       path: '/admin/submissions/today',
     },
     {
-      title: '审核通过',
+      title: t('admin.dashboard.approved'),
       count: stats?.approved ?? null,
-      description: '已审核通过，等待发布上线',
+      description: t('admin.dashboard.approved_desc'),
       path: '/admin/publish',
     },
     {
-      title: '已发布',
+      title: t('admin.dashboard.published'),
       count: stats?.published ?? null,
-      description: '已上线运行的版本',
+      description: t('admin.dashboard.published_desc'),
       path: '/admin/yank',
     },
     {
-      title: '已驳回',
+      title: t('admin.dashboard.rejected'),
       count: stats?.rejected ?? null,
-      description: '审核未通过的版本',
+      description: t('admin.dashboard.rejected_desc'),
       path: '/admin/rejected',
     },
   ];
@@ -90,8 +92,8 @@ export default function AdminDashboardClient() {
     <div className="admin-page">
       <div className="admin-dashboard">
         <div className="admin-dashboard-header">
-          <h1>管理员面板</h1>
-          <p>管理能力包的发布、下架与审计</p>
+          <h1>{t('admin.dashboard.title')}</h1>
+          <p>{t('admin.dashboard.subtitle')}</p>
         </div>
 
         <div className="admin-stat-grid">

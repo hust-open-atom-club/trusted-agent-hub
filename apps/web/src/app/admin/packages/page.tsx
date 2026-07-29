@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -18,20 +19,7 @@ interface PackageItem {
   updated_at: string | null;
 }
 
-const PACKAGE_TYPE_LABELS: Record<string, string> = {
-  skill: 'Skill',
-  mcp_server: 'MCP Server',
-  plugin: 'Plugin',
-  subagent: 'Subagent',
-  command: 'Command',
-  prompt: 'Prompt',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  published: '已发布',
-  yanked: '已下架',
-};
+const PACKAGE_TYPE_KEYS = ['skill', 'mcp_server', 'plugin', 'subagent', 'command', 'prompt'] as const;
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -50,11 +38,18 @@ function formatDate(iso: string | null): string {
 
 export default function AdminPackagesPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [items, setItems] = useState<PackageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const statusLabels: Record<string, string> = {
+    draft: t('admin.status.draft'),
+    published: t('admin.status.published'),
+    yanked: t('admin.status.yanked'),
+  };
 
   const fetchItems = () => {
     if (!token) return;
@@ -65,7 +60,7 @@ export default function AdminPackagesPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => setItems(data))
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   };
 
@@ -73,7 +68,7 @@ export default function AdminPackagesPage() {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录管理员账号');
+      setError(t('admin.auth_required'));
       return;
     }
     fetchItems();
@@ -84,7 +79,7 @@ export default function AdminPackagesPage() {
       <div className="admin-page">
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
+          <h3>{t('common.loading')}</h3>
         </div>
       </div>
     );
@@ -94,19 +89,19 @@ export default function AdminPackagesPage() {
     <div className="admin-page">
       <nav className="admin-nav">
         <button onClick={() => router.push('/admin')} className="link-btn">
-          ← 返回管理面板
+          {t('admin.back_to_dashboard')}
         </button>
       </nav>
 
       <div className="admin-section-header">
-        <h1>全部能力包</h1>
-        <p>已入库的能力包 · 共 {items.length} 个</p>
+        <h1>{t('admin.packages.title')}</h1>
+        <p>{t('admin.packages.subtitle')} · {t('admin.packages.subtitle')} / {items.length}</p>
       </div>
 
       {error && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}
@@ -114,8 +109,8 @@ export default function AdminPackagesPage() {
       {!error && items.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4E6;</div>
-          <h3>暂无数据</h3>
-          <p>还没有提交任何能力包</p>
+          <h3>{t('admin.packages.empty')}</h3>
+          <p>{t('admin.packages.empty_hint')}</p>
         </div>
       )}
 
@@ -124,39 +119,39 @@ export default function AdminPackagesPage() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>包名称</th>
-                <th>类型</th>
-                <th>状态</th>
-                <th>最新版本</th>
-                <th>描述</th>
-                <th>创建时间</th>
+                <th>{t('admin.table.package_name')}</th>
+                <th>{t('admin.table.type')}</th>
+                <th>{t('admin.table.status')}</th>
+                <th>{t('admin.table.latest_version')}</th>
+                <th>{t('admin.table.description')}</th>
+                <th>{t('admin.table.created_at')}</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.package_id}>
-                  <td data-label="包名称" className="admin-pkg-name">
+                  <td data-label={t('admin.table.package_name')} className="admin-pkg-name">
                     {item.package_name}
                   </td>
-                  <td data-label="类型">
+                  <td data-label={t('admin.table.type')}>
                     {item.package_type && (
                       <span className={`type-badge ${item.package_type}`}>
-                        {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                        {t(`search.${item.package_type}`, '') || item.package_type}
                       </span>
                     )}
                   </td>
-                  <td data-label="状态">
+                  <td data-label={t('admin.table.status')}>
                     <span className={`status-badge ${item.status}`}>
-                      {STATUS_LABELS[item.status] || item.status}
+                      {statusLabels[item.status] || item.status}
                     </span>
                   </td>
-                  <td data-label="最新版本">
+                  <td data-label={t('admin.table.latest_version')}>
                     <code>v{item.latest_version}</code>
                   </td>
-                  <td data-label="描述" style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <td data-label={t('admin.table.description')} style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {item.description || '—'}
                   </td>
-                  <td data-label="创建时间">{formatDate(item.created_at)}</td>
+                  <td data-label={t('admin.table.created_at')}>{formatDate(item.created_at)}</td>
                 </tr>
               ))}
             </tbody>

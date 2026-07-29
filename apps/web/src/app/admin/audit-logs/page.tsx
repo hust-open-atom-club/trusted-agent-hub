@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -18,27 +19,9 @@ interface AuditLogEntry {
   detail: Record<string, unknown> | null;
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  publish: '发布',
-  yank: '下架',
-  approved: '审核通过',
-  rejected: '审核驳回',
-  changes_requested: '要求修改',
-  submit: '提交审核',
-  scan_complete: '扫描完成',
-  request_changes: '要求修改',
-};
-
-const ACTION_OPTIONS = [
-  { value: '', label: '全部操作' },
-  { value: 'publish', label: '发布' },
-  { value: 'yank', label: '下架' },
-  { value: 'approved', label: '审核通过' },
-  { value: 'rejected', label: '审核驳回' },
-  { value: 'changes_requested', label: '要求修改' },
-  { value: 'submit', label: '提交审核' },
-  { value: 'scan_complete', label: '扫描完成' },
-];
+const ACTION_OPTIONS_KEYS = [
+  '', 'publish', 'yank', 'approved', 'rejected', 'changes_requested', 'submit', 'scan_complete',
+] as const;
 
 const PAGE_SIZES = [10, 30, 50, 100];
 
@@ -57,28 +40,39 @@ function formatDate(iso: string | null | undefined): string {
   }
 }
 
-function getActionLabel(action: string): string {
-  return ACTION_LABELS[action] || action;
-}
-
 export default function AdminAuditLogsPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 筛选
   const [action, setAction] = useState('');
   const [targetId, setTargetId] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  // 分页
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(30);
   const [totalCount, setTotalCount] = useState(0);
+
+  const actionLabels: Record<string, string> = {
+    publish: t('admin.audit.action.publish'),
+    yank: t('admin.audit.action.yank'),
+    approved: t('admin.audit.action.approved'),
+    rejected: t('admin.audit.action.rejected'),
+    changes_requested: t('admin.audit.action.changes_requested'),
+    submit: t('admin.audit.action.submitted'),
+    scan_complete: t('admin.audit.action.scan_complete'),
+    request_changes: t('admin.audit.action.changes_requested'),
+  };
+
+  const actionOptions = ACTION_OPTIONS_KEYS.map((key) => ({
+    value: key,
+    label: key ? (actionLabels[key] || key) : t('admin.audit.filter_all'),
+  }));
 
   const fetchLogs = useCallback(() => {
     if (!token) return;
@@ -104,7 +98,7 @@ export default function AdminAuditLogsPage() {
         setLogs(data);
         setTotalCount(data.length);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   }, [token, action, targetId, startDate, endDate, page, pageSize]);
 
@@ -112,7 +106,7 @@ export default function AdminAuditLogsPage() {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录管理员账号');
+      setError(t('admin.auth_required'));
       return;
     }
     fetchLogs();
@@ -120,8 +114,6 @@ export default function AdminAuditLogsPage() {
 
   const handleSearch = () => {
     setPage(0);
-    // fetchLogs will be triggered via dependency change
-    // We force a refetch by incrementing a key or directly calling
     fetchLogs();
   };
 
@@ -133,16 +125,15 @@ export default function AdminAuditLogsPage() {
     <div className="admin-page">
       <nav className="admin-nav">
         <button onClick={() => router.push('/admin')} className="link-btn">
-          ← 返回管理面板
+          {t('admin.back_to_dashboard')}
         </button>
       </nav>
 
       <div className="admin-section-header">
-        <h1>审计日志</h1>
-        <p>查看所有操作记录</p>
+        <h1>{t('admin.audit.title')}</h1>
+        <p>{t('admin.audit.subtitle')}</p>
       </div>
 
-      {/* 筛选栏 */}
       <div className="admin-filter-row">
         <div className="admin-filter-item">
           <select
@@ -150,7 +141,7 @@ export default function AdminAuditLogsPage() {
             value={action}
             onChange={(e) => { setAction(e.target.value); setPage(0); }}
           >
-            {ACTION_OPTIONS.map((opt) => (
+            {actionOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
@@ -160,7 +151,7 @@ export default function AdminAuditLogsPage() {
           <input
             className="admin-filter-input"
             type="text"
-            placeholder="目标 ID..."
+            placeholder={t('admin.audit.target_id_placeholder')}
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -168,7 +159,7 @@ export default function AdminAuditLogsPage() {
         </div>
 
         <div className="admin-filter-item">
-          <label className="admin-filter-label">开始</label>
+          <label className="admin-filter-label">{t('admin.audit.start_date')}</label>
           <input
             className="admin-filter-date"
             type="date"
@@ -178,7 +169,7 @@ export default function AdminAuditLogsPage() {
         </div>
 
         <div className="admin-filter-item">
-          <label className="admin-filter-label">结束</label>
+          <label className="admin-filter-label">{t('admin.audit.end_date')}</label>
           <input
             className="admin-filter-date"
             type="date"
@@ -189,23 +180,22 @@ export default function AdminAuditLogsPage() {
 
         <div className="admin-filter-item">
           <button className="btn btn-secondary btn-sm" onClick={handleSearch}>
-            查询
+            {t('admin.audit.search_btn')}
           </button>
         </div>
       </div>
 
-      {/* 内容区 */}
       {loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
+          <h3>{t('common.loading')}</h3>
         </div>
       )}
 
       {error && !loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}
@@ -213,8 +203,8 @@ export default function AdminAuditLogsPage() {
       {!loading && !error && logs.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4CB;</div>
-          <h3>暂无审计日志</h3>
-          <p>当前筛选条件下没有匹配的操作记录</p>
+          <h3>{t('admin.audit.empty')}</h3>
+          <p>{t('admin.audit.empty_hint')}</p>
         </div>
       )}
 
@@ -224,34 +214,34 @@ export default function AdminAuditLogsPage() {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th>操作</th>
-                  <th>目标类型</th>
-                  <th>目标 ID</th>
-                  <th>操作人</th>
-                  <th>详情</th>
+                  <th>{t('admin.audit.col_timestamp')}</th>
+                  <th>{t('admin.audit.col_action')}</th>
+                  <th>{t('admin.audit.col_target_type')}</th>
+                  <th>{t('admin.audit.col_target_id')}</th>
+                  <th>{t('admin.audit.col_operator')}</th>
+                  <th>{t('admin.audit.col_detail')}</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.map((log) => (
                   <React.Fragment key={log.id}>
                   <tr key={log.id}>
-                    <td data-label="时间">{formatDate(log.timestamp)}</td>
-                    <td data-label="操作">
+                    <td data-label={t('admin.audit.col_timestamp')}>{formatDate(log.timestamp)}</td>
+                    <td data-label={t('admin.audit.col_action')}>
                       <span className={`status-badge ${log.action}`}>
-                        {getActionLabel(log.action)}
+                        {actionLabels[log.action] || log.action}
                       </span>
                     </td>
-                    <td data-label="目标类型" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                    <td data-label={t('admin.audit.col_target_type')} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
                       {log.target_type}
                     </td>
-                    <td data-label="目标 ID" className="admin-mono-cell">
+                    <td data-label={t('admin.audit.col_target_id')} className="admin-mono-cell">
                       {log.target_id}
                     </td>
-                    <td data-label="操作人">
+                    <td data-label={t('admin.audit.col_operator')}>
                       {log.operator_name || log.operator_id}
                     </td>
-                    <td data-label="详情" className="admin-detail-cell" style={{ cursor: 'pointer' }} onClick={() => {
+                    <td data-label={t('admin.audit.col_detail')} className="admin-detail-cell" style={{ cursor: 'pointer' }} onClick={() => {
                       const detailStr = log.detail ? JSON.stringify(log.detail, null, 2) : '';
                       const el = document.getElementById(`detail-${log.id}`);
                       if (el) {
@@ -290,14 +280,13 @@ export default function AdminAuditLogsPage() {
             </table>
           </div>
 
-          {/* 分页器 */}
           <div className="pagination">
             <div className="pagination-info">
-              共 {totalCount + page * pageSize}+ 条
+              {t('admin.audit.total_count', { count: totalCount + page * pageSize })}
             </div>
 
             <div className="pagination-controls">
-              <span className="pagination-select-label">每页</span>
+              <span className="pagination-select-label">{t('admin.audit.per_page')}</span>
               <select
                 className="admin-select pagination-select"
                 value={pageSize}
@@ -307,24 +296,24 @@ export default function AdminAuditLogsPage() {
                   <option key={size} value={size}>{size}</option>
                 ))}
               </select>
-              <span className="pagination-select-label">条</span>
+              <span className="pagination-select-label">{t('admin.audit.per_page_unit')}</span>
 
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
               >
-                上一页
+                {t('admin.audit.prev_page')}
               </button>
 
-              <span className="pagination-page-num">第 {page + 1} 页</span>
+              <span className="pagination-page-num">{t('admin.audit.page_num', { page: page + 1 })}</span>
 
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => setPage((p) => p + 1)}
                 disabled={!hasMore}
               >
-                下一页
+                {t('admin.audit.next_page')}
               </button>
             </div>
           </div>

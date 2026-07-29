@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -132,8 +133,23 @@ def _load_scorer():
 # ---------------------------------------------------------------------------
 
 
-def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
+def _is_github_reachable(timeout: float = 5) -> bool:
+    """Quick TCP connectivity check before attempting git clone."""
+    try:
+        s = socket.create_connection(("github.com", 443), timeout=timeout)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 2) -> bool:
     """Phase A：用 GitHub Token 认证的 git clone，重试 max_attempts 次。"""
+
+    if not _is_github_reachable():
+        print("[TAH-trust]     github.com unreachable, skipping git clone")
+        return False
+
     token = os.environ.get("GITHUB_TOKEN", "")
     if token:
         clone_url = f"https://{token}@github.com/{parsed['owner']}/{parsed['repo']}.git"
@@ -148,7 +164,7 @@ def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: 
             ["git", "clone", "--depth", "1", clone_url, tmp_dir],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=30,
         )
         if result.returncode == 0:
             print(f"[TAH-trust]     git clone OK (attempt {attempt})")

@@ -20,6 +20,12 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: 'Trusted Agent Hub',
   description: 'Discover and install trusted AI agent capability packages',
+  alternates: {
+    languages: {
+      en: 'https://PLACEHOLDER_DOMAIN/en',
+      zh: 'https://PLACEHOLDER_DOMAIN/zh',
+    },
+  },
 };
 
 const INIT_SCRIPT = `
