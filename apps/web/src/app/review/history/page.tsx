@@ -4,15 +4,11 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
+import type { ReviewRecord } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-interface ReviewRecord {
-  id: string;
-  version_id: string;
-  conclusion: string;
-  comment: string | null;
-  created_at: string;
+interface HistoryReviewRecord extends ReviewRecord {
   version: string;
   version_status: string;
   package_name: string;
@@ -74,7 +70,7 @@ export default function ReviewHistoryPage() {
   const router = useRouter();
   const { user, token, loading: authLoading } = useAuth();
 
-  const [records, setRecords] = useState<ReviewRecord[]>([]);
+  const [records, setRecords] = useState<HistoryReviewRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -85,7 +81,7 @@ export default function ReviewHistoryPage() {
     setLoading(true);
     setError(null);
     const offset = page * pageSize;
-    apiFetch<ReviewRecord[]>(
+    apiFetch<HistoryReviewRecord[]>(
       `${API_BASE}/api/v0/producer/reviews?reviewer_id=${encodeURIComponent(user.id)}&limit=${pageSize}&offset=${offset}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )

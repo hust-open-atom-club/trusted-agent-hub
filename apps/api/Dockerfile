@@ -10,7 +10,7 @@ RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sourc
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
+    libpq-dev gcc git \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Python 依赖（使用阿里云 pypi 镜像）
@@ -21,10 +21,11 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -e ".[
 # 复制源码和共享包
 COPY apps/api/alembic.ini .
 COPY apps/api/src/ src/
-COPY packages/schema/ packages/schema/
+COPY packages/ /packages/
+COPY scanners/ /scanners/
 
-# 将共享包加入 Python 路径
-ENV PYTHONPATH=/app/packages
+# 将共享包加入 Python 路径（/scanners/、/packages/ 作为顶层包可 import）
+ENV PYTHONPATH=/packages:/
 
 # 暴露端口
 EXPOSE 8000

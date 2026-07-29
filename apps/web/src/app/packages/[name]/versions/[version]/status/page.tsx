@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trustedagenthub.com';
@@ -61,67 +62,6 @@ function getGradeClass(grade: string | null): string {
 
 function getGrade(grade: string | null): string {
   return grade ?? '\u2014';
-}
-
-interface Finding {
-  rule_id: string;
-  severity: string;
-  title: string;
-  file?: string;
-  line?: number;
-  evidence?: string;
-  suggestion?: string;
-}
-
-interface ScanSummary {
-  total: number;
-  critical: number;
-  high: number;
-  medium: number;
-  low: number;
-  info: number;
-  pass_rate?: number;
-  findings?: Finding[];
-}
-
-interface TrustScore {
-  level?: string;
-  grade?: string;
-  recommendation?: string;
-  risk_summary?: {
-    grade?: string;
-    level?: string;
-    top_risks?: string[];
-    install_recommendation?: string;
-  };
-  dimensions?: Record<string, unknown>;
-}
-
-interface VersionDetail {
-  id: string;
-  package_id: string;
-  version: string;
-  status: string;
-  source?: { repository_url?: string };
-  description?: string;
-  scan_summary?: ScanSummary | null;
-  trust_score?: TrustScore | null;
-  auto_grade?: string | null;
-  manual_grade?: string | null;
-  effective_grade?: string | null;
-  review_conclusion?: string | null;
-  yank_reason?: string | null;
-  scan_error?: string | null;
-  submitted_at?: string;
-  created_at?: string;
-}
-
-interface ReviewRecord {
-  id: string;
-  reviewer_id: string;
-  conclusion: string;
-  comment?: string | null;
-  created_at: string;
 }
 
 function StatusContent() {
@@ -447,11 +387,6 @@ function StatusContent() {
           </div>
           <div className="trust-score-detail">
             <h3>信任评分</h3>
-            {detail.trust_score.score != null && (
-              <p style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-ink)', marginBottom: '0.3rem' }}>
-                {detail.trust_score.score} / 100
-              </p>
-            )}
             {detail.trust_score.risk_summary?.level && (
               <p style={{ fontSize: '0.82rem', color: 'var(--color-ink-2)', marginBottom: '0.3rem' }}>
                 风险等级: {detail.trust_score.risk_summary.level.replace(/_/g, ' ')}
