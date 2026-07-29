@@ -8,6 +8,7 @@ from .common import PackageType, StrictContractModel
 from .packages import (
     Author,
     Installation,
+    Integrity,
     Permissions,
     Source,
     TrustScore,
@@ -42,8 +43,11 @@ class CreateVersionRequest(StrictContractModel):
     version: str = Field(description="SemVer 版本号，如 1.0.0")
     repo_url: str | None = Field(default=None, description="GitHub 仓库 HTTPS URL")
     description: str | None = None
-    installation: Installation | None = None
     source: Source | None = None
+    integrity: Integrity | None = None
+    permissions: Permissions | None = None
+    compatibility: list[str] = Field(default_factory=list)
+    installation: Installation | None = None
     field_source: dict[str, str] | None = Field(
         default=None,
         description="字段来源标记：key 为字段名，value 为 'auto'（自动提取）或 'manual'（用户补充）",

@@ -222,8 +222,11 @@ class ProducerRepository:
         submitter_id: str | None = None,
         repo_url: str | None = None,
         description: str | None = None,
-        installation: dict[str, object] | None = None,
         source: dict[str, object] | None = None,
+        integrity: dict[str, object] | None = None,
+        permissions: dict[str, object] | None = None,
+        compatibility: list[str] | None = None,
+        installation: dict[str, object] | None = None,
         field_source: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """创建新版本，返回版本信息。"""
@@ -236,6 +239,9 @@ class ProducerRepository:
             "status": "draft",
             "submitter_id": submitter_id,
             "source": source or {"type": "git", "repository_url": repo_url or "", "ref": "", "commit_hash": ""},
+            "integrity": integrity,
+            "permissions": permissions or {},
+            "compatibility": compatibility or [],
             "description": description,
             "installation": installation,
             "field_source": field_source,

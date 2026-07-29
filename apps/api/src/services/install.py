@@ -277,6 +277,8 @@ class InstallManifestService:
             dependencies=record.dependencies or Dependencies(),
         )
 
+    _LOCALHOST_ORIGINS = {"localhost", "127.0.0.1", "[::1]"}
+
     @staticmethod
     def _canonical_https_url(value: str | None) -> str | None:
         if value is None:
@@ -289,7 +291,18 @@ class InstallManifestService:
 
     @classmethod
     def _is_https_url(cls, value: str | None) -> bool:
-        return cls._canonical_https_url(value) is not None
+        if value is None:
+            return False
+        # Accept HTTPS URLs
+        if cls._canonical_https_url(value) is not None:
+            return True
+        # Allow localhost HTTP for development
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(value)
+            return parsed.scheme == "http" and parsed.hostname in cls._LOCALHOST_ORIGINS
+        except Exception:
+            return False
 
     @staticmethod
     def _is_strict_child_path(path: str, root: str) -> bool:

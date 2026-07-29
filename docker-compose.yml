@@ -5,9 +5,11 @@
 
 version: "3.9"
 
+name: tah-dev
+
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -30,8 +32,10 @@ services:
     restart: unless-stopped
     volumes:
       - ./examples:/examples:ro
+      - artifacts:/artifacts
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/trusted_agent_hub
+      ARTIFACTS_ROOT: /artifacts
       CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
     ports:
       - "8000:8000"
@@ -52,3 +56,4 @@ services:
 
 volumes:
   pgdata:
+  artifacts:

@@ -105,8 +105,11 @@ class ProducerService:
             submitter_id=submitter_id,
             repo_url=data.repo_url,
             description=data.description,
-            installation=data.installation.model_dump() if data.installation else None,
             source=data.source.model_dump() if data.source else None,
+            integrity=data.integrity.model_dump() if data.integrity else None,
+            permissions=data.permissions.model_dump() if data.permissions else None,
+            compatibility=data.compatibility,
+            installation=data.installation.model_dump() if data.installation else None,
             field_source=data.field_source,
         )
         return result
@@ -535,6 +538,13 @@ class ProducerService:
         target = "published"
         validate_transition(current, target)
 
+        # ── Pre-publish install validation ────────────────────
+        missing = _validate_install_readiness(version)
+        if missing:
+            raise ProducerServiceError(
+                f"版本安装资料不完整，无法发布。缺失字段: {', '.join(missing)}"
+            )
+
         package_id = version.get("package_id", "")
         pkg_version = version.get("version", "")
 
@@ -772,6 +782,59 @@ def _deep_diff(
         "removed_count": len(removed),
         "changed_count": len(changed),
     }
+
+
+# ── Install readiness validation ──────────────────────────────
+
+_REQUIRED_INSTALL_FIELDS = [
+    ("source.download_url", "source"),
+    ("source.commit_hash", "source"),
+    ("integrity.sha256", "integrity"),
+    ("integrity.download_size_bytes", "integrity"),
+    ("compatibility", None),
+    ("permissions", None),
+    ("installation.method", "installation"),
+    ("installation.target_client", "installation"),
+    ("installation.steps", "installation"),
+]
+
+
+def _validate_install_readiness(version: dict[str, object]) -> list[str]:
+    """Check that a version has all required install-manifest fields.
+
+    Returns a list of human-readable missing-field descriptions.
+    """
+    missing: list[str] = []
+
+    for field_path, parent_key in _REQUIRED_INSTALL_FIELDS:
+        if parent_key is None:
+            # Top-level field
+            val = version.get(field_path)
+            if not val or (isinstance(val, list) and len(val) == 0):
+                missing.append(field_path)
+        else:
+            parent = version.get(parent_key)
+            if not isinstance(parent, dict):
+                missing.append(field_path)
+                continue
+            field_name = field_path.split(".", 1)[1]
+            val = parent.get(field_name)
+            if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
+                missing.append(field_path)
+
+    # effective_grade check
+    auto_grade = None
+    trust_data = version.get("trust_score", {})
+    if isinstance(trust_data, dict):
+        rs = trust_data.get("risk_summary", {})
+        if isinstance(rs, dict):
+            auto_grade = rs.get("grade")
+    manual_grade = version.get("manual_grade")
+    effective = manual_grade or auto_grade
+    if effective == "E":
+        missing.append("effective_grade=E (blocked)")
+
+    return missing
 
 
 # ── ProducerService: 审核与发布 ────────────────────────────
