@@ -50,7 +50,6 @@ const GRADE_LABELS: Record<string, string> = {
   C: '需注意',
   D: '有风险',
   E: '高风险',
-  F: '严重风险',
 };
 
 const SEVERITY_ORDER: Record<string, number> = {

@@ -53,6 +53,7 @@ interface PackageMetadata {
   compatibility?: string[];
   permissions?: Record<string, unknown>;
   source?: Record<string, unknown>;
+  integrity?: Record<string, unknown>;
   installation?: Record<string, unknown>;
   dependencies?: Record<string, unknown>;
 }
@@ -254,7 +255,12 @@ function SubmitForm() {
 
       const verBody: Record<string, unknown> = {
         version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
-        source: sourceObj, field_source: fs,
+        source: sourceObj,
+        integrity: meta.integrity || null,
+        permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
+        compatibility: compatList,
+        installation: meta.installation || null,
+        field_source: fs,
       };
       const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
       if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }

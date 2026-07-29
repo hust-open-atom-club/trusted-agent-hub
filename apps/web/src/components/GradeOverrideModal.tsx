@@ -10,7 +10,6 @@ const GRADE_OPTIONS = [
   { value: 'C', label: 'C — 需注意' },
   { value: 'D', label: 'D — 有风险' },
   { value: 'E', label: 'E — 高风险' },
-  { value: 'F', label: 'F — 严重风险' },
 ];
 
 interface Props {
@@ -221,13 +220,13 @@ export default function GradeOverrideModal({
 
 function levelLabel(grade: string): string {
   const m: Record<string, string> = {
-    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险', F: '严重风险',
+    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险',
   };
   return m[grade] ?? grade;
 }
 
 function getGradeDiff(a: string | null, b: string | null): number {
-  const order = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const order = ['A', 'B', 'C', 'D', 'E'];
   const ai = a ? order.indexOf(a) : -1;
   const bi = b ? order.indexOf(b) : -1;
   if (ai < 0 || bi < 0) return 0;

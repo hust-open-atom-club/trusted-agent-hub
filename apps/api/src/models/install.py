@@ -23,9 +23,15 @@ SEMANTIC_VERSION_PATTERN = (
 )
 
 
+_LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+
+
 def _require_https(url: HttpUrl) -> HttpUrl:
-    if url.scheme != "https":
-        raise ValueError("URL must use HTTPS")
+    # Allow localhost HTTP for development
+    if url.scheme != "https" and not (
+        url.scheme == "http" and url.host in _LOCALHOST_HOSTS
+    ):
+        raise ValueError("URL must use HTTPS (or localhost HTTP in dev)")
     return url
 
 

@@ -148,6 +148,9 @@ class RiskSummary(StrictContractModel):
     grade: Grade | None = None
     top_risks: list[str] = Field(default_factory=list)
     install_recommendation: str
+    auto_grade: Grade | None = None
+    manual_grade: Grade | None = None
+    effective_grade: Grade | None = None
 
 
 class TrustScore(StrictContractModel):
@@ -252,6 +255,12 @@ class VersionDetail(StrictContractModel):
     created_at: str | None = None
     trust_score: TrustScore | None = None
     scan_report: ScanReport | None = None
+    auto_grade: Grade | None = None
+    manual_grade: Grade | None = None
+    effective_grade: Grade | None = None
+    manual_grade_by: str | None = None
+    manual_grade_reason: str | None = None
+    manual_grade_at: str | None = None
 
 
 class PackageDetail(PackageSummary):

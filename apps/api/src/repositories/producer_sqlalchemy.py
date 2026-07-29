@@ -222,8 +222,11 @@ class ProducerRepository:
         submitter_id: str | None = None,
         repo_url: str | None = None,
         description: str | None = None,
-        installation: dict[str, object] | None = None,
         source: dict[str, object] | None = None,
+        integrity: dict[str, object] | None = None,
+        permissions: dict[str, object] | None = None,
+        compatibility: list[str] | None = None,
+        installation: dict[str, object] | None = None,
         field_source: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """创建新版本，返回版本信息。"""
@@ -236,6 +239,9 @@ class ProducerRepository:
             "status": "draft",
             "submitter_id": submitter_id,
             "source": source or {"type": "git", "repository_url": repo_url or "", "ref": "", "commit_hash": ""},
+            "integrity": integrity,
+            "permissions": permissions or {},
+            "compatibility": compatibility or [],
             "description": description,
             "installation": installation,
             "field_source": field_source,
@@ -262,7 +268,7 @@ class ProducerRepository:
             if row is None:
                 return None
             data = dict(row.data) if row.data else {}
-            data["manual_grade"] = row.manual_grade
+            data["manual_grade"] = row.manual_grade if row.manual_grade and row.manual_grade != "F" else None
             data["manual_grade_by"] = row.manual_grade_by
             data["manual_grade_at"] = _serialize_dt(row.manual_grade_at) if row.manual_grade_at else None
             data["manual_grade_reason"] = row.manual_grade_reason
@@ -827,11 +833,11 @@ class ProducerRepository:
                 "submitted_at": data.get("submitted_at"),
                 "published_at": data.get("published_at"),
                 "auto_grade": grade_val,
-                "manual_grade": row.manual_grade,
+                "manual_grade": row.manual_grade if row.manual_grade and row.manual_grade != "F" else None,
                 "manual_grade_by": row.manual_grade_by,
                 "manual_grade_by_name": user_names.get(row.manual_grade_by or "") if row.manual_grade_by else None,
                 "manual_grade_reason": row.manual_grade_reason,
-                "grade": row.manual_grade or grade_val,
+                "grade": (row.manual_grade if row.manual_grade and row.manual_grade != "F" else None) or grade_val,
                 "findings_count": findings_count,
                 "yank_reason": data.get("yank_reason"),
             })

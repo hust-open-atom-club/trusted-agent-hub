@@ -18,7 +18,7 @@ from src.models.install import (
     ManifestSource,
     VerifyInstallationStep,
 )
-from src.models.packages import Dependencies
+from src.models.packages import Dependencies, Grade, RiskSummary
 from src.repositories.base import PackageRepository
 
 from .packages import PackageService
@@ -38,6 +38,15 @@ HTTPS_URL_ADAPTER = TypeAdapter(HttpsUrl)
 CLIENT_INSTALL_ROOTS = {
     "claude-code": "~/.claude/skills/",
     "cursor": "~/.cursor/skills/",
+}
+
+# effective_grade → install_recommendation mapping
+_GRADE_TO_RECOMMENDATION: dict[str, str] = {
+    "A": "safe",
+    "B": "review_recommended",
+    "C": "caution",
+    "D": "not_recommended",
+    "E": "blocked",
 }
 
 
@@ -180,18 +189,23 @@ class InstallManifestService:
         if record.permissions is None:
             invalid_fields.append("permissions")
 
-        trust_score = record.trust_score
-        risk_summary = None if trust_score is None else trust_score.risk_summary
-        if (
-            trust_score is None
-            or risk_summary is None
-            or risk_summary.grade is None
-        ):
+        # ── Grade resolution ──────────────────────────────────────
+        auto_grade: Grade | None = None
+        original_risk_summary = (
+            record.trust_score.risk_summary
+            if record.trust_score is not None
+            else None
+        )
+        if original_risk_summary is not None:
+            auto_grade = original_risk_summary.grade
+
+        effective_grade: Grade | None = record.manual_grade or auto_grade
+
+        if effective_grade is None:
             invalid_fields.append("risk_summary.grade")
-        if (
-            risk_summary is not None
-            and risk_summary.install_recommendation == "blocked"
-        ):
+
+        # Only block on effective_grade == E
+        if effective_grade == "E":
             invalid_fields.append("risk_summary.install_recommendation")
 
         if invalid_fields:
@@ -210,8 +224,29 @@ class InstallManifestService:
         assert installation is not None
         assert validated_steps is not None
         assert record.permissions is not None
-        assert trust_score is not None
-        assert risk_summary is not None
+        assert effective_grade is not None
+
+        # Build final risk summary from effective_grade
+        recommendation = _GRADE_TO_RECOMMENDATION.get(
+            str(effective_grade), "caution"
+        )
+        final_risk_summary = RiskSummary(
+            level=(
+                original_risk_summary.level
+                if original_risk_summary is not None
+                else "unknown"
+            ),
+            grade=effective_grade,
+            top_risks=(
+                original_risk_summary.top_risks
+                if original_risk_summary is not None
+                else []
+            ),
+            install_recommendation=recommendation,
+            auto_grade=auto_grade,
+            manual_grade=record.manual_grade,
+            effective_grade=effective_grade,
+        )
 
         return InstallManifest(
             name=package.name,
@@ -237,10 +272,12 @@ class InstallManifestService:
                 post_install_message=installation.post_install_message,
             ),
             permissions=record.permissions,
-            risk_summary=risk_summary,
+            risk_summary=final_risk_summary,
             compatibility=record.compatibility,
             dependencies=record.dependencies or Dependencies(),
         )
+
+    _LOCALHOST_ORIGINS = {"localhost", "127.0.0.1", "[::1]"}
 
     @staticmethod
     def _canonical_https_url(value: str | None) -> str | None:
@@ -254,7 +291,18 @@ class InstallManifestService:
 
     @classmethod
     def _is_https_url(cls, value: str | None) -> bool:
-        return cls._canonical_https_url(value) is not None
+        if value is None:
+            return False
+        # Accept HTTPS URLs
+        if cls._canonical_https_url(value) is not None:
+            return True
+        # Allow localhost HTTP for development
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(value)
+            return parsed.scheme == "http" and parsed.hostname in cls._LOCALHOST_ORIGINS
+        except Exception:
+            return False
 
     @staticmethod
     def _is_strict_child_path(path: str, root: str) -> bool:

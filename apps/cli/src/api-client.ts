@@ -296,13 +296,35 @@ export function createApiClient(customFetch?: FetchFn) {
       throw new ApiError('Resource not found', 404);
     }
 
-    // 409 Conflict → install manifest unavailable (expected for some packages)
+    // 409 Conflict → install manifest unavailable
     if (response.status === 409) {
       let detail = '';
+      let invalidFields: string[] = [];
       try {
         const body = await response.json();
         detail = body?.error?.message || '';
+        invalidFields = body?.error?.details?.invalid_fields || [];
       } catch { /* ignore */ }
+      if (invalidFields.length > 0) {
+        const reasons = invalidFields.map((f: string) => {
+          if (f === 'risk_summary.grade') return '自动扫描等级缺失';
+          if (f === 'risk_summary.install_recommendation') return '最终等级 E 禁止安装';
+          if (f === 'source.download_url') return '缺少下载地址';
+          if (f === 'source.commit_hash') return '缺少 commit hash';
+          if (f === 'integrity.sha256') return '缺少 SHA-256 校验值';
+          if (f === 'integrity.download_size_bytes') return '缺少文件大小';
+          if (f === 'compatibility') return '未声明兼容客户端';
+          if (f === 'permissions') return '未声明权限';
+          if (f === 'installation.steps') return '缺少安装步骤';
+          if (f === 'installation.target_client') return '未指定目标客户端';
+          if (f === 'installation.method') return '未指定安装方式';
+          return f;
+        });
+        throw new ApiError(
+          `安装资料不完整:\n${reasons.map(r => `  - ${r}`).join('\n')}`,
+          409,
+        );
+      }
       throw new ApiError(
         detail || 'Install manifest unavailable for this package/client combination',
         409,

@@ -240,6 +240,16 @@ program
     const rec = manifest.risk_summary.install_recommendation;
     if (rec) console.log(`  ${chalk.dim('Recommend:')} ${rec}`);
 
+    // Show auto/manual/effective grade breakdown when manual override is active
+    const autoG = manifest.risk_summary.auto_grade;
+    const manualG = manifest.risk_summary.manual_grade;
+    const effectiveG = manifest.risk_summary.effective_grade;
+    if (manualG && autoG && manualG !== autoG) {
+      console.log(
+        `  ${chalk.dim('Grades:')}    auto=${autoG}  ${chalk.yellow('manual=' + manualG)}  ${chalk.bold('effective=' + effectiveG)}`,
+      );
+    }
+
     // Top risks
     if (manifest.risk_summary.top_risks && manifest.risk_summary.top_risks.length > 0) {
       console.log('');

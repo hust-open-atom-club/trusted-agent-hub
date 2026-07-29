@@ -266,7 +266,7 @@ def get_version(version_id: str) -> dict[str, object]:
 def list_versions(
     submitter_id: str | None = Query(default=None, description="提交者用户 ID"),
     status: str | None = Query(default=None, description="按状态筛选，逗号分隔多个"),
-    grade: str | None = Query(default=None, description="按风险等级筛选（A/B/C/D/E/F）"),
+    grade: str | None = Query(default=None, description="按风险等级筛选（A/B/C/D/E）"),
     since: str | None = Query(default=None, description="提交时间起始（ISO 格式）"),
     until: str | None = Query(default=None, description="提交时间截止（ISO 格式）"),
     limit: int = Query(default=50, ge=1, le=200, description="每页数量"),
@@ -301,7 +301,7 @@ def list_versions(
 # ── PATCH /versions/{version_id}/grade ──────────────────────
 
 class GradeOverrideRequest(StrictContractModel):
-    grade: str | None = Field(default=None, description="手动评级: A/B/C/D/E/F, 或 null 恢复自动")
+    grade: str | None = Field(default=None, description="手动评级: A/B/C/D/E, 或 null 恢复自动")
     reason: str = Field(..., min_length=1, description="修改理由（必填）")
 
 
