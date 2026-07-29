@@ -53,6 +53,7 @@ interface PackageMetadata {
   compatibility?: string[];
   permissions?: Record<string, unknown>;
   source?: Record<string, unknown>;
+  integrity?: Record<string, unknown>;
   installation?: Record<string, unknown>;
   dependencies?: Record<string, unknown>;
 }

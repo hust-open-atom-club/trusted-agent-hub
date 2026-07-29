@@ -120,7 +120,7 @@ def build_artifact(
 
 
 def _create_zip(source_dir: Path, dest_path: Path, package_name: str) -> None:
-    """Create a ZIP where all files are under <package_name>/."""
+    """Create a ZIP containing skill files directly (no wrapper directory)."""
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in sorted(source_dir.rglob("*")):
             if file_path.is_file():
@@ -128,7 +128,7 @@ def _create_zip(source_dir: Path, dest_path: Path, package_name: str) -> None:
                 parts = file_path.relative_to(source_dir).parts
                 if any(p.startswith(".git") for p in parts):
                     continue
-                arcname = str(Path(package_name) / file_path.relative_to(source_dir))
+                arcname = str(file_path.relative_to(source_dir))
                 zf.write(file_path, arcname)
 
 

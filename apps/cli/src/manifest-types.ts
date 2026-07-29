@@ -176,6 +176,17 @@ function check(cond: boolean, field: string, msg: string): void {
   if (!cond) fail(field, msg);
 }
 
+/** Allow HTTPS URLs and localhost HTTP (for dev). */
+function isAllowedUrl(value: string): boolean {
+  if (value.startsWith('https://')) return true;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function validateManifest(raw: unknown): InstallManifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new ManifestValidationError('Manifest must be an object', ['(root)']);
@@ -205,8 +216,8 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(src != null && typeof src === 'object', 'source', 'must be an object');
   const validSourceTypes = ['github', 'npm', 'pypi', 'docker', 'local_upload'];
   check(validSourceTypes.includes(src!.type as string), 'source.type', 'invalid source type');
-  check(typeof src!.repository_url === 'string' && src!.repository_url.startsWith('https://'), 'source.repository_url', 'must be an HTTPS URL');
-  check(typeof src!.download_url === 'string' && src!.download_url.startsWith('https://'), 'source.download_url', 'must be an HTTPS URL');
+  check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL');
+  check(typeof src!.download_url === 'string' && isAllowedUrl(src!.download_url), 'source.download_url', 'must be an HTTPS URL (or localhost HTTP in dev)');
   check(typeof src!.ref === 'string' && src!.ref.length > 0, 'source.ref', 'must be a non-empty string');
   check(typeof src!.commit_hash === 'string' && COMMIT_RE.test(src!.commit_hash), 'source.commit_hash', 'must be a 40-char hex string');
 
@@ -283,7 +294,7 @@ function validateStep(step: Record<string, unknown>, index: number): InstallStep
   switch (action) {
     case 'download': {
       const url = step.url;
-      check(typeof url === 'string' && url.startsWith('https://'), `steps[${index}].url`, 'must be an HTTPS URL');
+      check(typeof url === 'string' && isAllowedUrl(url), `steps[${index}].url`, 'must be an HTTPS URL');
       return { action: 'download', url: url as string };
     }
     case 'verify': {
