@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import type { Finding, VersionDetail } from '@/types';
@@ -11,6 +12,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 export default function FileViewerPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
   const targetRef = useRef<HTMLDivElement>(null);
 
@@ -25,12 +27,12 @@ export default function FileViewerPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!versionId || !filePath) {
-      setError('缺少参数');
+      setError(t('review.files.missing_params'));
       setLoading(false);
       return;
     }
     if (!token) {
-      setError('请先登录');
+      setError(t('review.files.login_required'));
       setLoading(false);
       return;
     }
@@ -43,10 +45,10 @@ export default function FileViewerPage() {
         if (content) {
           setFileContent(content);
         } else {
-          setError('该文件内容不可用（可能是旧版扫描报告，请重新扫描）');
+          setError(t('review.files.content_unavailable'));
         }
       })
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   }, [versionId, filePath, token, authLoading]);
 
@@ -66,7 +68,7 @@ export default function FileViewerPage() {
       <div className="file-viewer-page">
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
+          <h3>{t('common.loading')}</h3>
         </div>
       </div>
     );
@@ -76,16 +78,16 @@ export default function FileViewerPage() {
     <div className="file-viewer-page">
       <nav className="file-viewer-nav">
         <button onClick={() => router.back()} className="link-btn">
-          ← 返回审核详情
+          {t('review.files.back_to_detail')}
         </button>
         <span className="file-viewer-file-name">{filePath}</span>
-        <span className="file-viewer-info">{lines.length} 行</span>
+        <span className="file-viewer-info">{t('review.files.line_count', { count: lines.length })}</span>
       </nav>
 
       {error && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}

@@ -1,7 +1,7 @@
 """
-Risk Scanner — 自动风险扫描器 v0.3.0
+Risk Scanner — 自动风险扫描器 v0.4.0
 
-遍历目标目录，运行 17 条静态分析规则，检测 Agent 能力包中的安全风险。
+遍历目标目录，运行 19 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
 
 规则列表:
@@ -22,7 +22,9 @@ Risk Scanner — 自动风险扫描器 v0.3.0
   SR-014:  SSRF (+ 防御上下文过滤)
   SR-015:  Agent 窥探
   SR-016:  工具滥用
-  SR-017:  MCP 安全 (占位符)
+  SR-017:  MCP 安全 (隐藏工具检测 + 非加密传输检测)
+  SR-018:  Plugin 安全 (内联MCP命令 + Hook注入 + 组件路径遍历)
+  SR-019:  Subagent 安全 (自主模式 + 危险工具 + 全局作用域 + 路径遍历)
 
 用法:
     from scanners.risk_scanner.scanner import RiskScanner
@@ -74,10 +76,12 @@ _RULE_MODULES: list[str] = [
     "scanners.risk_scanner.rules.ssrf",
     "scanners.risk_scanner.rules.agent_snooping",
     "scanners.risk_scanner.rules.tool_misuse",
-    "scanners.risk_scanner.rules.mcp_placeholder",
+    "scanners.risk_scanner.rules.mcp_security",
+    "scanners.risk_scanner.rules.plugin_security",
+    "scanners.risk_scanner.rules.subagent_security",
 ]
 
-SCANNER_VERSION = "0.3.0"
+SCANNER_VERSION = "0.4.0"
 
 
 class RiskScanner:

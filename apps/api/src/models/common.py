@@ -52,6 +52,7 @@ class Owner(StrictContractModel):
     id: str
     display_name: str
     role: str
+    username: str | None = None
     email: str | None = None
 
 

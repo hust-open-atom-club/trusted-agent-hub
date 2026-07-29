@@ -1,14 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { fetchFeedback, submitFeedback } from '@/data/packages';
 import type { FeedbackPage, FeedbackRecord, FeedbackLevel } from '@/types';
-
-const LEVEL_LABELS: Record<FeedbackLevel, { label: string; emoji: string }> = {
-  positive: { label: 'Positive', emoji: '👍' },
-  neutral: { label: 'Neutral', emoji: '😐' },
-  negative: { label: 'Negative', emoji: '👎' },
-};
 
 interface FeedbackSectionProps {
   packageName: string;
@@ -17,6 +12,13 @@ interface FeedbackSectionProps {
 }
 
 export default function FeedbackSection({ packageName, user, token }: FeedbackSectionProps) {
+  const { t } = useTranslation();
+
+  const levelLabels: Record<FeedbackLevel, { label: string; emoji: string }> = {
+    positive: { label: t('feedback.positive'), emoji: '👍' },
+    neutral: { label: t('feedback.neutral'), emoji: '😐' },
+    negative: { label: t('feedback.negative'), emoji: '👎' },
+  };
   const [feedbackPage, setFeedbackPage] = useState<FeedbackPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +67,8 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
   if (loading && !feedbackPage) {
     return (
       <div className="detail-section">
-        <h2>Feedback</h2>
-        <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem' }}>Loading feedback...</p>
+        <h2>{t('feedback.title')}</h2>
+        <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem' }}>{t('feedback.loading')}</p>
       </div>
     );
   }
@@ -74,8 +76,8 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
   if (error) {
     return (
       <div className="detail-section">
-        <h2>Feedback</h2>
-        <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem' }}>Feedback unavailable</p>
+        <h2>{t('feedback.title')}</h2>
+        <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem' }}>{t('feedback.unavailable')}</p>
       </div>
     );
   }
@@ -86,11 +88,11 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
 
   return (
     <div className="detail-section">
-      <h2>Feedback {totalFeedback > 0 && `(${totalFeedback})`}</h2>
+      <h2>{t('feedback.title')}{totalFeedback > 0 && ` (${totalFeedback})`}</h2>
 
       {/* Feedback counts */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
-        {(Object.entries(LEVEL_LABELS) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
+        {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
           <div key={level} style={{
             display: 'flex',
             alignItems: 'center',
@@ -114,9 +116,9 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
           border: '1px solid var(--color-rule)',
           marginBottom: '1rem',
         }}>
-          <p style={{ fontSize: '0.82rem', fontWeight: 600, marginBottom: '0.5rem' }}>Share your experience</p>
+          <p style={{ fontSize: '0.82rem', fontWeight: 600, marginBottom: '0.5rem' }}>{t('feedback.share')}</p>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-            {(Object.entries(LEVEL_LABELS) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
+            {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
               <button
                 key={level}
                 className={`btn btn-sm ${selectedLevel === level ? 'btn-primary' : 'btn-secondary'}`}
@@ -130,7 +132,7 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
           <textarea
             value={comment}
             onChange={(e) => setComment(e.target.value)}
-            placeholder="Optional comment (max 1000 characters)..."
+            placeholder={t('feedback.comment_placeholder')}
             maxLength={1000}
             rows={2}
             disabled={submitting}
@@ -152,10 +154,10 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
               disabled={!selectedLevel || submitting}
               onClick={handleSubmit}
             >
-              {submitting ? 'Submitting...' : 'Submit Feedback'}
+              {submitting ? t('feedback.submitting') : t('feedback.submit')}
             </button>
             {submitSuccess && (
-              <span style={{ color: 'var(--color-success)', fontSize: '0.8rem' }}>✓ Thank you!</span>
+              <span style={{ color: 'var(--color-success)', fontSize: '0.8rem' }}>✓ {t('feedback.thank_you')}</span>
             )}
             {submitError && (
               <span style={{ color: 'var(--color-danger)', fontSize: '0.8rem' }}>{submitError}</span>
@@ -172,7 +174,7 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
           fontSize: '0.82rem',
           color: 'var(--color-muted)',
         }}>
-          <a href="/login" style={{ color: 'var(--color-accent)', fontWeight: 600 }}>Login</a> to submit feedback.
+          <a href="/login" style={{ color: 'var(--color-accent)', fontWeight: 600 }}>{t('feedback.login_hint')}</a>{t('feedback.login_to_submit')}
         </div>
       )}
 
@@ -186,10 +188,10 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
               fontSize: '0.82rem',
             }}>
               <span style={{ marginRight: '0.5rem' }}>
-                {LEVEL_LABELS[fb.level]?.emoji ?? '❓'}
+                {levelLabels[fb.level]?.emoji ?? '❓'}
               </span>
               <span style={{ color: 'var(--color-ink-2)' }}>
-                {fb.comment || (LEVEL_LABELS[fb.level]?.label ?? fb.level)}
+                {fb.comment || (levelLabels[fb.level]?.label ?? fb.level)}
               </span>
               <span style={{ color: 'var(--color-muted)', marginLeft: '0.75rem', fontSize: '0.72rem' }}>
                 {new Date(fb.created_at).toLocaleDateString()}
@@ -199,7 +201,7 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
         </div>
       ) : (
         <p style={{ fontSize: '0.82rem', color: 'var(--color-muted)' }}>
-          No feedback yet. Be the first to share your experience!
+          {t('feedback.no_feedback')}
         </p>
       )}
     </div>

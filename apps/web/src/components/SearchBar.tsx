@@ -1,24 +1,7 @@
 'use client';
 
+import { useTranslation } from 'react-i18next';
 import type { SortField, SortOrder } from '@/data/packages';
-
-const FILTER_OPTIONS = [
-  { key: 'all', label: 'All' },
-  { key: 'skill', label: 'Skill' },
-  { key: 'mcp_server', label: 'MCP Server' },
-  { key: 'plugin', label: 'Plugin' },
-  { key: 'command', label: 'Command' },
-  { key: 'subagent', label: 'Subagent' },
-  { key: 'prompt', label: 'Prompt' },
-];
-
-const SORT_OPTIONS: { field: SortField; order: SortOrder; label: string }[] = [
-  { field: 'updated_at', order: 'desc', label: 'Recently updated' },
-  { field: 'install_count', order: 'desc', label: 'Most installed' },
-  { field: 'avg_rating', order: 'desc', label: 'Highest rated' },
-  { field: 'name', order: 'asc', label: 'Name A–Z' },
-  { field: 'grade', order: 'asc', label: 'Trust level' },
-];
 
 interface SearchBarProps {
   query: string;
@@ -32,6 +15,16 @@ interface SearchBarProps {
   onSortChange: (field: SortField, order: SortOrder) => void;
 }
 
+const FILTER_KEYS = ['all', 'skill', 'mcp_server', 'plugin', 'command', 'subagent', 'prompt'] as const;
+
+const SORT_OPTIONS: { field: SortField; order: SortOrder; key: string }[] = [
+  { field: 'updated_at', order: 'desc', key: 'updated' },
+  { field: 'install_count', order: 'desc', key: 'installed' },
+  { field: 'avg_rating', order: 'desc', key: 'rated' },
+  { field: 'name', order: 'asc', key: 'name_asc' },
+  { field: 'grade', order: 'asc', key: 'trust' },
+];
+
 export default function SearchBar({
   query,
   activeType,
@@ -43,6 +36,7 @@ export default function SearchBar({
   onCategoryChange,
   onSortChange,
 }: SearchBarProps) {
+  const { t } = useTranslation();
   const activeSortKey = `${sortBy}:${sortOrder}`;
 
   return (
@@ -52,7 +46,7 @@ export default function SearchBar({
         <input
           type="text"
           className="search-input"
-          placeholder="Search packages by name, keyword, or description..."
+          placeholder={t('search.placeholder')}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
         />
@@ -60,13 +54,13 @@ export default function SearchBar({
 
       <div className="search-controls-row">
         <div className="type-filters">
-          {FILTER_OPTIONS.map((opt) => (
+          {FILTER_KEYS.map((key) => (
             <button
-              key={opt.key}
-              className={`type-filter-btn ${activeType === opt.key ? 'active' : ''}`}
-              onClick={() => onTypeChange(opt.key)}
+              key={key}
+              className={`type-filter-btn ${activeType === key ? 'active' : ''}`}
+              onClick={() => onTypeChange(key)}
             >
-              {opt.label}
+              {t(`search.${key}`)}
             </button>
           ))}
         </div>
@@ -83,7 +77,7 @@ export default function SearchBar({
           >
             {SORT_OPTIONS.map((opt) => (
               <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
-                {opt.label}
+                {t(`sort.${opt.key}`)}
               </option>
             ))}
           </select>

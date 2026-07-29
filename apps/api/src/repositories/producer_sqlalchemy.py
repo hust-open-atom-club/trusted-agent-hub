@@ -642,11 +642,11 @@ class ProducerRepository:
             ) or 0
             pending_review = session.scalar(
                 select(func.count())
-                .select_from(PackageVersionRow)
-                .where(PackageVersionRow.status == "pending_review")
+                .select_from(PackageRow)
+                .where(PackageRow.status == "pending_review")
             ) or 0
             today_submissions = session.scalar(
-                select(func.count())
+                select(func.count(func.distinct(PackageVersionRow.package_id)))
                 .select_from(PackageVersionRow)
                 .where(
                     PackageVersionRow.data["submitted_at"]
@@ -656,23 +656,23 @@ class ProducerRepository:
             ) or 0
             approved_count = session.scalar(
                 select(func.count())
-                .select_from(PackageVersionRow)
-                .where(PackageVersionRow.status == "approved")
+                .select_from(PackageRow)
+                .where(PackageRow.status == "approved")
             ) or 0
             published_count = session.scalar(
                 select(func.count())
-                .select_from(PackageVersionRow)
-                .where(PackageVersionRow.status == "published")
+                .select_from(PackageRow)
+                .where(PackageRow.status == "published")
             ) or 0
             rejected_count = session.scalar(
                 select(func.count())
-                .select_from(PackageVersionRow)
-                .where(PackageVersionRow.status == "rejected")
+                .select_from(PackageRow)
+                .where(PackageRow.status == "rejected")
             ) or 0
             yanked_count = session.scalar(
                 select(func.count())
-                .select_from(PackageVersionRow)
-                .where(PackageVersionRow.status == "yanked")
+                .select_from(PackageRow)
+                .where(PackageRow.status == "yanked")
             ) or 0
         return {
             "total_packages": total_packages,

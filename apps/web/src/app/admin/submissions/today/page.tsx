@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -18,15 +19,6 @@ interface VersionItem {
   grade: string | null;
   findings_count: number;
 }
-
-const PACKAGE_TYPE_LABELS: Record<string, string> = {
-  skill: 'Skill',
-  mcp_server: 'MCP Server',
-  plugin: 'Plugin',
-  subagent: 'Subagent',
-  command: 'Command',
-  prompt: 'Prompt',
-};
 
 function getTodayStartISO(): string {
   const now = new Date();
@@ -57,6 +49,7 @@ function formatDate(iso: string | null): string {
 
 export default function AdminTodaySubmissionsPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [items, setItems] = useState<VersionItem[]>([]);
@@ -76,7 +69,7 @@ export default function AdminTodaySubmissionsPage() {
       { headers: { Authorization: `Bearer ${token}` } },
     )
       .then((data) => setItems(data))
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   };
 
@@ -84,7 +77,7 @@ export default function AdminTodaySubmissionsPage() {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录管理员账号');
+      setError(t('admin.auth_required'));
       return;
     }
     fetchItems();
@@ -95,7 +88,7 @@ export default function AdminTodaySubmissionsPage() {
       <div className="admin-page">
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
+          <h3>{t('common.loading')}</h3>
         </div>
       </div>
     );
@@ -105,19 +98,19 @@ export default function AdminTodaySubmissionsPage() {
     <div className="admin-page">
       <nav className="admin-nav">
         <button onClick={() => router.push('/admin')} className="link-btn">
-          ← 返回管理面板
+          {t('admin.back_to_dashboard')}
         </button>
       </nav>
 
       <div className="admin-section-header">
-        <h1>今日提交</h1>
-        <p>今天新提交的版本 · 共 {items.length} 个</p>
+        <h1>{t('admin.submissions.today.title')}</h1>
+        <p>{t('admin.submissions.today.subtitle')} · {items.length}</p>
       </div>
 
       {error && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}
@@ -125,8 +118,8 @@ export default function AdminTodaySubmissionsPage() {
       {!error && items.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x1F4C5;</div>
-          <h3>今日暂无提交</h3>
-          <p>今天还没有新的版本提交</p>
+          <h3>{t('admin.submissions.today.empty')}</h3>
+          <p>{t('admin.submissions.today.empty_hint')}</p>
         </div>
       )}
 
@@ -135,47 +128,47 @@ export default function AdminTodaySubmissionsPage() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>评分</th>
-                <th>包名称</th>
-                <th>版本</th>
-                <th>类型</th>
-                <th>状态</th>
-                <th>问题数</th>
-                <th>提交时间</th>
+                <th>{t('admin.table.grade')}</th>
+                <th>{t('admin.table.package_name')}</th>
+                <th>{t('admin.table.version')}</th>
+                <th>{t('admin.table.type')}</th>
+                <th>{t('admin.table.status')}</th>
+                <th>{t('admin.table.findings_count')}</th>
+                <th>{t('admin.table.submitted_at')}</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.version_id}>
-                  <td data-label="评分">
+                  <td data-label={t('admin.table.grade')}>
                     <span className={`grade-badge grade-${item.grade?.toLowerCase() || 'unknown'}`}>
                       {item.grade || '—'}
                     </span>
                   </td>
-                  <td data-label="包名称" className="admin-pkg-name">
+                  <td data-label={t('admin.table.package_name')} className="admin-pkg-name">
                     {item.package_name}
                   </td>
-                  <td data-label="版本">
+                  <td data-label={t('admin.table.version')}>
                     <code>v{item.version}</code>
                   </td>
-                  <td data-label="类型">
+                  <td data-label={t('admin.table.type')}>
                     {item.package_type && (
                       <span className={`type-badge ${item.package_type}`}>
-                        {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                        {t(`search.${item.package_type}`, '') || item.package_type}
                       </span>
                     )}
                   </td>
-                  <td data-label="状态">
+                  <td data-label={t('admin.table.status')}>
                     <span className={`status-badge ${item.status}`}>
                       {item.status}
                     </span>
                   </td>
-                  <td data-label="问题数">
+                  <td data-label={t('admin.table.findings_count')}>
                     <span className={item.findings_count > 0 ? 'review-findings-danger' : 'review-findings-ok'}>
                       {item.findings_count}
                     </span>
                   </td>
-                  <td data-label="提交时间">{formatDate(item.submitted_at)}</td>
+                  <td data-label={t('admin.table.submitted_at')}>{formatDate(item.submitted_at)}</td>
                 </tr>
               ))}
             </tbody>

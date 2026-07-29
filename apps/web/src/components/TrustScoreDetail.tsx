@@ -1,18 +1,7 @@
 'use client';
 
+import { useTranslation } from 'react-i18next';
 import type { TrustScore, TrustScoreDimension, TrustScoreExplanation } from '@/types';
-
-const DIM_LABELS: Record<string, string> = {
-  source_trust: '来源可信度',
-  author_reputation: '作者信誉',
-  metadata_completeness: '元数据完整度',
-  permission_minimization: '权限最小化',
-  scan_results: '扫描结果',
-  manual_review: '人工审核',
-  version_stability: '版本稳定性',
-  user_feedback: '用户反馈',
-  signature_verifiability: '签名验证',
-};
 
 function dimensionSummary(key: string, dets: Record<string, unknown> | undefined): string {
   if (!dets) return '—';
@@ -104,19 +93,37 @@ function scoreColor(s: number): string {
   return 'var(--color-danger)';
 }
 
-function levelLabel(level: string | undefined): string {
-  const m: Record<string, string> = {
-    trusted: '可信任', low_risk: '低风险', medium_risk: '中风险',
-    high_risk: '高风险', untrusted: '不可信',
-  };
-  return level ? (m[level] ?? level) : '未知';
-}
-
 export default function TrustScoreDetail({
   trustScore,
 }: {
   trustScore: TrustScore | null | undefined;
 }) {
+  const { t } = useTranslation();
+
+  const levelLabels: Record<string, string> = {
+    trusted: t('trust_score.level.trusted'),
+    low_risk: t('trust_score.level.low_risk'),
+    medium_risk: t('trust_score.level.medium_risk'),
+    high_risk: t('trust_score.level.high_risk'),
+    untrusted: t('trust_score.level.untrusted'),
+  };
+
+  const dimLabels: Record<string, string> = {
+    source_trust: t('trust_score.dim.source_trust'),
+    author_reputation: t('trust_score.dim.author_reputation'),
+    metadata_completeness: t('trust_score.dim.metadata_completeness'),
+    permission_minimization: t('trust_score.dim.permission_minimization'),
+    scan_results: t('trust_score.dim.scan_results'),
+    manual_review: t('trust_score.dim.manual_review'),
+    version_stability: t('trust_score.dim.version_stability'),
+    user_feedback: t('trust_score.dim.user_feedback'),
+    signature_verifiability: t('trust_score.dim.signature_verifiability'),
+  };
+
+  function levelLabel(level: string | undefined): string {
+    return level ? (levelLabels[level] ?? level) : '未知';
+  }
+
   if (!trustScore) return null;
 
   const dims = trustScore.dimensions;
@@ -141,7 +148,7 @@ export default function TrustScoreDetail({
       }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
           <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--color-muted)' }}>
-            综合得分
+            {t('trust_score.overall_score')}
           </span>
           <span style={{
             fontSize: '1.4rem', fontWeight: 700,
@@ -179,10 +186,10 @@ export default function TrustScoreDetail({
               fontSize: '0.7rem',
               textTransform: 'uppercase',
             }}>
-              <th style={thLeft}>维度</th>
-              <th style={thRight}>得分</th>
-              <th style={thRight}>权重</th>
-              <th style={thLeft}>详情</th>
+              <th style={thLeft}>{t('trust_score.table_header.dimension')}</th>
+              <th style={thRight}>{t('trust_score.table_header.score')}</th>
+              <th style={thRight}>{t('trust_score.table_header.weight')}</th>
+              <th style={thLeft}>{t('trust_score.table_header.detail')}</th>
             </tr>
           </thead>
           <tbody>
@@ -193,7 +200,7 @@ export default function TrustScoreDetail({
                   borderBottom: '1px solid var(--color-rule)',
                 }}>
                   <td style={{ ...td, fontWeight: 500, color: 'var(--color-ink)' }}>
-                    {DIM_LABELS[key] ?? key}
+                    {dimLabels[key] ?? key}
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: scoreColor(dim.score), fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                     {dim.score}
@@ -220,7 +227,7 @@ export default function TrustScoreDetail({
             color: 'var(--color-muted)',
             textTransform: 'uppercase',
           }}>
-            扣分明细
+            {t('trust_score.deductions')}
           </div>
           <div style={{ padding: '0 1.25rem 0.8rem' }}>
             {explanations.filter(e => e.deduction !== 0).map((exp, i) => (

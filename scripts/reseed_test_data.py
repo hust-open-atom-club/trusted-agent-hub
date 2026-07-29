@@ -1,4 +1,4 @@
-"""清空 PostgreSQL 旧数据，按设计规范插入 50 条测试包/版本数据。
+"""清空 PostgreSQL 旧数据，按设计规范插入 50 条测试包 + v2.0.0 多版本数据。
 用法: python scripts/reseed_test_data.py
 """
 import json
@@ -6,7 +6,7 @@ import os
 import uuid
 import sys
 from typing import Set
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 
@@ -19,7 +19,11 @@ DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:543
 # ============================================================
 SUBMITTER_ID   = "user-2ec4ba335e2a4fd88d0130b39e08c889"  # submitter 用户
 SUBMITTER_NAME = "Test Submitter"
-NOW            = datetime.now(timezone.utc).isoformat()
+_BASE_NOW       = datetime.now(timezone.utc)
+
+def _dt(days_ago: int = 0) -> str:
+    """Generate ISO timestamp offset from now, spreading dates across the past."""
+    return (_BASE_NOW - timedelta(days=days_ago)).isoformat()
 
 _used_ids: Set[str] = set()
 
@@ -39,8 +43,6 @@ def _ver(uid: str) -> str:
         if vid not in _used_ids:
             _used_ids.add(vid)
             return vid
-
-from scanners.risk_scanner.weights import LEVEL_TO_GRADE
 
 # ============================================================
 # 50 条包定义 — 覆盖全部状态 / 类型 / 等级组合
@@ -126,10 +128,14 @@ PACKAGES_RAW = [
 def _build_packages():
     packages = []
     versions = []
-    for raw in PACKAGES_RAW:
+    name_to_pkg = {}
+    for idx, raw in enumerate(PACKAGES_RAW):
+        days_offset = 2 + idx  # spread v1.0.0 dates across past 2-52 days
+        dt_str = _dt(days_offset)
         pkg_id = _uid("pkg")
         ver_id = _ver(pkg_id)
         name = raw["name"]
+        name_to_pkg[name] = pkg_id
         ptype = raw["type"]
         status = raw["status"]
         ver = "1.0.0"
@@ -154,8 +160,8 @@ def _build_packages():
             "grade": grade,
             "install_count": raw.get("install_count", 0),
             "avg_rating": raw.get("avg_rating"),
-            "created_at": NOW,
-            "updated_at": NOW,
+            "created_at": dt_str,
+            "updated_at": dt_str,
         }
 
         # 版本数据
@@ -173,7 +179,7 @@ def _build_packages():
                         else ("review_recommended" if risk == "medium_risk" else "blocked")
                     ),
                 },
-                "calculated_at": NOW,
+                "calculated_at": dt_str,
             }
 
         ver_json = {
@@ -191,8 +197,8 @@ def _build_packages():
             },
             "compatibility": ["codewhale"],
             "submitter_id": SUBMITTER_ID,
-            "submitted_at": NOW,
-            "created_at": NOW,
+            "submitted_at": dt_str,
+            "created_at": dt_str,
         }
         if trust_score:
             ver_json["trust_score"] = trust_score
@@ -211,6 +217,94 @@ def _build_packages():
             "status": status,
             "data": json.dumps(ver_json, ensure_ascii=False),
         })
+
+    # ── v2.0.0 多版本测试数据（11 个包的第二版本） ──
+    v2_defs = [
+        {"name":"【test】code-review-skill","risk_level":"medium_risk","grade":"C"},
+        {"name":"【test】ci-cd-automation-skill","risk_level":"medium_risk","grade":"C"},
+        {"name":"【test】database-explorer-mcp","risk_level":"medium_risk","grade":"C"},
+        {"name":"【test】k8s-monitor-mcp","risk_level":"trusted","grade":"A"},
+        {"name":"【test】dev-utility-plugin","risk_level":"low_risk","grade":"B"},
+        {"name":"【test】pr-review-subagent","risk_level":"low_risk","grade":"B"},
+        {"name":"【test】docker-deploy-command","risk_level":"low_risk","grade":"B"},
+        {"name":"【test】code-explainer-prompt","risk_level":"trusted","grade":"A"},
+        {"name":"【test】lang-translation-skill","risk_level":"trusted","grade":"A"},
+        {"name":"【test】git-workflow-plugin","risk_level":"low_risk","grade":"B"},
+        {"name":"【test】slack-notify-mcp","risk_level":"high_risk","grade":"D"},
+    ]
+
+    v2_dt = _dt(0)  # v2 versions use near-current dates
+    _v2_count = 0
+
+    for v2def in v2_defs:
+        name = v2def["name"]
+        if name not in name_to_pkg:
+            continue
+        pkg_id = name_to_pkg[name]
+        ver_id = _uid("ver")
+        ver = "2.0.0"
+        risk = v2def["risk_level"]
+        grade = v2def["grade"]
+        status = "published"  # all v2.0.0 are published
+
+        raw = next((r for r in PACKAGES_RAW if r["name"] == name), {})
+
+        trust_score = None
+        if risk and grade:
+            trust_score = {
+                "model_version": "1.0.0",
+                "risk_summary": {
+                    "level": risk,
+                    "grade": grade,
+                    "top_risks": [],
+                    "install_recommendation": (
+                        "safe" if risk in ("trusted", "low_risk")
+                        else ("review_recommended" if risk == "medium_risk" else "blocked")
+                    ),
+                },
+                "calculated_at": v2_dt,
+            }
+
+        ver_json = {
+            "id": ver_id,
+            "package_id": pkg_id,
+            "version": ver,
+            "status": status,
+            "description": raw.get("description", f"{name} v2 description"),
+            "source": {
+                "type": "github",
+                "repository_url": raw.get("homepage") or f"https://github.com/test/{name}",
+                "ref": "main",
+                "commit_hash": "",
+                "verified_owner": True,
+            },
+            "compatibility": ["codewhale"],
+            "submitter_id": SUBMITTER_ID,
+            "submitted_at": v2_dt,
+            "created_at": v2_dt,
+        }
+        if trust_score:
+            ver_json["trust_score"] = trust_score
+
+        versions.append({
+            "id": ver_id,
+            "package_id": pkg_id,
+            "version": ver,
+            "status": status,
+            "data": json.dumps(ver_json, ensure_ascii=False),
+        })
+
+        # update package latest_version and data
+        for p in packages:
+            if p["id"] == pkg_id:
+                p["latest_version"] = ver
+                pkg_data = json.loads(p["data"])
+                pkg_data["latest_version"] = ver
+                p["data"] = json.dumps(pkg_data, ensure_ascii=False)
+                break
+        _v2_count += 1
+
+    # print(f"  + {_v2_count} v2.0.0 versions added")
 
     return packages, versions
 

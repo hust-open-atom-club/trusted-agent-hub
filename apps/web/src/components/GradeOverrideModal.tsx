@@ -1,16 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-const GRADE_OPTIONS = [
-  { value: 'A', label: 'A — 高度可信' },
-  { value: 'B', label: 'B — 可信' },
-  { value: 'C', label: 'C — 需注意' },
-  { value: 'D', label: 'D — 有风险' },
-  { value: 'E', label: 'E — 高风险' },
-];
 
 interface Props {
   versionId: string;
@@ -22,6 +16,14 @@ interface Props {
   onComplete: () => void;
 }
 
+function getGradeDiff(a: string | null, b: string | null): number {
+  const order = ['A', 'B', 'C', 'D', 'E', 'F'];
+  const ai = a ? order.indexOf(a) : -1;
+  const bi = b ? order.indexOf(b) : -1;
+  if (ai < 0 || bi < 0) return 0;
+  return Math.abs(ai - bi);
+}
+
 export default function GradeOverrideModal({
   versionId,
   autoGrade,
@@ -31,6 +33,26 @@ export default function GradeOverrideModal({
   onClose,
   onComplete,
 }: Props) {
+  const { t } = useTranslation();
+
+  const gradeOptions = [
+    { value: 'A', key: 'A-highly_trusted' },
+    { value: 'B', key: 'B-trusted' },
+    { value: 'C', key: 'C-caution' },
+    { value: 'D', key: 'D-risky' },
+    { value: 'E', key: 'E-high_risk' },
+    { value: 'F', key: 'F-critical' },
+  ];
+
+  const gradeLabelMap: Record<string, string> = {
+    A: t('grade_modal.grade_label.A-highly_trusted'),
+    B: t('grade_modal.grade_label.B-trusted'),
+    C: t('grade_modal.grade_label.C-caution'),
+    D: t('grade_modal.grade_label.D-risky'),
+    E: t('grade_modal.grade_label.E-high_risk'),
+    F: t('grade_modal.grade_label.F-critical'),
+  };
+
   const [grade, setGrade] = useState<string>(currentManualGrade || '');
   const [reason, setReason] = useState('');
   const [confirmed, setConfirmed] = useState(false);
@@ -41,8 +63,8 @@ export default function GradeOverrideModal({
   const hasChanges = isResetting ? true : (grade !== (currentManualGrade || '') && grade !== '');
 
   const handleSubmit = async () => {
-    if (!reason.trim()) { setError('请填写修改理由'); return; }
-    if (!confirmed) { setError('请勾选确认'); return; }
+    if (!reason.trim()) { setError(t('grade_modal.reason_required')); return; }
+    if (!confirmed) { setError(t('grade_modal.confirm_required')); return; }
 
     setError('');
     setSubmitting(true);
@@ -57,12 +79,12 @@ export default function GradeOverrideModal({
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const e = await res.json().catch(() => ({ detail: '操作失败' }));
+        const e = await res.json().catch(() => ({ detail: t('grade_modal.error') }));
         throw new Error(e.detail || `HTTP ${res.status}`);
       }
       onComplete();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '操作失败');
+      setError(err instanceof Error ? err.message : t('grade_modal.error'));
     } finally {
       setSubmitting(false);
     }
@@ -70,14 +92,14 @@ export default function GradeOverrideModal({
 
   const close = () => { if (!submitting) onClose(); };
 
-  const autoLabel = autoGrade ? `${autoGrade} (${levelLabel(autoGrade)})` : '未评分';
-  const newLabel = isResetting ? '恢复自动评分' : (grade ? `${grade} (${levelLabel(grade)})` : '—');
+  const autoLabel = autoGrade ? `${autoGrade} (${gradeLabelMap[autoGrade] ?? autoGrade})` : t('grade_modal.not_scored');
+  const newLabel = isResetting ? t('grade_modal.reset_to_auto') : (grade ? `${grade} (${gradeLabelMap[grade] ?? grade})` : '—');
 
   return (
     <div className="modal-overlay" onClick={close}>
       <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
         <div className="modal-header">
-          <h3>修改手动评级</h3>
+          <h3>{t('grade_modal.title')}</h3>
           <button className="modal-close" onClick={close} disabled={submitting}>✕</button>
         </div>
 
@@ -90,12 +112,12 @@ export default function GradeOverrideModal({
             fontSize: '0.85rem',
           }}>
             <div>
-              <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>自动评分</span>
+              <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>{t('grade_modal.auto_grade_label')}</span>
               <div style={{ fontWeight: 600, color: 'var(--color-ink)' }}>{autoLabel}</div>
             </div>
             <div style={{ color: 'var(--color-muted)', alignSelf: 'center' }}>→</div>
             <div>
-              <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>手动评级</span>
+              <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>{t('grade_modal.manual_grade_label')}</span>
               <div style={{ fontWeight: 600, color: hasChanges ? 'var(--color-accent)' : 'var(--color-muted)' }}>
                 {newLabel}
               </div>
@@ -110,14 +132,14 @@ export default function GradeOverrideModal({
               fontSize: '0.75rem', color: 'var(--color-ink-2)',
               borderLeft: '3px solid var(--color-accent)',
             }}>
-              <span style={{ fontWeight: 600 }}>当前手动评级: {currentManualGrade}</span>
+              <span style={{ fontWeight: 600 }}>{t('grade_modal.current_manual')}: {currentManualGrade}</span>
               <br />
-              理由: {currentReason}
+              {t('grade_modal.reason_label')}: {currentReason}
             </div>
           )}
 
           <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-ink)' }}>
-            选择评级
+            {t('grade_modal.select_grade')}
           </label>
           <select
             value={grade}
@@ -131,16 +153,16 @@ export default function GradeOverrideModal({
               fontFamily: 'inherit', outline: 'none', cursor: 'pointer',
               marginBottom: '1rem',
             }}>
-            <option value="">— 请选择评级 —</option>
-            {GRADE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
+            <option value="">{t('grade_modal.select_placeholder')}</option>
+            {gradeOptions.map((o) => (
+              <option key={o.value} value={o.value}>{t(`grade_modal.grade_option.${o.key}`)}</option>
             ))}
             <option disabled>──────────────</option>
-            <option value="__reset__">恢复自动评分</option>
+            <option value="__reset__">{t('grade_modal.reset_to_auto_option')}</option>
           </select>
 
           <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-ink)' }}>
-            修改理由 <span style={{ color: 'var(--color-danger)' }}>*</span>
+            {t('grade_modal.reason_label')} <span style={{ color: 'var(--color-danger)' }}>*</span>
           </label>
           <textarea
             rows={3}
@@ -148,8 +170,8 @@ export default function GradeOverrideModal({
             onChange={(e) => { setReason(e.target.value); setError(''); }}
             placeholder={
               isResetting
-                ? '请说明为何恢复自动评分...'
-                : '请说明为何与自动评分不同...'
+                ? t('grade_modal.reason_placeholder_reset')
+                : t('grade_modal.reason_placeholder')
             }
             disabled={submitting}
             style={{
@@ -168,7 +190,7 @@ export default function GradeOverrideModal({
               padding: '0.75rem 1rem',
               marginBottom: '0.75rem',
               borderRadius: 'var(--radius-md)',
-              border: `1px solid ${Math.abs(getGradeDiff(autoGrade, isResetting ? null : grade)) >= 3 ? 'var(--color-danger)' : 'var(--color-warning)'}`,
+              border: `1px solid ${getGradeDiff(autoGrade, isResetting ? null : grade) >= 3 ? 'var(--color-danger)' : 'var(--color-warning)'}`,
               background: 'var(--color-paper-2)',
             }}>
               <label style={{
@@ -184,8 +206,8 @@ export default function GradeOverrideModal({
                   style={{ width: '1rem', height: '1rem', cursor: submitting ? 'not-allowed' : 'pointer', accentColor: 'var(--color-accent)' }}
                 />
                 {isResetting
-                  ? '我确认恢复自动评分，清除人工干预'
-                  : `我确认将评级改为 ${grade}（自动评分: ${autoGrade ?? '—'}），理解此操作的影响。`}
+                  ? t('grade_modal.confirm_auto')
+                  : t('grade_modal.confirm_manual', { grade, auto: autoGrade ?? '—' })}
               </label>
             </div>
           )}
@@ -202,14 +224,14 @@ export default function GradeOverrideModal({
 
           <div style={{ display: 'flex', gap: '0.6rem', justifyContent: 'flex-end' }}>
             <button className="btn btn-secondary" onClick={close} disabled={submitting}>
-              取消
+              {t('grade_modal.cancel')}
             </button>
             <button
               className="btn btn-primary"
               onClick={handleSubmit}
               disabled={submitting || !hasChanges || !reason.trim() || !confirmed}
             >
-              {submitting ? '提交中...' : '确认修改'}
+              {submitting ? t('grade_modal.submitting') : t('grade_modal.confirm')}
             </button>
           </div>
         </div>
@@ -218,17 +240,3 @@ export default function GradeOverrideModal({
   );
 }
 
-function levelLabel(grade: string): string {
-  const m: Record<string, string> = {
-    A: '高度可信', B: '可信', C: '需注意', D: '有风险', E: '高风险',
-  };
-  return m[grade] ?? grade;
-}
-
-function getGradeDiff(a: string | null, b: string | null): number {
-  const order = ['A', 'B', 'C', 'D', 'E'];
-  const ai = a ? order.indexOf(a) : -1;
-  const bi = b ? order.indexOf(b) : -1;
-  if (ai < 0 || bi < 0) return 0;
-  return Math.abs(ai - bi);
-}

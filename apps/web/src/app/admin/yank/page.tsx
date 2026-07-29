@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
 
@@ -22,15 +23,6 @@ interface YankItem {
   yank_reason?: string | null;
 }
 
-const PACKAGE_TYPE_LABELS: Record<string, string> = {
-  skill: 'Skill',
-  mcp_server: 'MCP Server',
-  plugin: 'Plugin',
-  subagent: 'Subagent',
-  command: 'Command',
-  prompt: 'Prompt',
-};
-
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   try {
@@ -48,6 +40,7 @@ function formatDate(iso: string | null): string {
 
 export default function AdminYankPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
 
   const [items, setItems] = useState<YankItem[]>([]);
@@ -81,7 +74,7 @@ export default function AdminYankPage() {
         setItems(published);
         setYankedItems(yanked);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
   };
 
@@ -89,7 +82,7 @@ export default function AdminYankPage() {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录管理员账号');
+      setError(t('admin.auth_required'));
       return;
     }
     fetchItems();
@@ -99,7 +92,7 @@ export default function AdminYankPage() {
     if (!selectedItem || !token) return;
 
     if (actionType === 'yank' && !reason.trim()) {
-      setSubmitError('下架原因不能为空');
+      setSubmitError(t('admin.yank.reason_required'));
       return;
     }
 
@@ -116,10 +109,10 @@ export default function AdminYankPage() {
           },
         );
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: '操作失败' }));
+          const err = await res.json().catch(() => ({ detail: t('admin.yank.error') }));
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
-        setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 已退回审核队列`);
+        setSuccessMsg(t('admin.yank.re_review_success', { name: selectedItem.package_name, version: selectedItem.version }));
       } else {
         const res = await fetch(
           `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/yank?reason=${encodeURIComponent(reason.trim())}`,
@@ -129,10 +122,10 @@ export default function AdminYankPage() {
           },
         );
         if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: '下架失败' }));
+          const err = await res.json().catch(() => ({ detail: t('admin.yank.error') }));
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
-        setSuccessMsg(`${selectedItem.package_name} v${selectedItem.version} 已下架`);
+        setSuccessMsg(t('admin.yank.yank_success', { name: selectedItem.package_name, version: selectedItem.version }));
       }
 
       setShowModal(false);
@@ -144,7 +137,7 @@ export default function AdminYankPage() {
 
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : '操作失败');
+      setSubmitError(err instanceof Error ? err.message : t('admin.yank.error'));
     } finally {
       setSubmitting(false);
     }
@@ -161,21 +154,21 @@ export default function AdminYankPage() {
         },
       );
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: '撤销失败' }));
+        const err = await res.json().catch(() => ({ detail: t('admin.yank.error') }));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      setSuccessMsg(`${item.package_name} v${item.version} 已重新发布`);
+      setSuccessMsg(t('admin.yank.unyank_success', { name: item.package_name, version: item.version }));
       clearFetchCache('versions');
       fetchItems();
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : '撤销失败');
+      alert(err instanceof Error ? err.message : t('admin.yank.error'));
     }
   };
 
   const handleDelete = async (item: YankItem) => {
     if (!token) return;
-    if (!confirm(`确定要删除 ${item.package_name} v${item.version}？此操作不可恢复。`)) return;
+    if (!confirm(t('admin.yank.delete_confirm', { name: item.package_name, version: item.version }))) return;
     setDeletingId(item.version_id);
     try {
       const res = await fetch(
@@ -183,15 +176,15 @@ export default function AdminYankPage() {
         { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
       );
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: '删除失败' }));
+        const err = await res.json().catch(() => ({ detail: t('admin.yank.delete_error') }));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      setSuccessMsg(`${item.package_name} v${item.version} 已删除`);
+      setSuccessMsg(t('admin.yank.delete_success', { name: item.package_name, version: item.version }));
       clearFetchCache('versions');
       fetchItems();
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : '删除失败');
+      alert(err instanceof Error ? err.message : t('admin.yank.delete_error'));
     } finally {
       setDeletingId(null);
     }
@@ -202,7 +195,7 @@ export default function AdminYankPage() {
       <div className="admin-page">
         <div className="empty-state">
           <div className="empty-state-icon">&#x23F3;</div>
-          <h3>加载中...</h3>
+          <h3>{t('common.loading')}</h3>
         </div>
       </div>
     );
@@ -212,20 +205,20 @@ export default function AdminYankPage() {
     <div className="admin-page">
       <nav className="admin-nav">
         <button onClick={() => router.push('/admin')} className="link-btn">
-          ← 返回管理面板
+          {t('admin.back_to_dashboard')}
         </button>
       </nav>
 
       <div className="admin-section-header">
-        <h1>下架管理</h1>
-        <p>已发布版本 · 共 {items.length} 个</p>
+        <h1>{t('admin.yank.title')}</h1>
+        <p>{t('admin.yank.published_subtitle')} · {items.length}</p>
         {successMsg && <span className="admin-success-msg">{successMsg}</span>}
       </div>
 
       {error && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}
@@ -233,8 +226,8 @@ export default function AdminYankPage() {
       {!error && items.length === 0 && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x2705;</div>
-          <h3>暂无已发布版本</h3>
-          <p>还没有版本被发布上线</p>
+          <h3>{t('admin.yank.no_published')}</h3>
+          <p>{t('admin.yank.no_published_hint')}</p>
         </div>
       )}
 
@@ -243,37 +236,37 @@ export default function AdminYankPage() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>评分</th>
-                <th>包名称</th>
-                <th>版本</th>
-                <th>类型</th>
-                <th>发布时间</th>
-                <th>操作</th>
+                <th>{t('admin.table.grade')}</th>
+                <th>{t('admin.table.package_name')}</th>
+                <th>{t('admin.table.version')}</th>
+                <th>{t('admin.table.type')}</th>
+                <th>{t('admin.table.published_at')}</th>
+                <th>{t('admin.table.actions')}</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.version_id}>
-                  <td data-label="评分">
+                  <td data-label={t('admin.table.grade')}>
                     <span className={`grade-badge grade-${item.grade?.toLowerCase() || 'unknown'}`}>
                       {item.grade || '—'}
                     </span>
                   </td>
-                  <td data-label="包名称" className="admin-pkg-name">
+                  <td data-label={t('admin.table.package_name')} className="admin-pkg-name">
                     {item.package_name}
                   </td>
-                  <td data-label="版本">
+                  <td data-label={t('admin.table.version')}>
                     <code>v{item.version}</code>
                   </td>
-                  <td data-label="类型">
+                  <td data-label={t('admin.table.type')}>
                     {item.package_type && (
                       <span className={`type-badge ${item.package_type}`}>
-                        {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                        {t(`search.${item.package_type}`, '') || item.package_type}
                       </span>
                     )}
                   </td>
-                  <td data-label="发布时间">{formatDate(item.published_at)}</td>
-                  <td data-label="操作">
+                  <td data-label={t('admin.table.published_at')}>{formatDate(item.published_at)}</td>
+                  <td data-label={t('admin.table.actions')}>
                     <button
                       className="btn btn-danger btn-sm"
                       onClick={() => {
@@ -284,7 +277,7 @@ export default function AdminYankPage() {
                         setShowModal(true);
                       }}
                     >
-                      下架
+                      {t('admin.yank.yank_btn')}
                     </button>
                   </td>
                 </tr>
@@ -294,10 +287,9 @@ export default function AdminYankPage() {
         </div>
       )}
 
-      {/* 已下架版本 */}
       <div className="admin-section-header" style={{ marginTop: '3rem' }}>
-        <h2>已下架版本</h2>
-        <p>已下架版本 · 共 {yankedItems.length} 个</p>
+        <h2>{t('admin.yank.yanked_title')}</h2>
+        <p>{t('admin.yank.yanked_subtitle')} · {yankedItems.length}</p>
       </div>
 
       {!error && yankedItems.length > 0 && (
@@ -305,46 +297,46 @@ export default function AdminYankPage() {
           <table className="admin-table">
             <thead>
               <tr>
-                <th>包名称</th>
-                <th>版本</th>
-                <th>类型</th>
-                <th>下架原因</th>
-                <th>操作</th>
+                <th>{t('admin.table.package_name')}</th>
+                <th>{t('admin.table.version')}</th>
+                <th>{t('admin.table.type')}</th>
+                <th>{t('admin.yank.yank_reason')}</th>
+                <th>{t('admin.table.actions')}</th>
               </tr>
             </thead>
             <tbody>
               {yankedItems.map((item) => (
                 <tr key={item.version_id}>
-                  <td data-label="包名称" className="admin-pkg-name">
+                  <td data-label={t('admin.table.package_name')} className="admin-pkg-name">
                     {item.package_name}
                   </td>
-                  <td data-label="版本">
+                  <td data-label={t('admin.table.version')}>
                     <code>v{item.version}</code>
                   </td>
-                  <td data-label="类型">
+                  <td data-label={t('admin.table.type')}>
                     {item.package_type && (
                       <span className={`type-badge ${item.package_type}`}>
-                        {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                        {t(`search.${item.package_type}`, '') || item.package_type}
                       </span>
                     )}
                   </td>
-                  <td data-label="下架原因" style={{ fontSize: '0.85rem', color: 'var(--color-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td data-label={t('admin.yank.yank_reason')} style={{ fontSize: '0.85rem', color: 'var(--color-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.yank_reason || '—'}
                   </td>
-                  <td data-label="操作">
+                  <td data-label={t('admin.table.actions')}>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button
                         className="btn btn-primary btn-sm"
                         onClick={() => handleUnyank(item)}
                       >
-                        重新发布
+                        {t('admin.yank.unyank_btn')}
                       </button>
                       <button
                         className="btn btn-danger btn-sm"
                         onClick={() => handleDelete(item)}
                         disabled={deletingId === item.version_id}
                       >
-                        {deletingId === item.version_id ? '删除中...' : '删除'}
+                        {deletingId === item.version_id ? t('admin.yank.deleting') : t('admin.yank.delete_btn')}
                       </button>
                     </div>
                   </td>
@@ -359,7 +351,7 @@ export default function AdminYankPage() {
         <div className="modal-overlay" onClick={() => !submitting && setShowModal(false)}>
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>{actionType === 're-review' ? '退回审核' : '确认下架'}</h3>
+              <h3>{actionType === 're-review' ? t('admin.yank.re_review_title') : t('admin.yank.confirm_yank_title')}</h3>
               <button
                 className="modal-close"
                 onClick={() => setShowModal(false)}
@@ -385,7 +377,7 @@ export default function AdminYankPage() {
                     onChange={() => { setActionType('yank'); setSubmitError(null); }}
                     disabled={submitting}
                   />
-                  <span>直接下架 — 该版本不再对用户可见</span>
+                  <span>{t('admin.yank.yank_option_label')}</span>
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem 0' }}>
                   <input
@@ -396,19 +388,19 @@ export default function AdminYankPage() {
                     onChange={() => { setActionType('re-review'); setSubmitError(null); }}
                     disabled={submitting}
                   />
-                  <span>退回审核 — 版本回到审核队列重新审查</span>
+                  <span>{t('admin.yank.re_review_option_label')}</span>
                 </label>
               </div>
 
               {actionType === 'yank' && (
                 <div className="form-field modal-form-field">
                   <label className="modal-comment-label">
-                    下架原因 <span className="required-star">*</span>
+                    {t('admin.yank.yank_reason_label')} <span className="required-star">*</span>
                   </label>
                   <textarea
                     className="modal-comment-textarea"
                     rows={3}
-                    placeholder="请填写下架原因..."
+                    placeholder={t('admin.yank.reason_placeholder')}
                     value={reason}
                     onChange={(e) => {
                       setReason(e.target.value);
@@ -428,14 +420,14 @@ export default function AdminYankPage() {
                 onClick={() => setShowModal(false)}
                 disabled={submitting}
               >
-                取消
+                {t('admin.common.cancel')}
               </button>
               <button
                 className="btn btn-danger"
                 onClick={handleYank}
                 disabled={submitting || (actionType === 'yank' && !reason.trim())}
               >
-                {submitting ? '处理中...' : actionType === 're-review' ? '确认退回' : '确认下架'}
+                {submitting ? t('admin.yank.processing') : actionType === 're-review' ? t('admin.yank.confirm_re_review') : t('admin.yank.confirm_yank')}
               </button>
             </div>
           </div>

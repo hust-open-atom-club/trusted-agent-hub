@@ -189,6 +189,14 @@ EXCESSIVE_PERMISSION_PATTERNS: dict[str, dict[str, list[str]]] = {
         "unexpected": ["shell", "network", "browser", "database", "credentials"],
         "label": "Prompt 通常不需要 shell/network/browser/database/credentials 权限",
     },
+    "plugin": {
+        "unexpected": ["credentials"],
+        "label": "Plugin 通常不需要直接访问 credentials 权限",
+    },
+    "subagent": {
+        "unexpected": ["browser", "database", "external_services", "credentials"],
+        "label": "Subagent 通常不需要 browser/database/external_services/credentials 权限",
+    },
 }
 
 AUTONOMOUS_DECISION_PATTERNS: list[tuple[str, str, str]] = [
@@ -369,4 +377,15 @@ TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
 
 TRIGGER_RISK_PATTERNS: list[tuple[str, str, str]] = [
     (r'triggers?\s*[=:]\s*\[[^]]*\*', "触发器使用通配符 *（过度触发）", "low"),
+]
+
+# =============================================================================
+# SR-017: MCP Security — Tool registration extraction patterns
+# =============================================================================
+
+MCP_TOOL_REGISTER_PATTERNS: list[str] = [
+    r'(?:server|app)\.tool\s*\(\s*["\'](\w+)["\']',
+    r'(?:server|app)\.add_?[Tt]ool\s*\(\s*["\'](\w+)["\']',
+    r'(?:tool_name|toolName)\s*==\s*["\'](\w+)["\']',
+    r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"description"',
 ]

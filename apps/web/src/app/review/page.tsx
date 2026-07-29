@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
@@ -26,16 +27,6 @@ interface ReviewItem {
   findings_count: number;
 }
 
-const GRADE_OPTIONS = ['全部', 'A', 'B', 'C', 'D', 'E'];
-
-const PACKAGE_TYPE_LABELS: Record<string, string> = {
-  skill: 'Skill',
-  mcp_server: 'MCP Server',
-  plugin: 'Plugin',
-  subagent: 'Subagent',
-  command: 'Command',
-  prompt: 'Prompt',
-};
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -53,48 +44,22 @@ function formatDate(iso: string | null): string {
   }
 }
 
-function SkeletonRows() {
-  return (
-    <table className="review-table">
-      <thead>
-        <tr>
-          <th>包名称</th>
-          <th>版本</th>
-          <th>风险</th>
-          <th>问题数</th>
-          <th>提交时间</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <tr key={i}>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem', height: '1.5rem', borderRadius: 'var(--radius-sm)' }} /></div></td>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem' }} /></div></td>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
-            <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '1rem' }} /></div></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
 export default function ReviewPage() {
   const router = useRouter();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [gradeFilter, setGradeFilter] = useState('全部');
+  const [gradeFilter, setGradeFilter] = useState(t('review.filter.all'));
+
+  const GRADE_OPTIONS = [t('review.filter.all'), 'A', 'B', 'C', 'D', 'E', 'F'];
 
   useEffect(() => {
     if (authLoading) return;
     if (!user || !token) {
       setLoading(false);
-      setError('请先登录审核员账号');
+      setError(t('review.auth_required'));
       return;
     }
 
@@ -110,7 +75,7 @@ export default function ReviewPage() {
   }, [user, token, authLoading]);
 
   const filtered = useMemo(() => {
-    if (gradeFilter === '全部') return items;
+    if (gradeFilter === t('review.filter.all')) return items;
     return items.filter((item) => item.grade === gradeFilter);
   }, [items, gradeFilter]);
 
@@ -131,27 +96,27 @@ export default function ReviewPage() {
       <nav className="admin-nav" style={{ display: 'flex', gap: '0.75rem' }}>
         {user?.role === 'admin' && (
           <button onClick={() => router.push('/admin')} className="link-btn">
-            ← 返回管理面板
+            {t('review.back_to_admin')}
           </button>
         )}
         <Link href="/review/history" className="link-btn">
-          查看审核历史 →
+          {t('review.view_history')}
         </Link>
       </nav>
 
       <div className="admin-section-header">
-        <h1>待审核列表</h1>
+        <h1>{t('review.title')}</h1>
         <p>
-          共 {items.length} 个版本等待审核
-          {gradeFilter !== '全部' && (
-            <span>（已筛选 {gradeFilter} 级）</span>
+          {t('review.subtitle', { count: items.length })}
+          {gradeFilter !== t('review.filter.all') && (
+            <span>{t('review.filter.active', { grade: gradeFilter })}</span>
           )}
         </p>
       </div>
 
       <div className="review-toolbar">
         <div className="review-filter">
-          <label htmlFor="grade-filter">风险等级：</label>
+          <label htmlFor="grade-filter">{t('review.filter.filter_grade_label')}</label>
           <select
             id="grade-filter"
             value={gradeFilter}
@@ -161,9 +126,9 @@ export default function ReviewPage() {
             {GRADE_OPTIONS.map((g) => (
               <option key={g} value={g}>
                 {g}
-                {g !== '全部' && gradeCounts[g]
+                {g !== t('review.filter.all') && gradeCounts[g]
                   ? ` (${gradeCounts[g]})`
-                  : g === '全部'
+                  : g === t('review.filter.all')
                     ? ` (${items.length})`
                     : ''}
               </option>
@@ -175,25 +140,48 @@ export default function ReviewPage() {
       {error && !loading && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{error}</p>
         </div>
       )}
 
       {!error && isFirstLoad && (
         <div className="review-table-wrapper">
-          <SkeletonRows />
+          <table className="review-table">
+            <thead>
+              <tr>
+                <th>{t('review.table.package_name')}</th>
+                <th>{t('review.table.version')}</th>
+                <th>{t('review.table.risk')}</th>
+                <th>{t('review.table.findings_count')}</th>
+                <th>{t('review.table.submitted_at')}</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '70%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '60%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem', height: '1.5rem', borderRadius: 'var(--radius-sm)' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '2rem' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '80%' }} /></div></td>
+                  <td><div className="skeleton"><div className="skeleton-bar" style={{ width: '1rem' }} /></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
       {!error && !isFirstLoad && !hasResults && (
         <div className="empty-state">
           <div className="empty-state-icon">&#x2705;</div>
-          <h3>暂无待审核版本</h3>
+          <h3>{t('review.empty')}</h3>
           <p>
-            {gradeFilter !== '全部'
-              ? `没有 ${gradeFilter} 级的待审核版本`
-              : '所有提交的版本都已审核完毕'}
+            {gradeFilter !== t('review.filter.all')
+              ? t('review.empty_filter', { grade: gradeFilter })
+              : t('review.empty_all')}
           </p>
         </div>
       )}
@@ -203,11 +191,11 @@ export default function ReviewPage() {
           <table className="review-table">
             <thead>
               <tr>
-                <th>包名称</th>
-                <th>版本</th>
-                <th>风险</th>
-                <th>问题数</th>
-                <th>提交时间</th>
+                <th>{t('review.table.package_name')}</th>
+                <th>{t('review.table.version')}</th>
+                <th>{t('review.table.risk')}</th>
+                <th>{t('review.table.findings_count')}</th>
+                <th>{t('review.table.submitted_at')}</th>
                 <th></th>
               </tr>
             </thead>
@@ -218,29 +206,29 @@ export default function ReviewPage() {
                   onClick={() => router.push(`/review/${item.version_id}?returnTo=/review`)}
                   className="review-row"
                 >
-                  <td className="review-pkg-name" data-label="包名称">
+                  <td className="review-pkg-name" data-label={t('review.table.package_name')}>
                     <div className="review-pkg-title">
                       {item.package_type && (
                         <span className={`type-badge ${item.package_type}`}>
-                          {PACKAGE_TYPE_LABELS[item.package_type] || item.package_type}
+                          {t(`search.${item.package_type}`, '') || item.package_type}
                         </span>
                       )}
                       <span>{item.package_name}</span>
                     </div>
                   </td>
-                  <td className="review-version" data-label="版本">
+                  <td className="review-version" data-label={t('review.table.version')}>
                     <code>v{item.version}</code>
                   </td>
-                  <td className="review-grade" data-label="风险">
+                  <td className="review-grade" data-label={t('review.table.risk')}>
                     <span
                       className={`grade-badge grade-${item.grade?.toLowerCase() || 'unknown'}`}
-                      title={item.manual_grade ? `手动: ${item.manual_grade}${(item.manual_grade_by_name || item.manual_grade_by) ? ' 由 ' + (item.manual_grade_by_name || item.manual_grade_by) : ''}` : ''}
+                      title={item.manual_grade ? `${t('review.detail.manual_grade_label')}: ${item.manual_grade}${(item.manual_grade_by_name || item.manual_grade_by) ? ' ' + t('review.detail.modified_by', { name: item.manual_grade_by_name || item.manual_grade_by }) : ''}` : ''}
                     >
                       {item.grade || '—'}
                       {item.manual_grade && '*'}
                     </span>
                   </td>
-                  <td className="review-findings" data-label="问题数">
+                  <td className="review-findings" data-label={t('review.table.findings_count')}>
                     <span
                       className={
                         item.findings_count > 0
@@ -251,7 +239,7 @@ export default function ReviewPage() {
                       {item.findings_count}
                     </span>
                   </td>
-                  <td className="review-date" data-label="提交时间">
+                  <td className="review-date" data-label={t('review.table.submitted_at')}>
                     {formatDate(item.submitted_at)}
                   </td>
                   <td className="review-action">

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
@@ -19,38 +20,6 @@ interface FileGroup {
   items: Finding[];
 }
 
-/* ── 常量 ── */
-
-const PACKAGE_TYPE_LABELS: Record<string, string> = {
-  skill: 'Skill',
-  mcp_server: 'MCP Server',
-  plugin: 'Plugin',
-  subagent: 'Subagent',
-  command: 'Command',
-  prompt: 'Prompt',
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: '草稿',
-  submitted: '已提交',
-  scanning: '扫描中',
-  pending_review: '待审核',
-  approved: '已通过',
-  rejected: '已驳回',
-  changes_requested: '需修改',
-  published: '已发布',
-  yanked: '已下架',
-  error: '扫描失败',
-  scan_failed: '扫描失败',
-};
-
-const GRADE_LABELS: Record<string, string> = {
-  A: '高度可信',
-  B: '可信',
-  C: '需注意',
-  D: '有风险',
-  E: '高风险',
-};
 
 const SEVERITY_ORDER: Record<string, number> = {
   critical: 0,
@@ -60,24 +29,7 @@ const SEVERITY_ORDER: Record<string, number> = {
   info: 4,
 };
 
-const SEVERITY_LABELS: Record<string, string> = {
-  critical: '严重',
-  high: '高危',
-  medium: '中危',
-  low: '低危',
-  info: '信息',
-};
-
-const SEVERITY_FILTERS = [
-  { value: 'all', label: '全部' },
-  { value: 'critical', label: '严重' },
-  { value: 'high', label: '高危' },
-  { value: 'medium', label: '中危' },
-  { value: 'low', label: '低危' },
-  { value: 'info', label: '信息' },
-];
-
-/* ── 工具函数 ── */
+const CODE_CONTEXT_RANGE = 50;
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -104,10 +56,6 @@ function shortUrl(url: string): string {
   }
 }
 
-/* ── 代码上下文展示组件 ── */
-
-const CODE_CONTEXT_RANGE = 50;
-
 function FindingCodeView({
   finding,
   fileContents,
@@ -117,6 +65,7 @@ function FindingCodeView({
   fileContents?: Record<string, string>;
   versionId: string;
 }) {
+  const { t } = useTranslation();
   const targetRef = useRef<HTMLDivElement>(null);
   const fileContent = fileContents?.[finding.location?.file || ''];
 
@@ -145,14 +94,14 @@ function FindingCodeView({
   return (
     <div className="finding-snippet finding-snippet-expanded">
       <div className="finding-snippet-info">
-        <span>第 {displayStart}–{displayEnd} 行 / 共 {lines.length} 行</span>
+        <span>{t('review.finding.lines_range', { start: displayStart, end: displayEnd, total: lines.length })}</span>
         <a
           className="finding-full-file-toggle"
           href={`/review/files?versionId=${encodeURIComponent(versionId)}&path=${encodeURIComponent(filePath)}&line=${targetLine}`}
           target="_blank"
           rel="noopener noreferrer"
         >
-          查看完整文件
+          {t('review.finding.view_full_file')}
         </a>
       </div>
       <pre><code>
@@ -175,37 +124,24 @@ function FindingCodeView({
   );
 }
 
-/* ── 组件 ── */
-
-const RETURN_LABELS: Record<string, string> = {
-  '/admin/rejected': '返回已驳回列表',
-  '/review': '返回待审核列表',
-};
-
 export default function ReviewDetailPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { t } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
   const versionId = params.versionId as string;
   const returnTo = searchParams.get('returnTo') || '/review';
 
-  /* ── 状态 ── */
   const [version, setVersion] = useState<VersionDetail | null>(null);
   const [pkg, setPkg] = useState<PackageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Filtering
   const [filter, setFilter] = useState('all');
-
-  // Finding 折叠：key = file path，value = 是否展开
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  // 单个 finding 代码展开
   const [showCodeFor, setShowCodeFor] = useState<Record<string, boolean>>({});
 
-  // Modal
   const [showModal, setShowModal] = useState(false);
   const [conclusion, setConclusion] = useState<string | null>(null);
   const [comment, setComment] = useState('');
@@ -213,14 +149,46 @@ export default function ReviewDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [reviewHistory, setReviewHistory] = useState<ReviewRecord[]>([]);
-
   const [showGradeModal, setShowGradeModal] = useState(false);
-  const [gradeRefreshKey, setGradeRefreshKey] = useState(0);
+
+  const severityLabels: Record<string, string> = {
+    critical: t('review.severity.critical'),
+    high: t('review.severity.high'),
+    medium: t('review.severity.medium'),
+    low: t('review.severity.low'),
+    info: t('review.severity.info'),
+  };
+
+  const statusLabels: Record<string, string> = {
+    draft: t('review.status.draft'),
+    scanning: t('review.status.scanning'),
+    scan_failed: t('review.status.scan_failed'),
+    pending_review: t('review.status.pending_review'),
+    approved: t('review.status.approved'),
+    rejected: t('review.status.rejected'),
+    changes_requested: t('review.status.changes_requested'),
+    published: t('review.status.published'),
+    yanked: t('review.status.yanked'),
+    error: t('review.status.scan_failed'),
+  };
+
+  const severityFilters = [
+    { value: 'all', label: t('review.severity_filter.all') },
+    { value: 'critical', label: t('review.severity.critical') },
+    { value: 'high', label: t('review.severity.high') },
+    { value: 'medium', label: t('review.severity.medium') },
+    { value: 'low', label: t('review.severity.low') },
+    { value: 'info', label: t('review.severity.info') },
+  ];
+
+  const returnLabels: Record<string, string> = {
+    '/admin/rejected': t('review.detail.return_rejected_list'),
+    '/review': t('review.detail.return_pending_list'),
+  };
 
   const canModifyGrade = (user?.role === 'admin' || user?.role === 'reviewer')
     && version && !['draft', 'scanning', 'error'].includes(version.status);
 
-  /* ── 登录检查 ── */
   useEffect(() => {
     if (authLoading) return;
     if (!user || !token) {
@@ -228,7 +196,6 @@ export default function ReviewDetailPage() {
     }
   }, [authLoading, user, token, router, versionId]);
 
-  /* ── 数据获取 ── */
   useEffect(() => {
     if (!token || !versionId) return;
 
@@ -241,7 +208,6 @@ export default function ReviewDetailPage() {
 
         if (cancelled) return;
 
-        // 获取包详情
         if (vData.package_id) {
           try {
             const pkgData = await apiFetch<PackageDetail>(`${API_BASE}/api/v0/producer/packages/${vData.package_id}`, {
@@ -253,19 +219,17 @@ export default function ReviewDetailPage() {
 
         setVersion(vData);
 
-        // 获取审核历史
         apiFetch<ReviewRecord[]>(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
           headers: { Authorization: `Bearer ${token}` },
         })
           .then((data) => { if (!cancelled) setReviewHistory(data); })
           .catch(() => {});
 
-        // 初始化文件折叠：默认全部展开
         const findings = vData.findings || [];
         const initCollapsed: Record<string, boolean> = {};
         const seen = new Set<string>();
         for (const f of findings) {
-          const file = f.location?.file || '(未知文件)';
+          const file = f.location?.file || '(unknown)';
           if (!seen.has(file)) {
             initCollapsed[file] = false;
             seen.add(file);
@@ -274,7 +238,7 @@ export default function ReviewDetailPage() {
         setCollapsed(initCollapsed);
       } catch (err: unknown) {
         if (!cancelled) {
-          setFetchError(err instanceof Error ? err.message : '加载失败');
+          setFetchError(err instanceof Error ? err.message : t('admin.dashboard.load_failed'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -287,16 +251,14 @@ export default function ReviewDetailPage() {
     };
   }, [token, versionId]);
 
-  /* ── Findings 按文件分组 ── */
   const groupedFindings = useMemo<FileGroup[]>(() => {
     const findings = version?.findings || [];
     const groups: Record<string, Finding[]> = {};
     for (const f of findings) {
-      const file = f.location?.file || '(未知文件)';
+      const file = f.location?.file || '(unknown)';
       if (!groups[file]) groups[file] = [];
       groups[file].push(f);
     }
-    // 按文件内最多的严重度排序
     return Object.entries(groups)
       .map(([file, items]) => ({ file, items }))
       .sort((a, b) => {
@@ -306,7 +268,6 @@ export default function ReviewDetailPage() {
       });
   }, [version?.findings]);
 
-  /* ── 按严重度筛选后的分组 ── */
   const filteredGroups = useMemo(() => {
     if (filter === 'all') return groupedFindings;
     return groupedFindings
@@ -317,19 +278,17 @@ export default function ReviewDetailPage() {
       .filter((g) => g.items.length > 0);
   }, [groupedFindings, filter]);
 
-  /* ── 切换文件折叠 ── */
   const toggleFile = (file: string) => {
     setCollapsed((prev) => ({ ...prev, [file]: !prev[file] }));
   };
 
-  /* ── 审核提交 ── */
   const handleSubmitReview = async () => {
     if (!conclusion) return;
     if (
       (conclusion === 'rejected' || conclusion === 'changes_requested') &&
       !comment.trim()
     ) {
-      setSubmitError('驳回或要求修改时，审核意见不能为空');
+      setSubmitError(t('review.detail.comment_required'));
       return;
     }
     setSubmitError(null);
@@ -349,44 +308,40 @@ export default function ReviewDetailPage() {
       );
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: '提交失败' }));
+        const err = await res.json().catch(() => ({ detail: t('review.detail.submit_error') }));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
 
       if (conclusion === 'approved') {
-        toast.success('审核通过', { description: '该版本已通过审核' });
+        toast.success(t('review.detail.toast_approved'), { description: t('review.detail.toast_approved_desc') });
       } else if (conclusion === 'rejected') {
-        toast.error('已驳回', { description: '该版本已被驳回' });
+        toast.error(t('review.detail.toast_rejected'), { description: t('review.detail.toast_rejected_desc') });
       } else if (conclusion === 'changes_requested') {
-        toast('已发送修改要求', { description: '已通知提交者进行修改' });
+        toast(t('review.detail.toast_changes_requested'), { description: t('review.detail.toast_changes_desc') });
       }
 
       setShowModal(false);
       router.push('/review');
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : '提交失败');
+      setSubmitError(err instanceof Error ? err.message : t('review.detail.submit_error'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  /* ── 渲染帮助 ── */
-
   const isPending = version?.status === 'pending_review';
   const grade = version?.effective_grade ?? version?.trust_score?.risk_summary?.grade;
-  const gradeLabel = grade ? GRADE_LABELS[grade] : null;
 
   const reviewResultLabel = version?.review_conclusion
     ? (version.review_conclusion === 'approved'
-        ? '已通过'
+        ? t('review.status.approved')
         : version.review_conclusion === 'rejected'
-          ? '已驳回'
+          ? t('review.status.rejected')
           : version.review_conclusion === 'changes_requested'
-            ? '需修改'
+            ? t('review.status.changes_requested')
             : version.review_conclusion)
     : null;
 
-  /* ── Loading ── */
   if (loading || authLoading) {
     return (
       <div className="review-detail-page">
@@ -406,56 +361,52 @@ export default function ReviewDetailPage() {
     );
   }
 
-  /* ── Error ── */
   if (fetchError) {
     return (
       <div className="review-detail-page">
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
-          <h3>加载失败</h3>
+          <h3>{t('admin.dashboard.load_failed')}</h3>
           <p>{fetchError}</p>
           <button className="btn btn-secondary" onClick={() => router.push('/review')}>
-            ← 返回待审核列表
+            {returnLabels['/review']}
           </button>
         </div>
       </div>
     );
   }
 
-  /* ── 主内容 ── */
   return (
     <div className="review-detail-page">
-      {/* ── 返回导航 ── */}
       <nav className="review-detail-nav">
         <button onClick={() => router.push(returnTo)} className="link-btn">
-          ← {RETURN_LABELS[returnTo] || '返回上级'}
+          ← {returnLabels[returnTo] || t('review.detail.return_default')}
         </button>
         <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
 
-      {/* ── 版本信息栏 ── */}
       <div className="review-detail-bar">
         <div className="review-detail-bar-main">
           <div className="review-detail-bar-top">
-            <h1 className="review-detail-bar-name">{pkg?.name || '(加载中…)'}</h1>
+            <h1 className="review-detail-bar-name">{pkg?.name || t('review.detail.loading_name')}</h1>
             {version?.effective_grade && (
-              <span className={`grade-badge ${version.effective_grade.toLowerCase()}`} title={gradeLabel || ''}>
+              <span className={`grade-badge ${version.effective_grade.toLowerCase()}`}>
                 {version.effective_grade}
                 {version.manual_grade && '*'}
               </span>
             )}
             <span className={`status-badge ${version?.status}`}>
-              {STATUS_LABELS[version?.status || ''] || version?.status}
+              {statusLabels[version?.status || ''] || version?.status}
             </span>
           </div>
           <div className="review-detail-bar-meta">
             {pkg?.type && (
               <span className="meta-chip">
-                {PACKAGE_TYPE_LABELS[pkg.type] || pkg.type}
+                {t(`search.${pkg.type}`, '') || pkg.type}
               </span>
             )}
             <span>v{version?.version}</span>
-            <span>提交于 {formatDate(version?.submitted_at)}</span>
+            <span>{t('review.detail.submitted_at', { date: formatDate(version?.submitted_at) })}</span>
           </div>
           {version?.source?.repository_url && (
             <div className="review-detail-bar-repo">
@@ -469,14 +420,14 @@ export default function ReviewDetailPage() {
               </a>
             </div>
           )}
-          {gradeLabel && (
+          {grade && (
             <div className="review-detail-bar-grade-label">
-              风险等级：{version?.effective_grade} — {gradeLabel}
+              {t('review.detail.risk_level')}: {version?.effective_grade} — {grade}
             </div>
           )}
           {reviewResultLabel && (
             <div className="review-detail-bar-result">
-              审核结论：{reviewResultLabel}
+              {t('review.detail.review_conclusion')}: {reviewResultLabel}
             </div>
           )}
         </div>
@@ -492,7 +443,7 @@ export default function ReviewDetailPage() {
                 setShowModal(true);
               }}
             >
-              开始审核
+              {t('review.detail.start_review_btn')}
             </button>
           ) : (
             reviewResultLabel && (
@@ -504,7 +455,6 @@ export default function ReviewDetailPage() {
         </div>
       </div>
 
-      {/* ── 手动评级提示横幅 ── */}
       {version?.manual_grade && version.auto_grade && version.manual_grade !== version.auto_grade && (
         <div style={{
           marginBottom: '1rem', padding: '0.85rem 1.25rem',
@@ -516,32 +466,31 @@ export default function ReviewDetailPage() {
           flexWrap: 'wrap',
         }}>
           <span style={{ fontWeight: 600 }}>
-            该包的评级已被手动修正：{version.auto_grade} (auto) → {version.manual_grade} (manual)
+            {t('review.detail.grade_overridden_banner', { from: version.auto_grade, to: version.manual_grade })}
           </span>
           {version.manual_grade_reason && (
             <span style={{ color: 'var(--color-muted)', fontSize: '0.76rem' }}>
-              理由：{version.manual_grade_reason}
+              {t('review.detail.reason')}: {version.manual_grade_reason}
             </span>
           )}
           {version.manual_grade_by && (
             <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>
-              由 {version.manual_grade_by_name || version.manual_grade_by} 修改
+              {t('review.detail.modified_by', { name: version.manual_grade_by_name || version.manual_grade_by })}
             </span>
           )}
         </div>
       )}
 
-      {/* ── 信任评分 + 手动评级 ── */}
       {version?.trust_score && (
         <section className="review-detail-section">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <h2 className="review-detail-section-title" style={{ margin: 0 }}>信任评分</h2>
+            <h2 className="review-detail-section-title" style={{ margin: 0 }}>{t('review.detail.trust_score_title')}</h2>
             {canModifyGrade && (
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={() => setShowGradeModal(true)}
               >
-                修改手动评级
+                {t('review.detail.override_grade_btn')}
               </button>
             )}
           </div>
@@ -553,7 +502,7 @@ export default function ReviewDetailPage() {
             borderRadius: 'var(--radius-md)',
           }}>
             <div>
-              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>自动评分</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>{t('review.detail.auto_grade_label')}</span>
               <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
                 {version.auto_grade ? (
                   <span className={`grade-badge ${version.auto_grade.toLowerCase()}`}>{version.auto_grade}</span>
@@ -563,17 +512,17 @@ export default function ReviewDetailPage() {
             <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>→</div>
             <div>
               <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>
-                手动评级 {version.manual_grade ? '' : '(未设置)'}
+                {t('review.detail.manual_grade_label')} {version.manual_grade ? '' : `(${t('review.detail.manual_grade_none')})`}
               </span>
               <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
                 {version.manual_grade ? (
                   <span style={{ color: 'var(--color-ink)' }}>{version.manual_grade} *</span>
-                ) : <span style={{ color: 'var(--color-muted)' }}>自动</span>}
+                ) : <span style={{ color: 'var(--color-muted)' }}>{t('review.detail.auto_grade_label')}</span>}
               </div>
             </div>
             <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>=</div>
             <div>
-              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>生效评级</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-muted)', textTransform: 'uppercase' }}>{t('review.detail.effective_grade_label')}</span>
               <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-ink)' }}>
                 {version.effective_grade ? (
                   <span className={`grade-badge ${version.effective_grade.toLowerCase()}`}>{version.effective_grade}</span>
@@ -586,16 +535,15 @@ export default function ReviewDetailPage() {
         </section>
       )}
 
-      {/* ── 审核历史时间线 ── */}
       {reviewHistory.length > 0 && (
         <section className="review-detail-section">
-          <h2 className="review-detail-section-title">审核历史（{reviewHistory.length}）</h2>
+          <h2 className="review-detail-section-title">{t('review.detail.review_history_title', { count: reviewHistory.length })}</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {reviewHistory.map((record) => {
               const cLabels: Record<string, { label: string; color: string }> = {
-                approved: { label: '通过', color: 'var(--color-success)' },
-                rejected: { label: '驳回', color: 'var(--color-danger)' },
-                changes_requested: { label: '需修改', color: 'var(--color-warning)' },
+                approved: { label: t('review.status.approved'), color: 'var(--color-success)' },
+                rejected: { label: t('review.status.rejected'), color: 'var(--color-danger)' },
+                changes_requested: { label: t('review.status.changes_requested'), color: 'var(--color-warning)' },
               };
               const c = cLabels[record.conclusion] || { label: record.conclusion, color: 'var(--color-muted)' };
               return (
@@ -634,31 +582,30 @@ export default function ReviewDetailPage() {
         </section>
       )}
 
-      {/* ── 包元数据 ── */}
       <section className="review-detail-section">
-        <h2 className="review-detail-section-title">包元数据</h2>
+        <h2 className="review-detail-section-title">{t('review.detail.package_meta')}</h2>
         <div className="review-meta-grid">
           {pkg?.description && (
             <div className="review-meta-field full">
-              <span className="review-meta-label">描述</span>
+              <span className="review-meta-label">{t('review.detail.meta_description')}</span>
               <span className="review-meta-value">{pkg.description}</span>
             </div>
           )}
           {pkg?.license && (
             <div className="review-meta-field">
-              <span className="review-meta-label">许可</span>
+              <span className="review-meta-label">{t('review.detail.meta_license')}</span>
               <span className="review-meta-value">{pkg.license}</span>
             </div>
           )}
           {pkg?.category && (
             <div className="review-meta-field">
-              <span className="review-meta-label">分类</span>
+              <span className="review-meta-label">{t('review.detail.meta_category')}</span>
               <span className="review-meta-value">{pkg.category}</span>
             </div>
           )}
           {pkg?.author && (
             <div className="review-meta-field">
-              <span className="review-meta-label">作者</span>
+              <span className="review-meta-label">{t('review.detail.meta_author')}</span>
               <span className="review-meta-value">
                 {pkg.author.name || pkg.author.email || pkg.author.url || '—'}
               </span>
@@ -666,7 +613,7 @@ export default function ReviewDetailPage() {
           )}
           {pkg?.keywords && pkg.keywords.length > 0 && (
             <div className="review-meta-field full">
-              <span className="review-meta-label">关键词</span>
+              <span className="review-meta-label">{t('review.detail.meta_keywords')}</span>
               <span className="review-meta-value">
                 {pkg.keywords.map((kw) => (
                   <span key={kw} className="keyword-pill">
@@ -678,7 +625,7 @@ export default function ReviewDetailPage() {
           )}
           {pkg?.homepage && (
             <div className="review-meta-field full">
-              <span className="review-meta-label">主页</span>
+              <span className="review-meta-label">{t('review.detail.meta_homepage')}</span>
               <span className="review-meta-value">
                 <a href={pkg.homepage} target="_blank" rel="noopener noreferrer">
                   {pkg.homepage}
@@ -688,10 +635,9 @@ export default function ReviewDetailPage() {
           )}
         </div>
 
-        {/* 权限声明 */}
         {pkg?.permissions && Object.keys(pkg.permissions).length > 0 && (
           <>
-            <h3 className="review-meta-subtitle">权限声明</h3>
+            <h3 className="review-meta-subtitle">{t('review.detail.permissions_title')}</h3>
             <div className="review-meta-grid">
               {Object.entries(pkg.permissions).map(([key, value]) => (
                 <div className="review-meta-field" key={key}>
@@ -711,10 +657,9 @@ export default function ReviewDetailPage() {
           </>
         )}
 
-        {/* 安装方式 */}
         {pkg?.installation && Object.keys(pkg.installation).length > 0 && (
           <>
-            <h3 className="review-meta-subtitle">安装方式</h3>
+            <h3 className="review-meta-subtitle">{t('review.detail.installation_title')}</h3>
             <pre className="review-code-block">
               {JSON.stringify(pkg.installation, null, 2)}
             </pre>
@@ -722,14 +667,12 @@ export default function ReviewDetailPage() {
         )}
       </section>
 
-      {/* ── 扫描发现 ── */}
       <section className="review-detail-section">
         <div className="review-findings-header">
           <h2 className="review-detail-section-title">
-            扫描发现 · 共 {version?.scan_summary?.total ?? (version?.findings || []).length} 个
+            {t('review.detail.scan_findings_title')} · {t('review.detail.scan_findings_title')} / {version?.scan_summary?.total ?? (version?.findings || []).length}
           </h2>
 
-          {/* 严重度统计 + 筛选 */}
           <div className="findings-toolbar">
             <div className="findings-stats">
               {(['critical', 'high', 'medium', 'low', 'info'] as const).map((sev) => {
@@ -737,7 +680,7 @@ export default function ReviewDetailPage() {
                 if (!count) return null;
                 return (
                   <span key={sev} className={`finding-stat-chip ${sev}`}>
-                    {SEVERITY_LABELS[sev]} {count}
+                    {severityLabels[sev]} {count}
                   </span>
                 );
               })}
@@ -747,7 +690,7 @@ export default function ReviewDetailPage() {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             >
-              {SEVERITY_FILTERS.map((f) => (
+              {severityFilters.map((f) => (
                 <option key={f.value} value={f.value}>
                   {f.label}
                 </option>
@@ -759,13 +702,12 @@ export default function ReviewDetailPage() {
         {filteredGroups.length === 0 ? (
           <div className="empty-state small">
             <div className="empty-state-icon">&#x2705;</div>
-            <h3>未发现风险问题</h3>
+            <h3>{t('review.detail.no_findings')}</h3>
           </div>
         ) : (
           <div className="findings-list">
             {filteredGroups.map((group) => (
               <div key={group.file} className="finding-file-group">
-                {/* 文件标题栏（折叠切换） */}
                 <button
                   className="finding-file-header"
                   onClick={() => toggleFile(group.file)}
@@ -775,11 +717,10 @@ export default function ReviewDetailPage() {
                   </span>
                   <span className="finding-file-name">{group.file}</span>
                   <span className="finding-file-count">
-                    {group.items.length} 个问题
+                    {t('review.detail.file_findings_count', { count: group.items.length })}
                   </span>
                 </button>
 
-                {/* 文件下的 finding 列表 */}
                 {!collapsed[group.file] && (
                   <div className="finding-file-body">
                     {group.items
@@ -794,7 +735,7 @@ export default function ReviewDetailPage() {
                           <div className="finding-card-body">
                             <div className="finding-card-header">
                               <span className={`finding-severity-chip ${finding.severity}`}>
-                                {SEVERITY_LABELS[finding.severity] || finding.severity}
+                                {severityLabels[finding.severity] || finding.severity}
                               </span>
                               <span className="finding-rule-id">{finding.rule_id}</span>
                               <span className="finding-title-text">{finding.title}</span>
@@ -818,7 +759,7 @@ export default function ReviewDetailPage() {
                                     }));
                                   }}
                                 >
-                                  {showCodeFor[finding.id!!] ? '▾ 收起代码' : '▸ 查看代码上下文'}
+                                  {showCodeFor[finding.id!!] ? t('review.finding.collapse_code') : t('review.finding.expand_code')}
                                 </button>
                               )}
                               <div className="finding-meta-pills">
@@ -826,7 +767,7 @@ export default function ReviewDetailPage() {
                                   <span className="finding-meta-pill cwe" title={finding.cwe_id}>CWE</span>
                                 )}
                                 {finding.remediation && (
-                                  <span className="finding-meta-pill remediation" title={finding.remediation}>修复建议</span>
+                                  <span className="finding-meta-pill remediation" title={finding.remediation}>{t('review.finding.remediation')}</span>
                                 )}
                               </div>
                             </div>
@@ -849,12 +790,11 @@ export default function ReviewDetailPage() {
         )}
       </section>
 
-      {/* ── 审核 Modal ── */}
       {showModal && (
         <div className="modal-overlay" onClick={() => !submitting && setShowModal(false)}>
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>审核结论</h3>
+              <h3>{t('review.detail.review_modal_title')}</h3>
               <button
                 className="modal-close"
                 onClick={() => setShowModal(false)}
@@ -864,15 +804,14 @@ export default function ReviewDetailPage() {
               </button>
             </div>
 
-            {/* 结论选择 */}
             <div className="modal-conclusion-options">
               {[
-                { value: 'approved', label: '✅ 通过', desc: '审核通过，允许发布' },
-                { value: 'rejected', label: '❌ 驳回', desc: '审核不通过，拒绝发布' },
+                { value: 'approved', label: t('review.detail.option_approved'), desc: t('review.detail.option_approved_desc') },
+                { value: 'rejected', label: t('review.detail.option_rejected'), desc: t('review.detail.option_rejected_desc') },
                 {
                   value: 'changes_requested',
-                  label: '🔄 要求修改',
-                  desc: '需要修改后重新提交',
+                  label: t('review.detail.option_changes_requested'),
+                  desc: t('review.detail.option_changes_desc'),
                 },
               ].map((opt) => (
                 <button
@@ -890,19 +829,18 @@ export default function ReviewDetailPage() {
               ))}
             </div>
 
-            {/* 意见文本框 */}
             {conclusion && (conclusion === 'rejected' || conclusion === 'changes_requested') && (
               <div className="modal-comment">
                 <label className="modal-comment-label">
-                  审核意见 <span className="required-star">*</span>
+                  {t('review.detail.review_comment_label')} <span className="required-star">*</span>
                 </label>
                 <textarea
                   className="modal-comment-textarea"
                   rows={4}
                   placeholder={
                     conclusion === 'rejected'
-                      ? '请详细说明驳回原因…'
-                      : '请说明需要修改的内容…'
+                      ? t('review.detail.comment_placeholder_reject')
+                      : t('review.detail.comment_placeholder_changes')
                   }
                   value={comment}
                   onChange={(e) => {
@@ -912,22 +850,20 @@ export default function ReviewDetailPage() {
                   disabled={submitting}
                 />
                 {!comment.trim() && (
-                  <span className="modal-comment-hint">驳回或要求修改时，审核意见不能为空</span>
+                  <span className="modal-comment-hint">{t('review.detail.comment_required')}</span>
                 )}
               </div>
             )}
 
-            {/* 错误提示 */}
             {submitError && <div className="modal-error">{submitError}</div>}
 
-            {/* 操作按钮 */}
             <div className="modal-actions">
               <button
                 className="btn btn-secondary"
                 onClick={() => setShowModal(false)}
                 disabled={submitting}
               >
-                取消
+                {t('review.detail.cancel')}
               </button>
               <button
                 className="btn btn-primary"
@@ -939,14 +875,13 @@ export default function ReviewDetailPage() {
                     !comment.trim())
                 }
               >
-                {submitting ? '提交中…' : '提交审核'}
+                {submitting ? t('review.detail.submitting') : t('review.detail.submit_review')}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── 手动评级 Modal ── */}
       {showGradeModal && token && version && (
         <GradeOverrideModal
           versionId={versionId}

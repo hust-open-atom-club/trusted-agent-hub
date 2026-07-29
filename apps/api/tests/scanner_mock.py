@@ -12,6 +12,7 @@ class MockScanner:
     files: dict[str, str] = field(default_factory=dict)
     code_example_predicate: Callable[[str, int], bool] = lambda f, ln: False
     findings: list[dict[str, Any]] = field(default_factory=list)
+    _package_metadata: dict[str, Any] | None = None
 
     @property
     def scanned_files(self) -> list[str]:

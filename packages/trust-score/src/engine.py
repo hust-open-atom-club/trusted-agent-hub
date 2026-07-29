@@ -343,11 +343,15 @@ def _build_dimensions(
     i2_disc: dict[str, Any],
     c1: dict[str, Any],
     c2_disc: dict[str, Any],
+    fb_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the nine-dimension output object per trust-score.schema.json.
 
     Maps our internal assessments to the schema's nine dimension slots.
+    fb_data may include avg_rating, total_ratings, total_installs, reports_count.
     """
+    if fb_data is None:
+        fb_data = {}
     source = package_metadata.get("source", {}) or {}
     integrity = package_metadata.get("integrity", {}) or {}
     permissions = package_metadata.get("permissions", {}) or {}
@@ -457,15 +461,25 @@ def _build_dimensions(
         },
     }
 
-    # user_feedback (no data in scope — neutral)
+    # user_feedback
+    avg_rating = fb_data.get("avg_rating", 0) or 0
+    total_ratings = fb_data.get("total_ratings", 0) or 0
+    total_installs = fb_data.get("total_installs", 0) or 0
+    reports_count = fb_data.get("reports_count", 0) or 0
+
+    if total_ratings > 0:
+        feedback_score = round((avg_rating / 5.0) * 100)
+    else:
+        feedback_score = 50
+
     user_feedback = {
-        "score": 50,
+        "score": feedback_score,
         "weight": 0.10,
         "details": {
-            "avg_rating": 0,
-            "total_ratings": 0,
-            "total_installs": 0,
-            "reports_count": 0,
+            "avg_rating": avg_rating,
+            "total_ratings": total_ratings,
+            "total_installs": total_installs,
+            "reports_count": reports_count,
         },
     }
 

@@ -2,7 +2,9 @@
 
 import logging
 import math
+import time as _time
 from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,10 @@ _GRADE_NUMERIC: dict[Grade | None, int] = {
 
 def _grade_order(grade: Grade | None) -> int:
     return _GRADE_NUMERIC.get(grade, 0)
+
+
+_STATS_CACHE: dict[str, tuple[float, Any]] = {}
+_STATS_CACHE_TTL = 180  # 3 minutes
 
 
 class PackageService:
@@ -231,18 +237,25 @@ class PackageService:
         return version.trust_score
 
     def get_stats(self, name: str) -> PackageStats:
+        now = _time.time()
+        if name in _STATS_CACHE:
+            ts, val = _STATS_CACHE[name]
+            if now - ts < _STATS_CACHE_TTL:
+                return val
+
         package = self.get_public_package(name)
         self._get_public_latest(package)
         if hasattr(self.repository, "get_package_stats"):
             stats = self.repository.get_package_stats(name)
             if stats is not None:
+                _STATS_CACHE[name] = (now, stats)
                 return stats
         versions = [
             version
             for version in self.repository.list_versions(name)
             if version.status == "published"
         ]
-        return PackageStats(
+        result = PackageStats(
             package_name=package.name,
             install_count=package.install_count,
             avg_rating=package.avg_rating,
@@ -250,6 +263,8 @@ class PackageService:
             latest_version=package.latest_version,
             status=package.status,
         )
+        _STATS_CACHE[name] = (now, result)
+        return result
 
     @staticmethod
     def _version_summary(version: VersionDetail) -> VersionSummary:
