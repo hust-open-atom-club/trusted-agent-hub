@@ -138,8 +138,19 @@ def _check_typosquatting(scanner: Any, meta: dict[str, Any]) -> None:
                     evidence=f"Levenshtein distance: {dist}, package: {dep_name} vs {known}",
                     remediation=f"验证包 '{dep_name}' 是否为官方包，检查其来源和发布历史。",
                 )
-        if pkg_name and _levenshtein(pkg_name, dep_name) <= 2 and pkg_name != dep_name:
-            pass
+        pkg_dist = _levenshtein(pkg_name, dep_name)
+        if pkg_name and pkg_dist <= 2 and pkg_name != dep_name:
+            manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
+            scanner._add_finding(
+                rule_id="SR-008",
+                severity="high",
+                category="supply_chain",
+                title=f"Typosquatting 检测: 依赖 '{dep_name}' 与包自身名 '{pkg_name}' 相似",
+                description=f"依赖包名 '{dep_name}' 与包自身名称 '{pkg_name}' Levenshtein 距离为 {pkg_dist}，可能存在 typosquatting 攻击。",
+                location={"file": manifest_file},
+                evidence=f"Levenshtein distance: {pkg_dist}, package: {dep_name} vs {pkg_name}",
+                remediation=f"验证依赖 '{dep_name}' 是否为包 '{pkg_name}' 的合法依赖，检查其来源和发布历史。",
+            )
 
 
 def run(scanner: Any) -> None:

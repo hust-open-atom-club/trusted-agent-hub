@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -42,8 +43,22 @@ _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
 # ---------------------------------------------------------------------------
-# key: scan_id, value: {status, package_name, created_at, finished_at, report_path, error}
+# key: scan_id, value: {status, package_name, created_at, finished_at, report_path, error, expires_at}
 _scans: Dict[str, Dict[str, Any]] = {}
+
+_SCAN_TTL_SECONDS = 3600  # 临时扫描结果保留 1 小时
+
+
+def _cleanup_expired_scans() -> None:
+    """清理超过 TTL 的临时扫描结果，避免字典无限增长。"""
+    now = _time.time()
+    expired = [sid for sid, info in _scans.items() if info.get("expires_at", 0) < now]
+    for sid in expired:
+        del _scans[sid]
+
+
+def _scan_not_found_detail(scan_id: str) -> str:
+    return f"Scan '{scan_id}' not found or expired (scans are kept for 1 hour). Please re-scan."
 
 # ---------------------------------------------------------------------------
 # Pydantic 模型
@@ -456,8 +471,8 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
         try:
             with open(manifest, encoding="utf-8") as fh:
                 return json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logging.warning("manifest.json fallback failed for %s: %s", target, e)
 
     # 尝试 plugin.json
     plugin = target / "plugin.json"
@@ -465,8 +480,8 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
         try:
             with open(plugin, encoding="utf-8") as fh:
                 return json.load(fh)
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logging.warning("plugin.json fallback failed for %s: %s", target, e)
 
     # 尝试解析 SKILL.md frontmatter
     skill = target / "SKILL.md"
@@ -477,10 +492,11 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
             fm = _parse_frontmatter(fm_content)
             if fm:
                 return fm
-        except (OSError, UnicodeDecodeError):
-            pass
+        except (OSError, UnicodeDecodeError) as e:
+            logging.warning("SKILL.md fallback failed for %s: %s", target, e)
 
     # 从 scan_report 构建最简 metadata
+    logging.warning("All metadata fallbacks failed for %s, returning stub metadata", target)
     return {
         "name": scan_report.get("package_name", "unknown"),
         "version": scan_report.get("version", "0.0.0"),
@@ -675,6 +691,7 @@ async def submit_scan(
         "summary": None,
         "trust_score": None,
         "error": None,
+        "expires_at": _time.time() + _SCAN_TTL_SECONDS,
     }
 
     # 启动后台扫描
@@ -706,11 +723,12 @@ def get_scan_status(scan_id: str) -> Dict[str, Any]:
         complete — 扫描完成
         error    — 扫描失败
     """
+    _cleanup_expired_scans()
     info = _scans.get(scan_id)
     if not info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Scan '{scan_id}' not found.",
+            detail=_scan_not_found_detail(scan_id),
         )
 
     return {
@@ -739,11 +757,12 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
     在扫描进行中时返回 202 Accepted 及当前状态。
     扫描失败时返回 422 Unprocessable Entity 及错误信息。
     """
+    _cleanup_expired_scans()
     info = _scans.get(scan_id)
     if not info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Scan '{scan_id}' not found.",
+            detail=_scan_not_found_detail(scan_id),
         )
 
     if info["status"] == "complete":
@@ -783,11 +802,12 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
 @router.get("/scan/{scan_id}/metadata")
 def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
     """获取扫描过程中提取的完整元数据（供提交页自动填充使用）。"""
+    _cleanup_expired_scans()
     info = _scans.get(scan_id)
     if not info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Scan '{scan_id}' not found.",
+            detail=_scan_not_found_detail(scan_id),
         )
     if info["status"] != "complete":
         raise HTTPException(
@@ -820,6 +840,7 @@ def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
 @router.get("/scans")
 def list_scans() -> List[Dict[str, Any]]:
     """列出所有扫描任务（管理调试用）。"""
+    _cleanup_expired_scans()
     return [
         {
             "scan_id": sid,
