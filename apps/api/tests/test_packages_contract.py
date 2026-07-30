@@ -352,7 +352,7 @@ def test_list_filters_public_packages(
 @pytest.mark.parametrize(
     ("field", "order", "expected"),
     [
-        (SortField.GRADE, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
+        (SortField.GRADE, SortOrder.ASC, ["beta-package", "Gamma-package", "alpha-package"]),
         (SortField.GRADE, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
@@ -538,16 +538,17 @@ def _repository_with_draft_latest(
     return FakeRepository((package, *fake_repository.packages[1:]), versions)
 
 
-def test_list_rejects_public_package_with_draft_latest_version(
+def test_list_skips_public_package_with_draft_latest_version(
     fake_repository: FakeRepository,
 ) -> None:
     repository = _repository_with_draft_latest(fake_repository)
 
-    with pytest.raises(RepositoryDataError, match="invalid latest_version 3.0.0"):
-        PackageService(repository).list_packages(PackageListQuery())
+    page = PackageService(repository).list_packages(PackageListQuery())
+    names = {item.name for item in page.items}
+    assert "alpha-package" not in names
 
 
-def test_stats_reject_public_package_with_draft_latest_version(
+def test_stats_skip_public_package_with_draft_latest_version(
     fake_repository: FakeRepository,
 ) -> None:
     repository = _repository_with_draft_latest(fake_repository)

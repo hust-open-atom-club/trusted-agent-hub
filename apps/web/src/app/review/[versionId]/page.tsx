@@ -531,7 +531,13 @@ export default function ReviewDetailPage() {
             </div>
           </div>
 
-          <TrustScoreDetail trustScore={version.trust_score} />
+          <TrustScoreDetail
+            trustScore={version.trust_score}
+            effectiveGrade={version.effective_grade}
+            autoGrade={version.auto_grade}
+            manualGrade={version.manual_grade}
+            manualGradeReason={version.manual_grade_reason}
+          />
         </section>
       )}
 

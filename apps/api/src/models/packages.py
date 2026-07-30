@@ -127,6 +127,12 @@ class TrustScoreDimension(StrictContractModel):
     weight: float
     details: dict[str, object] | None = None
 
+    def model_post_init(self, __context: object) -> None:
+        """Strip legacy numeric dimension score from public output."""
+        super().model_post_init(__context)
+        if self.model_extra:
+            self.model_extra.pop("score", None)
+
 
 class TrustScoreExplanation(StrictContractModel):
     dimension: str
@@ -160,6 +166,12 @@ class TrustScore(StrictContractModel):
     explanations: list[TrustScoreExplanation] | None = None
     risk_summary: RiskSummary | None = None
     calculated_at: str | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        """Strip legacy numeric score from public output."""
+        super().model_post_init(__context)
+        if self.model_extra:
+            self.model_extra.pop("score", None)
 
 
 class ScanFinding(StrictContractModel):

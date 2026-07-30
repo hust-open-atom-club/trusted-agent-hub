@@ -588,13 +588,24 @@
             "title": "Client",
             "type": "string"
           },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
           },
           "install_path": {
-            "title": "Install Path",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Path"
           },
           "installed_at": {
             "title": "Installed At",
@@ -609,8 +620,15 @@
             "type": "string"
           },
           "user_id": {
-            "title": "User Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           },
           "version": {
             "title": "Version",
@@ -626,9 +644,8 @@
           "package_name",
           "version",
           "version_id",
-          "user_id",
           "client",
-          "install_path",
+          "event_id",
           "integrity_verified",
           "installed_at"
         ],
@@ -643,10 +660,23 @@
             "title": "Client",
             "type": "string"
           },
-          "install_path": {
+          "event_id": {
+            "description": "Client-generated unique idempotency key",
             "minLength": 1,
-            "title": "Install Path",
+            "title": "Event Id",
             "type": "string"
+          },
+          "install_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted for anonymous installs",
+            "title": "Install Path"
           },
           "integrity_verified": {
             "default": false,
@@ -666,7 +696,7 @@
           "package_name",
           "version",
           "client",
-          "install_path"
+          "event_id"
         ],
         "title": "InstallReportRequest",
         "type": "object"
@@ -1123,6 +1153,17 @@
             "title": "Display Name",
             "type": "string"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1132,13 +1173,19 @@
             "type": "string"
           },
           "username": {
-            "title": "Username",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
           }
         },
         "required": [
           "id",
-          "username",
           "display_name",
           "role"
         ],
@@ -1655,6 +1702,26 @@
       "RiskSummary": {
         "additionalProperties": false,
         "properties": {
+          "auto_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grade": {
             "anyOf": [
               {
@@ -1672,6 +1739,16 @@
           "level": {
             "title": "Level",
             "type": "string"
+          },
+          "manual_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "top_risks": {
             "items": {
@@ -2143,6 +2220,7 @@
         "type": "object"
       },
       "TrustScore": {
+        "additionalProperties": true,
         "properties": {
           "calculated_at": {
             "anyOf": [
@@ -2209,6 +2287,7 @@
         "type": "object"
       },
       "TrustScoreDimension": {
+        "additionalProperties": true,
         "properties": {
           "details": {
             "anyOf": [
@@ -2354,6 +2433,16 @@
               }
             ]
           },
+          "auto_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "compatibility": {
             "items": {
               "type": "string"
@@ -2376,6 +2465,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Dependencies"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
               },
               {
                 "type": "null"
@@ -2415,6 +2514,49 @@
                 "type": "null"
               }
             ]
+          },
+          "manual_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual_grade_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade At"
+          },
+          "manual_grade_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade By"
+          },
+          "manual_grade_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade Reason"
           },
           "package_id": {
             "title": "Package Id",
@@ -2627,16 +2769,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unauthorized"
           },
           "404": {
             "content": {

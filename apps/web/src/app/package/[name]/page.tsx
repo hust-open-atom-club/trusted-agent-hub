@@ -289,7 +289,13 @@ export default function PackageDetailPage() {
         </div>
         {trustScore && (
           <div style={{ marginTop: '1rem' }}>
-            <TrustScoreDetail trustScore={trustScore} />
+            <TrustScoreDetail
+              trustScore={trustScore}
+              effectiveGrade={versionDetail?.effective_grade}
+              autoGrade={versionDetail?.auto_grade}
+              manualGrade={versionDetail?.manual_grade}
+              manualGradeReason={versionDetail?.manual_grade_reason}
+            />
           </div>
         )}
 

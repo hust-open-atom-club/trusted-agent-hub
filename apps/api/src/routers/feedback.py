@@ -4,7 +4,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Response, status
 
-from src.dependencies import CurrentUserDependency, RepositoryDependency
+from src.dependencies import (
+    CurrentUserDependency, OptionalUserDependency, RepositoryDependency,
+)
 from src.models.common import ErrorEnvelope
 from src.models.feedback import (
     FeedbackListQuery,
@@ -28,7 +30,6 @@ router = APIRouter(tags=["feedback"])
     status_code=status.HTTP_201_CREATED,
     responses={
         200: {"model": InstallRecord, "description": "Existing install record"},
-        401: {"model": ErrorEnvelope},
         404: {"model": ErrorEnvelope},
         503: {"model": ErrorEnvelope},
     },
@@ -38,11 +39,12 @@ def record_install(
     response: Response,
     query: Annotated[NoQueryParameters, Query()],
     repository: RepositoryDependency,
-    current_user: CurrentUserDependency,
+    current_user: OptionalUserDependency,
 ) -> InstallRecord:
+    user_id = current_user.id if current_user else None
     record, created = FeedbackService(repository).record_install(
         request,
-        current_user.id,
+        user_id,
     )
     if not created:
         response.status_code = status.HTTP_200_OK

@@ -427,6 +427,24 @@ export const RISK_LEVEL_TO_GRADE: Record<string, Grade> = {
   untrusted: 'E',
 };
 
+/** Canonical: effective_grade → risk_level (唯一映射源). */
+export const GRADE_TO_RISK_LEVEL: Record<Grade, RiskLevel> = {
+  A: 'trusted',
+  B: 'low_risk',
+  C: 'medium_risk',
+  D: 'high_risk',
+  E: 'untrusted',
+};
+
+/** Canonical: effective_grade → install_recommendation (唯一映射源). */
+export const GRADE_TO_RECOMMENDATION: Record<Grade, InstallRecommendation> = {
+  A: 'safe',
+  B: 'review_recommended',
+  C: 'caution',
+  D: 'not_recommended',
+  E: 'blocked',
+};
+
 // ============================================================
 // 排序选项
 // ============================================================

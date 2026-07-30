@@ -1,135 +1,85 @@
 'use client';
 
 import { useTranslation } from 'react-i18next';
-import type { TrustScore, TrustScoreDimension, TrustScoreExplanation } from '@/types';
+import type { TrustScore } from '@/types';
 
-function dimensionSummary(key: string, dets: Record<string, unknown> | undefined): string {
-  if (!dets) return '—';
-  switch (key) {
-    case 'source_trust': {
-      const verified = dets.is_verified_owner;
-      const srcType = dets.source_type;
-      const hasHash = dets.has_commit_hash;
-      const parts: string[] = [];
-      if (srcType) parts.push(`来源: ${srcType}`);
-      if (hasHash) parts.push('commit 已锚定'); else parts.push('缺 commit');
-      if (verified) parts.push('已验证 owner'); else parts.push('未验证 owner');
-      return parts.join(' · ');
-    }
-    case 'author_reputation': {
-      const pkgs = dets.packages_published;
-      const avg = dets.avg_historical_score;
-      const viol = dets.violations_count;
-      if (!pkgs && !viol) return '新作者，无历史记录';
-      return `发布 ${pkgs ?? 0} 包 · 均分 ${avg ?? 0} · 违规 ${viol ?? 0}`;
-    }
-    case 'metadata_completeness': {
-      const missing = dets.missing_required_fields as string[] | undefined;
-      const hasDesc = dets.has_description;
-      const hasLic = dets.has_license;
-      const hasKw = dets.has_keywords;
-      if (missing && missing.length > 0) return `缺字段: ${missing.join(', ')}`;
-      const status: string[] = [];
-      if (!hasDesc) status.push('缺描述');
-      if (!hasLic) status.push('缺许可证');
-      if (!hasKw) status.push('缺关键词');
-      return status.length ? status.join(', ') : '元数据完整';
-    }
-    case 'permission_minimization': {
-      const total = dets.total_permissions;
-      const high = dets.high_risk_permissions;
-      return `声明 ${total ?? 0} 项权限 · 高风险 ${high ?? 0} 项`;
-    }
-    case 'scan_results': {
-      const crit = dets.critical_findings ?? 0;
-      const high = dets.high_findings ?? 0;
-      const med = dets.medium_findings ?? 0;
-      const low = dets.low_findings ?? 0;
-      const passRate = dets.scan_pass_rate;
-      const total = (crit as number) + (high as number) + (med as number) + (low as number);
-      if (total === 0) return '扫描通过，无发现问题';
-      return `严重 ${crit} · 高危 ${high} · 中危 ${med} · 低危 ${low} · 通过率 ${passRate ?? 0}%`;
-    }
-    case 'manual_review': {
-      const status = dets.review_status;
-      const count = dets.reviewer_count;
-      const map: Record<string, string> = {
-        approved: '已通过', rejected: '已驳回', unreviewed: '未审核',
-        changes_requested: '需修改', pending: '待审核',
-      };
-      return `${map[String(status)] ?? status ?? '未审核'} · ${count ?? 0} 人已审`;
-    }
-    case 'version_stability': {
-      const stable = dets.is_stable;
-      const versions = dets.total_versions;
-      return `${stable ? '稳定版' : '预览版'} · 共 ${versions ?? 1} 个版本`;
-    }
-    case 'user_feedback': {
-      const rating = dets.avg_rating;
-      const ratings = dets.total_ratings;
-      const installs = dets.total_installs;
-      if (!ratings && !installs) return '暂无用户反馈';
-      return `均分 ${rating ?? 0} · ${ratings ?? 0} 评价 · ${installs ?? 0} 安装`;
-    }
-    case 'signature_verifiability': {
-      const sig = dets.has_signature;
-      const att = dets.has_attestation;
-      const sbom = dets.has_sbom;
-      const parts: string[] = [];
-      if (sig) parts.push('有签名'); else parts.push('无签名');
-      if (att) parts.push('有 attestation');
-      if (sbom) parts.push('有 SBOM');
-      return parts.join(' · ');
-    }
-    default:
-      return '—';
-  }
+/* ── Grade → visual helpers ─────────────────────────────────────────── */
+
+const GRADE_COLORS: Record<string, { bg: string; fg: string; border: string }> = {
+  A: { bg: 'oklch(92% 0.04 140)', fg: 'oklch(35% 0.08 140)', border: 'oklch(75% 0.06 140)' },
+  B: { bg: 'oklch(94% 0.03 220)', fg: 'oklch(35% 0.06 220)', border: 'oklch(78% 0.05 220)' },
+  C: { bg: 'oklch(92% 0.06 85)',  fg: 'oklch(35% 0.08 80)',  border: 'oklch(75% 0.08 85)' },
+  D: { bg: 'oklch(90% 0.05 45)',  fg: 'oklch(35% 0.09 40)',  border: 'oklch(72% 0.07 45)' },
+  E: { bg: 'oklch(88% 0.05 20)',  fg: 'oklch(38% 0.10 20)',  border: 'oklch(68% 0.07 20)' },
+};
+
+const GRADE_LABELS: Record<string, string> = {
+  A: 'A · 可信',
+  B: 'B · 低风险',
+  C: 'C · 需注意',
+  D: 'D · 有风险',
+  E: 'E · 高风险',
+};
+
+const RISK_LEVEL_LABELS: Record<string, string> = {
+  trusted: '可信',
+  low_risk: '低风险',
+  medium_risk: '中风险',
+  high_risk: '高风险',
+  untrusted: '不可信',
+};
+
+/** effective_grade → risk_level */
+function gradeToRiskLevel(grade: string | null | undefined): string {
+  if (!grade) return '';
+  const map: Record<string, string> = {
+    A: 'trusted', B: 'low_risk', C: 'medium_risk', D: 'high_risk', E: 'untrusted',
+  };
+  return map[grade] ?? '';
 }
 
-function scoreColor(s: number): string {
-  if (s >= 80) return 'var(--color-success)';
-  if (s >= 60) return 'var(--color-accent)';
-  if (s >= 40) return 'var(--color-warning)';
-  return 'var(--color-danger)';
+/** effective_grade → install_recommendation */
+function gradeToRecommendation(grade: string | null | undefined): string {
+  if (!grade) return '';
+  const map: Record<string, string> = {
+    A: 'safe', B: 'review_recommended', C: 'caution', D: 'not_recommended', E: 'blocked',
+  };
+  return map[grade] ?? '';
+}
+
+export interface TrustScoreDetailProps {
+  trustScore: TrustScore | null | undefined;
+  /** Effective grade (manual_grade ?? auto_grade) from version detail */
+  effectiveGrade?: string | null;
+  /** Auto grade from scan result */
+  autoGrade?: string | null;
+  /** Manual grade set by reviewer */
+  manualGrade?: string | null;
+  /** Reason for manual grade override */
+  manualGradeReason?: string | null;
 }
 
 export default function TrustScoreDetail({
   trustScore,
-}: {
-  trustScore: TrustScore | null | undefined;
-}) {
+  effectiveGrade,
+  autoGrade,
+  manualGrade,
+  manualGradeReason,
+}: TrustScoreDetailProps) {
   const { t } = useTranslation();
-
-  const levelLabels: Record<string, string> = {
-    trusted: t('trust_score.level.trusted'),
-    low_risk: t('trust_score.level.low_risk'),
-    medium_risk: t('trust_score.level.medium_risk'),
-    high_risk: t('trust_score.level.high_risk'),
-    untrusted: t('trust_score.level.untrusted'),
-  };
-
-  const dimLabels: Record<string, string> = {
-    source_trust: t('trust_score.dim.source_trust'),
-    author_reputation: t('trust_score.dim.author_reputation'),
-    metadata_completeness: t('trust_score.dim.metadata_completeness'),
-    permission_minimization: t('trust_score.dim.permission_minimization'),
-    scan_results: t('trust_score.dim.scan_results'),
-    manual_review: t('trust_score.dim.manual_review'),
-    version_stability: t('trust_score.dim.version_stability'),
-    user_feedback: t('trust_score.dim.user_feedback'),
-    signature_verifiability: t('trust_score.dim.signature_verifiability'),
-  };
-
-  function levelLabel(level: string | undefined): string {
-    return level ? (levelLabels[level] ?? level) : '未知';
-  }
 
   if (!trustScore) return null;
 
-  const dims = trustScore.dimensions;
-  const explanations = trustScore.explanations;
-  const score = trustScore.score;
   const summary = trustScore.risk_summary;
+  const topRisks = summary?.top_risks ?? [];
+  const explanations = trustScore.explanations;
+
+  // Use effective_grade from props first, fall back to risk_summary.grade
+  const grade = effectiveGrade ?? summary?.grade;
+  const riskLevel = gradeToRiskLevel(grade);
+  const recommendation = gradeToRecommendation(grade);
+
+  const gradeColor = grade ? GRADE_COLORS[grade] : null;
 
   return (
     <div style={{
@@ -138,149 +88,169 @@ export default function TrustScoreDetail({
       border: '1px solid var(--color-rule)',
       overflow: 'hidden',
     }}>
+      {/* ── Header: grade badge + risk level + recommendation ── */}
       <div style={{
         padding: '1rem 1.25rem',
         borderBottom: '1px solid var(--color-rule)',
         display: 'flex',
         alignItems: 'center',
-        gap: '1rem',
+        gap: '0.75rem',
         flexWrap: 'wrap',
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
-          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--color-muted)' }}>
-            {t('trust_score.overall_score')}
-          </span>
+        {/* Grade badge */}
+        {grade && gradeColor && (
           <span style={{
-            fontSize: '1.4rem', fontWeight: 700,
-            color: score != null ? scoreColor(score) : 'var(--color-muted)',
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            {score != null ? score : '--'}
-          </span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>/ 100</span>
-        </div>
-
-        {summary?.level && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '0.3rem',
-            padding: '0.15rem 0.6rem',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            padding: '0.2rem 0.75rem',
             borderRadius: 'var(--radius-pill)',
-            fontSize: '0.75rem', fontWeight: 600,
-            background: score != null && score < 40 ? 'oklch(88% 0.05 20)' : 'oklch(92% 0.03 140)',
-            color: score != null && score < 40 ? 'oklch(40% 0.10 20)' : 'oklch(40% 0.10 140)',
+            fontSize: '0.85rem',
+            fontWeight: 700,
+            background: gradeColor.bg,
+            color: gradeColor.fg,
+            border: `1px solid ${gradeColor.border}`,
           }}>
-            {levelLabel(summary.level)}
-          </div>
+            {GRADE_LABELS[grade] ?? grade}
+          </span>
+        )}
+
+        {/* Risk level */}
+        {riskLevel && (
+          <span style={{
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            color: 'var(--color-muted)',
+          }}>
+            {RISK_LEVEL_LABELS[riskLevel] ?? riskLevel}
+          </span>
+        )}
+
+        {/* Recommendation */}
+        {recommendation && (
+          <span style={{
+            fontSize: '0.75rem',
+            color: 'var(--color-ink-2)',
+            fontStyle: 'italic',
+          }}>
+            {(() => {
+              const recLabels: Record<string, string> = {
+                safe: '可安全安装',
+                review_recommended: '建议查看详情后安装',
+                caution: '请谨慎安装',
+                not_recommended: '不推荐安装',
+                blocked: '已阻止安装',
+              };
+              return recLabels[recommendation] ?? recommendation;
+            })()}
+          </span>
         )}
       </div>
 
-      {dims && Object.keys(dims).length > 0 && (
-        <table style={{
-          width: '100%', borderCollapse: 'collapse',
-          fontSize: '0.78rem',
+      {/* ── Grade source: auto vs manual ── */}
+      {(autoGrade || manualGrade) && (
+        <div style={{
+          padding: '0.6rem 1.25rem',
+          borderBottom: '1px solid var(--color-rule)',
+          fontSize: '0.75rem',
+          color: 'var(--color-ink-2)',
+          lineHeight: 1.6,
         }}>
-          <thead>
-            <tr style={{
-              borderBottom: '1px solid var(--color-rule)',
-              color: 'var(--color-muted)',
-              fontSize: '0.7rem',
-              textTransform: 'uppercase',
-            }}>
-              <th style={thLeft}>{t('trust_score.table_header.dimension')}</th>
-              <th style={thRight}>{t('trust_score.table_header.score')}</th>
-              <th style={thRight}>{t('trust_score.table_header.weight')}</th>
-              <th style={thLeft}>{t('trust_score.table_header.detail')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(dims).map(([key, dim]) => {
-              const dets = dim.details as Record<string, unknown> | undefined;
-              return (
-                <tr key={key} style={{
-                  borderBottom: '1px solid var(--color-rule)',
-                }}>
-                  <td style={{ ...td, fontWeight: 500, color: 'var(--color-ink)' }}>
-                    {dimLabels[key] ?? key}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right', color: scoreColor(dim.score), fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                    {dim.score}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right', color: 'var(--color-muted)', fontVariantNumeric: 'tabular-nums' }}>
-                    {Math.round(dim.weight * 100)}%
-                  </td>
-                  <td style={{ ...td, color: 'var(--color-ink-2)', maxWidth: '220px', fontSize: '0.73rem', lineHeight: 1.4 }}>
-                    {dimensionSummary(key, dets)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+          {autoGrade && (
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
+                {t('trust_score.auto_grade', '自动评级')}:
+              </span>
+              {' '}{GRADE_LABELS[autoGrade] ?? autoGrade}
+            </div>
+          )}
+          {manualGrade && (
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
+                {t('trust_score.manual_grade', '人工评级')}:
+              </span>
+              {' '}{GRADE_LABELS[manualGrade] ?? manualGrade}
+              {manualGradeReason && (
+                <span style={{ marginLeft: '0.5rem' }}>
+                  — {manualGradeReason}
+                </span>
+              )}
+            </div>
+          )}
+          {!manualGrade && autoGrade && (
+            <div style={{ fontSize: '0.7rem', color: 'var(--color-muted)', marginTop: '0.15rem' }}>
+              {t('trust_score.no_manual_override', '未设置人工评级，使用自动评级结果')}
+            </div>
+          )}
+        </div>
       )}
 
-      {explanations && explanations.filter(e => e.deduction !== 0).length > 0 && (
-        <div style={{ borderTop: '1px solid var(--color-rule)' }}>
+      {/* ── Top risks ── */}
+      {topRisks.length > 0 && (
+        <div style={{
+          padding: '0.75rem 1.25rem',
+          borderBottom: '1px solid var(--color-rule)',
+        }}>
           <div style={{
-            padding: '0.6rem 1.25rem 0.3rem',
-            fontSize: '0.7rem',
+            fontSize: '0.72rem',
             fontWeight: 700,
             color: 'var(--color-muted)',
             textTransform: 'uppercase',
+            marginBottom: '0.4rem',
           }}>
-            {t('trust_score.deductions')}
+            {t('trust_score.top_risks', '主要风险')}
           </div>
-          <div style={{ padding: '0 1.25rem 0.8rem' }}>
-            {explanations.filter(e => e.deduction !== 0).map((exp, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.5rem',
-                padding: '0.3rem 0',
-                fontSize: '0.75rem',
-                lineHeight: 1.5,
-              }}>
-                <span style={{
-                  flexShrink: 0,
-                  color: exp.deduction < 0 ? 'var(--color-danger)' : 'var(--color-success)',
-                  fontWeight: 700,
-                  fontVariantNumeric: 'tabular-nums',
-                  minWidth: '2.5rem',
-                }}>
-                  {exp.deduction > 0 ? '+' : ''}{exp.deduction}
-                </span>
-                <span style={{ color: 'var(--color-ink-2)' }}>
-                  {exp.message}
-                </span>
-                {exp.evidence && (
-                  <span style={{
-                    color: 'var(--color-muted)',
-                    fontSize: '0.68rem',
-                    marginLeft: 'auto',
-                    maxWidth: '200px',
-                    textAlign: 'right',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
-                    {exp.evidence.slice(0, 60)}
-                  </span>
-                )}
-              </div>
+          <ul style={{
+            margin: 0,
+            paddingLeft: '1.2rem',
+            fontSize: '0.76rem',
+            color: 'var(--color-ink-2)',
+            lineHeight: 1.6,
+          }}>
+            {topRisks.map((risk, i) => (
+              <li key={i}>{risk}</li>
             ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── Explanations (messages only, no deduction scores) ── */}
+      {explanations && explanations.length > 0 && (
+        <div style={{ padding: '0.75rem 1.25rem' }}>
+          <div style={{
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            color: 'var(--color-muted)',
+            textTransform: 'uppercase',
+            marginBottom: '0.4rem',
+          }}>
+            {t('trust_score.explanations', '说明')}
           </div>
+          <ul style={{
+            margin: 0,
+            paddingLeft: '1.2rem',
+            fontSize: '0.76rem',
+            color: 'var(--color-ink-2)',
+            lineHeight: 1.6,
+          }}>
+            {explanations.map((exp, i) => (
+              <li key={i}>{exp.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ── Empty state ── */}
+      {!grade && topRisks.length === 0 && (!explanations || explanations.length === 0) && (
+        <div style={{
+          padding: '1.5rem 1.25rem',
+          textAlign: 'center',
+          fontSize: '0.78rem',
+          color: 'var(--color-muted)',
+        }}>
+          {t('trust_score.no_data', '暂无可用的信任评分信息')}
         </div>
       )}
     </div>
   );
 }
-
-const thLeft: React.CSSProperties = {
-  padding: '0.5rem 0.75rem',
-  textAlign: 'left',
-  fontWeight: 600,
-};
-const thRight: React.CSSProperties = { ...thLeft, textAlign: 'right' };
-const td: React.CSSProperties = {
-  padding: '0.5rem 0.75rem',
-  fontSize: '0.76rem',
-};

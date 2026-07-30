@@ -32,9 +32,10 @@ class ConsumerPersistenceRepository(PackageRepository, Protocol):
         package_name: str,
         version: str,
         version_id: str,
-        user_id: str,
+        user_id: str | None,
         client: str,
-        install_path: str,
+        event_id: str,
+        install_path: str | None,
         integrity_verified: bool,
     ) -> tuple[dict[str, object], bool]: ...
 

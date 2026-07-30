@@ -65,22 +65,23 @@ def db_client(
     clear_runtime_dependencies()
 
 
-def test_install_report_requires_authenticated_user(
+def test_install_report_allows_anonymous_user(
     db_client: TestClient,
 ) -> None:
+    """Anonymous install reports are now allowed — auth is optional."""
     response = db_client.post(
         "/api/v0/installs",
         json={
             "package_name": "code-review-skill",
             "version": "1.0.0",
             "client": "claude-code",
-            "install_path": "~/.claude/skills/code-review-skill",
+            "event_id": "evt-anon-001",
+            "install_path": None,
             "integrity_verified": True,
         },
     )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "authentication_required"
+    assert response.status_code == 201
 
 
 def test_install_report_is_idempotent_and_updates_database_stats(
@@ -90,6 +91,7 @@ def test_install_report_is_idempotent_and_updates_database_stats(
         "package_name": "code-review-skill",
         "version": "1.0.0",
         "client": "claude-code",
+        "event_id": "evt-idem-001",
         "install_path": "~/.claude/skills/code-review-skill",
         "integrity_verified": True,
     }
@@ -123,7 +125,8 @@ def test_non_public_package_cannot_create_install_record(
             "package_name": "risky-executor",
             "version": "0.1.0",
             "client": "claude-code",
-            "install_path": "~/.claude/skills/risky-executor",
+            "event_id": "evt-nonpublic-001",
+            "install_path": None,
             "integrity_verified": True,
         },
         headers={"X-User-Id": "user-1"},
@@ -301,13 +304,18 @@ def test_unavailable_version_uses_trust_level_not_found_semantics(
     assert response.json()["error"]["code"] == "trust_level_not_found"
 
 
-def test_public_version_without_level_uses_trust_level_not_found_semantics(
+def test_public_version_without_level_computes_from_effective_grade(
     db_client: TestClient,
 ) -> None:
+    """When no trust_level row exists, the endpoint computes from effective_grade
+    and backfills instead of returning 404."""
     response = db_client.get("/api/v0/versions/ver-001/trust-level")
 
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "trust_level_not_found"
+    assert response.status_code == 200
+    data = response.json()
+    assert data["version_id"] == "ver-001"
+    assert "level" in data
+    assert "install_recommendation" in data
 
 
 def test_database_configured_default_app_persists_feedback(
