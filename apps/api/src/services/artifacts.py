@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
@@ -18,6 +20,34 @@ ARTIFACTS_ROOT = Path(os.environ.get("ARTIFACTS_ROOT", "/artifacts"))
 
 class ArtifactError(Exception):
     """Artifact packaging failure."""
+
+
+def force_rmtree(path: str | os.PathLike[str]) -> None:
+    """递归删除目录，兼容 Windows 上 git 生成的只读文件。
+
+    git 在 Windows 会给 .git/objects/pack/*.{pack,idx} 设置只读属性，
+    直接 shutil.rmtree 会因 PermissionError 失败而残留目录外壳。
+    删除前先清除只读属性并重试，最终以 ignore_errors 兜底（尽力而为）。
+    """
+    p = Path(path)
+    if not p.is_dir():
+        return
+
+    def _clear_readonly(func, target, exc) -> None:
+        if isinstance(exc, PermissionError):
+            try:
+                os.chmod(target, stat.S_IWRITE)
+                func(target)
+            except OSError:
+                pass
+
+    for attempt in range(3):
+        try:
+            shutil.rmtree(p, onexc=_clear_readonly)
+            return
+        except OSError:
+            time.sleep(0.5 * (attempt + 1))
+    shutil.rmtree(p, ignore_errors=True)
 
 
 def _find_skill_dir(repo_dir: Path) -> Path:
@@ -51,8 +81,14 @@ def build_artifact(
     commit_hash: str,
     package_name: str,
     version: str,
+    local_source_dir: str | None = None,
 ) -> dict[str, object]:
     """Clone repo, zip the skill directory, compute SHA-256.
+
+    When ``local_source_dir`` points to an existing directory (e.g. the code
+    already fetched during the initial scan), it is used directly instead of
+    re-cloning, avoiding a second network fetch. Falls back to git clone when
+    the directory is missing or not provided.
 
     Returns a dict with:
       download_url  — relative URL path for the download endpoint
@@ -78,6 +114,21 @@ def build_artifact(
             "sha256": sha256,
             "download_size_bytes": size,
         }
+
+    # ── 本地目录优先：复用初始扫描已获取的代码，不再重新拉取 ──
+    if local_source_dir:
+        source_dir = Path(local_source_dir)
+        if source_dir.is_dir():
+            skill_dir = _find_skill_dir(source_dir)
+            _create_zip(skill_dir, zip_path, package_name)
+            sha256 = _sha256_file(zip_path)
+            size = zip_path.stat().st_size
+            return {
+                "download_url": f"/api/v0/artifacts/{zip_name}",
+                "sha256": sha256,
+                "download_size_bytes": size,
+            }
+        print(f"[TAH-artifacts] local_source_dir 不存在，回退 git clone: {source_dir}")
 
     with tempfile.TemporaryDirectory(prefix="tah-artifact-") as tmp:
         tmp_dir = Path(tmp)

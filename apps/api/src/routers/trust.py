@@ -30,6 +30,8 @@ from typing import Callable, Dict, List, Any, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from src.services.artifacts import force_rmtree
+
 router = APIRouter(tags=["trust-scan"])
 
 # ---------------------------------------------------------------------------
@@ -54,6 +56,10 @@ def _cleanup_expired_scans() -> None:
     now = _time.time()
     expired = [sid for sid, info in _scans.items() if info.get("expires_at", 0) < now]
     for sid in expired:
+        info = _scans[sid]
+        local_dir = (info.get("full_report") or {}).get("local_source_dir")
+        if local_dir:
+            force_rmtree(local_dir)
         del _scans[sid]
 
 
@@ -186,7 +192,7 @@ def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: 
         print(f"[TAH-trust]     clone attempt {attempt} failed: {last_err}")
         if attempt < max_attempts:
             _time.sleep(3)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            force_rmtree(tmp_dir)
             os.makedirs(tmp_dir, exist_ok=True)
     return False
 
@@ -219,7 +225,7 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
             if attempt < max_attempts:
                 _time.sleep(3)
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+                force_rmtree(tmp_dir)
                 os.makedirs(tmp_dir, exist_ok=True)
     return False
 
@@ -257,7 +263,7 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
         print(f"[TAH-trust]     HEAD commit: {commit_hash[:8] if commit_hash else 'N/A'}")
         return tmp_dir, "git", commit_hash
 
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    force_rmtree(tmp_dir)
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
     print(f"[TAH-trust] === Phase B: ZIP download ===")
     if _download_zipball(parsed, tmp_dir):
@@ -276,7 +282,7 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
         print(f"[TAH-trust]     ZIP commit: {commit_hash[:8] if commit_hash else 'N/A'}")
         return tmp_dir, "zip", commit_hash
 
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    force_rmtree(tmp_dir)
     return None, "", ""
 
 
@@ -414,6 +420,9 @@ def _run_scan_task(
             "scan_report": scan_report,
             "trust_score": trust_score_result,
             "file_contents": scanner._file_contents,
+            # 保留本地代码目录供提交时打包安装产物（不重新拉取）。
+            # 由 handle_scan_complete 消费后清理，或随扫描记录过期清理。
+            "local_source_dir": tmp_dir,
         }
 
         # Step 5: 更新内存状态
@@ -431,8 +440,7 @@ def _run_scan_task(
             "llm_review": scan_report.get("llm_review"),
         })
 
-        # 清理临时目录
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        # 临时目录保留给提交阶段打包产物，由 handle_scan_complete / 过期清理负责删除
         if on_complete:
             on_complete(scan_id, full_report, None)
         print(f"[TAH-trust] *** 扫描流水线完成: {scan_id}, grade={trust_score_result.get('risk_summary', {}).get('grade')}")
@@ -443,7 +451,7 @@ def _run_scan_task(
         print(f"[TAH-trust] *** 扫描异常: {type(exc).__name__}: {exc}", flush=True)
         import traceback; traceback.print_exc()
         if "tmp_dir" in locals():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            force_rmtree(tmp_dir)
         if on_complete:
             on_complete(scan_id, None, str(exc))
 
@@ -761,7 +769,10 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
     if info["status"] == "complete":
         full_report = info.get("full_report")
         if full_report:
-            return full_report
+            # 剔除内部字段（本地代码目录路径），不对外暴露
+            report = dict(full_report)
+            report.pop("local_source_dir", None)
+            return report
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

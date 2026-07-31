@@ -27,7 +27,7 @@ with open(os.path.join(FIXTURES, "scan_risky.json")) as f:
 def _mock_artifact_build(monkeypatch):
     """Integration tests must never hit real git/network for artifact packaging."""
 
-    def _fake_build_artifact(*, repo_url, commit_hash, package_name, version):
+    def _fake_build_artifact(*, repo_url, commit_hash, package_name, version, local_source_dir=None):
         zip_name = f"{package_name}-{version}-{commit_hash[:8]}.zip"
         return {
             "download_url": f"/api/v0/artifacts/{zip_name}",

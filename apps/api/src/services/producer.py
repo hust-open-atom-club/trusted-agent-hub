@@ -182,11 +182,13 @@ class ProducerService:
 
         打包失败视为提交流程失败：状态回退 error，提交者可重新提交。
         """
-        from src.services.artifacts import ArtifactError, build_artifact
+        from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
         scan_report = full_report.get("scan_report", {})
         trust_score = full_report.get("trust_score", {})
         report_path = full_report.get("report_path", "")
+        # 初始扫描保留的本地代码目录（打包产物时优先复用，不再重新拉取）
+        local_source_dir = full_report.get("local_source_dir")
 
         # ── 生成安装产物（同步，失败则回退 error） ───────────
         version = self.repository.get_version(version_id)
@@ -209,6 +211,14 @@ class ProducerService:
                         commit_hash=str(commit_hash),
                         package_name=package_name,
                         version=str(pkg_version),
+                        local_source_dir=local_source_dir,
+                    )
+                    self._apply_artifact_to_version(
+                        version_id,
+                        artifact,
+                        package_name,
+                        pkg_version,
+                        str(commit_hash),
                     )
                 except ArtifactError as exc:
                     self.repository.update_version_status(version_id, "error")
@@ -224,13 +234,13 @@ class ProducerService:
                         detail={"error": f"artifact packaging failed: {exc}"},
                     )
                     return
-                self._apply_artifact_to_version(
-                    version_id,
-                    artifact,
-                    package_name,
-                    pkg_version,
-                    str(commit_hash),
-                )
+                finally:
+                    # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
+                    if local_source_dir:
+                        force_rmtree(local_source_dir)
+            elif local_source_dir:
+                # 无打包消费方（缺少 repo_url 等），直接清理扫描遗留目录
+                force_rmtree(local_source_dir)
 
         # 保存扫描报告
         file_contents = full_report.get("file_contents", {})
