@@ -212,6 +212,18 @@ class SqlAlchemyPackageRepository(PackageRepository):
                 "integrity_verified": row.integrity_verified,
                 "installed_at": _serialize_datetime(row.installed_at),
             }
+
+            # Update cached install_count on the package when a new install is recorded
+            if created:
+                version_row = session.get(PackageVersionRow, row.version_id)
+                if version_row is not None:
+                    pkg_row = session.get(PackageRow, version_row.package_id)
+                    if pkg_row is not None:
+                        data = dict(pkg_row.data) if pkg_row.data else {}
+                        data["install_count"] = (data.get("install_count", 0) or 0) + 1
+                        pkg_row.data = data
+                        session.commit()
+
             return payload, created
 
     def upsert_feedback(
