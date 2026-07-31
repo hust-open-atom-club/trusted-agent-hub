@@ -1,0 +1,27 @@
+{
+  "name": "demo-sql-explorer",
+  "version": "1.0.0",
+  "description": "PostgreSQL 只读查询 MCP Server — 支持只读 SQL 查询和 Schema 浏览，禁止写操作",
+  "type": "mcp_server",
+  "vendor": "TrustedAgentHub Examples",
+  "transport": "stdio",
+  "command": "python",
+  "args": ["./server.py"],
+  "tools": [
+    {
+      "name": "run_query",
+      "description": "执行只读 SQL 查询，返回查询结果"
+    },
+    {
+      "name": "list_tables",
+      "description": "列出数据库中的所有表"
+    }
+  ],
+  "permissions": {
+    "filesystem": { "read": [], "write": [], "delete": false },
+    "network": { "allowed": true, "domains": ["localhost"] },
+    "shell": { "allowed": false },
+    "database": { "allowed": true, "drivers": ["postgresql"], "read_only": true },
+    "environment": { "read": ["DATABASE_URL"] }
+  }
+}

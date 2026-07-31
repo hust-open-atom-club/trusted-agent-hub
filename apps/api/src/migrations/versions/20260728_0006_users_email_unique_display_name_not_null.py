@@ -17,10 +17,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint("uq_users_email", "users", ["email"])
-    op.alter_column("users", "display_name", nullable=False)
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.create_unique_constraint("uq_users_email", ["email"])
+        batch_op.alter_column("display_name", nullable=False)
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_users_email", "users", type_="unique")
-    op.alter_column("users", "display_name", nullable=True)
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.drop_constraint("uq_users_email", type_="unique")
+        batch_op.alter_column("display_name", nullable=True)

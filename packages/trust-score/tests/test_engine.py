@@ -538,13 +538,13 @@ def test_old_report_without_llm_fields() -> None:
 
 def test_all_grades_appear_in_output() -> None:
     """Smoke test: each level produces its corresponding grade."""
-    from src.engine import _to_grade
-    assert _to_grade("trusted") == "A"
-    assert _to_grade("low_risk") == "B"
-    assert _to_grade("medium_risk") == "C"
-    assert _to_grade("high_risk") == "D"
-    assert _to_grade("untrusted") == "E"
-    assert _to_grade("unknown") == "C"  # default
+    from src.derived_score import level_to_grade
+    assert level_to_grade("trusted") == "A"
+    assert level_to_grade("low_risk") == "B"
+    assert level_to_grade("medium_risk") == "C"
+    assert level_to_grade("high_risk") == "D"
+    assert level_to_grade("untrusted") == "E"
+    assert level_to_grade("unknown") == "C"  # default
 
 
 def test_dangerous_category_memory_poisoning_veto() -> None:

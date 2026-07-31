@@ -183,6 +183,7 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
     expected_indexes = {
         "packages": {"ix_packages_name", "ix_packages_status"},
         "package_versions": {
+            "ix_package_versions_manual_grade",
             "ix_package_versions_package_id",
             "ix_package_versions_status",
             "ix_package_versions_version",

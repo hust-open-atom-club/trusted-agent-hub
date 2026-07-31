@@ -538,13 +538,19 @@ def _repository_with_draft_latest(
     return FakeRepository((package, *fake_repository.packages[1:]), versions)
 
 
-def test_list_rejects_public_package_with_draft_latest_version(
+def test_list_skips_public_package_with_draft_latest_version(
     fake_repository: FakeRepository,
 ) -> None:
+    """A published package whose latest_version points to a draft must be
+    skipped from the public list (not crash the whole list)."""
     repository = _repository_with_draft_latest(fake_repository)
 
-    with pytest.raises(RepositoryDataError, match="invalid latest_version 3.0.0"):
-        PackageService(repository).list_packages(PackageListQuery())
+    page = PackageService(repository).list_packages(PackageListQuery())
+
+    names = {item.name for item in page.items}
+    assert "alpha-package" not in names
+    assert "beta-package" in names
+    assert "Gamma-package" in names
 
 
 def test_stats_reject_public_package_with_draft_latest_version(

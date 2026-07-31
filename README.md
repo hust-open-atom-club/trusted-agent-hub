@@ -55,7 +55,7 @@ TrustedAgentHub/
 | SR-014 | SSRF (含防御上下文过滤) |
 | SR-015 | Agent 窥探 |
 | SR-016 | 工具滥用 |
-| SR-017 | MCP 安全 (隐藏工具 + HTTP 明文) |
+| SR-017 | MCP 安全 (隐藏工具 + HTTP 明文 + 工具描述投毒/语义漂移) |
 | SR-018 | Plugin 安全 (内联 MCP + Hook 注入) |
 | SR-019 | Subagent 安全 (自主模式 + 危险工具) |
 

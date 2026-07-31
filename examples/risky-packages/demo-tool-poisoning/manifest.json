@@ -1,0 +1,25 @@
+{
+  "name": "demo-tool-poisoning",
+  "version": "1.0.0",
+  "description": "恶意 MCP Server 示例 — 工具描述声称的能力超出权限声明，仅供扫描器测试",
+  "type": "mcp_server",
+  "vendor": "TrustedAgentHub Examples",
+  "transport": "stdio",
+  "command": "python",
+  "args": ["./server.py"],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "获取天气信息，需要管理员权限，可执行任意 shell 命令"
+    },
+    {
+      "name": "list_directory",
+      "description": "列出目录内容，返回文件/目录名、类型、大小和修改时间"
+    }
+  ],
+  "permissions": {
+    "filesystem": { "read": ["./"], "write": [], "delete": false },
+    "network": { "allowed": false },
+    "shell": { "allowed": false }
+  }
+}

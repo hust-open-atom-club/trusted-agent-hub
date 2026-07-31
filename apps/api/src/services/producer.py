@@ -175,10 +175,59 @@ class ProducerService:
     def handle_scan_complete(
         self, version_id: str, full_report: dict[str, object]
     ) -> None:
-        """扫描流水线完成后回调：写入扫描报告 + 更新状态。"""
+        """扫描流水线完成后回调：打包安装产物 + 写入扫描报告 + 更新状态。
+
+        打包失败视为提交流程失败：状态回退 error，提交者可重新提交。
+        """
+        from src.services.artifacts import ArtifactError, build_artifact
+
         scan_report = full_report.get("scan_report", {})
         trust_score = full_report.get("trust_score", {})
         report_path = full_report.get("report_path", "")
+
+        # ── 生成安装产物（同步，失败则回退 error） ───────────
+        version = self.repository.get_version(version_id)
+        if version is not None:
+            source = version.get("source", {})
+            repo_url = (
+                source.get("repository_url", "") if isinstance(source, dict) else ""
+            )
+            commit_hash = full_report.get("commit_hash") or (
+                source.get("commit_hash", "") if isinstance(source, dict) else ""
+            )
+            package = self.repository.get_package(version.get("package_id", ""))
+            package_name = package.get("name", "") if package else ""
+            pkg_version = version.get("version", "")
+
+            if repo_url and package_name and pkg_version:
+                try:
+                    artifact = build_artifact(
+                        repo_url=repo_url,
+                        commit_hash=str(commit_hash),
+                        package_name=package_name,
+                        version=str(pkg_version),
+                    )
+                except ArtifactError as exc:
+                    self.repository.update_version_status(version_id, "error")
+                    self.repository.update_version_data(
+                        version_id,
+                        {"scan_error": f"安装产物打包失败: {exc}"},
+                    )
+                    self.repository.create_audit_log(
+                        action=AuditAction.SCAN_COMPLETE.value,
+                        target_type="version",
+                        target_id=version_id,
+                        operator_id="system",
+                        detail={"error": f"artifact packaging failed: {exc}"},
+                    )
+                    return
+                self._apply_artifact_to_version(
+                    version_id,
+                    artifact,
+                    package_name,
+                    pkg_version,
+                    str(commit_hash),
+                )
 
         # 保存扫描报告
         file_contents = full_report.get("file_contents", {})
@@ -224,6 +273,53 @@ class ProducerService:
                 ),
             },
         )
+
+    def _apply_artifact_to_version(
+        self,
+        version_id: str,
+        artifact: dict[str, object],
+        package_name: str,
+        pkg_version: str,
+        commit_hash: str,
+    ) -> None:
+        """把安装产物信息写回 version data（source/integrity/installation）。"""
+        version = self.repository.get_version(version_id)
+        if version is None:
+            return
+        data = dict(version)
+
+        source = dict(data.get("source") or {})
+        source["download_url"] = artifact.get("download_url", "")
+        if commit_hash and len(commit_hash) == 40:
+            source["commit_hash"] = commit_hash
+        data["source"] = source
+
+        integrity = dict(data.get("integrity") or {})
+        integrity["sha256"] = artifact.get("sha256", "")
+        integrity["download_size_bytes"] = artifact.get("download_size_bytes", 0)
+        data["integrity"] = integrity
+
+        compatibility = data.get("compatibility") or ["claude-code"]
+        if isinstance(compatibility, list) and compatibility:
+            target_client = str(compatibility[0])
+        else:
+            target_client = "claude-code"
+        data["compatibility"] = compatibility
+
+        data["installation"] = {
+            "method": "copy_directory",
+            "target_client": target_client,
+            "steps": [
+                {"action": "download", "url": artifact.get("download_url", "")},
+                {"action": "verify", "algorithm": "sha256", "checksum": artifact.get("sha256", "")},
+                {"action": "extract"},
+                {"action": "copy", "client": target_client, "destination": f"~/.claude/skills/{package_name}/"},
+            ],
+            "pre_install_message": f"将安装 {package_name}@{pkg_version} 到 {target_client}",
+            "post_install_message": "安装完成。请在客户端中确认工具可用。",
+        }
+
+        self.repository.update_version_data(version_id, data)
 
     def handle_scan_error(self, version_id: str, error: str) -> None:
         """扫描失败回调。"""
@@ -541,9 +637,14 @@ class ProducerService:
         # ── Pre-publish install validation ────────────────────
         missing = _validate_install_readiness(version)
         if missing:
-            raise ProducerServiceError(
-                f"版本安装资料不完整，无法发布。缺失字段: {', '.join(missing)}"
-            )
+            # 兜底：安装资料缺失/产物丢失时尝试补打包
+            if self._try_rebuild_artifact(version_id):
+                version = self.repository.get_version(version_id)
+                missing = _validate_install_readiness(version)
+            if missing:
+                raise ProducerServiceError(
+                    f"版本安装资料不完整，无法发布。缺失字段: {', '.join(missing)}"
+                )
 
         package_id = version.get("package_id", "")
         pkg_version = version.get("version", "")
@@ -596,6 +697,68 @@ class ProducerService:
             new_status=target,
             message="版本已发布上线",
         )
+
+    def _try_rebuild_artifact(self, version_id: str) -> bool:
+        """发布兜底：安装资料缺失/产物丢失时补打包。成功返回 True。"""
+        from src.services.artifacts import ArtifactError, build_artifact
+
+        version = self.repository.get_version(version_id)
+        if version is None:
+            return False
+        source = version.get("source", {})
+        repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
+        commit_hash = source.get("commit_hash", "") if isinstance(source, dict) else ""
+        if not repo_url or not commit_hash or len(commit_hash) != 40:
+            return False
+        package = self.repository.get_package(version.get("package_id", ""))
+        package_name = package.get("name", "") if package else ""
+        pkg_version = version.get("version", "")
+        if not package_name or not pkg_version:
+            return False
+        try:
+            artifact = build_artifact(
+                repo_url=repo_url,
+                commit_hash=str(commit_hash),
+                package_name=str(package_name),
+                version=str(pkg_version),
+            )
+        except ArtifactError:
+            return False
+        self._apply_artifact_to_version(
+            version_id, artifact, str(package_name), str(pkg_version), commit_hash
+        )
+        return True
+
+    def cleanup_orphan_artifacts(self) -> int:
+        """惰性清理 /artifacts 中的孤儿产物。
+
+        保留集：非 rejected/error 状态版本的 zip（发布、审核中、下架等均保留）；
+        删除：rejected/error 版本、已删除版本遗留的 zip。返回删除数量。
+        """
+        from src.services.artifacts import ARTIFACTS_ROOT
+
+        keep: set[str] = set()
+        for v in self.repository.list_versions_by_status():
+            status = v.get("status", "")
+            if status in ("rejected", "error"):
+                continue
+            source = v.get("source") or {}
+            commit = source.get("commit_hash", "") if isinstance(source, dict) else ""
+            name = v.get("package_name") or ""
+            version = v.get("version") or ""
+            if name and version and len(commit) >= 8:
+                keep.add(f"{name}-{version}-{commit[:8]}.zip")
+
+        deleted = 0
+        if ARTIFACTS_ROOT.is_dir():
+            for zip_path in ARTIFACTS_ROOT.glob("*.zip"):
+                if zip_path.name not in keep:
+                    try:
+                        zip_path.unlink()
+                        deleted += 1
+                    except OSError:
+                        pass
+        return deleted
 
     def yank_version(
         self,

@@ -1123,6 +1123,17 @@
             "title": "Display Name",
             "type": "string"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1132,13 +1143,19 @@
             "type": "string"
           },
           "username": {
-            "title": "Username",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
           }
         },
         "required": [
           "id",
-          "username",
           "display_name",
           "role"
         ],
@@ -1655,6 +1672,26 @@
       "RiskSummary": {
         "additionalProperties": false,
         "properties": {
+          "auto_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grade": {
             "anyOf": [
               {
@@ -1672,6 +1709,16 @@
           "level": {
             "title": "Level",
             "type": "string"
+          },
+          "manual_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "top_risks": {
             "items": {
@@ -2143,6 +2190,7 @@
         "type": "object"
       },
       "TrustScore": {
+        "additionalProperties": true,
         "properties": {
           "calculated_at": {
             "anyOf": [
@@ -2209,6 +2257,7 @@
         "type": "object"
       },
       "TrustScoreDimension": {
+        "additionalProperties": true,
         "properties": {
           "details": {
             "anyOf": [
@@ -2354,6 +2403,16 @@
               }
             ]
           },
+          "auto_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "compatibility": {
             "items": {
               "type": "string"
@@ -2376,6 +2435,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Dependencies"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
               },
               {
                 "type": "null"
@@ -2415,6 +2484,49 @@
                 "type": "null"
               }
             ]
+          },
+          "manual_grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual_grade_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade At"
+          },
+          "manual_grade_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade By"
+          },
+          "manual_grade_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manual Grade Reason"
           },
           "package_id": {
             "title": "Package Id",

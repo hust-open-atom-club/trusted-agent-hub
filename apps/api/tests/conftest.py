@@ -19,6 +19,16 @@ def repository() -> JsonPackageRepository:
     return JsonPackageRepository(MOCK / "packages.json", MOCK / "versions")
 
 
+@pytest.fixture(autouse=True)
+def _clear_stats_cache():
+    """get_stats 的模块级缓存跨测试会污染结果，每次测试前清空。"""
+    from src.services.packages import _STATS_CACHE
+
+    _STATS_CACHE.clear()
+    yield
+    _STATS_CACHE.clear()
+
+
 @pytest.fixture
 def client(repository: JsonPackageRepository) -> Iterator[TestClient]:
     """Return a TestClient with the fixture repository overridden."""

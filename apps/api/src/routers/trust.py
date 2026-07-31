@@ -68,8 +68,6 @@ def _scan_not_found_detail(scan_id: str) -> str:
 class ScanRequest(BaseModel):
     """扫描提交请求。"""
     repo_url: Optional[str] = Field(default=None, description="GitHub 仓库 HTTPS URL")
-    local_path: Optional[str] = Field(default=None, description="本地目录路径（仅开发/测试用）")
-    # 文件上传通过 multipart/form-data，不在 JSON body 中
 
 
 class ScanResponse(BaseModel):
@@ -226,36 +224,60 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
     return False
 
 
-def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str]:
+def _git_head_hash(repo_dir: str) -> str:
+    """读取 git 仓库当前 HEAD 的完整 commit hash（40 位 hex）。"""
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ""
+
+
+def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
     """级联获取代码：Phase A git clone → Phase B ZIP 下载。
 
     Returns:
-        (repo_root, source_method) — repo_root 是仓库内容根目录路径，
-        source_method 为 "git" 或 "zip"。
-        失败返回 (None, "")。
+        (repo_root, source_method, commit_hash) — repo_root 是仓库内容根目录路径，
+        source_method 为 "git" 或 "zip"，commit_hash 为真实 40 位 git hash
+        （git 模式读 HEAD，zip 模式从目录名提取；提取失败为空字符串）。
+        失败返回 (None, "", "")。
     """
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
 
     print(f"[TAH-trust] === Phase A: git clone ===")
     if _git_clone_with_retries(parsed, tmp_dir):
-        return tmp_dir, "git"
+        commit_hash = _git_head_hash(tmp_dir)
+        print(f"[TAH-trust]     HEAD commit: {commit_hash[:8] if commit_hash else 'N/A'}")
+        return tmp_dir, "git", commit_hash
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
     print(f"[TAH-trust] === Phase B: ZIP download ===")
     if _download_zipball(parsed, tmp_dir):
+        commit_hash = ""
         # ZIP 解压后内容在一层子目录中 {owner}-{repo}-{hash}/
         entries = os.listdir(tmp_dir)
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
             inner = os.path.join(tmp_dir, entries[0])
+            match = re.search(r"-([0-9a-f]{40})$", entries[0])
+            if match:
+                commit_hash = match.group(1)
             # 将内层目录内容移到 tmp_dir
             for item in os.listdir(inner):
                 shutil.move(os.path.join(inner, item), os.path.join(tmp_dir, item))
             os.rmdir(inner)
-        return tmp_dir, "zip"
+        print(f"[TAH-trust]     ZIP commit: {commit_hash[:8] if commit_hash else 'N/A'}")
+        return tmp_dir, "zip", commit_hash
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    return None, ""
+    return None, "", ""
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +289,6 @@ def _run_scan_task(
     scan_id: str,
     source: str,
     *,
-    is_local: bool = False,
     on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
 ) -> None:
     """后台执行扫描流水线：acquire → scan → score → save。
@@ -276,35 +297,27 @@ def _run_scan_task(
     """
     try:
         print(f"\n[TAH-trust] >>> _run_scan_task 开始 scan_id={scan_id}")
-        print(f"[TAH-trust]     source = {source}, is_local = {is_local}")
+        print(f"[TAH-trust]     source = {source}")
 
-        parsed = _parse_github_url(source) if not is_local else None
-        if not is_local and parsed:
-            print(f"[TAH-trust]     owner={parsed['owner']}, repo={parsed['repo']}, "
-                  f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+        parsed = _parse_github_url(source)
+        print(f"[TAH-trust]     owner={parsed['owner']}, repo={parsed['repo']}, "
+              f"ref={parsed['ref']}, subdir={parsed['subdir']}")
 
-        if is_local:
-            tmp_dir = source
-            repo_root = source
-            if not os.path.isdir(tmp_dir):
-                raise FileNotFoundError(f"Local path not found: {tmp_dir}")
-            print(f"[TAH-trust]     本地目录: {tmp_dir}")
-        else:
-            _scans[scan_id]["status"] = "cloning"
+        _scans[scan_id]["status"] = "cloning"
 
-            repo_root, method = _acquire_repo_source(parsed)
-            if repo_root is None:
-                _scans[scan_id]["status"] = "error"
-                _scans[scan_id]["error"] = (
-                    "无法获取仓库（Git clone + ZIP 下载均失败）。"
-                    "请检查 GitHub 连接或尝试使用本地路径。"
-                )
-                print(f"[TAH-trust] *** 获取仓库失败（git + zip 均失败）")
-                if on_complete:
-                    on_complete(scan_id, None, _scans[scan_id]["error"])
-                return
-            tmp_dir = repo_root
-            print(f"[TAH-trust]     仓库获取方式: {method}")
+        repo_root, method, commit_hash = _acquire_repo_source(parsed)
+        if repo_root is None:
+            _scans[scan_id]["status"] = "error"
+            _scans[scan_id]["error"] = (
+                "无法获取仓库（Git clone + ZIP 下载均失败）。"
+                "请检查 GitHub 连接。"
+            )
+            print(f"[TAH-trust] *** 获取仓库失败（git + zip 均失败）")
+            if on_complete:
+                on_complete(scan_id, None, _scans[scan_id]["error"])
+            return
+        tmp_dir = repo_root
+        print(f"[TAH-trust]     仓库获取方式: {method}")
 
         # ── 确定扫描目标目录（子目录优先） ──
         subdir = parsed.get("subdir") if parsed else None
@@ -395,6 +408,7 @@ def _run_scan_task(
             "repo_url": repo_url,
             "package_name": pkg_name,
             "version": pkg_version,
+            "commit_hash": commit_hash,
             "created_at": _scans[scan_id]["created_at"],
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "scan_report": scan_report,
@@ -417,9 +431,8 @@ def _run_scan_task(
             "llm_review": scan_report.get("llm_review"),
         })
 
-        # 清理临时目录（仅 git clone 模式）
-        if not is_local:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        # 清理临时目录
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         if on_complete:
             on_complete(scan_id, full_report, None)
         print(f"[TAH-trust] *** 扫描流水线完成: {scan_id}, grade={trust_score_result.get('risk_summary', {}).get('grade')}")
@@ -429,7 +442,7 @@ def _run_scan_task(
         _scans[scan_id]["error"] = f"Scan failed: {type(exc).__name__}: {exc}"
         print(f"[TAH-trust] *** 扫描异常: {type(exc).__name__}: {exc}", flush=True)
         import traceback; traceback.print_exc()
-        if "tmp_dir" in locals() and not is_local:
+        if "tmp_dir" in locals():
             shutil.rmtree(tmp_dir, ignore_errors=True)
         if on_complete:
             on_complete(scan_id, None, str(exc))
@@ -616,7 +629,6 @@ async def submit_scan(
     background_tasks: BackgroundTasks,
     repo_url: Optional[str] = None,
     body: Optional[ScanRequest] = None,
-    local_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """提交一个新的扫描任务。
 
@@ -626,61 +638,42 @@ async def submit_scan(
 
     返回 scan_id 用于后续查询。
     """
-    # 获取 URL / 本地路径
+    # 获取 URL
     url = repo_url
-    local = local_path
-    if body:
-        if not url and body.repo_url:
-            url = body.repo_url
-        if not local and body.local_path:
-            local = body.local_path
+    if body and body.repo_url:
+        url = body.repo_url
 
     print(f"\n[TAH-trust] >>> POST /scan 收到请求")
     print(f"[TAH-trust]     query_param repo_url = {repo_url!r}")
     print(f"[TAH-trust]     body.repo_url       = {body.repo_url if body else 'N/A'!r}")
-    print(f"[TAH-trust]     body.local_path     = {body.local_path if body else 'N/A'!r}")
 
-    # 本地路径模式
-    if local:
-        local = local.strip()
-        print(f"[TAH-trust]     本地扫描路径: {local!r}")
-        if not os.path.isabs(local):
-            local = os.path.normpath(os.path.join(_PROJECT_ROOT, local))
-        if not os.path.isdir(local):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Local path not found: {local}",
-            )
-        source = local
-        is_local = True
-    elif not url:
+    if not url:
         print(f"[TAH-trust] *** 缺少 repo_url，返回 400")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing 'repo_url'. Provide it in JSON body or as query parameter.",
         )
-    else:
-        # 基本 URL 验证
-        url = url.strip()
-        print(f"[TAH-trust]     raw url = {url!r}")
-        if not url.startswith("https://github.com/"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only https://github.com/... URLs are supported at this time.",
-            )
 
-        # 解析 URL
-        parsed = _parse_github_url(url)
-        print(f"[TAH-trust]     parsed: owner={parsed['owner']}, repo={parsed['repo']}, "
-              f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+    # 基本 URL 验证
+    url = url.strip()
+    print(f"[TAH-trust]     raw url = {url!r}")
+    if not url.startswith("https://github.com/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only https://github.com/... URLs are supported at this time.",
+        )
 
-        source = url
-        is_local = False
+    # 解析 URL
+    parsed = _parse_github_url(url)
+    print(f"[TAH-trust]     parsed: owner={parsed['owner']}, repo={parsed['repo']}, "
+          f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+
+    source = url
 
     # 创建扫描任务
     scan_id = f"scan-{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc).isoformat()
-    print(f"[TAH-trust]     scan_id = {scan_id}, is_local={is_local}, 启动后台任务...")
+    print(f"[TAH-trust]     scan_id = {scan_id}, 启动后台任务...")
 
     _scans[scan_id] = {
         "status": "pending",
@@ -695,7 +688,7 @@ async def submit_scan(
     }
 
     # 启动后台扫描
-    background_tasks.add_task(_run_scan_task, scan_id, source, is_local=is_local)
+    background_tasks.add_task(_run_scan_task, scan_id, source)
 
     return {
         "scan_id": scan_id,
