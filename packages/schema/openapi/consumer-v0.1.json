@@ -588,13 +588,24 @@
             "title": "Client",
             "type": "string"
           },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
           "id": {
             "title": "Id",
             "type": "string"
           },
           "install_path": {
-            "title": "Install Path",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Path"
           },
           "installed_at": {
             "title": "Installed At",
@@ -609,8 +620,15 @@
             "type": "string"
           },
           "user_id": {
-            "title": "User Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           },
           "version": {
             "title": "Version",
@@ -626,9 +644,8 @@
           "package_name",
           "version",
           "version_id",
-          "user_id",
           "client",
-          "install_path",
+          "event_id",
           "integrity_verified",
           "installed_at"
         ],
@@ -643,10 +660,23 @@
             "title": "Client",
             "type": "string"
           },
-          "install_path": {
+          "event_id": {
+            "description": "Client-generated unique idempotency key",
             "minLength": 1,
-            "title": "Install Path",
+            "title": "Event Id",
             "type": "string"
+          },
+          "install_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omitted for anonymous installs",
+            "title": "Install Path"
           },
           "integrity_verified": {
             "default": false,
@@ -666,7 +696,7 @@
           "package_name",
           "version",
           "client",
-          "install_path"
+          "event_id"
         ],
         "title": "InstallReportRequest",
         "type": "object"
@@ -2739,16 +2769,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Unauthorized"
           },
           "404": {
             "content": {

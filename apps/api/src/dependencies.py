@@ -108,8 +108,35 @@ def get_current_user(
     raise _authentication_required()
 
 
+def get_optional_user(
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Security(_bearer_auth),
+    ],
+    x_user_id: Annotated[
+        str | None,
+        Header(alias="X-User-Id", include_in_schema=False),
+    ] = None,
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser | None:
+    """Resolve user identity or return None for anonymous access."""
+    if credentials is not None:
+        verifier = _bearer_token_verifier or _default_verifier()
+        try:
+            return verifier(credentials.credentials)
+        except BearerTokenInvalid:
+            return None
+    if settings.allow_insecure_user_header and x_user_id is not None:
+        user_id = x_user_id.strip()
+        if user_id:
+            return CurrentUser(id=user_id, role="admin")
+    return None
+
+
 RepositoryDependency = Annotated[
     PackageRepository, Depends(get_package_repository)
 ]
 
 CurrentUserDependency = Annotated[CurrentUser, Depends(get_current_user)]
+
+OptionalUserDependency = Annotated[CurrentUser | None, Depends(get_optional_user)]

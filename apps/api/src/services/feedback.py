@@ -1,5 +1,8 @@
 """Consumer write-side services for installs, feedback, and trust levels."""
 
+from datetime import datetime, timezone
+
+from schema.constants import GRADE_TO_RECOMMENDATION, GRADE_TO_RISK_LEVEL
 from src.errors import ConsumerAPIError
 from src.models.feedback import (
     FeedbackListQuery,
@@ -29,7 +32,7 @@ class FeedbackService:
     def record_install(
         self,
         request: InstallReportRequest,
-        user_id: str,
+        user_id: str | None,
     ) -> tuple[InstallRecord, bool]:
         version = self.packages.get_public_version(
             request.package_name,
@@ -37,13 +40,16 @@ class FeedbackService:
         )
         if not is_consumer_persistence_repository(self.repository):
             raise _persistence_unavailable()
+        # Anonymous users must not upload local install path
+        install_path = request.install_path if user_id else None
         payload, created = self.repository.record_install(
             package_name=request.package_name,
             version=version.version,
             version_id=version.id,
             user_id=user_id,
             client=request.client,
-            install_path=request.install_path,
+            event_id=request.event_id,
+            install_path=install_path,
             integrity_verified=request.integrity_verified,
         )
         return InstallRecord.model_validate(payload), created
@@ -84,15 +90,60 @@ class FeedbackService:
 
     def get_trust_level(self, version_id: str) -> TrustLevelResponse:
         try:
-            self.packages.get_public_version_by_id(version_id)
+            version = self.packages.get_public_version_by_id(version_id)
         except VersionNotFoundError as error:
             raise _trust_level_not_found(version_id) from error
         if not is_consumer_persistence_repository(self.repository):
             raise _persistence_unavailable()
+
         payload = self.repository.get_trust_level(version_id)
-        if payload is None:
+        if payload is not None:
+            return TrustLevelResponse.model_validate(payload)
+
+        # No trust_level row yet — compute from effective_grade and backfill
+        effective = version.effective_grade
+        if effective is None and version.trust_score is not None:
+            rs = version.trust_score.risk_summary
+            if rs is not None:
+                effective = rs.grade
+
+        if effective is None:
             raise _trust_level_not_found(version_id)
-        return TrustLevelResponse.model_validate(payload)
+
+        level = GRADE_TO_RISK_LEVEL.get(str(effective), "medium_risk")
+        recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
+        top_risks: list[str] = []
+        explanation: str | None = None
+        model_version = "0.2.0"
+        if version.trust_score is not None:
+            rs = version.trust_score.risk_summary
+            if rs is not None:
+                top_risks = rs.top_risks
+            if version.trust_score.explanations:
+                explanation = "; ".join(
+                    e.message for e in version.trust_score.explanations
+                )
+            model_version = version.trust_score.model_version or model_version
+
+        # Backfill the trust_levels row for future requests
+        self.repository.upsert_trust_level(
+            version_id=version_id,
+            level=level,
+            install_recommendation=recommendation,
+            top_risks=top_risks,
+            explanation=explanation,
+            model_version=model_version,
+        )
+
+        return TrustLevelResponse(
+            version_id=version_id,
+            level=level,
+            install_recommendation=recommendation,
+            top_risks=top_risks,
+            explanation=explanation,
+            model_version=model_version,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
 
 def _persistence_unavailable() -> ConsumerAPIError:

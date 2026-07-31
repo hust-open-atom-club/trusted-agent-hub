@@ -15,7 +15,10 @@ from src.models.producer import (
 )
 
 # 从 constants.py 导入状态常量
-from schema.constants import STATUS_TRANSITIONS, VersionStatus, AuditAction
+from schema.constants import (
+    STATUS_TRANSITIONS, VersionStatus, AuditAction,
+    GRADE_TO_RISK_LEVEL, GRADE_TO_RECOMMENDATION,
+)
 
 _SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -148,8 +151,8 @@ class ProducerService:
         source = version.get("source", {})
         repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
 
-        # 重新提交时清除手动评级，以新的自动评分为准
-        self.repository.clear_manual_grade(version_id)
+        # 重新扫描只更新 auto_grade，保留 manual_grade
+        # effective_grade 继续优先使用人工评级
 
         if not repo_url:
             raise ProducerServiceError(
@@ -385,21 +388,18 @@ class ProducerService:
         # 如果已发布，同步 consumer 侧数据
         current_status = version.get("status", "")
         if current_status == "published" and effective:
-            level = "medium_risk"
-            recommendation = "caution"
-            trust_data2 = version.get("trust_score", {})
-            if isinstance(trust_data2, dict):
-                rs = trust_data2.get("risk_summary", {})
-                if isinstance(rs, dict):
-                    level = rs.get("level", level)
-                    recommendation = rs.get("install_recommendation", recommendation)
+            level = GRADE_TO_RISK_LEVEL.get(str(effective), "medium_risk")
+            recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
             pkg_id = version.get("package_id", "")
             if pkg_id:
-                self.repository.update_package_data(pkg_id, {"grade": effective})
+                self.repository.update_package_data(pkg_id, {
+                    "grade": effective,
+                    "risk_level": level,
+                })
             self.repository.upsert_trust_level(
                 version_id=version_id,
-                level=level if isinstance(level, str) else "medium_risk",
-                recommendation=recommendation if isinstance(recommendation, str) else "caution",
+                level=level,
+                recommendation=recommendation,
             )
 
         self.repository.create_audit_log(
@@ -656,33 +656,40 @@ class ProducerService:
         )
 
         # 计算生效评级并同步到 consumer 侧
-        level = "medium_risk"
-        recommendation = "caution"
         trust_data = version.get("trust_score", {})
         auto_grade = None
         if isinstance(trust_data, dict):
             risk_summary = trust_data.get("risk_summary", {})
             if isinstance(risk_summary, dict):
                 auto_grade = risk_summary.get("grade")
-                level = risk_summary.get("level", level)
-                recommendation = risk_summary.get("install_recommendation", recommendation)
         effective_grade = version.get("manual_grade") or auto_grade
+
+        # 从 effective_grade 计算 level 和 recommendation
+        if effective_grade:
+            level = GRADE_TO_RISK_LEVEL.get(str(effective_grade), "medium_risk")
+            recommendation = GRADE_TO_RECOMMENDATION.get(str(effective_grade), "caution")
+        else:
+            level = "medium_risk"
+            recommendation = "caution"
 
         # 同步更新包状态和最新版本号
         if package_id:
             self.repository.update_package_status(
                 package_id, "published", latest_version=pkg_version,
             )
-            # 同步 consumer 侧 packages.data.grade
+            # 同步 consumer 侧 packages.data.grade 和 risk_level
             if effective_grade:
                 self.repository.update_package_data(
-                    package_id, {"grade": effective_grade}
+                    package_id, {
+                        "grade": effective_grade,
+                        "risk_level": level,
+                    }
                 )
             # 同步 consumer 侧 trust_levels
             self.repository.upsert_trust_level(
                 version_id=version_id,
-                level=level if isinstance(level, str) else "medium_risk",
-                recommendation=recommendation if isinstance(recommendation, str) else "caution",
+                level=level,
+                recommendation=recommendation,
             )
 
         self.repository.create_audit_log(

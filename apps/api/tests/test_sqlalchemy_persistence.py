@@ -100,6 +100,7 @@ def test_record_install_loads_concurrent_winner_after_unique_conflict(
         version_id="ver-001",
         user_id="user-race",
         client="claude-code",
+        event_id="evt-race-001",
         install_path="~/.claude/skills/code-review-skill",
         integrity_verified=True,
         installed_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
@@ -115,6 +116,7 @@ def test_record_install_loads_concurrent_winner_after_unique_conflict(
         version_id="ver-001",
         user_id="user-race",
         client="claude-code",
+        event_id="evt-race-001",
         install_path="~/.claude/skills/code-review-skill",
         integrity_verified=False,
     )
@@ -166,6 +168,7 @@ def test_record_install_reraises_non_idempotency_integrity_error(
         version_id="ver-001",
         user_id="user-race",
         client="claude-code",
+        event_id="evt-rerace-winner",
         install_path="~/.claude/skills/code-review-skill",
         integrity_verified=True,
         installed_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
@@ -188,6 +191,7 @@ def test_record_install_reraises_non_idempotency_integrity_error(
             version_id="ver-001",
             user_id="user-race",
             client="claude-code",
+            event_id="evt-rerace-001",
             install_path="~/.claude/skills/code-review-skill",
             integrity_verified=False,
         )

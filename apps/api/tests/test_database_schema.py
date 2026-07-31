@@ -166,7 +166,7 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
     assert {
         constraint["name"]
         for constraint in inspector.get_unique_constraints("install_records")
-    } == {"uq_install_idempotency"}
+    } == {"uq_install_event_id"}
     assert {
         constraint["name"]
         for constraint in inspector.get_unique_constraints("feedback_records")

@@ -5,6 +5,7 @@ import re
 
 from pydantic import TypeAdapter, ValidationError
 
+from schema.constants import GRADE_TO_RECOMMENDATION, GRADE_TO_RISK_LEVEL
 from src.errors import ConsumerAPIError
 from src.models.install import (
     CopyInstallationStep,
@@ -38,15 +39,6 @@ HTTPS_URL_ADAPTER = TypeAdapter(HttpsUrl)
 CLIENT_INSTALL_ROOTS = {
     "claude-code": "~/.claude/skills/",
     "cursor": "~/.cursor/skills/",
-}
-
-# effective_grade → install_recommendation mapping
-_GRADE_TO_RECOMMENDATION: dict[str, str] = {
-    "A": "safe",
-    "B": "review_recommended",
-    "C": "caution",
-    "D": "not_recommended",
-    "E": "blocked",
 }
 
 
@@ -227,15 +219,14 @@ class InstallManifestService:
         assert effective_grade is not None
 
         # Build final risk summary from effective_grade
-        recommendation = _GRADE_TO_RECOMMENDATION.get(
+        recommendation = GRADE_TO_RECOMMENDATION.get(
             str(effective_grade), "caution"
         )
+        level = GRADE_TO_RISK_LEVEL.get(
+            str(effective_grade), "medium_risk"
+        )
         final_risk_summary = RiskSummary(
-            level=(
-                original_risk_summary.level
-                if original_risk_summary is not None
-                else "unknown"
-            ),
+            level=level,
             grade=effective_grade,
             top_risks=(
                 original_risk_summary.top_risks

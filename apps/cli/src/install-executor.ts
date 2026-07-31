@@ -750,6 +750,7 @@ export class InstallExecutor {
       package_name: manifest.name,
       version: manifest.version,
       client,
+      event_id: crypto.randomUUID(),
       install_path: installPath,
       integrity_verified: true,
     }).catch((err: unknown) => {

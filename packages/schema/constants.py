@@ -330,6 +330,24 @@ class InstallRecommendation(StrEnum):
 # ============================================================
 GRADES: Final[list[str]] = ["A", "B", "C", "D", "E"]
 
+# effective_grade → risk_level (唯一映射源)
+GRADE_TO_RISK_LEVEL: Final[dict[str, str]] = {
+    "A": "trusted",
+    "B": "low_risk",
+    "C": "medium_risk",
+    "D": "high_risk",
+    "E": "untrusted",
+}
+
+# effective_grade → install_recommendation (唯一映射源)
+GRADE_TO_RECOMMENDATION: Final[dict[str, str]] = {
+    "A": "safe",
+    "B": "review_recommended",
+    "C": "caution",
+    "D": "not_recommended",
+    "E": "blocked",
+}
+
 
 # ============================================================
 # 角色权限矩阵

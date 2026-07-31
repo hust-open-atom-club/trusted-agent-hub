@@ -158,18 +158,17 @@ class SqlAlchemyPackageRepository(PackageRepository):
         package_name: str,
         version: str,
         version_id: str,
-        user_id: str,
+        user_id: str | None,
         client: str,
-        install_path: str,
+        event_id: str,
+        install_path: str | None,
         integrity_verified: bool,
     ) -> tuple[dict[str, object], bool]:
         with self.session_factory() as session:
+            # Deduplicate by event_id (client-generated idempotency key)
             row = session.scalar(
                 select(InstallRecordRow)
-                .where(InstallRecordRow.version_id == version_id)
-                .where(InstallRecordRow.user_id == user_id)
-                .where(InstallRecordRow.client == client)
-                .where(InstallRecordRow.install_path == install_path)
+                .where(InstallRecordRow.event_id == event_id)
             )
             created = row is None
             if row is None:
@@ -178,6 +177,7 @@ class SqlAlchemyPackageRepository(PackageRepository):
                     version_id=version_id,
                     user_id=user_id,
                     client=client,
+                    event_id=event_id,
                     install_path=install_path,
                     integrity_verified=integrity_verified,
                     installed_at=utc_now(),
@@ -188,22 +188,14 @@ class SqlAlchemyPackageRepository(PackageRepository):
                 except IntegrityError as error:
                     if not _is_target_unique_violation(
                         error,
-                        constraint_name="uq_install_idempotency",
-                        sqlite_columns=(
-                            "install_records.version_id",
-                            "install_records.user_id",
-                            "install_records.client",
-                            "install_records.install_path",
-                        ),
+                        constraint_name="uq_install_event_id",
+                        sqlite_columns=("install_records.event_id",),
                     ):
                         raise
                     session.rollback()
                     row = session.scalar(
                         select(InstallRecordRow)
-                        .where(InstallRecordRow.version_id == version_id)
-                        .where(InstallRecordRow.user_id == user_id)
-                        .where(InstallRecordRow.client == client)
-                        .where(InstallRecordRow.install_path == install_path)
+                        .where(InstallRecordRow.event_id == event_id)
                     )
                     if row is None:
                         raise
@@ -215,6 +207,7 @@ class SqlAlchemyPackageRepository(PackageRepository):
                 "version_id": row.version_id,
                 "user_id": row.user_id,
                 "client": row.client,
+                "event_id": row.event_id,
                 "install_path": row.install_path,
                 "integrity_verified": row.integrity_verified,
                 "installed_at": _serialize_datetime(row.installed_at),

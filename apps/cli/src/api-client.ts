@@ -61,8 +61,17 @@ export interface VersionDetail {
       grade?: 'A' | 'B' | 'C' | 'D' | 'E';
       top_risks?: string[];
       install_recommendation?: string;
+      auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+      manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+      effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
     };
   } | null;
+  auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
+  manual_grade_by?: string | null;
+  manual_grade_reason?: string | null;
+  manual_grade_at?: string | null;
   created_at?: string | null;
   submitted_at?: string | null;
 }
@@ -79,7 +88,8 @@ export interface InstallReportRequest {
   package_name: string;
   version: string;
   client: string;
-  install_path: string;
+  event_id: string;
+  install_path?: string | null;
   integrity_verified: boolean;
 }
 
@@ -422,7 +432,7 @@ export function createApiClient(customFetch?: FetchFn) {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       };
-      // P1 fix: include Bearer token when available (POST /api/v0/installs requires auth)
+      // Include Bearer token when available (POST /api/v0/installs supports anonymous)
       if (API_TOKEN) {
         headers['Authorization'] = `Bearer ${API_TOKEN}`;
       }

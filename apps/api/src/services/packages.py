@@ -21,6 +21,8 @@ from src.models.packages import (
 )
 from src.repositories.base import PackageRepository, RepositoryDataError
 
+from schema.constants import GRADE_TO_RISK_LEVEL
+
 from .errors import (
     PackageNotFoundError,
     TrustScoreNotFoundError,
@@ -159,23 +161,29 @@ class PackageService:
         return package
 
     def _enrich_grade(self, package: PackageSummary) -> None:
-        """Populate PackageSummary.grade from the latest published version's trust_score.
+        """Populate package grade and risk_level from effective_grade of latest version.
 
-        When the repository does not already provide grade at the package level,
-        this reads the latest version's trust_score.risk_summary.grade and copies
-        it to the package summary so that API responses and frontend cards can
-        display it without loading the full version detail.
+        Uses effective_grade (manual_grade or auto_grade) as the single source
+        of truth for both grade and risk_level on the package summary.
+        Only overwrites if not already set by the repository.
         """
-        if package.grade is not None:
-            return  # already populated by repository
         try:
             version = self._get_public_latest(package)
         except RepositoryDataError:
             return  # no valid latest version
-        if version.trust_score is not None and version.trust_score.risk_summary is not None:
-            rs_grade = version.trust_score.risk_summary.grade
-            if rs_grade is not None:
-                package.grade = rs_grade
+
+        effective = version.effective_grade or (
+            version.trust_score.risk_summary.grade
+            if version.trust_score and version.trust_score.risk_summary
+            else None
+        )
+
+        if package.grade is None and effective is not None:
+            package.grade = effective
+        if package.risk_level is None and effective is not None:
+            package.risk_level = GRADE_TO_RISK_LEVEL.get(
+                str(effective), "medium_risk"
+            )
 
     def get_public_version(self, name: str, version: str) -> VersionDetail:
         self.get_public_package(name)
@@ -234,7 +242,11 @@ class PackageService:
         version = self.get_public_version_by_id(version_id)
         if version.trust_score is None:
             raise TrustScoreNotFoundError(version_id)
-        return version.trust_score
+        # Strip legacy numerical score from public API responses
+        ts = version.trust_score
+        if hasattr(ts, 'model_extra') and ts.model_extra:
+            ts.model_extra.pop('score', None)
+        return ts
 
     def get_stats(self, name: str) -> PackageStats:
         now = _time.time()

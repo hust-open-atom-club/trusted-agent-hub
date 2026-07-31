@@ -553,7 +553,7 @@ def test_list_skips_public_package_with_draft_latest_version(
     assert "Gamma-package" in names
 
 
-def test_stats_reject_public_package_with_draft_latest_version(
+def test_stats_skip_public_package_with_draft_latest_version(
     fake_repository: FakeRepository,
 ) -> None:
     repository = _repository_with_draft_latest(fake_repository)

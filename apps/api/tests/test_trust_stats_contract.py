@@ -5,6 +5,12 @@ from src.dependencies import get_package_repository
 from src.main import create_app
 from src.models.packages import PackageSummary, VersionDetail
 from src.repositories.mock import JsonPackageRepository
+from src.services.packages import _STATS_CACHE
+
+
+@pytest.fixture(autouse=True)
+def _clear_stats_cache() -> None:
+    _STATS_CACHE.clear()
 
 
 TRUST_SCORE_PATH = "/api/v0/versions/ver-001/trust-score"

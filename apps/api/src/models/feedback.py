@@ -25,7 +25,8 @@ class InstallReportRequest(StrictContractModel):
     package_name: str
     version: str
     client: str = Field(min_length=1)
-    install_path: str = Field(min_length=1)
+    event_id: str = Field(min_length=1, description="Client-generated unique idempotency key")
+    install_path: str | None = Field(default=None, description="Omitted for anonymous installs")
     integrity_verified: bool = False
 
 
@@ -34,9 +35,10 @@ class InstallRecord(StrictContractModel):
     package_name: str
     version: str
     version_id: str
-    user_id: str
+    user_id: str | None = None
     client: str
-    install_path: str
+    event_id: str
+    install_path: str | None = None
     integrity_verified: bool
     installed_at: str
 

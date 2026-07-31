@@ -6,6 +6,8 @@ import {
   INSTALL_RECOMMENDATION_LABELS,
   GRADE_LABELS,
   RISK_LEVEL_TO_GRADE,
+  GRADE_TO_RISK_LEVEL,
+  GRADE_TO_RECOMMENDATION,
 } from '../../../packages/schema/constants';
 import type {
   PackageType,
@@ -61,14 +63,25 @@ function gradeColor(grade: string | null): chalk.Chalk {
   }
 }
 
-/** Resolve grade from version detail, falling back to risk_level mapping. */
+/** Resolve grade from version detail, preferring effective_grade.
+ *
+ * Resolution order:
+ * 1. version.effective_grade (manual_grade or auto_grade from backend)
+ * 2. pkg.grade (already enriched from effective_grade)
+ * 3. version.trust_score.risk_summary.grade (auto grade fallback)
+ * 4. risk_level → grade mapping (legacy data)
+ */
 function resolveGrade(pkg: PackageSummary, version: VersionDetail | null): string | null {
-  // Prefer backend-supplied grade
+  // Prefer effective_grade from version (reflects manual override)
+  if (version?.effective_grade) {
+    return version.effective_grade;
+  }
+  if (pkg.grade) return pkg.grade;
+  // Fallback: auto grade from risk_summary
   if (version?.trust_score?.risk_summary?.grade) {
     return version.trust_score.risk_summary.grade;
   }
-  if (pkg.grade) return pkg.grade;
-  // Fallback: map risk_level → grade for legacy data
+  // Legacy: map risk_level → grade
   const level = pkg.risk_level || version?.trust_score?.risk_summary?.level;
   if (level && level in RISK_LEVEL_TO_GRADE) {
     return RISK_LEVEL_TO_GRADE[level];
@@ -85,8 +98,12 @@ export function formatPackageCard(pkg: PackageSummary): string {
   const typeLabel = PACKAGE_TYPE_LABELS[pkg.type as PackageType] || pkg.type;
   const statusLabel =
     VERSION_STATUS_LABELS[pkg.status as VersionStatus] || pkg.status;
-  const riskLabel = pkg.risk_level
-    ? RISK_LEVEL_LABELS[pkg.risk_level as RiskLevel]
+  const effectiveRiskLevel = pkg.grade
+    ? GRADE_TO_RISK_LEVEL[pkg.grade as Grade]
+    : null;
+  const displayRiskLevel = effectiveRiskLevel || pkg.risk_level;
+  const riskLabel = displayRiskLevel
+    ? RISK_LEVEL_LABELS[displayRiskLevel as RiskLevel]
     : 'N/A';
 
   const lines: string[] = [];
@@ -106,7 +123,7 @@ export function formatPackageCard(pkg: PackageSummary): string {
   // Stats row
   const stats = [
     gradeStr ? `${chalk.dim('Grade:')} ${gradeStr}` : null,
-    `${chalk.dim('Risk:')} ${riskLevelColor(pkg.risk_level)(riskLabel)}`,
+    `${chalk.dim('Risk:')} ${riskLevelColor(displayRiskLevel)(riskLabel)}`,
     `${chalk.dim('Status:')} ${statusColor(pkg.status)(statusLabel)}`,
     `${chalk.dim('v')}${pkg.latest_version}`,
     `${chalk.dim('Installs:')} ${pkg.install_count.toLocaleString()}`,
@@ -168,11 +185,15 @@ export function formatPackageDetail(
       `  ${chalk.dim('Grade:')}        ${gradeColor(gradeVal)(gradeLabel)}`,
     );
   }
-  const riskLabel = pkg.risk_level
-    ? RISK_LEVEL_LABELS[pkg.risk_level as RiskLevel]
+  const effectiveRiskLevel = gradeVal
+    ? GRADE_TO_RISK_LEVEL[gradeVal as Grade]
+    : null;
+  const displayRiskLevel = effectiveRiskLevel || pkg.risk_level;
+  const riskLabel = displayRiskLevel
+    ? RISK_LEVEL_LABELS[displayRiskLevel as RiskLevel]
     : 'N/A';
   lines.push(
-    `  ${chalk.dim('Risk Level:')}  ${riskLevelColor(pkg.risk_level)(riskLabel)}`,
+    `  ${chalk.dim('Risk Level:')}  ${riskLevelColor(displayRiskLevel)(riskLabel)}`,
   );
   const statusLabel =
     VERSION_STATUS_LABELS[pkg.status as VersionStatus] || pkg.status;
@@ -180,14 +201,18 @@ export function formatPackageDetail(
     `  ${chalk.dim('Status:')}      ${statusColor(pkg.status)(statusLabel)}`,
   );
 
-  // Install recommendation (from version detail)
-  if (version?.trust_score?.risk_summary?.install_recommendation) {
-    const rec = version.trust_score.risk_summary.install_recommendation;
-    const recLabel =
-      INSTALL_RECOMMENDATION_LABELS[rec as InstallRecommendation] || rec;
-    lines.push(
-      `  ${chalk.dim('Recommend:')}   ${recLabel}`,
-    );
+  // Install recommendation (from effective_grade)
+  {
+    const rec = gradeVal
+      ? GRADE_TO_RECOMMENDATION[gradeVal as Grade]
+      : version?.trust_score?.risk_summary?.install_recommendation;
+    if (rec) {
+      const recLabel =
+        INSTALL_RECOMMENDATION_LABELS[rec as InstallRecommendation] || rec;
+      lines.push(
+        `  ${chalk.dim('Recommend:')}   ${recLabel}`,
+      );
+    }
   }
 
   // Stats

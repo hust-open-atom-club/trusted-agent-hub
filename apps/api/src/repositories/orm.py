@@ -110,11 +110,8 @@ class InstallRecordRow(Base):
     __tablename__ = "install_records"
     __table_args__ = (
         UniqueConstraint(
-            "version_id",
-            "user_id",
-            "client",
-            "install_path",
-            name="uq_install_idempotency",
+            "event_id",
+            name="uq_install_event_id",
         ),
     )
 
@@ -123,9 +120,10 @@ class InstallRecordRow(Base):
         ForeignKey("package_versions.id", ondelete="CASCADE"),
         index=True,
     )
-    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     client: Mapped[str] = mapped_column(String(64), index=True)
-    install_path: Mapped[str] = mapped_column(String(512))
+    event_id: Mapped[str] = mapped_column(String(128), unique=True)
+    install_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     integrity_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     installed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
