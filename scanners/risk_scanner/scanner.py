@@ -22,7 +22,7 @@ Risk Scanner — 自动风险扫描器 v0.4.0
   SR-014:  SSRF (+ 防御上下文过滤)
   SR-015:  Agent 窥探
   SR-016:  工具滥用
-  SR-017:  MCP 安全 (隐藏工具检测 + 非加密传输检测)
+  SR-017:  MCP 安全 (隐藏工具检测 + 非加密传输检测 + 工具描述投毒/语义漂移)
   SR-018:  Plugin 安全 (内联MCP命令 + Hook注入 + 组件路径遍历)
   SR-019:  Subagent 安全 (自主模式 + 危险工具 + 全局作用域 + 路径遍历)
 
@@ -141,7 +141,8 @@ class RiskScanner:
         manifest_path = self.target_dir / "manifest.json"
         if manifest_path.is_file():
             try:
-                self._package_metadata = json.loads(manifest_path.open(encoding="utf-8"))
+                with manifest_path.open(encoding="utf-8") as f:
+                    self._package_metadata = json.load(f)
                 return
             except (json.JSONDecodeError, OSError):
                 pass
@@ -149,7 +150,8 @@ class RiskScanner:
         plugin_path = self.target_dir / "plugin.json"
         if plugin_path.is_file():
             try:
-                self._package_metadata = json.loads(plugin_path.open(encoding="utf-8"))
+                with plugin_path.open(encoding="utf-8") as f:
+                    self._package_metadata = json.load(f)
                 return
             except (json.JSONDecodeError, OSError):
                 pass

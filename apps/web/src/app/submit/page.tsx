@@ -72,8 +72,6 @@ function SubmitForm() {
   const { token } = useAuth();
 
   const [repoUrl, setRepoUrl] = useState('');
-  const [localPath, setLocalPath] = useState('');
-  const [inputMode, setInputMode] = useState<'github' | 'local'>('github');
   const [phase, setPhase] = useState<ScanPhase>('input');
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [metadata, setMetadata] = useState<PackageMetadata | null>(null);
@@ -111,16 +109,10 @@ function SubmitForm() {
   const handleStartScan = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    let body: Record<string, string>;
-    if (inputMode === 'local') {
-      if (!localPath.trim()) { setError('请输入有效的本地目录路径'); return; }
-      body = { local_path: localPath.trim() };
-    } else {
-      if (!repoUrl.trim() || !repoUrl.trim().startsWith('https://github.com/')) {
-        setError('请输入有效的 GitHub 仓库地址'); return;
-      }
-      body = { repo_url: repoUrl.trim() };
+    if (!repoUrl.trim() || !repoUrl.trim().startsWith('https://github.com/')) {
+      setError('请输入有效的 GitHub 仓库地址'); return;
     }
+    const body = { repo_url: repoUrl.trim() };
 
     setPhase('scanning');
     setStatusMsg('正在提交扫描任务...');
@@ -316,7 +308,7 @@ function SubmitForm() {
       <div className="submit-container">
         <div className="submit-header">
           <h1>提交 Agent 能力包</h1>
-          <p>输入 GitHub 仓库地址或本地路径，系统自动扫描提取元数据。</p>
+          <p>输入 GitHub 仓库地址，系统自动扫描提取元数据。</p>
         </div>
 
         {error && <div className="submit-error">{error}</div>}
@@ -324,31 +316,13 @@ function SubmitForm() {
         {/* ══ Phase: 输入 ══ */}
         {phase === 'input' && (
           <form className="scanner-form" onSubmit={handleStartScan}>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <button type="button" className={`btn ${inputMode === 'github' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }} onClick={() => setInputMode('github')}>
-                GitHub URL
-              </button>
-              <button type="button" className={`btn ${inputMode === 'local' ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }} onClick={() => setInputMode('local')}>
-                本地路径
-              </button>
+            <div className="scanner-input-row">
+              <input type="url" className="scanner-url-input" placeholder="https://github.com/owner/repo" value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)} disabled={isBusy} required />
+              <button type="submit" className="scanner-submit-btn" disabled={isBusy || !repoUrl.trim()}>开始扫描</button>
             </div>
-            {inputMode === 'github' ? (
-              <div className="scanner-input-row">
-                <input type="url" className="scanner-url-input" placeholder="https://github.com/owner/repo" value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)} disabled={isBusy} required />
-                <button type="submit" className="scanner-submit-btn" disabled={isBusy || !repoUrl.trim()}>开始扫描</button>
-              </div>
-            ) : (
-              <div className="scanner-input-row">
-                <input type="text" className="scanner-url-input" placeholder="E:\path\to\package" value={localPath}
-                  onChange={(e) => setLocalPath(e.target.value)} disabled={isBusy} required />
-                <button type="submit" className="scanner-submit-btn" disabled={isBusy || !localPath.trim()}>开始扫描</button>
-              </div>
-            )}
             <p className="scanner-hint">
-              {inputMode === 'github' ? '仅支持公开 GitHub 仓库，扫描完成后自动提取元数据。' : '输入本地 capability 包目录的绝对路径。'}
+              仅支持公开 GitHub 仓库，扫描完成后自动提取元数据。
             </p>
           </form>
         )}
@@ -501,9 +475,6 @@ function SubmitForm() {
                   onChange={(e) => { setPkgSourceUrl(e.target.value); setFieldSource(p => ({ ...p, 'source.repository_url': 'manual' })); }}
                   disabled={isBusy} placeholder="https://github.com/owner/repo"
                   style={isAuto('source.repository_url') ? roInp : inp} />
-                {inputMode === 'local' && !isAuto('source.repository_url') && (
-                  <span style={warnHint}>本地路径扫描无法自动获取 GitHub 地址，请手动填写</span>
-                )}
                 {!isAuto('source.repository_url') && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
               </div>
             </div>

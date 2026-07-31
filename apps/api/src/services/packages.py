@@ -127,7 +127,7 @@ class PackageService:
             if field is SortField.UPDATED_AT:
                 return self._parse_updated_at(item)
             if field is SortField.GRADE:
-                return _grade_order(item.grade)
+                return _grade_order(item.grade) if item.grade is not None else None
             return getattr(item, field.value)
 
         keyed_items = [(item, raw_value(item)) for item in items]

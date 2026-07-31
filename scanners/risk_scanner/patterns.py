@@ -389,3 +389,63 @@ MCP_TOOL_REGISTER_PATTERNS: list[str] = [
     r'(?:tool_name|toolName)\s*==\s*["\'](\w+)["\']',
     r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"description"',
 ]
+
+# SR-017: 代码注册描述提取 — 捕获 (tool_name, description) 对
+MCP_TOOL_REGISTER_DESC_PATTERNS: list[str] = [
+    r'(?:server|app)\.tool\s*\(\s*["\'](\w+)["\']\s*,\s*description\s*=\s*["\']([^"\']{5,})["\']',
+    r'(?:server|app)\.tool\s*\(\s*["\'](\w+)["\']\s*,\s*["\']([^"\']{5,})["\']',
+    r'(?:server|app)\.add_?[Tt]ool\s*\(\s*["\'](\w+)["\']\s*,\s*(?:description\s*=\s*)?["\']([^"\']{5,})["\']',
+]
+
+# =============================================================================
+# SR-017: MCP Security — Tool description poisoning keywords
+# (keyword, capability) — capability 映射到权限声明类别
+# =============================================================================
+
+MCP_TOOL_DESC_RISK_KEYWORDS: list[tuple[str, str]] = [
+    # --- shell 执行类 (permissions.shell.allowed) ---
+    ("shell", "shell"),
+    ("exec", "shell"),
+    ("execute", "shell"),
+    ("sudo", "shell"),
+    ("bash", "shell"),
+    ("powershell", "shell"),
+    ("提权", "shell"),
+    ("执行命令", "shell"),
+    ("执行任意", "shell"),
+    ("命令执行", "shell"),
+    ("执行系统", "shell"),
+    # --- 破坏类 (permissions.filesystem.delete/write) ---
+    ("delete", "delete"),
+    ("remove", "delete"),
+    ("destroy", "delete"),
+    ("删除", "delete"),
+    ("清空", "delete"),
+    ("格式化", "delete"),
+    ("truncate", "delete"),
+    # --- 凭据类 (permissions.environment.read / filesystem) ---
+    ("credential", "credential"),
+    ("password", "credential"),
+    ("token", "credential"),
+    ("secret", "credential"),
+    ("api key", "credential"),
+    ("私钥", "credential"),
+    ("凭据", "credential"),
+    ("密码", "credential"),
+    ("密钥", "credential"),
+    ("ssh", "credential"),
+    ("环境变量", "credential"),
+    # --- 网络外传类 (permissions.network.allowed) ---
+    ("exfiltrat", "network"),
+    ("发送到", "network"),
+    ("外传", "network"),
+    ("上传到", "network"),
+    ("远程服务器", "network"),
+    ("webhook", "network"),
+    # --- 系统/提权类 (permissions.shell.allowed) ---
+    ("root", "system"),
+    ("管理员权限", "system"),
+    ("系统命令", "system"),
+    ("权限提升", "system"),
+    ("system command", "system"),
+]

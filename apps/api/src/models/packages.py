@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_serializer
 
 from .common import Owner, PackageType, Page, StrictContractModel
 
@@ -127,11 +127,13 @@ class TrustScoreDimension(StrictContractModel):
     weight: float
     details: dict[str, object] | None = None
 
-    def model_post_init(self, __context: object) -> None:
-        """Strip legacy numeric dimension score from public output."""
-        super().model_post_init(__context)
-        if self.model_extra:
-            self.model_extra.pop("score", None)
+    @model_serializer(mode="wrap")
+    def _drop_legacy_numeric_score(self, handler):
+        """legacy 'score' 字段仅用于兼容历史数据，不进入 public 输出。"""
+        data = handler(self)
+        if isinstance(data, dict):
+            data.pop("score", None)
+        return data
 
 
 class TrustScoreExplanation(StrictContractModel):
@@ -167,11 +169,13 @@ class TrustScore(StrictContractModel):
     risk_summary: RiskSummary | None = None
     calculated_at: str | None = None
 
-    def model_post_init(self, __context: object) -> None:
-        """Strip legacy numeric score from public output."""
-        super().model_post_init(__context)
-        if self.model_extra:
-            self.model_extra.pop("score", None)
+    @model_serializer(mode="wrap")
+    def _drop_legacy_numeric_score(self, handler):
+        """legacy 'score' 字段仅用于兼容历史数据，不进入 public 输出。"""
+        data = handler(self)
+        if isinstance(data, dict):
+            data.pop("score", None)
+        return data
 
 
 class ScanFinding(StrictContractModel):

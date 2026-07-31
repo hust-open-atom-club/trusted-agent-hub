@@ -352,7 +352,7 @@ def test_list_filters_public_packages(
 @pytest.mark.parametrize(
     ("field", "order", "expected"),
     [
-        (SortField.GRADE, SortOrder.ASC, ["beta-package", "Gamma-package", "alpha-package"]),
+        (SortField.GRADE, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
         (SortField.GRADE, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.ASC, ["Gamma-package", "alpha-package", "beta-package"]),
         (SortField.UPDATED_AT, SortOrder.DESC, ["alpha-package", "Gamma-package", "beta-package"]),
@@ -541,11 +541,16 @@ def _repository_with_draft_latest(
 def test_list_skips_public_package_with_draft_latest_version(
     fake_repository: FakeRepository,
 ) -> None:
+    """A published package whose latest_version points to a draft must be
+    skipped from the public list (not crash the whole list)."""
     repository = _repository_with_draft_latest(fake_repository)
 
     page = PackageService(repository).list_packages(PackageListQuery())
+
     names = {item.name for item in page.items}
     assert "alpha-package" not in names
+    assert "beta-package" in names
+    assert "Gamma-package" in names
 
 
 def test_stats_skip_public_package_with_draft_latest_version(

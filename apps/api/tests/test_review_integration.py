@@ -23,6 +23,21 @@ with open(os.path.join(FIXTURES, "scan_risky.json")) as f:
     SCAN_RISKY = json.load(f)
 
 
+@pytest.fixture(autouse=True)
+def _mock_artifact_build(monkeypatch):
+    """Integration tests must never hit real git/network for artifact packaging."""
+
+    def _fake_build_artifact(*, repo_url, commit_hash, package_name, version):
+        zip_name = f"{package_name}-{version}-{commit_hash[:8]}.zip"
+        return {
+            "download_url": f"/api/v0/artifacts/{zip_name}",
+            "sha256": "a" * 64,
+            "download_size_bytes": 1024,
+        }
+
+    monkeypatch.setattr("src.services.artifacts.build_artifact", _fake_build_artifact)
+
+
 def _random_email(prefix: str = "test") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}@example.com"
 
@@ -122,7 +137,12 @@ def _set_version_status(version_id: str, status: str):
 
 
 def _simulate_scan_complete(version_id: str, scan_data: dict):
-    """Set scan report + update version status to pending_review (skips real scanner)."""
+    """Set scan report + install artifacts + update version status to pending_review.
+
+    Simulates handle_scan_complete: scan report + trust score are injected
+    directly, and install manifest fields (download_url / sha256 / steps)
+    are written back as if artifact packaging had completed.
+    """
     _inject_scan(version_id, scan_data)
     import psycopg2
     from urllib.parse import urlparse
@@ -137,6 +157,40 @@ def _simulate_scan_complete(version_id: str, scan_data: dict):
     row = cur.fetchone()
     if row:
         data = row[0] if isinstance(row[0], dict) else {}
+        pkg_name = scan_data.get("package_name", "test-package")
+        pkg_version = scan_data.get("version", "1.0.0")
+        commit_hash = "a" * 40
+        zip_name = f"{pkg_name}-{pkg_version}-{commit_hash[:8]}.zip"
+        download_url = f"/api/v0/artifacts/{zip_name}"
+
+        source = dict(data.get("source") or {})
+        source["download_url"] = download_url
+        source["commit_hash"] = commit_hash
+        data["source"] = source
+        data["integrity"] = {"sha256": "a" * 64, "download_size_bytes": 1024}
+        if not data.get("permissions"):
+            data["permissions"] = {
+                "filesystem": {"read": [], "write": [], "delete": False},
+                "shell": {"allowed": False},
+                "network": {"allowed": False},
+            }
+
+        compat = data.get("compatibility") or ["claude-code"]
+        if not compat:
+            compat = ["claude-code"]
+        target_client = compat[0]
+        data["compatibility"] = compat
+        data["installation"] = {
+            "method": "copy_directory",
+            "target_client": target_client,
+            "steps": [
+                {"action": "download", "url": download_url},
+                {"action": "verify", "algorithm": "sha256", "checksum": "a" * 64},
+                {"action": "extract"},
+                {"action": "copy", "client": target_client,
+                 "destination": f"~/.claude/skills/{pkg_name}/"},
+            ],
+        }
         data["status"] = "pending_review"
         cur.execute(
             "UPDATE package_versions SET status = %s, data = %s WHERE id = %s",

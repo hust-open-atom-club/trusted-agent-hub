@@ -167,6 +167,9 @@ class FindingCategory(StrEnum):
     SSRF = "ssrf"
     AGENT_SNOOPING = "agent_snooping"
     TOOL_MISUSE = "tool_misuse"
+    MCP_SECURITY = "mcp_security"
+    PLUGIN_SECURITY = "plugin_security"
+    SUBAGENT_SECURITY = "subagent_security"
 
 
 FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
@@ -187,6 +190,9 @@ FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
     "ssrf": "SSRF 服务端请求伪造",
     "agent_snooping": "Agent 窥探",
     "tool_misuse": "工具滥用",
+    "mcp_security": "MCP安全",
+    "plugin_security": "插件安全",
+    "subagent_security": "子Agent安全",
 }
 
 

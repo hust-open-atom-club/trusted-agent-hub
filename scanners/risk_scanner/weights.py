@@ -85,3 +85,24 @@ LLM_REVIEW_LABELS: dict[str, str] = {
     "negligent": "llm:suspected-negligent",
     "benign": "llm:likely-benign",
 }
+
+# =============================================================================
+# SR-017: MCP tool description poisoning detection
+# =============================================================================
+
+# ② 语义漂移阈值: description 与 permissions 声明的余弦相似度低于该值 → low 提示
+# 标定于 2026-07-31：0.4 会误报正常短功能描述（如 list_tables 0.379），下调至 0.35
+TOOL_POISONING_DESC_PERM_THRESHOLD: float = 0.35
+
+# ① 确定性投毒严重度（高危词 + 权限声明矛盾）
+TOOL_POISONING_KEYWORD_SEVERITY: str = "high"
+
+# ① 命中 ≥2 个工具 → 升级为 critical
+TOOL_POISONING_MULTI_COUNT: int = 2
+TOOL_POISONING_MULTI_SEVERITY: str = "critical"
+
+# ② 语义漂移提示严重度
+TOOL_POISONING_DRIFT_SEVERITY: str = "low"
+
+# 无权限声明时，高危词命中 → 提示级（无法判定矛盾，仅提醒人工审核）
+TOOL_POISONING_NO_PERM_SEVERITY: str = "low"

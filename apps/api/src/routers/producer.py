@@ -171,7 +171,6 @@ def submit_version(
         _run_scan_task,
         scan_id,
         repo_url,
-        is_local=False,
         on_complete=on_scan_done,
     )
 
@@ -283,6 +282,12 @@ def list_versions(
     """
     repo = _get_producer_repository()
     service = ProducerService(repo)
+
+    # 惰性清理：顺带删除 rejected/error 版本遗留的安装产物
+    try:
+        service.cleanup_orphan_artifacts()
+    except Exception:
+        pass
 
     if submitter_id is not None:
         return service.list_my_versions(submitter_id, limit=limit, offset=offset)
