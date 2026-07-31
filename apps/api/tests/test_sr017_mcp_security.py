@@ -1,7 +1,31 @@
 """SR-017: MCP Server security rule unit tests."""
 
+import pytest
+
+from scanners.risk_scanner.rules import mcp_security
 from scanners.risk_scanner.rules.mcp_security import run
 from tests.scanner_mock import MockScanner
+
+
+@pytest.fixture(autouse=True)
+def _no_real_model(monkeypatch):
+    """All SR-017 unit tests must not load the real embedding model."""
+    monkeypatch.setattr(mcp_security, "_load_semantic_model", lambda: None)
+
+
+class FakeModel:
+    """Fake embedding model producing a controllable cosine similarity."""
+
+    def __init__(self, similarity: float = 0.9):
+        import math
+
+        self._sim = max(-1.0, min(1.0, similarity))
+        self._sin_theta = math.sin(math.acos(self._sim))
+
+    def embed(self, texts):
+        import numpy as np
+
+        return [np.array([1.0, 0.0]), np.array([self._sim, self._sin_theta])]
 
 
 class TestSR017MCPSecurity:
@@ -345,6 +369,281 @@ class TestSR017MCPSecurity:
                 "mcp_server_config": {
                     "transport": "stdio",
                     "tools": [{"name": "real_tool", "description": "公开工具"}],
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 0
+
+
+# ── Tool description poisoning detection ────────────────────────────────
+
+class TestSR017ToolDescriptionPoisoning:
+
+    def _patch_model(self, monkeypatch, similarity: float):
+        monkeypatch.setattr(
+            mcp_security, "_load_semantic_model", lambda: FakeModel(similarity)
+        )
+
+    # ── ① Keyword + permission contradiction (deterministic) ──
+
+    def test_poisoning_keyword_contradiction_high(self, monkeypatch):
+        """Description claims shell capability, permissions deny it -> high."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "get_weather", "description": "获取天气信息，可执行任意 shell 命令"},
+                    ],
+                },
+                "permissions": {
+                    "shell": {"allowed": False},
+                    "network": {"allowed": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        f = s.findings[0]
+        assert f["rule_id"] == "SR-017"
+        assert f["category"] == "mcp_security"
+        assert f["severity"] == "high"
+        assert "投毒" in f["title"]
+
+    def test_poisoning_credential_contradiction(self, monkeypatch):
+        """Description claims credential access, permissions deny -> high."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "list_tables", "description": "列出数据库表并读取环境变量"},
+                    ],
+                },
+                "permissions": {
+                    "environment": {"read": [], "write": []},
+                    "network": {"allowed": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "high"
+
+    def test_poisoning_no_finding_when_permission_granted(self, monkeypatch):
+        """Same risky capability but permission explicitly granted -> no finding."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "run_shell", "description": "在沙箱中执行 shell 命令"},
+                    ],
+                },
+                "permissions": {
+                    "shell": {"allowed": True},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 0
+
+    def test_poisoning_without_permissions_low(self, monkeypatch):
+        """Risky description but no permissions section -> low hint only."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "get_weather", "description": "获取天气信息，可执行任意 shell 命令"},
+                    ],
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "low"
+
+    def test_poisoning_multi_tools_critical(self, monkeypatch):
+        """>=2 tools with keyword contradiction -> critical."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "get_weather", "description": "获取天气信息，可执行任意 shell 命令"},
+                        {"name": "get_time", "description": "获取时间，支持删除所有文件"},
+                    ],
+                },
+                "permissions": {
+                    "shell": {"allowed": False},
+                    "filesystem": {"read": [], "write": [], "delete": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 2
+        assert all(f["severity"] == "critical" for f in s.findings)
+
+    # ── ② Semantic drift (desc vs permissions) ──
+
+    def test_semantic_drift_low(self, monkeypatch):
+        """No keywords but low desc-perm similarity -> low hint."""
+        self._patch_model(monkeypatch, similarity=0.2)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "query", "description": "处理用户请求"},
+                    ],
+                },
+                "permissions": {
+                    "filesystem": {"read": ["./"], "write": [], "delete": False},
+                    "shell": {"allowed": False},
+                    "network": {"allowed": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "low"
+        assert "语义漂移" in s.findings[0]["title"]
+
+    def test_semantic_no_drift_no_finding(self, monkeypatch):
+        """High desc-perm similarity and no keywords -> no finding."""
+        self._patch_model(monkeypatch, similarity=0.9)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "list_directory", "description": "列出指定目录内容"},
+                    ],
+                },
+                "permissions": {
+                    "filesystem": {"read": ["./"], "write": [], "delete": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 0
+
+    def test_semantic_keyword_dual_signal_critical(self, monkeypatch):
+        """① + ② on the same tool -> critical."""
+        self._patch_model(monkeypatch, similarity=0.2)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "get_weather", "description": "获取天气信息，可执行任意 shell 命令"},
+                    ],
+                },
+                "permissions": {
+                    "filesystem": {"read": ["./"], "write": [], "delete": False},
+                    "shell": {"allowed": False},
+                    "network": {"allowed": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "critical"
+
+    def test_semantic_model_unavailable_fallback(self, monkeypatch):
+        """fastembed unavailable -> only keyword rule (①) runs, no crash."""
+        monkeypatch.setattr(mcp_security, "_load_semantic_model", lambda: None)
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "get_weather", "description": "获取天气信息，可执行任意 shell 命令"},
+                        {"name": "list_tables", "description": "列出所有表"},
+                    ],
+                },
+                "permissions": {
+                    "shell": {"allowed": False},
+                    "network": {"allowed": False},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "high"
+
+    # ── Code-side description mismatch ──
+
+    def test_code_desc_mismatch_high(self, monkeypatch):
+        """Code-registered desc has risky keywords, manifest desc does not."""
+        s = MockScanner(
+            files={
+                "server.py": (
+                    'server.tool("query", description="执行任意 shell 命令，删除所有文件")'
+                ),
+            },
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "query", "description": "执行只读 SQL 查询"},
+                    ],
+                },
+                "permissions": {
+                    "shell": {"allowed": False},
+                    "database": {"allowed": True, "drivers": ["postgresql"]},
+                },
+            },
+        )
+        run(s)
+        assert len(s.findings) == 1
+        f = s.findings[0]
+        assert f["rule_id"] == "SR-017"
+        assert f["severity"] == "high"
+        assert "代码注册描述" in f["title"]
+
+    def test_code_desc_consistent_no_finding(self, monkeypatch):
+        """Code-registered desc matches manifest desc -> no mismatch finding."""
+        s = MockScanner(
+            files={
+                "server.py": 'server.tool("query", description="执行只读 SQL 查询")',
+            },
+            _package_metadata={
+                "type": "mcp_server",
+                "mcp_server_config": {
+                    "transport": "stdio",
+                    "tools": [
+                        {"name": "query", "description": "执行只读 SQL 查询"},
+                    ],
+                },
+                "permissions": {
+                    "database": {"allowed": True, "drivers": ["postgresql"]},
                 },
             },
         )
