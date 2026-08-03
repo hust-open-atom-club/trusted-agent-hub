@@ -221,7 +221,9 @@
       "rejected_desc": "审核未通过的版本",
       "load_failed": "加载失败",
       "users": "用户管理",
-      "users_desc": "管理角色与账户状态"
+      "users_desc": "管理角色与账户状态",
+      "audit_logs": "审计日志",
+      "audit_logs_desc": "查询操作留痕与证据链"
     },
     "auth_required": "请先登录管理员账号",
     "back_to_dashboard": "← 返回管理面板",
@@ -329,10 +331,13 @@
       "action": {
         "publish": "发布",
         "yank": "下架",
+        "approve": "审核通过",
+        "reject": "审核驳回",
         "approved": "审核通过",
         "rejected": "审核驳回",
         "changes_requested": "要求修改",
         "submitted": "提交审核",
+        "scan_start": "扫描开始",
         "scan_complete": "扫描完成"
       }
     },

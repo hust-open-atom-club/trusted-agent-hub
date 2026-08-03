@@ -4656,10 +4656,26 @@ h3 {
   color: var(--color-ink);
   outline: none;
   min-height: 36px;
+  color-scheme: light;
 }
 
 .admin-filter-date:focus {
   border-color: var(--color-accent);
+}
+
+/* 暗色主题下日期选择器弹层跟随主题，日历指示器反色可见 */
+[data-theme="dark"] .admin-filter-date {
+  color-scheme: dark;
+}
+
+[data-theme="dark"] .admin-filter-date::-webkit-calendar-picker-indicator {
+  filter: invert(0.85) sepia(0.3) hue-rotate(60deg);
+  cursor: pointer;
+}
+
+/* admin 过滤行查询按钮统一宽度 */
+.admin-search-btn {
+  min-width: 100px;
 }
 
 /* ============================================================

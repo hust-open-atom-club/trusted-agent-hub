@@ -244,6 +244,11 @@ class ProducerService:
         file_contents = full_report.get("file_contents", {})
         scan_data: dict[str, object] = scan_report if isinstance(scan_report, dict) else {}
         scan_data["file_contents"] = file_contents if isinstance(file_contents, dict) else {}
+        # 顶层 scan_id 统一为任务级 scan_id，与 SCAN_START / SCAN_COMPLETE
+        # 审计日志的 detail.scan_id 一致，支持审计 → 报告全链路溯源
+        task_scan_id = full_report.get("scan_id")
+        if isinstance(task_scan_id, str) and task_scan_id:
+            scan_data["scan_id"] = task_scan_id
         self.repository.save_scan_report(
             version_id=version_id,
             scan_json=scan_data,
@@ -612,8 +617,14 @@ class ProducerService:
         # 将审核结论写入版本 data JSON（供前端版本详情页直接读取）
         self.repository.update_version_data(version_id, {"review_conclusion": conclusion})
 
-        # 写入审计日志
-        audit_action = AuditAction.REQUEST_CHANGES.value if conclusion == ReviewConclusion.CHANGES_REQUESTED.value else conclusion
+        # 写入审计日志：结论映射到 AuditAction 常量（approve / reject / request_changes），
+        # 保证审计 action 与枚举和前端过滤器一致
+        if conclusion == ReviewConclusion.APPROVED.value:
+            audit_action = AuditAction.APPROVE.value
+        elif conclusion == ReviewConclusion.REJECTED.value:
+            audit_action = AuditAction.REJECT.value
+        else:
+            audit_action = AuditAction.REQUEST_CHANGES.value
         self.repository.create_audit_log(
             action=audit_action,
             target_type="version",

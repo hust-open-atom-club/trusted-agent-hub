@@ -674,6 +674,16 @@ class ProducerRepository:
                 .select_from(PackageRow)
                 .where(PackageRow.status == "yanked")
             ) or 0
+            total_users = session.scalar(
+                select(func.count())
+                .select_from(UserRow)
+                .where(UserRow.is_active.is_(True))
+            ) or 0
+            today_audit_actions = session.scalar(
+                select(func.count())
+                .select_from(AuditLogRow)
+                .where(AuditLogRow.timestamp >= today_start)
+            ) or 0
         return {
             "total_packages": total_packages,
             "total_versions": total_versions,
@@ -683,6 +693,8 @@ class ProducerRepository:
             "published": published_count,
             "rejected": rejected_count,
             "yanked": yanked_count,
+            "total_users": total_users,
+            "today_audit_actions": today_audit_actions,
         }
 
 # ── 辅助函数 ──────────────────────────────────────────────

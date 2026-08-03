@@ -472,7 +472,7 @@ function StatusContent() {
             扫描发现 ({detail.scan_summary.total} 项)
             {detail.scan_summary.pass_rate !== undefined && (
               <span style={{ fontSize: '0.83rem', fontWeight: 400, color: 'var(--color-muted)', marginLeft: '0.5rem' }}>
-                通过率 {Math.round(detail.scan_summary.pass_rate * 100)}%
+                通过率 {Math.round(detail.scan_summary.pass_rate)}%
               </span>
             )}
           </h2>

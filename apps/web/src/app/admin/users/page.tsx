@@ -181,7 +181,7 @@ export default function AdminUsersPage() {
         </div>
 
         <div className="admin-filter-item" style={{ alignSelf: 'flex-end' }}>
-          <button type="submit" className="btn btn-primary btn-sm">
+          <button type="submit" className="btn btn-primary btn-sm admin-search-btn">
             查询
           </button>
         </div>

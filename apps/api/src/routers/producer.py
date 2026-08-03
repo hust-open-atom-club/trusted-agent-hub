@@ -184,6 +184,7 @@ def submit_version(
 
     # 否则正常启动后台扫描
     from src.routers.trust import _run_scan_task, _scans, _SCAN_TTL_SECONDS
+    from schema.constants import AuditAction
     import time as _time
 
     _scans[scan_id] = {
@@ -198,6 +199,16 @@ def submit_version(
         "expires_at": _time.time() + _SCAN_TTL_SECONDS,
         "user_id": _user.id,
     }
+
+    # 扫描任务真正启动时补写 SCAN_START 审计，与 scan_complete 的 detail.scan_id
+    # 形成证据链：submit → scan_start → scan_complete
+    repo.create_audit_log(
+        action=AuditAction.SCAN_START.value,
+        target_type="version",
+        target_id=version_id,
+        operator_id=_user.id,
+        detail={"scan_id": scan_id},
+    )
 
     background_tasks.add_task(
         _run_scan_task,
