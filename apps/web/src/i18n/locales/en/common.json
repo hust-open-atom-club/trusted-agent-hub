@@ -220,7 +220,9 @@
       "published_desc": "Versions live in production",
       "rejected": "Rejected",
       "rejected_desc": "Versions that failed review",
-      "load_failed": "Failed to load"
+      "load_failed": "Failed to load",
+      "users": "User Management",
+      "users_desc": "Manage roles and account status"
     },
     "auth_required": "Please log in as admin",
     "back_to_dashboard": "← Back to Dashboard",

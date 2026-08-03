@@ -219,7 +219,9 @@
       "published_desc": "已上线运行的版本",
       "rejected": "已驳回",
       "rejected_desc": "审核未通过的版本",
-      "load_failed": "加载失败"
+      "load_failed": "加载失败",
+      "users": "用户管理",
+      "users_desc": "管理角色与账户状态"
     },
     "auth_required": "请先登录管理员账号",
     "back_to_dashboard": "← 返回管理面板",

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.auth import require_role
+from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
 from src.database import create_session_factory, get_runtime_engine
 from src.models.common import ErrorEnvelope
@@ -74,9 +74,22 @@ def submit_review(
 @router.get(
     "/versions/{version_id}/reviews",
 )
-def list_reviews(version_id: str):
-    """获取某个版本的全部审核历史记录（按时间倒序）。"""
+def list_reviews(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+):
+    """获取某个版本的全部审核历史记录（按时间倒序）。
+
+    仅版本所属包的提交者、reviewer 或 admin 可查看。
+    """
     repo = _get_producer_repository()
+    version = repo.get_version(version_id)
+    if version:
+        pkg_id = version.get("package_id")
+        if pkg_id:
+            pkg = repo.get_package(str(pkg_id))
+            if pkg:
+                verify_resource_access(_user, pkg.get("submitter_id", ""))
     return repo.list_review_records(version_id)
 
 
@@ -243,6 +256,7 @@ def list_audit_logs(
     end_date: str | None = Query(default=None, description="结束日期（ISO 格式，如 2026-07-31T23:59:59）"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    _user: CurrentUser = Depends(require_role("reviewer")),
 ) -> list[AuditLogEntry]:
     """查询审计日志，支持按目标类型/目标ID/操作类型/时间范围筛选。"""
     repo = _get_producer_repository()

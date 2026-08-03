@@ -86,6 +86,12 @@ export default function AdminDashboardClient() {
       description: t('admin.dashboard.rejected_desc'),
       path: '/admin/rejected',
     },
+    {
+      title: t('admin.dashboard.users'),
+      count: null,
+      description: t('admin.dashboard.users_desc'),
+      path: '/admin/users',
+    },
   ];
 
   return (

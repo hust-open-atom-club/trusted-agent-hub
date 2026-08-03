@@ -27,9 +27,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
+from src.auth import require_role, verify_resource_access
+from src.dependencies import CurrentUser
 from src.services.artifacts import force_rmtree
 
 router = APIRouter(tags=["trust-scan"])
@@ -172,19 +174,27 @@ def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: 
     token = os.environ.get("GITHUB_TOKEN", "")
     if token:
         clone_url = f"https://{token}@github.com/{parsed['owner']}/{parsed['repo']}.git"
-        print(f"[TAH-trust]     git clone 使用 Token 认证")
+        safe_url = f"https://***@github.com/{parsed['owner']}/{parsed['repo']}.git"
     else:
         clone_url = f"https://github.com/{parsed['owner']}/{parsed['repo']}.git"
-        print(f"[TAH-trust]     git clone 无 Token（匿名）")
+        safe_url = clone_url
 
     for attempt in range(1, max_attempts + 1):
-        print(f"[TAH-trust]     git clone (attempt {attempt}/{max_attempts}) --depth 1 ...")
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, tmp_dir],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        print(f"[TAH-trust]     git clone {safe_url} (attempt {attempt}/{max_attempts}) --depth 1 ...")
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, tmp_dir],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[TAH-trust]     clone attempt {attempt} timed out after 60s")
+            if attempt < max_attempts:
+                _time.sleep(3)
+                force_rmtree(tmp_dir)
+                os.makedirs(tmp_dir, exist_ok=True)
+            continue
         if result.returncode == 0:
             print(f"[TAH-trust]     git clone OK (attempt {attempt})")
             return True
@@ -447,13 +457,16 @@ def _run_scan_task(
 
     except Exception as exc:
         _scans[scan_id]["status"] = "error"
-        _scans[scan_id]["error"] = f"Scan failed: {type(exc).__name__}: {exc}"
-        print(f"[TAH-trust] *** 扫描异常: {type(exc).__name__}: {exc}", flush=True)
-        import traceback; traceback.print_exc()
+        err_msg = str(exc)
+        token = os.environ.get("GITHUB_TOKEN", "")
+        if token and token in err_msg:
+            err_msg = err_msg.replace(token, "***")
+        _scans[scan_id]["error"] = f"Scan failed: {type(exc).__name__}: {err_msg}"
+        print(f"[TAH-trust] *** 扫描异常: {type(exc).__name__}: {err_msg}", flush=True)
         if "tmp_dir" in locals():
             force_rmtree(tmp_dir)
         if on_complete:
-            on_complete(scan_id, None, str(exc))
+            on_complete(scan_id, None, err_msg)
 
 def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_url: str = "", subdirectory: str | None = None) -> Dict[str, Any]:
     """从扫描报告和目标目录构建 package_metadata 用于评分引擎。
@@ -637,6 +650,7 @@ async def submit_scan(
     background_tasks: BackgroundTasks,
     repo_url: Optional[str] = None,
     body: Optional[ScanRequest] = None,
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> Dict[str, Any]:
     """提交一个新的扫描任务。
 
@@ -693,6 +707,7 @@ async def submit_scan(
         "trust_score": None,
         "error": None,
         "expires_at": _time.time() + _SCAN_TTL_SECONDS,
+        "user_id": _user.id,
     }
 
     # 启动后台扫描
@@ -712,7 +727,10 @@ async def submit_scan(
 
 
 @router.get("/scan/{scan_id}", response_model=ScanStatusResponse)
-def get_scan_status(scan_id: str) -> Dict[str, Any]:
+def get_scan_status(
+    scan_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> Dict[str, Any]:
     """查询扫描任务的状态。
 
     status 可能的值:
@@ -731,6 +749,8 @@ def get_scan_status(scan_id: str) -> Dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_scan_not_found_detail(scan_id),
         )
+
+    verify_resource_access(_user, info.get("user_id", ""))
 
     return {
         "scan_id": scan_id,
@@ -751,7 +771,10 @@ def get_scan_status(scan_id: str) -> Dict[str, Any]:
 
 
 @router.get("/scan/{scan_id}/report")
-def get_scan_report(scan_id: str) -> Dict[str, Any]:
+def get_scan_report(
+    scan_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> Dict[str, Any]:
     """获取完整的扫描报告 JSON。
 
     仅在扫描完成 (status=complete) 时返回完整报告。
@@ -765,6 +788,8 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_scan_not_found_detail(scan_id),
         )
+
+    verify_resource_access(_user, info.get("user_id", ""))
 
     if info["status"] == "complete":
         full_report = info.get("full_report")
@@ -804,7 +829,10 @@ def get_scan_report(scan_id: str) -> Dict[str, Any]:
 
 
 @router.get("/scan/{scan_id}/metadata")
-def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
+def get_scan_metadata(
+    scan_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> Dict[str, Any]:
     """获取扫描过程中提取的完整元数据（供提交页自动填充使用）。"""
     _cleanup_expired_scans()
     info = _scans.get(scan_id)
@@ -813,6 +841,7 @@ def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_scan_not_found_detail(scan_id),
         )
+    verify_resource_access(_user, info.get("user_id", ""))
     if info["status"] != "complete":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -842,9 +871,16 @@ def get_scan_metadata(scan_id: str) -> Dict[str, Any]:
 
 
 @router.get("/scans")
-def list_scans() -> List[Dict[str, Any]]:
-    """列出所有扫描任务（管理调试用）。"""
+def list_scans(
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> List[Dict[str, Any]]:
+    """列出扫描任务（submitter 及以上角色）。
+
+    admin 可查看全部扫描记录；其他角色仅返回自己发起的扫描。
+    """
+    from schema.constants import UserRole
     _cleanup_expired_scans()
+    is_admin = _user.role == UserRole.ADMIN.value
     return [
         {
             "scan_id": sid,
@@ -853,4 +889,5 @@ def list_scans() -> List[Dict[str, Any]]:
             "created_at": info["created_at"],
         }
         for sid, info in _scans.items()
+        if is_admin or info.get("user_id") == _user.id
     ]

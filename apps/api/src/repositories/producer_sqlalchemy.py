@@ -847,6 +847,93 @@ class ProducerRepository:
 
         return results
 
+    # ── 用户管理 ────────────────────────────────────────────
+
+    def list_users(
+        self,
+        *,
+        search: str | None = None,
+        role: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, object]], int]:
+        """分页查询用户列表，支持邮箱/昵称模糊搜索 + 角色筛选。"""
+        with self.session_factory() as session:
+            base = select(UserRow)
+            count_base = select(func.count()).select_from(UserRow)
+
+            if search:
+                pattern = f"%{search}%"
+                base = base.where(
+                    UserRow.email.ilike(pattern) | UserRow.display_name.ilike(pattern)
+                )
+                count_base = count_base.where(
+                    UserRow.email.ilike(pattern) | UserRow.display_name.ilike(pattern)
+                )
+
+            if role:
+                base = base.where(UserRow.role == role)
+                count_base = count_base.where(UserRow.role == role)
+
+            total = session.scalar(count_base) or 0
+
+            rows = session.execute(
+                base.order_by(UserRow.created_at.desc()).offset(offset).limit(limit)
+            ).scalars().all()
+
+            items = [
+                {
+                    "id": row.id,
+                    "email": row.email,
+                    "display_name": row.display_name,
+                    "role": row.role,
+                    "is_active": row.is_active,
+                    "created_at": _serialize_dt(row.created_at),
+                }
+                for row in rows
+            ]
+            return items, total
+
+    def update_user_role(self, user_id: str, new_role: str) -> dict[str, object] | None:
+        """更新用户角色。返回更新后的用户信息；若用户不存在返回 None；若角色未变返回特殊标记。
+        
+        Returns:
+            dict with "conflict": True 表示角色未变化。
+        """
+        with self.session_factory() as session:
+            user = session.get(UserRow, user_id)
+            if user is None:
+                return None
+            if user.role == new_role:
+                return {"conflict": True}
+            user.role = new_role
+            session.commit()
+            return {
+                "id": user.id,
+                "email": user.email,
+                "display_name": user.display_name,
+                "role": user.role,
+                "is_active": user.is_active,
+                "created_at": _serialize_dt(user.created_at),
+            }
+
+    def update_user_status(self, user_id: str, is_active: bool) -> dict[str, object] | None:
+        """启用或禁用用户账号。返回更新后的用户信息，若用户不存在返回 None。"""
+        with self.session_factory() as session:
+            user = session.get(UserRow, user_id)
+            if user is None:
+                return None
+            user.is_active = is_active
+            session.commit()
+            return {
+                "id": user.id,
+                "email": user.email,
+                "display_name": user.display_name,
+                "role": user.role,
+                "is_active": user.is_active,
+                "created_at": _serialize_dt(user.created_at),
+            }
+
 
 def _version_brief(row: PackageVersionRow) -> dict[str, object]:
     data = dict(row.data) if row.data else {}

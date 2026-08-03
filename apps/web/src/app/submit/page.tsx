@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, Suspense } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -69,7 +70,10 @@ function isPlaceholderStr(v: string | undefined | null): boolean {
 
 function SubmitForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { token } = useAuth();
+  const packageId = searchParams.get('packageId') || '';
+  const isNewVersion = !!packageId;
 
   const [repoUrl, setRepoUrl] = useState('');
   const [phase, setPhase] = useState<ScanPhase>('input');
@@ -95,6 +99,20 @@ function SubmitForm() {
 
   const isBusy = phase === 'scanning' || phase === 'submitting';
 
+  useEffect(() => {
+    if (!isNewVersion || !token) return;
+    apiFetch<{ name: string; type: string; description: string; license: string }>(
+      `${API_BASE}/api/v0/producer/packages/${packageId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    ).then((pkg) => {
+      setPkgName(pkg.name || '');
+      if (pkg.type) setPkgType(pkg.type);
+      if (pkg.description) setPkgDescription(pkg.description);
+      if (pkg.license) setPkgLicense(pkg.license);
+      setFieldSource((prev) => ({ ...prev, name: 'auto', type: 'auto' }));
+    }).catch(() => {});
+  }, [isNewVersion, packageId, token]);
+
   /* ── 字段来源追踪 ── */
   const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
 
@@ -118,21 +136,21 @@ function SubmitForm() {
     setStatusMsg('正在提交扫描任务...');
     try {
       const r = await fetch(`${API_BASE}/api/v0/scan`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '扫描提交失败'); }
       const { scan_id } = await r.json();
 
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        const sr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}`);
+        const sr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await sr.json();
         setStatusMsg(`扫描中... (${data.status})`);
 
         if (data.status === 'complete') {
           let meta: PackageMetadata | null = null;
           try {
-            const mr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}/metadata`);
+            const mr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}/metadata`, { headers: { Authorization: `Bearer ${token}` } });
             if (mr.ok) { const md = await mr.json(); meta = md.metadata; }
           } catch { /* ignore */ }
 
@@ -231,6 +249,32 @@ function SubmitForm() {
       const compatList = pkgCompatibility ? pkgCompatibility.split(',').map(s => s.trim()).filter(Boolean) : meta.compatibility || [];
       const kwList = pkgKeywords ? pkgKeywords.split(',').map(s => s.trim()).filter(Boolean) : meta.keywords || [];
 
+      if (isNewVersion) {
+        const verBody: Record<string, unknown> = {
+          version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
+          source: sourceObj,
+          integrity: meta.integrity || null,
+          permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
+          compatibility: compatList,
+          installation: meta.installation || null,
+          field_source: fs,
+        };
+        const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
+        if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
+        const verData = await verRes.json();
+        const versionId: string = verData.id;
+        const subRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
+        });
+        if (!subRes.ok) { const e = await subRes.json().catch(() => ({ detail: '提交审核失败' })); throw new Error(e.detail || `提交审核失败 (${subRes.status})`); }
+        setPhase('done');
+        setTimeout(() => {
+          router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
+        }, 1000);
+        return;
+      }
+
       const pkgBody: Record<string, unknown> = {
         name: pkgName.trim(), type: pkgType, description: pkgDescription.trim() || pkgName.trim(),
         license: pkgLicense.trim(), keywords: kwList, category: pkgCategory.trim() || meta.category || 'other',
@@ -243,7 +287,7 @@ function SubmitForm() {
       const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages`, { method: 'POST', headers, body: JSON.stringify(pkgBody) });
       if (!pkgRes.ok) { const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' })); throw new Error(e.detail || `创建包失败 (${pkgRes.status})`); }
       const pkgData = await pkgRes.json();
-      const packageId: string = pkgData.id;
+      const createdPkgId: string = pkgData.id;
 
       const verBody: Record<string, unknown> = {
         version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
@@ -254,7 +298,7 @@ function SubmitForm() {
         installation: meta.installation || null,
         field_source: fs,
       };
-      const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
+      const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${createdPkgId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
       if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
       const verData = await verRes.json();
       const versionId: string = verData.id;
@@ -307,8 +351,8 @@ function SubmitForm() {
     <div className="submit-page" style={{ paddingBottom: '80px' }}>
       <div className="submit-container">
         <div className="submit-header">
-          <h1>提交 Agent 能力包</h1>
-          <p>输入 GitHub 仓库地址，系统自动扫描提取元数据。</p>
+          <h1>{isNewVersion ? '创建新版本' : '提交 Agent 能力包'}</h1>
+          <p>{isNewVersion ? `为 ${pkgName || '已有包'} 创建新版本，输入 GitHub 仓库地址后扫描提交。` : '输入 GitHub 仓库地址，系统自动扫描提取元数据。'}</p>
         </div>
 
         {error && <div className="submit-error">{error}</div>}
@@ -390,12 +434,13 @@ function SubmitForm() {
 
               {/* 名称 */}
               <div style={fieldStyle}>
-                <label style={lbl}>包名称 {isAuto('name') && <span style={badge('auto')}>自动识别</span>}</label>
+                <label style={lbl}>包名称 {isAuto('name') || isNewVersion ? <span style={badge('auto')}>{isNewVersion ? '已有包' : '自动识别'}</span> : null}</label>
                 <input type="text" value={pkgName} onChange={(e) => { setPkgName(e.target.value); setFieldSource(p => ({ ...p, name: 'manual' })); }}
-                  readOnly={isAuto('name')} disabled={isBusy}
-                  style={isAuto('name') ? roInp : inp} />
-                {isAuto('name') && <span style={hint}>来源: SKILL.md / manifest.json 自动提取，不可修改</span>}
-                {!isAuto('name') && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
+                  readOnly={isAuto('name') || isNewVersion} disabled={isBusy}
+                  style={(isAuto('name') || isNewVersion) ? roInp : inp} />
+                {isAuto('name') && !isNewVersion && <span style={hint}>来源: SKILL.md / manifest.json 自动提取，不可修改</span>}
+                {isNewVersion && <span style={hint}>为已有包创建新版本，包名称不可修改</span>}
+                {!isAuto('name') && !isNewVersion && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
               </div>
 
               {/* 类型 — 分段按钮组 */}
@@ -422,12 +467,12 @@ function SubmitForm() {
 
               {/* 版本号 */}
               <div style={fieldStyle}>
-                <label style={lbl}>版本号 {isAuto('version') && <span style={badge('auto')}>自动识别</span>}</label>
+                <label style={lbl}>版本号 {!isNewVersion && isAuto('version') && <span style={badge('auto')}>自动识别</span>}</label>
                 <input type="text" value={pkgVersion} onChange={(e) => { setPkgVersion(e.target.value); setFieldSource(p => ({ ...p, version: 'manual' })); }}
-                  readOnly={isAuto('version')} disabled={isBusy} placeholder="0.1.0"
-                  style={isAuto('version') ? roInp : inp} />
-                <span style={hint}>格式: 主版本.次版本.修订版 (如 1.0.0)</span>
-                {!isAuto('version') && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
+                  readOnly={!isNewVersion && isAuto('version')} disabled={isBusy} placeholder="0.1.0"
+                  style={(!isNewVersion && isAuto('version')) ? roInp : inp} />
+                <span style={hint}>格式: 主版本.次版本.修订版 (如 1.0.0){isNewVersion ? '，请填写新版本号' : ''}</span>
+                {!isNewVersion && !isAuto('version') && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
               </div>
 
               {/* 描述 */}

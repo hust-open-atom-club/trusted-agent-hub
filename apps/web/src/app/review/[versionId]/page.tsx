@@ -382,6 +382,12 @@ export default function ReviewDetailPage() {
         <button onClick={() => router.push(returnTo)} className="link-btn">
           ← {returnLabels[returnTo] || t('review.detail.return_default')}
         </button>
+        <button
+          onClick={() => router.push(`/review/diff?versionId=${encodeURIComponent(versionId)}`)}
+          className="link-btn"
+        >
+          代码变更 →
+        </button>
         <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
 
