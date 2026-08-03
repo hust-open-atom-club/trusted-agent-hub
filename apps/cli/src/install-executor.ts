@@ -52,6 +52,7 @@ import {
   describeMcpDiff,
   mcpServersFromManifest,
   readJsonConfig,
+  removeMcpEntries,
   resolveMcpConfigPath,
   writeMergedMcpConfig,
   type McpWriteSummary,
@@ -137,6 +138,14 @@ export interface InstallOptions {
   confirmMcpWrite?: (
     summary: McpWriteSummary,
   ) => boolean | Promise<boolean>;
+  /** Confirmation gate for executors that run external commands
+   *  (npm_install / pip_install / docker_run).  Fail-closed: when absent
+   *  or denied the install is blocked before any command runs. */
+  confirmManagedInstall?: (summary: {
+    method: string;
+    packageName: string;
+    version: string;
+  }) => boolean | Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +177,9 @@ export class InstallExecutor {
   private readonly confirmMcpWrite?: (
     summary: McpWriteSummary,
   ) => boolean | Promise<boolean>;
+  private readonly confirmManagedInstall?: (
+    summary: { method: string; packageName: string; version: string },
+  ) => boolean | Promise<boolean>;
   private readonly recordStore: LocalInstallStore;
 
   constructor(
@@ -185,6 +197,7 @@ export class InstallExecutor {
     this.beforeActivate = options.beforeActivate;
     this.runCommand = options.runCommand || defaultRunCommand;
     this.confirmMcpWrite = options.confirmMcpWrite;
+    this.confirmManagedInstall = options.confirmManagedInstall;
     this.recordStore = new LocalInstallStore(this.homeDir);
   }
 
@@ -317,6 +330,11 @@ export class InstallExecutor {
     let stagingPopulated = false;
     let backupCreated = false;
     let targetActivated = false; // P1: track whether staging→target rename succeeded
+    let mcpInfo: {
+      configFile: string;
+      configEntries: string[];
+      backupPath: string | null;
+    } | null = null;
 
     try {
       if (!manifest.integrity) {
@@ -394,7 +412,7 @@ export class InstallExecutor {
 
       // 10. Save local install record — MUST succeed before deleting backup.
       //    If this fails, we restore the backup and remove the new target.
-      const mcpInfo = await this.writeMcpConfigsIfPresent(
+      mcpInfo = await this.writeMcpConfigsIfPresent(
         manifest,
         clientType,
       );
@@ -464,6 +482,14 @@ export class InstallExecutor {
       if (backupCreated && fs.existsSync(backupDir)) {
         try { fs.renameSync(backupDir, targetDir); } catch { /* best-effort restore */ }
       }
+      if (mcpInfo) {
+        try {
+          await removeMcpEntries(
+            mcpInfo.configFile,
+            mcpInfo.configEntries,
+          );
+        } catch { /* best-effort rollback */ }
+      }
       throw err;
     } finally {
       // Always cleanup temp dir (download + extract)
@@ -481,6 +507,24 @@ export class InstallExecutor {
     manifest: InstallManifest,
     clientType: string,
   ): Promise<InstallResult> {
+    // 外部命令执行确认（manual_steps 只展示文本，无需确认）
+    if (manifest.installation.method !== 'manual_steps') {
+      const ok = this.confirmManagedInstall
+        ? await this.confirmManagedInstall({
+            method: manifest.installation.method,
+            packageName: manifest.name,
+            version: manifest.version,
+          })
+        : false;
+      if (!ok) {
+        throw new InstallBlockedError(
+          `安装方式 ${manifest.installation.method} 需要执行外部命令，` +
+            '必须显式确认（--yes 或交互确认）后才能安装。',
+          'C',
+        );
+      }
+    }
+
     const ctx: ExecutorContext = {
       homeDir: this.homeDir,
       manifest,
@@ -517,7 +561,6 @@ export class InstallExecutor {
       );
     }
 
-    if (this.beforeSaveRecord) this.beforeSaveRecord();
     const mcpInfo = await this.writeMcpConfigsIfPresent(
       manifest,
       clientType,
@@ -527,7 +570,20 @@ export class InstallExecutor {
       result.record.config_entries = mcpInfo.configEntries;
       result.record.backup_path = mcpInfo.backupPath ?? undefined;
     }
-    this.recordStore.save(result.record);
+    try {
+      if (this.beforeSaveRecord) this.beforeSaveRecord();
+      this.recordStore.save(result.record);
+    } catch (err) {
+      if (mcpInfo) {
+        try {
+          await removeMcpEntries(
+            mcpInfo.configFile,
+            mcpInfo.configEntries,
+          );
+        } catch { /* best-effort rollback */ }
+      }
+      throw err;
+    }
     this.reportInstallAsync(
       manifest,
       clientType,

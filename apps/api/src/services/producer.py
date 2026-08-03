@@ -1190,10 +1190,6 @@ def _deep_diff(
 # ── Install readiness validation ──────────────────────────────
 
 _REQUIRED_INSTALL_FIELDS = [
-    ("source.download_url", "source"),
-    ("source.commit_hash", "source"),
-    ("integrity.sha256", "integrity"),
-    ("integrity.download_size_bytes", "integrity"),
     ("compatibility", None),
     ("permissions", None),
     ("installation.method", "installation"),
@@ -1208,8 +1204,24 @@ def _validate_install_readiness(version: dict[str, object]) -> list[str]:
     Returns a list of human-readable missing-field descriptions.
     """
     missing: list[str] = []
+    installation = version.get("installation")
+    method = (
+        installation.get("method")
+        if isinstance(installation, dict)
+        else None
+    )
+    fields = list(_REQUIRED_INSTALL_FIELDS)
+    # 仅目录复制方式需要可下载 ZIP 制品与完整性摘要；
+    # npm/pip/docker/manual 由各自安装步骤承载。
+    if method == "copy_directory":
+        fields += [
+            ("source.download_url", "source"),
+            ("source.commit_hash", "source"),
+            ("integrity.sha256", "integrity"),
+            ("integrity.download_size_bytes", "integrity"),
+        ]
 
-    for field_path, parent_key in _REQUIRED_INSTALL_FIELDS:
+    for field_path, parent_key in fields:
         if parent_key is None:
             # Top-level field
             val = version.get(field_path)

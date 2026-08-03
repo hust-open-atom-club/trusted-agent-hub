@@ -233,6 +233,7 @@ runTest('install writes MCP config after confirmation', async () => {
   const apiClient = createApiClient(mockFetch(manifest));
   const executor = new InstallExecutor(apiClient, {
     homeDir: home,
+    confirmManagedInstall: async () => true,
     confirmMcpWrite: async () => true,
     runCommand: async (cmd, args) => {
       const prefixIdx = args.indexOf('--prefix');
@@ -286,6 +287,7 @@ runTest('install skips MCP write when confirmation is denied', async () => {
   const apiClient = createApiClient(mockFetch(manifest));
   const executor = new InstallExecutor(apiClient, {
     homeDir: home,
+    confirmManagedInstall: async () => true,
     confirmMcpWrite: async () => false,
     runCommand: async (cmd, args) => {
       const prefixIdx = args.indexOf('--prefix');
@@ -299,6 +301,39 @@ runTest('install skips MCP write when confirmation is denied', async () => {
   const result = await executor.installWithManifest(manifest, 'claude-code', {});
   assert.strictEqual(result.record.config_file, undefined);
   assert.strictEqual(fs.existsSync(resolveMcpConfigPath('claude-code', home)!), false);
+});
+
+runTest('record-save failure rolls back written MCP entries', async () => {
+  const home = path.join(TEST_HOME, 'e2e-3');
+  const manifest = makeNpmManifest();
+  const apiClient = createApiClient(mockFetch(manifest));
+  const executor = new InstallExecutor(apiClient, {
+    homeDir: home,
+    confirmManagedInstall: async () => true,
+    confirmMcpWrite: async () => true,
+    beforeSaveRecord: () => {
+      throw new Error('simulated record save failure');
+    },
+    runCommand: async (cmd, args) => {
+      const prefixIdx = args.indexOf('--prefix');
+      if (prefixIdx >= 0) {
+        fs.mkdirSync(args[prefixIdx + 1], { recursive: true });
+        fs.writeFileSync(path.join(args[prefixIdx + 1], 'package.json'), '{}', 'utf-8');
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.installWithManifest(manifest, 'claude-code', {}),
+    (err: unknown) => err instanceof Error && err.message.includes('simulated record save failure'),
+  );
+  // 安装失败后 MCP 配置条目应被回滚
+  const config = await readJsonConfig(resolveMcpConfigPath('claude-code', home)!);
+  assert.strictEqual(
+    'mcp-demo' in (config.mcpServers as Record<string, unknown>),
+    false,
+  );
 });
 
 // ---------------------------------------------------------------------------

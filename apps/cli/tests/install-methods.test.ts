@@ -12,10 +12,12 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { InstallExecutor, InstallError } from '../src/install-executor';
+import { UpdateExecutor } from '../src/update-executor';
 import { validateManifest, ManifestValidationError } from '../src/manifest-types';
 import type { InstallManifest } from '../src/manifest-types';
 import { createApiClient } from '../src/api-client';
 import type { FetchFn } from '../src/api-client';
+import { LocalInstallStore } from '../src/local-install-store';
 
 const TEST_HOME = path.join(
   os.tmpdir(),
@@ -233,6 +235,7 @@ async function makeExecutor(
   const apiClient = createApiClient(mockApiFetch());
   const executor = new InstallExecutor(apiClient, {
     homeDir: TEST_HOME,
+    confirmManagedInstall: async () => true,
     runCommand: runCommand || (async () => ({ exitCode: 0, stdout: '', stderr: '' })),
   });
   return executor;
@@ -395,6 +398,120 @@ runTest('grade E blocks non-copy installs before execution', async () => {
     (err: unknown) => (err as { name: string }).name === 'InstallBlockedError',
   );
   assert.strictEqual(ran, false);
+});
+
+runTest('managed install is fail-closed without confirmation callback', async () => {
+  let ran = false;
+  const manifest = makeMethodManifest('npm_install', {
+    action: 'npm_install',
+    package: 'demo',
+    version: '1.0.0',
+  });
+  const apiClient = createApiClient(mockApiFetch());
+  const executor = new InstallExecutor(apiClient, {
+    homeDir: TEST_HOME,
+    runCommand: async () => {
+      ran = true;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+  await assert.rejects(
+    () => executor.installWithManifest(manifest, 'claude-code', {}),
+    (err: unknown) =>
+      (err as { name: string }).name === 'InstallBlockedError',
+  );
+  assert.strictEqual(ran, false);
+});
+
+runTest('update works for npm installs with confirmation', async () => {
+  const home = path.join(
+    os.tmpdir(),
+    'tah-methods-upd-' + crypto.randomBytes(4).toString('hex'),
+  );
+  const v1 = makeMethodManifest('npm_install', {
+    action: 'npm_install',
+    package: 'demo-tool',
+    version: '1.0.0',
+  });
+  const v2 = validateManifest({
+    ...v1,
+    version: '2.0.0',
+    installation: {
+      ...v1.installation,
+      steps: [
+        {
+          action: 'npm_install',
+          package: 'demo-tool',
+          version: '2.0.0',
+          registry: 'https://registry.npmjs.org',
+        },
+      ],
+    },
+  }) as InstallManifest;
+
+  const fetcher: FetchFn = async (urlStr: string, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      return {
+        status: 201,
+        ok: true,
+        headers: new Headers(),
+        json: async () => ({}),
+        text: async () => '',
+      } as Response;
+    }
+    if (String(urlStr).includes('install-manifest')) {
+      return {
+        status: 200,
+        ok: true,
+        headers: new Headers(),
+        json: async () => v2,
+        text: async () => JSON.stringify(v2),
+      } as Response;
+    }
+    return {
+      status: 404,
+      ok: false,
+      headers: new Headers(),
+      json: async () => ({}),
+      text: async () => '',
+    } as Response;
+  };
+  const api = createApiClient(fetcher);
+  const runCommand = async (cmd: string, args: string[]) => {
+    const prefixIdx = args.indexOf('--prefix');
+    if (prefixIdx >= 0) {
+      fs.mkdirSync(args[prefixIdx + 1], { recursive: true });
+      fs.writeFileSync(
+        path.join(args[prefixIdx + 1], 'package.json'),
+        '{"name":"demo-tool"}\n',
+        'utf-8',
+      );
+    }
+    return { exitCode: 0, stdout: '', stderr: '' };
+  };
+
+  const installer = new InstallExecutor(api, {
+    homeDir: home,
+    confirmManagedInstall: async () => true,
+    runCommand,
+  });
+  await installer.installWithManifest(v1, 'claude-code', {});
+
+  const updater = new UpdateExecutor(api, {
+    homeDir: home,
+    confirmManagedInstall: async () => true,
+    runCommand,
+  });
+  const result = await updater.update('demo-tool', 'claude-code', {
+    yes: true,
+  });
+  assert.strictEqual(result.status, 'updated', result.message);
+
+  const store = new LocalInstallStore(home);
+  const record = store.find('demo-tool', 'claude-code');
+  assert.ok(record);
+  assert.strictEqual(record!.version, '2.0.0');
+  assert.strictEqual(record!.method, 'npm_install');
 });
 
 console.log(`\n  ✓ ${passed} passed` + (failed ? `  ✗ ${failed} failed` : '') + '\n');

@@ -45,6 +45,7 @@ import { CLIENT_INSTALL_ROOTS } from './client-paths';
 import { computeDirectoryDigest, ContentIntegrityError } from './content-integrity';
 import { sanitizeOutput } from './safe-output';
 import { ApiError } from './api-client';
+import type { RunCommand } from './executors/types';
 
 // ---------------------------------------------------------------------------
 // Status
@@ -96,6 +97,14 @@ export interface UpdateOptions {
   yes?: boolean;
   acceptHighRisk?: boolean;
   homeDir?: string;
+  /** 外部命令安装方式（npm/pip/docker）更新前的显式确认。 */
+  confirmManagedInstall?: (summary: {
+    method: string;
+    packageName: string;
+    version: string;
+  }) => boolean | Promise<boolean>;
+  /** 自定义命令执行器（测试注入），透传给内部 InstallExecutor。 */
+  runCommand?: RunCommand;
   /** Custom fetch implementation (for testing). */
   fetchFn?: typeof fetch;
   /** Test hook: passed through to InstallExecutor.beforeSaveRecord. */
@@ -156,6 +165,10 @@ export class UpdateExecutor {
   private readonly store: LocalInstallStore;
   private readonly fetchFn?: typeof fetch;
   private readonly beforeInstallSaveRecord?: () => void;
+  private readonly confirmManagedInstall?: (
+    summary: { method: string; packageName: string; version: string },
+  ) => boolean | Promise<boolean>;
+  private readonly runCommand?: RunCommand;
 
   constructor(
     private apiClient: ReturnType<typeof import('./api-client').createApiClient>,
@@ -166,6 +179,8 @@ export class UpdateExecutor {
     this.store = new LocalInstallStore(this.homeDir);
     this.fetchFn = options.fetchFn;
     this.beforeInstallSaveRecord = options._beforeInstallSaveRecord;
+    this.confirmManagedInstall = options.confirmManagedInstall;
+    this.runCommand = options.runCommand;
   }
 
   // -----------------------------------------------------------------------
@@ -515,6 +530,8 @@ export class UpdateExecutor {
         fetchFn: this.fetchFn,
         beforeActivate,
         beforeSaveRecord: this.beforeInstallSaveRecord,
+        confirmManagedInstall: this.confirmManagedInstall,
+        runCommand: this.runCommand,
       });
       installResult = await installExecutor.installWithManifest(manifest, clientType, {
         yes: options.yes,

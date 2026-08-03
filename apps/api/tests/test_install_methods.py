@@ -356,3 +356,40 @@ def test_producer_keeps_existing_matching_steps() -> None:
     assert repo.version["installation"]["steps"][0]["registry"] == (
         "https://registry.example.com"
     )
+
+
+def test_publish_readiness_requires_zip_fields_only_for_copy_directory() -> None:
+    from src.services.producer import _validate_install_readiness
+
+    npm_version = {
+        "compatibility": ["claude-code"],
+        "permissions": {"shell": {"allowed": False}},
+        "installation": {
+            "method": "npm_install",
+            "target_client": "claude-code",
+            "steps": [
+                {
+                    "action": "npm_install",
+                    "package": "demo",
+                    "version": "1.0.0",
+                }
+            ],
+        },
+        "trust_score": {"risk_summary": {"grade": "B"}},
+    }
+    assert _validate_install_readiness(npm_version) == []
+
+    copy_version = dict(npm_version)
+    copy_version["installation"] = {
+        "method": "copy_directory",
+        "target_client": "claude-code",
+        "steps": [
+            {"action": "download", "url": "https://example.com/a.zip"},
+            {"action": "verify", "algorithm": "sha256", "checksum": "a" * 64},
+            {"action": "extract"},
+            {"action": "copy", "source": "x/", "destination": "y/"},
+        ],
+    }
+    missing = _validate_install_readiness(copy_version)
+    assert any("download_url" in item for item in missing)
+    assert any("sha256" in item for item in missing)

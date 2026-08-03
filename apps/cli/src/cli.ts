@@ -177,6 +177,29 @@ program
     const clientType = options.client || 'claude-code';
     let manifestVersion = '';
     const executor = new InstallExecutor(client, {
+      confirmManagedInstall: async (summary) => {
+        console.log('');
+        console.log(
+          chalk.yellow(
+            `  ${summary.method} 将执行外部命令安装 ${summary.packageName}@${summary.version}`,
+          ),
+        );
+        console.log(
+          chalk.dim(
+            '  安装会执行包管理器的安装脚本，请确认来源可信后再继续。',
+          ),
+        );
+        if (options.yes) return true;
+        const confirm = createTerminalConfirm();
+        if (!confirm) return false;
+        return await confirm({
+          packageName: summary.packageName,
+          version: summary.version,
+          client: clientType,
+          installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
+          contentState: 'external-command',
+        });
+      },
       confirmMcpWrite: async (summary: McpWriteSummary) => {
         console.log('');
         console.log(chalk.yellow('  MCP config write requires confirmation:'));
@@ -243,6 +266,7 @@ program
     // ── Display package info ──
     console.log(`  ${chalk.dim('Package:')}  ${chalk.cyan(manifest.name)}  ${chalk.dim('v' + manifest.version)}`);
     console.log(`  ${chalk.dim('Type:')}     ${PACKAGE_TYPE_LABELS[manifest.type as PackageType] || manifest.type}`);
+    console.log(`  ${chalk.dim('Method:')}   ${manifest.installation.method}`);
     const gradeVal = manifest.risk_summary.grade || null;
     if (gradeVal) {
       const gradeLabel = GRADE_LABELS[gradeVal as Grade] || gradeVal;
@@ -516,7 +540,26 @@ program
 
     const spinner = ora('Checking for updates…').start();
 
-    const executor = new UpdateExecutor(client);
+    const executor = new UpdateExecutor(client, {
+      confirmManagedInstall: async (summary) => {
+        console.log('');
+        console.log(
+          chalk.yellow(
+            `  ${summary.method} 将执行外部命令更新 ${summary.packageName}@${summary.version}`,
+          ),
+        );
+        if (options.yes) return true;
+        const confirm = createTerminalConfirm();
+        if (!confirm) return false;
+        return await confirm({
+          packageName: summary.packageName,
+          version: summary.version,
+          client: clientType,
+          installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
+          contentState: 'external-command',
+        });
+      },
+    });
     let result: UpdateResult;
     try {
       result = await executor.update(name, clientType, {
