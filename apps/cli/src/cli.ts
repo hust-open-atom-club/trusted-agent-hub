@@ -14,6 +14,7 @@ import type { UpdateResult } from './update-executor';
 import { createTerminalConfirm } from './confirm';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest } from './manifest-types';
+import type { McpWriteSummary } from './config-writer';
 import { client, ApiError } from './api-client';
 import type { PackageSummary, VersionDetail } from './api-client';
 import {
@@ -174,7 +175,25 @@ program
     acceptHighRisk?: boolean;
   }) => {
     const clientType = options.client || 'claude-code';
-    const executor = new InstallExecutor(client);
+    let manifestVersion = '';
+    const executor = new InstallExecutor(client, {
+      confirmMcpWrite: async (summary: McpWriteSummary) => {
+        console.log('');
+        console.log(chalk.yellow('  MCP config write requires confirmation:'));
+        console.log(`  ${chalk.dim('File:')} ${summary.filePath}`);
+        for (const line of summary.diff) console.log(line);
+        if (options.yes) return true;
+        const confirm = createTerminalConfirm();
+        if (!confirm) return false;
+        return await confirm({
+          packageName: name,
+          version: manifestVersion || '—',
+          client: clientType,
+          installPath: summary.filePath,
+          contentState: 'mcp-config',
+        });
+      },
+    });
 
     // ── Display intent ──
     console.log('');
@@ -209,6 +228,7 @@ program
     let manifest: InstallManifest;
     try {
       manifest = validateManifest(manifestRaw);
+      manifestVersion = manifest.version;
     } catch (err: unknown) {
       if (err instanceof ManifestValidationError) {
         fatal(
@@ -289,7 +309,9 @@ program
 
       console.log('');
       console.log(`  ${chalk.dim('Installed to:')} ${chalk.cyan(result.targetDir)}`);
-      console.log(`  ${chalk.dim('SHA-256:')}      ${chalk.dim(result.sha256.slice(0, 16))}…`);
+      if (result.sha256) {
+        console.log(`  ${chalk.dim('SHA-256:')}      ${chalk.dim(result.sha256.slice(0, 16))}…`);
+      }
       console.log(`  ${chalk.dim('Record:')}       ${chalk.dim('~/.trusted-agent-hub/installs.json')}`);
 
       // Post-install message

@@ -618,6 +618,13 @@ export class UpdateExecutor {
           ...savedRecord,
           installed_at: oldRecordSnapshot.installed_at,
           updated_at: new Date().toISOString(),
+          // 保留旧的 MCP 配置写入信息（更新流程不自动改写用户配置）
+          config_file:
+            oldRecordSnapshot.config_file ?? savedRecord.config_file,
+          config_entries:
+            oldRecordSnapshot.config_entries ?? savedRecord.config_entries,
+          backup_path:
+            oldRecordSnapshot.backup_path ?? savedRecord.backup_path,
         };
         this.store.save(patchedRecord);
       }
@@ -640,7 +647,7 @@ export class UpdateExecutor {
         localVersion: oldRecordSnapshot.version,
         remoteVersion: manifest.version,
         installPath: installResult.targetDir,
-        artifactSha256: installResult.sha256,
+        artifactSha256: installResult.sha256 ?? undefined,
       },
     );
   }
@@ -679,7 +686,7 @@ export class UpdateExecutor {
     manifest: InstallManifest,
     client: string,
     installPath: string,
-    sha256: string,
+    _sha256: string | null,
   ): void {
     this.apiClient.recordInstall({
       package_name: manifest.name,

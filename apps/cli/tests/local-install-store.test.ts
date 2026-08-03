@@ -56,6 +56,10 @@ function makeRecord(overrides: Partial<LocalInstallRecord> = {}): LocalInstallRe
     integrity_verified: true,
     installed_at: '2026-07-22T00:00:00.000Z',
     manifest_version: '1.0',
+    method: 'copy_directory',
+    config_file: undefined,
+    config_entries: undefined,
+    backup_path: undefined,
     content_hash_algorithm: 'sha256-tree-v1',
     content_sha256: 'b'.repeat(64),
     ...overrides,
@@ -446,6 +450,7 @@ async function main() {
       content_hash_algorithm: 'sha256-tree-v1',
       content_sha256: 'b'.repeat(64),
       updated_at: '2026-07-22T01:00:00.000Z',
+      method: 'copy_directory',
     });
     const recordKeys = Object.keys(full).sort();
     const fieldKeys = [...RECORD_COMPARE_FIELDS].sort();

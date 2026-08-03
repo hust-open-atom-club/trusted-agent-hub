@@ -15,6 +15,7 @@
 
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
@@ -155,15 +156,20 @@ export class LocalInstallInspector {
       );
     }
 
-    // 3. Resolve client root; install_path must be strict child
+    // 3. Resolve install root; install_path must be strict child.
+    //    copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed
     let clientRoot: string;
     try {
-      clientRoot = getClientRoot(record.client, this.homeDir);
+      if ((record.method ?? 'copy_directory') === 'copy_directory') {
+        clientRoot = getClientRoot(record.client, this.homeDir);
+      } else {
+        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
+      }
     } catch {
       return makeResult(
         record,
         'unsafe_path',
-        `Cannot resolve client root for "${record.client}".`,
+        `Cannot resolve install root for "${record.client}".`,
       );
     }
 
@@ -171,7 +177,7 @@ export class LocalInstallInspector {
       return makeResult(
         record,
         'unsafe_path',
-        `Install path "${record.install_path}" is outside the client root.`,
+        `Install path "${record.install_path}" is outside the install root.`,
       );
     }
 

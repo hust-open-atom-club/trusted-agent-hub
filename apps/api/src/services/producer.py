@@ -207,44 +207,63 @@ class ProducerService:
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")
+            install_method = str(
+                (version.get("installation") or {}).get("method")
+                or "copy_directory"
+            )
 
-            if repo_url and package_name and pkg_version:
-                try:
-                    artifact = build_artifact(
-                        repo_url=repo_url,
-                        commit_hash=str(commit_hash),
-                        package_name=package_name,
-                        version=str(pkg_version),
-                        local_source_dir=local_source_dir,
-                    )
-                    self._apply_artifact_to_version(
-                        version_id,
-                        artifact,
-                        package_name,
-                        pkg_version,
-                        str(commit_hash),
-                    )
-                except ArtifactError as exc:
-                    self.repository.update_version_status(version_id, "error")
-                    self.repository.update_version_data(
-                        version_id,
-                        {"scan_error": f"安装产物打包失败: {exc}"},
-                    )
-                    self.repository.create_audit_log(
-                        action=AuditAction.SCAN_COMPLETE.value,
-                        target_type="version",
-                        target_id=version_id,
-                        operator_id="system",
-                        detail={"error": f"artifact packaging failed: {exc}"},
-                    )
-                    return
-                finally:
-                    # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
-                    if local_source_dir:
-                        force_rmtree(local_source_dir)
-            elif local_source_dir:
-                # 无打包消费方（缺少 repo_url 等），直接清理扫描遗留目录
-                force_rmtree(local_source_dir)
+            if install_method == "copy_directory":
+                if repo_url and package_name and pkg_version:
+                    try:
+                        artifact = build_artifact(
+                            repo_url=repo_url,
+                            commit_hash=str(commit_hash),
+                            package_name=package_name,
+                            version=str(pkg_version),
+                            local_source_dir=local_source_dir,
+                        )
+                        self._apply_artifact_to_version(
+                            version_id,
+                            artifact,
+                            package_name,
+                            pkg_version,
+                            str(commit_hash),
+                        )
+                    except ArtifactError as exc:
+                        self.repository.update_version_status(
+                            version_id, "error"
+                        )
+                        self.repository.update_version_data(
+                            version_id,
+                            {"scan_error": f"安装产物打包失败: {exc}"},
+                        )
+                        self.repository.create_audit_log(
+                            action=AuditAction.SCAN_COMPLETE.value,
+                            target_type="version",
+                            target_id=version_id,
+                            operator_id="system",
+                            detail={
+                                "error": f"artifact packaging failed: {exc}"
+                            },
+                        )
+                        return
+                    finally:
+                        # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
+                        if local_source_dir:
+                            force_rmtree(local_source_dir)
+                elif local_source_dir:
+                    force_rmtree(local_source_dir)
+            else:
+                # npm/pip/docker/manual 不需要 ZIP 制品：
+                # 按安装方式生成 manifest 步骤
+                self._apply_installation_steps_to_version(
+                    version_id,
+                    package_name,
+                    pkg_version,
+                    install_method,
+                )
+                if local_source_dir:
+                    force_rmtree(local_source_dir)
 
         # 保存扫描报告
         file_contents = full_report.get("file_contents", {})
@@ -341,6 +360,83 @@ class ProducerService:
             "post_install_message": "安装完成。请在客户端中确认工具可用。",
         }
 
+        self.repository.update_version_data(version_id, data)
+
+    def _apply_installation_steps_to_version(
+        self,
+        version_id: str,
+        package_name: str,
+        pkg_version: str,
+        method: str,
+    ) -> None:
+        """为非 ZIP 安装方式生成 Manifest 安装步骤（npm/pip/docker/manual）。
+
+        若提交的元数据已带同 action 的步骤，则保留；否则生成默认步骤。
+        """
+        version = self.repository.get_version(version_id)
+        if version is None:
+            return
+        data = dict(version)
+        installation = dict(data.get("installation") or {})
+        existing_steps = installation.get("steps") or []
+        if (
+            existing_steps
+            and isinstance(existing_steps[0], dict)
+            and existing_steps[0].get("action") == method
+        ):
+            return
+
+        target_client = (
+            str(installation.get("target_client") or "")
+            or str((data.get("compatibility") or ["claude-code"])[0])
+        )
+        if method == "npm_install":
+            step: dict[str, object] = {
+                "action": "npm_install",
+                "package": package_name,
+                "version": pkg_version,
+                "registry": "https://registry.npmjs.org",
+            }
+        elif method == "pip_install":
+            step = {
+                "action": "pip_install",
+                "package": package_name,
+                "version": pkg_version,
+                "index_url": "https://pypi.org/simple",
+            }
+        elif method == "docker_run":
+            deps = data.get("dependencies") or {}
+            docker_images = []
+            if isinstance(deps, dict):
+                docker = deps.get("docker") or []
+                docker_images = [
+                    str(item.get("image") or "")
+                    for item in docker
+                    if isinstance(item, dict) and item.get("image")
+                ]
+            image = docker_images[0] if docker_images else package_name
+            step = {
+                "action": "docker_run",
+                "image": image,
+                "tag": pkg_version,
+                "ports": [],
+                "volumes": [],
+                "env": [],
+            }
+        else:  # manual_steps
+            step = {
+                "action": "manual_steps",
+                "title": package_name,
+                "text": (
+                    str(installation.get("post_install_message") or "")
+                    or f"请按 {package_name}@{pkg_version} 包说明手动安装"
+                ),
+            }
+
+        installation["method"] = method
+        installation["target_client"] = target_client
+        installation["steps"] = [step]
+        data["installation"] = installation
         self.repository.update_version_data(version_id, data)
 
     def handle_scan_error(self, version_id: str, error: str) -> None:

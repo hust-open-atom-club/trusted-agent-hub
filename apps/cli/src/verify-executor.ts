@@ -17,6 +17,7 @@
 
 import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
@@ -24,6 +25,7 @@ import { computeDirectoryDigest, ContentIntegrityError, validateAncestorChain } 
 import { isStrictChildPath, getClientRoot, isSupportedClient, resolveManifestDestination } from './client-paths';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest, CopyStep } from './manifest-types';
+import { readJsonConfig } from './config-writer';
 import { ApiError } from './api-client';
 import { sanitizeOutput } from './safe-output';
 
@@ -206,10 +208,15 @@ export class VerifyExecutor {
       );
     }
 
-    // 3. Check install_path is a strict child of the client root
+    // 3. Check install_path is a strict child of the install root
+    //    (copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed)
     let clientRoot: string;
     try {
-      clientRoot = getClientRoot(record.client, this.homeDir);
+      if ((record.method ?? 'copy_directory') === 'copy_directory') {
+        clientRoot = getClientRoot(record.client, this.homeDir);
+      } else {
+        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
+      }
     } catch {
       return result(
         'unsupported_client',
@@ -225,7 +232,7 @@ export class VerifyExecutor {
         'unsafe_path',
         packageName,
         client,
-        `Install path "${record.install_path}" is outside the client root. The record may have been tampered with.`,
+        `Install path "${record.install_path}" is outside the install root. The record may have been tampered with.`,
         { version: record.version, installPath: record.install_path },
       );
     }
@@ -485,34 +492,14 @@ export class VerifyExecutor {
       throw err;
     }
 
-    // 10. Verify manifest installation method — only copy_directory is
-    //     supported by the current installer and verifier.
-    if (manifest.installation.method !== 'copy_directory') {
+    // 10. Verify manifest installation method matches the install record
+    const recordMethod = record.method ?? 'copy_directory';
+    if (manifest.installation.method !== recordMethod) {
       return result(
         'manifest_mismatch',
         packageName,
         client,
-        `Manifest installation method is not supported. Only copy_directory is accepted.`,
-        {
-          version: record.version,
-          installPath: record.install_path,
-          artifactSha256: record.sha256,
-          expectedContentSha256,
-          actualContentSha256: actualDigest,
-        },
-      );
-    }
-
-    // Require exactly one copy step
-    const copySteps = manifest.installation.steps.filter(
-      (s): s is CopyStep => s.action === 'copy',
-    );
-    if (copySteps.length !== 1) {
-      return result(
-        'manifest_mismatch',
-        packageName,
-        client,
-        `Manifest must contain exactly one copy step (found ${copySteps.length}).`,
+        `Manifest installation method (${manifest.installation.method}) does not match the install record (${recordMethod}).`,
         {
           version: record.version,
           installPath: record.install_path,
@@ -588,62 +575,128 @@ export class VerifyExecutor {
       );
     }
 
-    // Compare artifact SHA-256
-    if (manifest.integrity.sha256 !== record.sha256) {
-      return result(
-        'manifest_mismatch',
-        packageName,
-        client,
-        `Manifest artifact SHA-256 does not match the install record.`,
-        {
-          version: record.version,
-          installPath: record.install_path,
-          artifactSha256: record.sha256,
-          expectedContentSha256,
-          actualContentSha256: actualDigest,
-        },
+    if (recordMethod === 'copy_directory') {
+      // Require exactly one copy step
+      const copySteps = manifest.installation.steps.filter(
+        (s): s is CopyStep => s.action === 'copy',
       );
+      if (copySteps.length !== 1) {
+        return result(
+          'manifest_mismatch',
+          packageName,
+          client,
+          `Manifest must contain exactly one copy step (found ${copySteps.length}).`,
+          {
+            version: record.version,
+            installPath: record.install_path,
+            artifactSha256: record.sha256,
+            expectedContentSha256,
+            actualContentSha256: actualDigest,
+          },
+        );
+      }
+
+      // Compare artifact SHA-256
+      if (!manifest.integrity || manifest.integrity.sha256 !== record.sha256) {
+        return result(
+          'manifest_mismatch',
+          packageName,
+          client,
+          `Manifest artifact SHA-256 does not match the install record.`,
+          {
+            version: record.version,
+            installPath: record.install_path,
+            artifactSha256: record.sha256,
+            expectedContentSha256,
+            actualContentSha256: actualDigest,
+          },
+        );
+      }
+
+      // 12. Resolve copy destination and compare with record.install_path
+      const copyStep = copySteps[0];
+      let expectedPath: string;
+      try {
+        expectedPath = resolveManifestDestination(
+          copyStep.destination,
+          record.client,
+          clientRoot,
+        );
+      } catch {
+        return result(
+          'manifest_mismatch',
+          packageName,
+          client,
+          'Manifest copy destination could not be resolved.',
+          {
+            version: record.version,
+            installPath: record.install_path,
+            artifactSha256: record.sha256,
+            expectedContentSha256,
+            actualContentSha256: actualDigest,
+          },
+        );
+      }
+
+      if (expectedPath !== record.install_path) {
+        return result(
+          'manifest_mismatch',
+          packageName,
+          client,
+          `Manifest destination does not match the install record path.`,
+          {
+            version: record.version,
+            installPath: record.install_path,
+            artifactSha256: record.sha256,
+            expectedContentSha256,
+            actualContentSha256: actualDigest,
+          },
+        );
+      }
     }
 
-    // 12. Resolve copy destination and compare with record.install_path
-    const copyStep = copySteps[0];
-    let expectedPath: string;
-    try {
-      expectedPath = resolveManifestDestination(
-        copyStep.destination,
-        record.client,
-        clientRoot,
-      );
-    } catch {
-      return result(
-        'manifest_mismatch',
-        packageName,
-        client,
-        'Manifest copy destination could not be resolved.',
-        {
-          version: record.version,
-          installPath: record.install_path,
-          artifactSha256: record.sha256,
-          expectedContentSha256,
-          actualContentSha256: actualDigest,
-        },
-      );
-    }
-
-    if (expectedPath !== record.install_path) {
-      return result(
-        'manifest_mismatch',
-        packageName,
-        client,
-        `Manifest destination does not match the install record path.`,
-        {
-          version: record.version,
-          installPath: record.install_path,
-          artifactSha256: record.sha256,
-          expectedContentSha256,
-          actualContentSha256: actualDigest,
-        },
-      );
+    // 12.5 Verify MCP config entries recorded at install time still exist
+    if (record.config_file && record.config_entries?.length) {
+      try {
+        const config = await readJsonConfig(record.config_file);
+        const mcpServers =
+          config.mcpServers &&
+          typeof config.mcpServers === 'object' &&
+          !Array.isArray(config.mcpServers)
+            ? (config.mcpServers as Record<string, unknown>)
+            : {};
+        for (const key of record.config_entries) {
+          if (!(key in mcpServers)) {
+            return result(
+              'manifest_mismatch',
+              packageName,
+              client,
+              `MCP config entry "${key}" is missing from ${record.config_file}.`,
+              {
+                version: record.version,
+                installPath: record.install_path,
+                artifactSha256: record.sha256,
+                expectedContentSha256,
+                actualContentSha256: actualDigest,
+              },
+            );
+          }
+        }
+      } catch {
+        return result(
+          'manifest_mismatch',
+          packageName,
+          client,
+          `MCP config file could not be read: ${record.config_file}`,
+          {
+            version: record.version,
+            installPath: record.install_path,
+            artifactSha256: record.sha256,
+            expectedContentSha256,
+            actualContentSha256: actualDigest,
+          },
+        );
+      }
     }
 
     // 13. All checks passed — valid

@@ -14,6 +14,7 @@ from .common import (
 )
 from .install import (
     CopyInstallationStep,
+    DockerRunInstallationStep,
     DownloadInstallationStep,
     ExtractInstallationStep,
     InstallManifest,
@@ -22,6 +23,9 @@ from .install import (
     ManifestInstallationStep,
     ManifestIntegrity,
     ManifestSource,
+    ManualStepsInstallationStep,
+    NpmInstallationStep,
+    PipInstallationStep,
     VerifyInstallationStep,
 )
 from .feedback import (
@@ -73,6 +77,7 @@ __all__ = [
     "CopyInstallationStep",
     "CredentialsPermissions",
     "Dependencies",
+    "DockerRunInstallationStep",
     "DownloadInstallationStep",
     "EnvironmentPermissions",
     "EntryPoints",
@@ -101,7 +106,9 @@ __all__ = [
     "ManifestInstallationStep",
     "ManifestIntegrity",
     "ManifestSource",
+    "ManualStepsInstallationStep",
     "NetworkPermissions",
+    "NpmInstallationStep",
     "Owner",
     "PackageDetail",
     "PackageListQuery",
@@ -111,6 +118,7 @@ __all__ = [
     "PackageType",
     "Page",
     "Permissions",
+    "PipInstallationStep",
     "RiskSummary",
     "ScanFinding",
     "ScanReport",

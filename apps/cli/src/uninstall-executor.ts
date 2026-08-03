@@ -43,6 +43,7 @@ import {
 } from './client-paths';
 import { sanitizeOutput } from './safe-output';
 import type { ConfirmCallback } from './confirm';
+import { removeMcpEntries } from './config-writer';
 
 // ---------------------------------------------------------------------------
 // Status
@@ -62,6 +63,7 @@ export type UninstallStatus =
   | 'confirmation_required'
   | 'record_update_failed'
   | 'cleanup_failed'
+  | 'config_remove_failed'
   | 'rollback_failed';
 
 const SUCCESS_STATUSES = new Set<UninstallStatus>([
@@ -168,7 +170,18 @@ const defaultFileOps: UninstallFileOps = {
  */
 function recordsFieldsMatch(a: LocalInstallRecord, b: LocalInstallRecord): boolean {
   for (const key of RECORD_COMPARE_FIELDS) {
-    if (a[key] !== b[key]) return false;
+    const av = a[key];
+    const bv = b[key];
+    if (Array.isArray(av) && Array.isArray(bv)) {
+      if (
+        av.length !== bv.length ||
+        av.some((value, index) => value !== bv[index])
+      ) {
+        return false;
+      }
+    } else if (av !== bv) {
+      return false;
+    }
   }
   return true;
 }
@@ -291,16 +304,21 @@ export class UninstallExecutor {
       });
     }
 
-    // 3. Resolve client root; install_path must be strict child
+    // 3. Resolve install root; install_path must be strict child.
+    //    copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed
     let clientRoot: string;
     try {
-      clientRoot = getClientRoot(record.client, this.homeDir);
+      if ((record.method ?? 'copy_directory') === 'copy_directory') {
+        clientRoot = getClientRoot(record.client, this.homeDir);
+      } else {
+        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
+      }
     } catch {
       return makeResult('unsupported_client', {
         packageName,
         client,
         version: record.version,
-        message: `Cannot resolve client root for "${record.client}".`,
+        message: `Cannot resolve install root for "${record.client}".`,
       });
     }
 
@@ -310,7 +328,7 @@ export class UninstallExecutor {
         client,
         version: record.version,
         installPath: record.install_path,
-        message: 'Install path is outside the client root.',
+        message: 'Install path is outside the install root.',
       });
     }
 
@@ -373,7 +391,7 @@ export class UninstallExecutor {
 
     // 5. Branch: target missing → stale record cleanup
     if (!targetExists) {
-      return this.handleStaleRecord(record, clientRoot);
+      return await this.handleStaleRecord(record, clientRoot);
     }
 
     // 6. Target must be a directory (not symlink)
@@ -490,10 +508,10 @@ export class UninstallExecutor {
   // Stale record (target directory missing)
   // -----------------------------------------------------------------------
 
-  private handleStaleRecord(
+  private async handleStaleRecord(
     record: LocalInstallRecord,
     clientRoot: string,
-  ): UninstallResult {
+  ): Promise<UninstallResult> {
     const context: ResultContext = {
       packageName: record.package_name,
       client: record.client,
@@ -560,6 +578,19 @@ export class UninstallExecutor {
         ...context,
         message: 'Target directory reappeared during stale cleanup.',
       });
+    }
+
+    // 先移除 MCP 配置条目（若记录声明过），失败则保留记录供人工处理
+    if (record.config_file && record.config_entries?.length) {
+      try {
+        await removeMcpEntries(record.config_file, record.config_entries);
+      } catch {
+        return makeResult('config_remove_failed', {
+          ...context,
+          message:
+            'MCP config entries could not be removed; record kept for manual review.',
+        });
+      }
     }
 
     // Atomically remove the stale record (pass expected snapshot for
@@ -748,6 +779,45 @@ export class UninstallExecutor {
         message:
           'The filesystem changed during uninstall; manual recovery is required.',
       });
+    }
+
+    // --- 移除 MCP 配置条目（若有），失败则回滚目录 -------------------------
+    if (record.config_file && record.config_entries?.length) {
+      try {
+        await removeMcpEntries(record.config_file, record.config_entries);
+      } catch {
+        let canRestore = false;
+        try {
+          canRestore =
+            sameDirectoryIdentity(
+              latestIdentity,
+              this.fileOps.lstat(quarantinePath),
+            ) && !this.fileOps.exists(record.install_path);
+        } catch {
+          canRestore = false;
+        }
+        if (canRestore) {
+          try {
+            this.fileOps.rename(quarantinePath, record.install_path);
+            return makeResult('config_remove_failed', {
+              ...context,
+              message:
+                'MCP config entries could not be removed; the install directory was restored.',
+            });
+          } catch {
+            return makeResult('rollback_failed', {
+              ...context,
+              message:
+                'MCP config removal failed and the directory could not be restored.',
+            });
+          }
+        }
+        return makeResult('rollback_failed', {
+          ...context,
+          message:
+            'MCP config removal failed and automatic recovery is unsafe.',
+        });
+      }
     }
 
     // --- Atomically remove record ------------------------------------------

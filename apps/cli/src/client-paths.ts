@@ -14,6 +14,7 @@ import * as os from 'os';
 
 export const CLIENT_INSTALL_ROOTS: Record<string, string> = {
   'claude-code': '.claude/skills',
+  'claude-code-plugin': '.claude/plugins',
   cursor: '.cursor/skills',
 } as const;
 
@@ -24,6 +25,7 @@ export const CLIENT_INSTALL_ROOTS: Record<string, string> = {
  */
 export const CLIENT_MANIFEST_ROOTS: Record<string, string> = {
   'claude-code': '~/.claude/skills/',
+  'claude-code-plugin': '~/.claude/plugins/',
   cursor: '~/.cursor/skills/',
 } as const;
 

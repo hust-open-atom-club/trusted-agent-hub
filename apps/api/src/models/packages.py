@@ -30,7 +30,7 @@ class Source(StrictContractModel):
     repo: str | None = None
     ref_type: str | None = None
     ref: str
-    commit_hash: str
+    commit_hash: str | None = None
     verified_owner: bool = False
     stars: int | None = None
     last_commit_at: str | None = None

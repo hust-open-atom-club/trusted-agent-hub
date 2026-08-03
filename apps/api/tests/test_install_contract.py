@@ -213,13 +213,12 @@ def test_install_manifest_collects_all_unsafe_fields_deterministically(
                 "Install manifest for 'demo-filesystem@1.0.0' "
                 "is unavailable."
             ),
-            "details": {
-                "invalid_fields": [
-                    "source.download_url",
-                    "integrity.sha256",
-                    "installation.steps",
-                    "installation.target_client",
-                    "installation.method",
+                "details": {
+                    "invalid_fields": [
+                        "source.repository_url",
+                        "installation.steps",
+                        "installation.target_client",
+                        "installation.method",
                     "permissions",
                     "risk_summary.grade",
                 ]
@@ -267,12 +266,20 @@ def test_install_manifest_openapi_contract_is_strict(client: TestClient) -> None
         "#/components/schemas/VerifyInstallationStep",
         "#/components/schemas/ExtractInstallationStep",
         "#/components/schemas/CopyInstallationStep",
+        "#/components/schemas/NpmInstallationStep",
+        "#/components/schemas/PipInstallationStep",
+        "#/components/schemas/DockerRunInstallationStep",
+        "#/components/schemas/ManualStepsInstallationStep",
     }
     for schema_name, required in {
         "DownloadInstallationStep": ["action", "url"],
         "VerifyInstallationStep": ["action", "algorithm", "checksum"],
         "ExtractInstallationStep": ["action", "archive"],
         "CopyInstallationStep": ["action", "source", "destination"],
+        "NpmInstallationStep": ["action", "package", "version"],
+        "PipInstallationStep": ["action", "package"],
+        "DockerRunInstallationStep": ["action", "image"],
+        "ManualStepsInstallationStep": ["action", "text"],
     }.items():
         assert schemas[schema_name]["additionalProperties"] is False
         assert schemas[schema_name]["required"] == required
@@ -282,7 +289,6 @@ def test_install_manifest_openapi_contract_is_strict(client: TestClient) -> None
         "type",
         "description",
         "source",
-        "integrity",
         "installation",
         "permissions",
         "risk_summary",
