@@ -736,6 +736,53 @@ def test_feedback_absent_keeps_neutral_default() -> None:
     assert dim["details"]["total_ratings"] == 0
 
 
+def test_feedback_installs_boost_score_without_ratings() -> None:
+    """No ratings yet: install adoption lifts user_feedback from neutral 50."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 50,
+            "reports_count": 0,
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["score"] == 70
+    assert dim["details"]["total_installs"] == 50
+
+
+def test_feedback_installs_tiers_and_ceiling() -> None:
+    """Install tiers: 0->50, 1->55, 5->60, 20->70, 100+->80 (capped)."""
+    fx = _load_fixture("b1_code_review_skill")
+
+    def score_for(installs: int) -> int:
+        result = rate(
+            package_metadata=fx["package_metadata"],
+            scan_report=fx["scan_report"],
+            author_history=fx["author_history"],
+            review_records=fx["review_records"],
+            feedback={
+                "avg_rating": 0,
+                "total_ratings": 0,
+                "total_installs": installs,
+                "reports_count": 0,
+            },
+        )
+        return result["dimensions"]["user_feedback"]["score"]
+
+    assert score_for(0) == 50
+    assert score_for(1) == 55
+    assert score_for(5) == 60
+    assert score_for(20) == 70
+    assert score_for(100) == 80
+    assert score_for(1000) == 80
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

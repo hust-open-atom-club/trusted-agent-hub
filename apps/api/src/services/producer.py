@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -27,6 +28,8 @@ _SEMVER_RE = re.compile(
     r"(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?"
     r"(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ProducerServiceError(Exception):
@@ -726,6 +729,18 @@ class ProducerService:
             target_id=version_id,
             operator_id=operator_id,
         )
+
+        # 发布后使用真实审核信号重算信任评分
+        # （manual_review / user_feedback 维度反映发布后的平台数据）
+        try:
+            from src.services.trust_refresh import TrustScoreRefreshService
+
+            TrustScoreRefreshService(self.repository).refresh(version_id)
+        except Exception:
+            logger.exception(
+                "trust score refresh failed after publish for %s",
+                version_id,
+            )
 
         return ReviewResponse(
             version_id=version_id,

@@ -75,6 +75,7 @@ def _collect_author_history(
     repository: Any,
     *,
     submitter_id: str | None,
+    exclude_version_id: str | None = None,
 ) -> dict[str, Any]:
     versions: list[dict[str, Any]] = []
     if submitter_id:
@@ -89,6 +90,12 @@ def _collect_author_history(
     scores: list[float] = []
     violations = 0
     for version in versions:
+        version_key = str(
+            version.get("id") or version.get("version_id") or ""
+        )
+        if exclude_version_id and version_key == exclude_version_id:
+            # 排除正在评分的版本自身，避免“评分→历史均分→再评分”自指循环
+            continue
         status = str(version.get("status", "")).lower()
         package_id = str(version.get("package_id", ""))
         if status in ("published", "approved", "pending_review"):
@@ -163,6 +170,7 @@ def collect_platform_signals(
         "author_history": _collect_author_history(
             repository,
             submitter_id=submitter_id or str(version.get("submitter_id") or ""),
+            exclude_version_id=version_id,
         ),
         "review_records": _collect_review_records(
             repository,

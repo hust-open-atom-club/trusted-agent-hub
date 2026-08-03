@@ -518,6 +518,84 @@ class TestIntegrationAuditFlow:
         assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
         assert "非法" in resp.json()["detail"] or "not allowed" in resp.json()["detail"].lower()
 
+    def test_case6_publish_refreshes_trust_score_with_real_signals(self):
+        """Publish 后评分用真实审核/安装信号刷新（manual_review / user_feedback）。"""
+        _needs_db()
+        client = _get_client()
+
+        stoken = _register_and_login_as(
+            client, _random_email("sub"), "submitter"
+        )["access_token"]
+        rtoken = _register_and_login_as(
+            client, _random_email("rev"), "reviewer"
+        )["access_token"]
+        atoken = _register_and_login_as(
+            client, _random_email("adm"), "admin"
+        )["access_token"]
+
+        pkg = _create_package(
+            client, stoken, f"test-refresh-{uuid.uuid4().hex[:6]}"
+        )
+        ver = _create_version(client, stoken, pkg["id"])
+        _CLEANUP_IDS.append(ver["id"])
+
+        _simulate_scan_complete(ver["id"], SCAN_CLEAN)
+
+        client.post(
+            f"/api/v0/producer/versions/{ver['id']}/reviews",
+            json={"conclusion": "approved", "comment": "OK"},
+            headers={"Authorization": f"Bearer {rtoken}"},
+        )
+        resp = client.post(
+            f"/api/v0/producer/versions/{ver['id']}/publish",
+            headers={"Authorization": f"Bearer {atoken}"},
+        )
+        assert resp.status_code == 200, f"Publish failed: {resp.text}"
+
+        # 发布后评分应已用 approved 审核信号重算并持久化
+        dbv = _get_db_version(ver["id"])
+        trust_score = (dbv["data"] or {}).get("trust_score")
+        assert trust_score is not None, (
+            "publish refresh should persist trust_score"
+        )
+        manual = trust_score["dimensions"]["manual_review"]["details"]
+        assert manual["review_status"] == "approved"
+        assert int(trust_score["score"]) > 0
+
+        # 匿名安装上报后，GET trust-score 应惰性刷新 user_feedback 维度
+        install = client.post(
+            "/api/v0/installs",
+            json={
+                "package_name": pkg["name"],
+                "version": "1.0.0",
+                "client": "claude-code",
+                "event_id": f"e2e-install-{uuid.uuid4().hex}",
+                "integrity_verified": True,
+            },
+        )
+        assert install.status_code == 201, (
+            f"Install report failed: {install.text}"
+        )
+
+        ts = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
+        assert ts.status_code == 200, f"trust-score failed: {ts.text}"
+        body = ts.json()
+        feedback = body["dimensions"]["user_feedback"]["details"]
+        assert feedback["total_installs"] == 1
+        assert (
+            body["dimensions"]["manual_review"]["details"]["review_status"]
+            == "approved"
+        )
+
+        # 信号未变化时再次读取不应重算（评分保持一致）
+        ts2 = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
+        assert ts2.status_code == 200
+        assert (
+            ts2.json()["risk_summary"]["grade"]
+            == body["risk_summary"]["grade"]
+        )
+        assert ts2.json()["calculated_at"] == body["calculated_at"]
+
     def test_scan_start_audit_log_written(self, monkeypatch):
         """Submit → real /submit endpoint writes SCAN_START audit log.
 

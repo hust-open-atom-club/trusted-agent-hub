@@ -736,6 +736,7 @@ class ProducerRepository:
                     "status": row.status,
                     "submitted_at": (row.data or {}).get("submitted_at"),
                     "yank_reason": (row.data or {}).get("yank_reason"),
+                    "trust_score": (row.data or {}).get("trust_score"),
                 }
                 for row in rows
             ]

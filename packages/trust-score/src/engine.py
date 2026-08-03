@@ -470,7 +470,18 @@ def _build_dimensions(
     if total_ratings > 0:
         feedback_score = round((avg_rating / 5.0) * 100)
     else:
-        feedback_score = 50
+        # 无评分数据时，用安装量体现现实采用度（封顶 80；
+        # 一旦接入真实评分，评分将重新成为该维度主信号）。
+        if total_installs >= 100:
+            feedback_score = 80
+        elif total_installs >= 20:
+            feedback_score = 70
+        elif total_installs >= 5:
+            feedback_score = 60
+        elif total_installs >= 1:
+            feedback_score = 55
+        else:
+            feedback_score = 50
 
     user_feedback = {
         "score": feedback_score,
