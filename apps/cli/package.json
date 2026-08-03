@@ -1,8 +1,32 @@
 {
   "name": "trusted-agent-hub",
   "version": "0.1.0",
-  "description": "TrustedAgentHub CLI — registry for AI agent capability packages (Skills, MCP Servers, Plugins, and more)",
-  "bin": { "tah": "./dist/apps/cli/src/cli.js" },
+  "description": "TrustedAgentHub CLI - registry for AI agent capability packages (Skills, MCP Servers, Plugins, and more)",
+  "bin": {
+    "tah": "./dist/apps/cli/src/cli.js",
+    "trusted-agent-hub": "./dist/apps/cli/src/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hust-open-atom-club/trusted-agent-hub.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "skills",
+    "mcp",
+    "plugins",
+    "trust",
+    "registry"
+  ],
+  "prepublishOnly": "npm run build",
   "scripts": {
     "build": "tsc",
     "dev": "ts-node src/cli.ts",

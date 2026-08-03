@@ -157,15 +157,17 @@ export function mcpServersFromManifest(
   const list = manifest.dependencies?.mcp_servers;
   if (!Array.isArray(list) || list.length === 0) return null;
   const out: Record<string, McpServerEntry> = {};
-  for (const item of list) {
-    const name =
-      item.name || item.package || item.id || item.server || item.key;
+  for (const raw of list) {
+    const item = raw as Record<string, unknown>;
+    const name = String(
+      item.name || item.package || item.id || item.server || item.key || '',
+    );
     if (!name) continue;
     const entry: McpServerEntry = {};
-    if (item.url) {
+    if (typeof item.url === 'string') {
       entry.url = item.url;
     }
-    if (item.command) {
+    if (typeof item.command === 'string') {
       entry.command = item.command;
       if (Array.isArray(item.args)) entry.args = item.args.map(String);
       if (

@@ -113,7 +113,7 @@ class Dependencies(StrictContractModel):
     pip: list[dict[str, str]] | None = None
     system: list[str] | None = None
     docker: list[dict[str, str]] | None = None
-    mcp_servers: list[dict[str, str]] | None = None
+    mcp_servers: list[dict[str, object]] | None = None
 
 
 class EntryPoints(StrictContractModel):

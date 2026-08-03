@@ -25,6 +25,10 @@ export async function runNpmInstall(
   const targetDir = managedInstallDir(ctx.homeDir, ctx.manifest.name, 'npm');
   await fs.promises.mkdir(targetDir, { recursive: true });
 
+  // Windows npm ships as npm.cmd (nvm/nvm4w shims put npm.ps1/npm.cmd on PATH);
+  // execFile cannot spawn .cmd shims directly, so defaultRunCommand routes
+  // them through cmd.exe.  Unix keeps the plain `npm` binary.
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const args = [
     'install',
     `${step.package}@${step.version}`,
@@ -37,7 +41,7 @@ export async function runNpmInstall(
     args.push('--registry', step.registry);
   }
 
-  const res = await ctx.runCommand('npm', args);
+  const res = await ctx.runCommand(npmCommand, args);
   if (res.exitCode !== 0) {
     throw new Error(
       `npm install failed (exit ${res.exitCode}): ${

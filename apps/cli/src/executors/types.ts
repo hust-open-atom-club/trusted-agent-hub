@@ -83,11 +83,21 @@ export async function defaultRunCommand(
   options?: { cwd?: string },
 ): Promise<RunCommandResult> {
   try {
-    const { stdout, stderr } = await execFileP(cmd, args, {
+    const execOptions = {
       cwd: options?.cwd,
       timeout: 300_000,
       maxBuffer: 10 * 1024 * 1024,
-    });
+    };
+    // Windows .cmd/.bat shims (e.g. npm.cmd) cannot be spawned directly by
+    // execFile; route them through cmd.exe with explicit argv so argument
+    // quoting stays under execFile's control.
+    let runCmd = cmd;
+    let runArgs = args;
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd)) {
+      runCmd = process.env.ComSpec || 'cmd.exe';
+      runArgs = ['/d', '/s', '/c', cmd, ...args];
+    }
+    const { stdout, stderr } = await execFileP(runCmd, runArgs, execOptions);
     return { exitCode: 0, stdout: stdout ?? '', stderr: stderr ?? '' };
   } catch (err) {
     const e = err as {

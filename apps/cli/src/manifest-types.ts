@@ -160,7 +160,7 @@ export interface ManifestDependencies {
   pip?: Array<Record<string, string>> | null;
   system?: string[] | null;
   docker?: Array<Record<string, string>> | null;
-  mcp_servers?: Array<Record<string, string>> | null;
+  mcp_servers?: Array<Record<string, unknown>> | null;
 }
 
 // ---------------------------------------------------------------------------

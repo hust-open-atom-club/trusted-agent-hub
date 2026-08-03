@@ -1,0 +1,24 @@
+{
+  "name": "demo-claude-plugin",
+  "version": "1.0.0",
+  "description": "演示 claude-code-plugin 目标：将 Claude 插件安装到 ~/.claude/plugins/",
+  "type": "plugin",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": ["plugin", "claude-code-plugin", "demo"],
+  "compatibility": ["claude-code-plugin"],
+  "permissions": {
+    "filesystem": { "read": ["./"], "write": [], "delete": false },
+    "shell": { "allowed": false, "commands": [] },
+    "network": { "allowed": false, "domains": [] }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "target_client": "claude-code-plugin",
+    "steps": [],
+    "post_install_message": "插件已安装到 ~/.claude/plugins/demo-claude-plugin/"
+  }
+}

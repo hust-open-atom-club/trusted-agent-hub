@@ -268,7 +268,10 @@ runTest('npm install dispatches to npm executor with managed prefix', async () =
   assert.strictEqual(result.sha256, null);
   assert.ok(result.targetDir.endsWith(path.join('installed', 'demo-tool-npm')));
   assert.strictEqual(calls.length, 1);
-  assert.strictEqual(calls[0].cmd, 'npm');
+  assert.strictEqual(
+    calls[0].cmd,
+    process.platform === 'win32' ? 'npm.cmd' : 'npm',
+  );
   assert.ok(calls[0].args.includes('--prefix'));
   assert.ok(calls[0].args.includes('--registry'));
   assert.ok(calls[0].args.includes('demo-tool@1.0.0'));

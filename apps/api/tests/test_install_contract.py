@@ -5,11 +5,30 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 
 from src.models.install import ManifestInstallationStep
-from src.models.packages import InstallationStep
+from src.models.packages import Dependencies, InstallationStep
 from src.repositories.mock import JsonPackageRepository
 
 
 MANIFEST_PATH = "/api/v0/packages/code-review-skill/install-manifest"
+
+
+def test_dependencies_accept_mcp_server_args_and_env_arrays() -> None:
+    """mcp_servers entries must support command/args/env used by CLI config writers."""
+
+    deps = Dependencies(
+        mcp_servers=[
+            {
+                "name": "demo-mcp-config",
+                "command": "python",
+                "args": ["server.py"],
+                "env": {"LOG_LEVEL": "info"},
+            }
+        ]
+    )
+
+    assert deps.mcp_servers is not None
+    assert deps.mcp_servers[0]["args"] == ["server.py"]
+    assert deps.mcp_servers[0]["env"] == {"LOG_LEVEL": "info"}
 
 
 def test_install_manifest_defaults_to_latest_published_version(
