@@ -259,6 +259,24 @@ def _get_db_version(version_id: str) -> dict | None:
     return {"status": row[0], "data": row[1]}
 
 
+def _db_query_row(sql: str, params: tuple = ()) -> str | None:
+    """Execute a scalar query and return the first column of the first row."""
+    import psycopg2
+    from urllib.parse import urlparse
+    settings = get_settings()
+    url = urlparse(settings.database_url)
+    conn = psycopg2.connect(
+        host=url.hostname, port=url.port or 5432,
+        dbname=url.path.lstrip("/"), user=url.username, password=url.password,
+    )
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row is not None else None
+
+
 def _db_query_audit_logs(target_id: str) -> list[dict]:
     """Query audit_logs for a target (version), ordered by timestamp ascending."""
     import psycopg2
@@ -470,6 +488,16 @@ class TestIntegrationAuditFlow:
 
         dbv = _get_db_version(ver["id"])
         assert dbv["status"] == "yanked"
+
+        # 下架的是最新版本时，包状态应同步为 yanked，消费侧不再暴露
+        dbpkg = _db_query_row(
+            "SELECT status FROM packages WHERE id = %s", (pkg["id"],)
+        )
+        assert dbpkg == "yanked"
+        detail = client.get(f"/api/v0/packages/{pkg['name']}")
+        assert detail.status_code == 404, (
+            f"Consumer detail should 404 after yank: {detail.text}"
+        )
 
     def test_case5_illegal_transition_rejected(self):
         """Try to publish from draft → should be rejected (400)."""

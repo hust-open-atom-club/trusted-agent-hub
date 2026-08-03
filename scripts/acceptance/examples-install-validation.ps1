@@ -65,12 +65,20 @@ $openssl = @(
 if ([string]::IsNullOrWhiteSpace($openssl)) { throw "OpenSSL not found" }
 $certificatePath = Join-Path $fixtureRoot "localhost-cert.pem"
 $privateKeyPath = Join-Path $fixtureRoot "localhost-key.pem"
-& $openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 `
-    -keyout $privateKeyPath -out $certificatePath `
-    -subj "/CN=127.0.0.1" `
-    -addext "subjectAltName=IP:127.0.0.1" `
-    -addext "basicConstraints=critical,CA:TRUE" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "openssl failed" }
+$previousEap = $ErrorActionPreference
+$opensslExit = 0
+try {
+    $ErrorActionPreference = "Continue"
+    & $openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 `
+        -keyout $privateKeyPath -out $certificatePath `
+        -subj "/CN=127.0.0.1" `
+        -addext "subjectAltName=IP:127.0.0.1" `
+        -addext "basicConstraints=critical,CA:TRUE" 2>&1 | Out-Null
+    $opensslExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousEap
+}
+if ($opensslExit -ne 0) { throw "openssl failed (exit $opensslExit)" }
 
 foreach ($pkg in $packages) {
     $sourcePath = Join-Path $codeWorktree $pkg.SourceDir
@@ -148,6 +156,13 @@ foreach ($pkg in $packages) {
     $rec = if ($grade -eq "E") { "blocked" } else { "safe" }
     $sql = @"
 BEGIN;
+DELETE FROM install_records WHERE version_id = '$versionId';
+DELETE FROM trust_levels WHERE version_id = '$versionId';
+DELETE FROM scan_reports WHERE version_id = '$versionId';
+DELETE FROM review_records WHERE version_id = '$versionId';
+DELETE FROM audit_logs WHERE target_id = '$versionId' AND target_type = 'version';
+DELETE FROM package_versions WHERE id = '$versionId';
+DELETE FROM packages WHERE id = '$packageId';
 INSERT INTO packages (id, name, status, latest_version, data)
 VALUES (
   '$packageId', '$($pkg.Name)', 'published', '1.0.0',
@@ -173,9 +188,17 @@ VALUES (
 );
 COMMIT;
 "@
-    $sql | & docker compose -f $composeFile exec -T db `
-        psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Fixture insert failed for $($pkg.Name)" }
+    $previousEap = $ErrorActionPreference
+    $psqlExit = 0
+    try {
+        $ErrorActionPreference = "Continue"
+        $sql | & docker compose -f $composeFile exec -T db `
+            psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" 2>&1 | Out-Null
+        $psqlExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
+    if ($psqlExit -ne 0) { throw "Fixture insert failed for $($pkg.Name) (exit $psqlExit)" }
     Write-Host "  + fixture $($pkg.Name) ($grade)"
 }
 
@@ -262,11 +285,27 @@ $(foreach ($pkg in $packages) {
 })
 COMMIT;
 "@
-$cleanupSql | & docker compose -f $composeFile exec -T db `
-    psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" | Out-Null
+$previousEap = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    $cleanupSql | & docker compose -f $composeFile exec -T db `
+        psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" 2>&1 | Out-Null
+    $cleanupExit = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousEap
+}
+if ($cleanupExit -ne 0) { Write-Warning "Fixture cleanup failed (exit $cleanupExit)" }
 if (-not [string]::IsNullOrWhiteSpace($testUserId)) {
     $userSql = "DELETE FROM users WHERE id = '$testUserId' AND email = '$username@example.com';"
-    $userSql | & docker compose -f $composeFile exec -T db psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" | Out-Null
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $userSql | & docker compose -f $composeFile exec -T db psql -U postgres -d trusted_agent_hub -v "ON_ERROR_STOP=1" 2>&1 | Out-Null
+        $userExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
+    if ($userExit -ne 0) { Write-Warning "User cleanup failed (exit $userExit)" }
 }
 
 function Remove-VerifiedTempPath([string]$Candidate, [string]$Prefix) {

@@ -814,8 +814,15 @@ class ProducerService:
         target = "yanked"
         validate_transition(current, target)
 
+        package_id = version.get("package_id", "")
+        pkg_version = version.get("version", "")
         self.repository.update_version_status(version_id, target)
         self.repository.update_version_data(version_id, {"yank_reason": reason} if reason else {})
+        # 下架的是当前最新版本时，同步包状态为 yanked，消费侧不再暴露该包
+        if package_id:
+            pkg = self.repository.get_package(package_id)
+            if pkg and pkg.get("latest_version") == pkg_version:
+                self.repository.update_package_status(package_id, "yanked")
         self.repository.create_audit_log(
             action=AuditAction.YANK.value,
             target_type="version",
@@ -848,8 +855,15 @@ class ProducerService:
         target = "published"
         validate_transition(current, target)
 
+        package_id = version.get("package_id", "")
+        pkg_version = version.get("version", "")
         self.repository.update_version_status(version_id, target)
         self.repository.update_version_data(version_id, {"yank_reason": None})
+        # 撤销下架的版本仍是包的最新版本时，恢复包为 published
+        if package_id:
+            pkg = self.repository.get_package(package_id)
+            if pkg and pkg.get("latest_version") == pkg_version:
+                self.repository.update_package_status(package_id, "published")
         self.repository.create_audit_log(
             action=AuditAction.UNYANK.value if hasattr(AuditAction, 'UNYANK') else "unyank",
             target_type="version",
