@@ -31,3 +31,5 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+        env:
+          NEXT_IGNORE_INCORRECT_LOCKFILE: "1"

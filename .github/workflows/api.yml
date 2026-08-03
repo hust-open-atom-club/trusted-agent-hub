@@ -49,7 +49,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install dependencies
-        run: pip install -e ".[dev]" jsonschema psycopg2-binary
+        run: |
+          pip install -U pip setuptools wheel build
+          pip install -e ".[dev]" jsonschema psycopg2-binary numpy
       - name: Apply migrations
         run: alembic upgrade head
       - name: Run full test suite
