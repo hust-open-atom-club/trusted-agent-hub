@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
+import { apiFetch } from '@/lib/api-fetch';
 import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -68,7 +69,7 @@ function StatusContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const versionId = searchParams.get('vid') || '';
-  const { user, loading: authLoading } = useAuth();
+  const { user, token, loading: authLoading } = useAuth();
 
   const [detail, setDetail] = useState<VersionDetail | null>(null);
   const [packageName, setPackageName] = useState<string | null>(null);
@@ -77,14 +78,19 @@ function StatusContent() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [scanTimedOut, setScanTimedOut] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitMsg, setSubmitMsg] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef(0);
 
   const fetchDetail = useCallback(async () => {
+    if (!token) return null;
     try {
       setError(null);
       setScanTimedOut(false);
-      const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`);
+      const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!res.ok) {
         if (res.status === 404) throw new Error('版本不存在');
         throw new Error(`请求失败 (${res.status})`);
@@ -94,7 +100,9 @@ function StatusContent() {
 
       if (data.package_id && !packageName) {
         try {
-          const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`);
+          const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           if (pkgRes.ok) {
             const pkgData = await pkgRes.json();
             setPackageName(pkgData.name || null);
@@ -104,7 +112,9 @@ function StatusContent() {
 
       if (data.status === 'rejected' || data.status === 'changes_requested') {
         try {
-          const reviewsRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`);
+          const reviewsRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           if (reviewsRes.ok) {
             const reviews: ReviewRecord[] = await reviewsRes.json();
             const latest = reviews[0];
@@ -173,6 +183,32 @@ function StatusContent() {
     await fetchDetail();
     setRefreshing(false);
   };
+
+  const handleResubmit = async () => {
+    if (!token || submitting) return;
+    setSubmitting(true);
+    setSubmitMsg(null);
+    try {
+      await apiFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      });
+      setSubmitMsg('已提交，正在扫描中...');
+      setTimeout(() => fetchDetail(), 2000);
+    } catch (err: unknown) {
+      setSubmitMsg(err instanceof Error ? err.message : '提交失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCreateNewVersion = () => {
+    if (!detail?.package_id) return;
+    router.push(`/submit?packageId=${detail.package_id}`);
+  };
+
+  const RESUBMITABLE = new Set(['rejected', 'changes_requested', 'error', 'scan_failed']);
 
   const buildTimeline = () => {
     if (!detail) return [];
@@ -288,6 +324,30 @@ function StatusContent() {
           {refreshing ? '刷新中...' : '\u21BB 刷新状态'}
         </button>
       </div>
+
+      {RESUBMITABLE.has(detail.status) && (
+        <div className="status-action-bar">
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleResubmit}
+            disabled={submitting || detail.status === 'scanning'}
+          >
+            {submitting ? '提交中...' : '重新提交'}
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleCreateNewVersion}
+            disabled={!detail.package_id}
+          >
+            创建新版本
+          </button>
+          {submitMsg && (
+            <span style={{ fontSize: '0.82rem', marginLeft: '0.75rem', color: submitMsg.includes('失败') ? 'var(--color-danger)' : 'var(--color-success)' }}>
+              {submitMsg}
+            </span>
+          )}
+        </div>
+      )}
 
       {detail.status === 'yanked' && (
         <div className="status-alert">
@@ -412,7 +472,7 @@ function StatusContent() {
             扫描发现 ({detail.scan_summary.total} 项)
             {detail.scan_summary.pass_rate !== undefined && (
               <span style={{ fontSize: '0.83rem', fontWeight: 400, color: 'var(--color-muted)', marginLeft: '0.5rem' }}>
-                通过率 {Math.round(detail.scan_summary.pass_rate * 100)}%
+                通过率 {Math.round(detail.scan_summary.pass_rate)}%
               </span>
             )}
           </h2>

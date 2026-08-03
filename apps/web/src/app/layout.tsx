@@ -1,21 +1,8 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
-import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { ClientProviders } from './client-providers';
 import Navbar from '@/components/Navbar';
 import './globals.css';
-
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  display: 'swap',
-  variable: '--font-jakarta',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  display: 'swap',
-  variable: '--font-jetbrains',
-});
 
 export const metadata: Metadata = {
   title: 'Trusted Agent Hub',
@@ -51,8 +38,8 @@ export default function RootLayout({
   } catch { /* cookieStore unavailable during build */ }
 
   return (
-    <html lang={lang} className={`${jakarta.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
-      <body style={{ fontFamily: 'var(--font-jakarta), var(--font-sans)' }}>
+    <html lang={lang} suppressHydrationWarning>
+      <body style={{ fontFamily: 'var(--font-sans)' }}>
         <script dangerouslySetInnerHTML={{ __html: INIT_SCRIPT }} />
         <ClientProviders serverLang={lang}>
           <Navbar />

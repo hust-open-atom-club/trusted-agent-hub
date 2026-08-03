@@ -220,7 +220,11 @@
       "published_desc": "Versions live in production",
       "rejected": "Rejected",
       "rejected_desc": "Versions that failed review",
-      "load_failed": "Failed to load"
+      "load_failed": "Failed to load",
+      "users": "User Management",
+      "users_desc": "Manage roles and account status",
+      "audit_logs": "Audit Logs",
+      "audit_logs_desc": "Browse operation traces and audit trail"
     },
     "auth_required": "Please log in as admin",
     "back_to_dashboard": "← Back to Dashboard",
@@ -328,10 +332,13 @@
       "action": {
         "publish": "Publish",
         "yank": "Yank",
+        "approve": "Approved",
+        "reject": "Rejected",
         "approved": "Approved",
         "rejected": "Rejected",
         "changes_requested": "Changes Requested",
         "submitted": "Submitted",
+        "scan_start": "Scan Started",
         "scan_complete": "Scan Complete"
       }
     },

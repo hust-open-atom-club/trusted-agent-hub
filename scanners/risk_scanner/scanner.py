@@ -54,6 +54,7 @@ from scanners.risk_scanner.common import (
     SKIP_READ_EXTENSIONS,
     SUSPICIOUS_EXTENSIONS,
 )
+from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,16 @@ class RiskScanner:
             severity_counts[s] for s in ("critical", "high", "medium", "low")
         )
 
+        # 扫描通过率（0-100）：按严重度罚分，与评分引擎 _compute_pass_rate 同公式
+        penalty = sum(
+            SEVERITY_POINTS.get(sev, 0) * severity_counts[sev]
+            for sev in ("critical", "high", "medium", "low")
+        )
+        pass_rate = (
+            100.0 if effective_total == 0
+            else max(0.0, round(100.0 - penalty, 1))
+        )
+
         pkg_name = "unknown"
         pkg_version = "0.0.0"
         if self._package_metadata:
@@ -354,6 +365,7 @@ class RiskScanner:
                 "medium": severity_counts["medium"],
                 "low": severity_counts["low"],
                 "info": severity_counts["info"],
+                "pass_rate": pass_rate,
             },
             "metadata_validation": metadata_validation,
             "structure_check": structure_check,

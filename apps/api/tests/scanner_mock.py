@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -13,6 +14,7 @@ class MockScanner:
     code_example_predicate: Callable[[str, int], bool] = lambda f, ln: False
     findings: list[dict[str, Any]] = field(default_factory=list)
     _package_metadata: dict[str, Any] | None = None
+    target_dir: Path = field(default_factory=lambda: Path("."))
 
     @property
     def scanned_files(self) -> list[str]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 from datetime import datetime, timezone
 
@@ -135,10 +136,10 @@ class ProducerService:
         current_status = version.get("status", "")
 
         # 统一走状态机校验；根据当前状态决定中间跳
-        if current_status == "draft":
+        if current_status in ("draft", "error"):
             validate_transition(current_status, "submitted")
             next_status = "submitted"
-        elif current_status in ("resubmitted", "changes_requested", "error"):
+        elif current_status in ("resubmitted", "changes_requested"):
             validate_transition(current_status, "scanning")
             next_status = "scanning"
         else:
@@ -246,6 +247,11 @@ class ProducerService:
         file_contents = full_report.get("file_contents", {})
         scan_data: dict[str, object] = scan_report if isinstance(scan_report, dict) else {}
         scan_data["file_contents"] = file_contents if isinstance(file_contents, dict) else {}
+        # 顶层 scan_id 统一为任务级 scan_id，与 SCAN_START / SCAN_COMPLETE
+        # 审计日志的 detail.scan_id 一致，支持审计 → 报告全链路溯源
+        task_scan_id = full_report.get("scan_id")
+        if isinstance(task_scan_id, str) and task_scan_id:
+            scan_data["scan_id"] = task_scan_id
         self.repository.save_scan_report(
             version_id=version_id,
             scan_json=scan_data,
@@ -530,11 +536,16 @@ class ProducerService:
                 },
                 "base": None,
                 "diff": None,
+                "code_diff": None,
                 "message": "当前是该包唯一的版本（首版），无上一版本可对比。可通过 ?base={version_id} 显式指定基准版本。",
             }
 
         base_data = {k: v for k, v in base.items() if k not in ("id", "created_at")}
         diff_result = _deep_diff(base_data, current_data)
+
+        current_files = _get_file_contents(self.repository, current.get("id", ""))
+        base_files = _get_file_contents(self.repository, base.get("id", ""))
+        code_diff = _compute_code_diff(base_files, current_files)
 
         return {
             "current": {
@@ -550,6 +561,7 @@ class ProducerService:
                 if isinstance(base.get("source"), dict) else "",
             },
             "diff": diff_result,
+            "code_diff": code_diff,
         }
 
     def review_version(
@@ -605,8 +617,14 @@ class ProducerService:
         # 将审核结论写入版本 data JSON（供前端版本详情页直接读取）
         self.repository.update_version_data(version_id, {"review_conclusion": conclusion})
 
-        # 写入审计日志
-        audit_action = AuditAction.REQUEST_CHANGES.value if conclusion == ReviewConclusion.CHANGES_REQUESTED.value else conclusion
+        # 写入审计日志：结论映射到 AuditAction 常量（approve / reject / request_changes），
+        # 保证审计 action 与枚举和前端过滤器一致
+        if conclusion == ReviewConclusion.APPROVED.value:
+            audit_action = AuditAction.APPROVE.value
+        elif conclusion == ReviewConclusion.REJECTED.value:
+            audit_action = AuditAction.REJECT.value
+        else:
+            audit_action = AuditAction.REQUEST_CHANGES.value
         self.repository.create_audit_log(
             action=audit_action,
             target_type="version",
@@ -917,6 +935,86 @@ def validate_transition(current: str, target: str) -> None:
         raise ProducerServiceError(
             f"状态跳转非法：'{current}' → '{target}' 不在允许的跳转列表中"
         )
+
+
+def _get_file_contents(repo: ProducerRepository, version_id: str) -> dict[str, str]:
+    """从 scan_reports 中提取版本的源代码全文（file_contents）。"""
+    scan = repo.get_scan_report(version_id)
+    if not scan:
+        return {}
+    scan_json = scan.get("scan_json", {})
+    if not isinstance(scan_json, dict):
+        return {}
+    fc = scan_json.get("file_contents", {})
+    return fc if isinstance(fc, dict) else {}
+
+
+def _compute_code_diff(
+    base_files: dict[str, str],
+    current_files: dict[str, str],
+) -> dict[str, object]:
+    """对比两个版本的 file_contents，返回代码级差异。
+
+    Returns:
+        {
+            files_added: [str],
+            files_removed: [str],
+            files_modified: [{path, base_content, current_content, diff_hunks}],
+            files_unchanged: int,
+            summary: str,
+        }
+    """
+    base_paths = set(base_files.keys())
+    current_paths = set(current_files.keys())
+
+    files_added = sorted(current_paths - base_paths)
+    files_removed = sorted(base_paths - current_paths)
+    files_common = sorted(base_paths & current_paths)
+
+    files_modified: list[dict[str, object]] = []
+    files_unchanged = 0
+
+    for path in files_common:
+        base_text = base_files.get(path, "")
+        current_text = current_files.get(path, "")
+        if base_text == current_text:
+            files_unchanged += 1
+            continue
+
+        base_lines = base_text.splitlines(keepends=True)
+        current_lines = current_text.splitlines(keepends=True)
+        diff_lines = list(
+            difflib.unified_diff(
+                base_lines, current_lines,
+                fromfile=f"a/{path}", tofile=f"b/{path}",
+                lineterm="",
+            )
+        )
+        files_modified.append({
+            "path": path,
+            "base_content": base_text,
+            "current_content": current_text,
+            "diff_hunks": diff_lines,
+        })
+
+    total_changes = len(files_added) + len(files_removed) + len(files_modified)
+    summary_parts = []
+    if files_added:
+        summary_parts.append(f"{len(files_added)} 个文件新增")
+    if files_removed:
+        summary_parts.append(f"{len(files_removed)} 个文件删除")
+    if files_modified:
+        summary_parts.append(f"{len(files_modified)} 个文件修改")
+    if not summary_parts:
+        summary_parts.append("无变更")
+
+    return {
+        "files_added": files_added,
+        "files_removed": files_removed,
+        "files_modified": files_modified,
+        "files_unchanged": files_unchanged,
+        "summary": "，".join(summary_parts),
+    }
 
 
 def _deep_diff(

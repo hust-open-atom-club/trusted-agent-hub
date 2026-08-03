@@ -664,6 +664,34 @@ h3 {
 }
 
 /* ============================================================
+   排序下拉
+   ============================================================ */
+
+.sort-select {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  font-size: 0.83rem;
+  font-family: var(--font-sans);
+  background: var(--color-paper);
+  color: var(--color-ink-2);
+  outline: none;
+  cursor: pointer;
+  min-height: 36px;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.sort-select:focus {
+  border-color: var(--color-accent);
+}
+
+.search-extras {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ============================================================
    结果元信息
    ============================================================ */
 
@@ -2209,6 +2237,14 @@ h3 {
   color: var(--color-muted);
 }
 
+.status-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
 /* 时间线 */
 .timeline {
   position: relative;
@@ -2993,13 +3029,14 @@ h3 {
 .review-detail-nav {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.6rem;
   margin-bottom: 1.5rem;
 }
 
 .review-detail-nav-user {
   font-size: 0.83rem;
   color: var(--color-muted);
+  margin-left: auto;
 }
 
 /* ── 信息栏 ── */
@@ -3515,6 +3552,271 @@ h3 {
   padding-right: 0.75rem;
   color: var(--color-muted);
   user-select: none;
+}
+
+/* ============================================================
+   Code Diff — split panel layout
+   ============================================================ */
+
+.diff-layout {
+  min-height: 100vh;
+  background: var(--color-paper);
+}
+
+.diff-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1.5rem;
+  background: var(--color-paper-2);
+  border-bottom: 1px solid var(--color-rule);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.diff-version-label {
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  color: var(--color-ink-2);
+  background: var(--color-paper);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-sm);
+}
+
+.diff-summary-text {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  margin-left: auto;
+}
+
+.diff-body {
+  display: flex;
+  height: calc(100vh - 48px);
+}
+
+/* ── Sidebar ── */
+
+.diff-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-rule);
+  background: var(--color-paper-2);
+  overflow-y: auto;
+}
+
+.diff-sidebar-header {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  border-bottom: 1px solid var(--color-rule);
+  position: sticky;
+  top: 0;
+  background: var(--color-paper-2);
+}
+
+.diff-sidebar-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-ink);
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0 0.35rem;
+  margin-left: 0.4rem;
+}
+
+.diff-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 1rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-ink-2);
+  transition: background 120ms var(--ease-out);
+  border-left: 3px solid transparent;
+}
+
+.diff-file-item:hover:not(:disabled) {
+  background: var(--color-paper-3);
+}
+
+.diff-file-item.active {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  border-left-color: var(--color-accent);
+}
+
+.diff-file-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.diff-file-item.added .diff-file-icon { color: var(--color-success); }
+.diff-file-item.removed .diff-file-icon { color: var(--color-danger); }
+.diff-file-item.modified .diff-file-icon { color: var(--color-accent-deep); }
+
+.diff-file-icon.tree {
+  color: var(--color-muted);
+  font-size: 0.6rem;
+}
+
+.diff-file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-changes {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  color: var(--color-muted);
+  background: var(--color-paper-3);
+  padding: 0.08rem 0.35rem;
+  border-radius: var(--radius-pill);
+}
+
+/* ── Main diff view ── */
+
+.diff-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-paper);
+}
+
+.diff-main-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--color-paper-2);
+  border-bottom: 1px solid var(--color-rule);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-ink-2);
+  flex-shrink: 0;
+}
+
+.diff-main-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-main-stats {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+.diff-viewport {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+/* ── Diff hunks ── */
+
+.diff-hunk-block {
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.diff-hunk-header {
+  padding: 0.25rem 0.75rem;
+  background: var(--color-paper-3);
+  color: var(--color-accent-deep);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.diff-line {
+  display: flex;
+  padding: 0 0.75rem;
+  min-height: 22px;
+}
+
+.diff-line.diff-add {
+  background: var(--color-success-light);
+}
+
+.diff-line.diff-del {
+  background: var(--color-danger-light);
+}
+
+.diff-line-prefix {
+  width: 18px;
+  flex-shrink: 0;
+  text-align: center;
+  user-select: none;
+  color: var(--color-muted);
+}
+
+.diff-add .diff-line-prefix { color: var(--color-success); }
+.diff-del .diff-line-prefix { color: var(--color-danger); }
+
+.diff-line-text {
+  flex: 1;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* ============================================================
+   Admin user management — toggle button
+   ============================================================ */
+
+.user-toggle-btn {
+  padding: 0.3rem 0.85rem;
+  font-size: 0.78rem;
+  min-height: auto;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.user-toggle-danger {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.user-toggle-danger:hover:not(:disabled) {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.user-toggle-safe {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.user-toggle-safe:hover:not(:disabled) {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.user-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .code-line-content {
@@ -4354,10 +4656,26 @@ h3 {
   color: var(--color-ink);
   outline: none;
   min-height: 36px;
+  color-scheme: light;
 }
 
 .admin-filter-date:focus {
   border-color: var(--color-accent);
+}
+
+/* 暗色主题下日期选择器弹层跟随主题，日历指示器反色可见 */
+[data-theme="dark"] .admin-filter-date {
+  color-scheme: dark;
+}
+
+[data-theme="dark"] .admin-filter-date::-webkit-calendar-picker-indicator {
+  filter: invert(0.85) sepia(0.3) hue-rotate(60deg);
+  cursor: pointer;
+}
+
+/* admin 过滤行查询按钮统一宽度 */
+.admin-search-btn {
+  min-width: 100px;
 }
 
 /* ============================================================

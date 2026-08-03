@@ -20,7 +20,7 @@ interface AuditLogEntry {
 }
 
 const ACTION_OPTIONS_KEYS = [
-  '', 'publish', 'yank', 'approved', 'rejected', 'changes_requested', 'submit', 'scan_complete',
+  '', 'publish', 'yank', 'approve', 'reject', 'request_changes', 'submit', 'scan_start', 'scan_complete',
 ] as const;
 
 const PAGE_SIZES = [10, 30, 50, 100];
@@ -61,12 +61,15 @@ export default function AdminAuditLogsPage() {
   const actionLabels: Record<string, string> = {
     publish: t('admin.audit.action.publish'),
     yank: t('admin.audit.action.yank'),
-    approved: t('admin.audit.action.approved'),
-    rejected: t('admin.audit.action.rejected'),
-    changes_requested: t('admin.audit.action.changes_requested'),
-    submit: t('admin.audit.action.submitted'),
-    scan_complete: t('admin.audit.action.scan_complete'),
+    approve: t('admin.audit.action.approve'),
+    reject: t('admin.audit.action.reject'),
     request_changes: t('admin.audit.action.changes_requested'),
+    submit: t('admin.audit.action.submitted'),
+    scan_start: t('admin.audit.action.scan_start'),
+    scan_complete: t('admin.audit.action.scan_complete'),
+    approved: t('admin.audit.action.approve'),
+    rejected: t('admin.audit.action.reject'),
+    changes_requested: t('admin.audit.action.changes_requested'),
   };
 
   const actionOptions = ACTION_OPTIONS_KEYS.map((key) => ({
@@ -179,7 +182,7 @@ export default function AdminAuditLogsPage() {
         </div>
 
         <div className="admin-filter-item">
-          <button className="btn btn-secondary btn-sm" onClick={handleSearch}>
+          <button className="btn btn-primary btn-sm admin-search-btn" onClick={handleSearch}>
             {t('admin.audit.search_btn')}
           </button>
         </div>
