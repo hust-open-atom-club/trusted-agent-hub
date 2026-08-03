@@ -33,6 +33,13 @@ class FakeProducerRepository:
     def list_versions_by_submitter(self, submitter_id: str) -> list[dict]:
         return self._versions
 
+    def get_feedback_level_counts(self, package_id: str) -> dict:
+        return {
+            "positive": self._package.get("fb_positive", 0) or 0,
+            "neutral": self._package.get("fb_neutral", 0) or 0,
+            "negative": self._package.get("fb_negative", 0) or 0,
+        }
+
 
 def _sample_version(*, status: str = "published", score: float = 90.0) -> dict:
     version = {
@@ -130,6 +137,39 @@ def test_feedback_uses_package_install_count_and_rating() -> None:
     assert feedback["total_installs"] == 42
     assert feedback["avg_rating"] == 4.5
     assert feedback["total_ratings"] == 1
+    assert feedback["level_counts"] == {
+        "positive": 0,
+        "neutral": 0,
+        "negative": 0,
+    }
+
+
+def test_feedback_collects_level_counts() -> None:
+    repo = FakeProducerRepository(
+        version=_sample_version(),
+        package={
+            "id": "pkg-1",
+            "install_count": 42,
+            "avg_rating": None,
+            "fb_positive": 5,
+            "fb_neutral": 2,
+            "fb_negative": 1,
+        },
+        reviews=[],
+        versions_by_submitter=[],
+    )
+    signals = collect_platform_signals(
+        repo,
+        version_id="ver-1",
+        package_id="pkg-1",
+        submitter_id="user-1",
+    )
+    feedback = signals["feedback"]
+    assert feedback["level_counts"] == {
+        "positive": 5,
+        "neutral": 2,
+        "negative": 1,
+    }
 
 
 def test_missing_repository_methods_fall_back_to_neutral() -> None:

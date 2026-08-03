@@ -783,6 +783,68 @@ def test_feedback_installs_tiers_and_ceiling() -> None:
     assert score_for(1000) == 80
 
 
+def test_feedback_level_counts_drive_score_without_ratings() -> None:
+    """无数值评分时，level 反馈按权重折算（positive=100/neutral=60/negative=20）。"""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 10,
+            "reports_count": 0,
+            "level_counts": {"positive": 5, "neutral": 2, "negative": 1},
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    # (5*100 + 2*60 + 1*20) / 8 = 640 / 8 = 80
+    assert dim["score"] == 80
+    assert dim["details"]["level_counts"] == {
+        "positive": 5,
+        "neutral": 2,
+        "negative": 1,
+    }
+
+
+def test_feedback_level_counts_negative_dominant() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 100,
+            "reports_count": 0,
+            "level_counts": {"positive": 0, "neutral": 1, "negative": 3},
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    # (0 + 60 + 60) / 4 = 30
+    assert dim["score"] == 30
+
+
+def test_feedback_absent_level_counts_default_to_zero() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["details"]["level_counts"] == {
+        "positive": 0,
+        "neutral": 0,
+        "negative": 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

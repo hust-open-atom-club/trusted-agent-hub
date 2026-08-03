@@ -121,13 +121,27 @@ def _collect_author_history(
     }
 
 
-def _collect_feedback(package: dict[str, Any]) -> dict[str, Any]:
+def _collect_feedback(
+    repository: Any,
+    package: dict[str, Any],
+) -> dict[str, Any]:
     avg_rating = package.get("avg_rating")
+    level_counts = {"positive": 0, "neutral": 0, "negative": 0}
+    get_counts = getattr(repository, "get_feedback_level_counts", None)
+    if callable(get_counts):
+        try:
+            counts = get_counts(str(package.get("id") or ""))
+            if isinstance(counts, dict):
+                for key in level_counts:
+                    level_counts[key] = int(counts.get(key) or 0)
+        except Exception:  # pragma: no cover - defensive for partial mocks
+            pass
     return {
         "avg_rating": float(avg_rating) if isinstance(avg_rating, (int, float)) else 0.0,
         "total_ratings": 1 if isinstance(avg_rating, (int, float)) else 0,
         "total_installs": int(package.get("install_count") or 0),
         "reports_count": 0,
+        "level_counts": level_counts,
     }
 
 
@@ -177,5 +191,5 @@ def collect_platform_signals(
             version_id=version_id,
             version=version,
         ),
-        "feedback": _collect_feedback(package),
+        "feedback": _collect_feedback(repository, package),
     }

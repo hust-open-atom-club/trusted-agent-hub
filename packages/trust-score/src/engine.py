@@ -466,9 +466,24 @@ def _build_dimensions(
     total_ratings = fb_data.get("total_ratings", 0) or 0
     total_installs = fb_data.get("total_installs", 0) or 0
     reports_count = fb_data.get("reports_count", 0) or 0
+    _raw_level_counts = fb_data.get("level_counts") or {}
+    level_counts = {
+        "positive": int(_raw_level_counts.get("positive", 0) or 0),
+        "neutral": int(_raw_level_counts.get("neutral", 0) or 0),
+        "negative": int(_raw_level_counts.get("negative", 0) or 0),
+    }
+    positive = level_counts["positive"]
+    neutral = level_counts["neutral"]
+    negative = level_counts["negative"]
+    level_total = positive + neutral + negative
 
     if total_ratings > 0:
         feedback_score = round((avg_rating / 5.0) * 100)
+    elif level_total > 0:
+        # 无数值评分时用 level 反馈加权（positive=100, neutral=60, negative=20）
+        feedback_score = round(
+            (positive * 100 + neutral * 60 + negative * 20) / level_total
+        )
     else:
         # 无评分数据时，用安装量体现现实采用度（封顶 80；
         # 一旦接入真实评分，评分将重新成为该维度主信号）。
@@ -491,6 +506,7 @@ def _build_dimensions(
             "total_ratings": total_ratings,
             "total_installs": total_installs,
             "reports_count": reports_count,
+            "level_counts": level_counts,
         },
     }
 

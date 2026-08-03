@@ -15,6 +15,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from src.repositories.orm import (
+    FeedbackRecordRow,
     PackageRow,
     PackageVersionRow,
     TrustLevelRow,
@@ -400,6 +401,22 @@ class ProducerRepository:
                     model_version="0.2.0",
                 ))
             session.commit()
+
+    def get_feedback_level_counts(
+        self,
+        package_id: str,
+    ) -> dict[str, int]:
+        """聚合某包的 level 反馈计数（positive/neutral/negative）。"""
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(FeedbackRecordRow.level, func.count())
+                .where(FeedbackRecordRow.package_id == package_id)
+                .group_by(FeedbackRecordRow.level)
+            ).all()
+        counts = {"positive": 0, "neutral": 0, "negative": 0}
+        for level, count in rows:
+            counts[str(level)] = int(count)
+        return counts
 
     # ── 扫描报告 ──────────────────────────────────────────
 

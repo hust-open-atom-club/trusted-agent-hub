@@ -211,7 +211,17 @@
                 "avg_rating": { "type": "number", "minimum": 0, "maximum": 5 },
                 "total_ratings": { "type": "integer", "minimum": 0 },
                 "total_installs": { "type": "integer", "minimum": 0 },
-                "reports_count": { "type": "integer", "minimum": 0 }
+                "reports_count": { "type": "integer", "minimum": 0 },
+                "level_counts": {
+                  "type": "object",
+                  "required": ["positive", "neutral", "negative"],
+                  "properties": {
+                    "positive": { "type": "integer", "minimum": 0 },
+                    "neutral": { "type": "integer", "minimum": 0 },
+                    "negative": { "type": "integer", "minimum": 0 }
+                  },
+                  "additionalProperties": false
+                }
               },
               "additionalProperties": false
             }

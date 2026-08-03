@@ -596,6 +596,21 @@ class TestIntegrationAuditFlow:
         )
         assert ts2.json()["calculated_at"] == body["calculated_at"]
 
+        # 提交 positive 反馈后，level_counts 应进入 user_feedback 维度
+        fb = client.post(
+            f"/api/v0/packages/{pkg['name']}/feedback",
+            json={"level": "positive", "comment": "works well"},
+            headers={"Authorization": f"Bearer {stoken}"},
+        )
+        assert fb.status_code == 201, f"Feedback failed: {fb.text}"
+
+        ts3 = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
+        assert ts3.status_code == 200
+        counts = ts3.json()["dimensions"]["user_feedback"]["details"][
+            "level_counts"
+        ]
+        assert counts["positive"] >= 1
+
     def test_scan_start_audit_log_written(self, monkeypatch):
         """Submit → real /submit endpoint writes SCAN_START audit log.
 
