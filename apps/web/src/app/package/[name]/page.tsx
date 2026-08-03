@@ -387,7 +387,7 @@ export default function PackageDetailPage() {
               <span style={{ fontSize: '0.83rem', fontWeight: 400, color: 'var(--color-muted)', marginLeft: '0.5rem' }}>
                 Pass rate:{' '}
                 {versionDetail.scan_report.summary.pass_rate != null
-                  ? `${Math.round(Number(versionDetail.scan_report.summary.pass_rate) * 100)}%`
+                  ? `${Math.round(Number(versionDetail.scan_report.summary.pass_rate))}%`
                   : 'N/A'}
               </span>
             )}

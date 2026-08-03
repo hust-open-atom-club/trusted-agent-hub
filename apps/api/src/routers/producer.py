@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Callable
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -19,7 +20,7 @@ from src.database import (
     create_session_factory,
     get_runtime_engine,
 )
-from src.auth import require_role
+from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
 from src.models.common import ErrorEnvelope, StrictContractModel
 from src.models.producer import (
@@ -90,9 +91,15 @@ def create_version(
 ) -> dict[str, object]:
     """为指定包创建一个新版本（需登录，仅 submitter 及以上角色）。
 
+    仅包所有者（或 admin/reviewer）可创建版本。
     支持填写 GitHub 仓库 URL，版本号需符合 SemVer 规范。
     """
     repo = _get_producer_repository()
+    pkg = repo.get_package(package_id)
+    if pkg is None:
+        raise HTTPException(status_code=404, detail=f"包 {package_id} 不存在")
+    verify_resource_access(_user, pkg.get("submitter_id", ""))
+
     service = ProducerService(repo)
     try:
         return service.create_version(package_id, body, submitter_id=_user.id)
@@ -125,8 +132,19 @@ def submit_version(
     """提交审核（需登录）：状态变更 → scanning，自动触发安全扫描。
     扫描在后台执行，完成后自动回调更新版本状态为 pending_review。
     若传入 initial_scan_id 且对应扫描已完成，直接复用结果跳过重复扫描。
+
+    仅版本所属包的提交者（或 admin/reviewer）可提交审核。
     """
     repo = _get_producer_repository()
+    version = repo.get_version(version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"版本 {version_id} 不存在")
+    pkg_id = version.get("package_id")
+    if pkg_id:
+        pkg = repo.get_package(str(pkg_id))
+        if pkg:
+            verify_resource_access(_user, pkg.get("submitter_id", ""))
+
     service = ProducerService(repo)
     try:
         repo_url, scan_id, next_status = service.submit_version(version_id, user_id=_user.id)
@@ -177,7 +195,32 @@ def submit_version(
                 )
 
     # 否则正常启动后台扫描
-    from src.routers.trust import _run_scan_task
+    from src.routers.trust import _run_scan_task, _scans, _SCAN_TTL_SECONDS
+    from schema.constants import AuditAction
+    import time as _time
+
+    _scans[scan_id] = {
+        "status": "pending",
+        "package_name": None,
+        "created_at": version.get("submitted_at") or datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "full_report": None,
+        "summary": None,
+        "trust_score": None,
+        "error": None,
+        "expires_at": _time.time() + _SCAN_TTL_SECONDS,
+        "user_id": _user.id,
+    }
+
+    # 扫描任务真正启动时补写 SCAN_START 审计，与 scan_complete 的 detail.scan_id
+    # 形成证据链：submit → scan_start → scan_complete
+    repo.create_audit_log(
+        action=AuditAction.SCAN_START.value,
+        target_type="version",
+        target_id=version_id,
+        operator_id=_user.id,
+        detail={"scan_id": scan_id},
+    )
 
     background_tasks.add_task(
         _run_scan_task,
@@ -217,12 +260,17 @@ def list_packages(
     "/packages/{package_id}",
     responses={404: {"model": ErrorEnvelope}},
 )
-def get_package(package_id: str) -> dict[str, object]:
-    """获取包详情，含版本列表。"""
+def get_package(
+    package_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> dict[str, object]:
+    """获取包详情，含版本列表。仅所有者（submitter）或 reviewer/admin 可访问。"""
     repo = _get_producer_repository()
     pkg = repo.get_package(package_id)
     if pkg is None:
         raise HTTPException(status_code=404, detail=f"包 {package_id} 不存在")
+
+    verify_resource_access(_user, pkg.get("submitter_id", ""))
 
     versions = repo.list_package_versions(package_id)
     pkg["versions"] = versions
@@ -238,6 +286,7 @@ def get_package(package_id: str) -> dict[str, object]:
 def diff_version(
     version_id: str,
     base: str | None = Query(default=None, description="基准版本 ID，不传则对比同包的上一版本"),
+    _user: CurrentUser = Depends(require_role("reviewer")),
 ) -> dict[str, object]:
     """对比两个版本的元数据差异。
 
@@ -257,8 +306,11 @@ def diff_version(
     "/versions/{version_id}",
     responses={404: {"model": ErrorEnvelope}},
 )
-def get_version(version_id: str) -> dict[str, object]:
-    """获取版本详情，含扫描报告摘要和信任评分。"""
+def get_version(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> dict[str, object]:
+    """获取版本详情，含扫描报告摘要和信任评分。仅所有者或 reviewer/admin 可访问。"""
     repo = _get_producer_repository()
     service = ProducerService(repo)
     detail = service.get_version_detail(version_id)
@@ -266,6 +318,11 @@ def get_version(version_id: str) -> dict[str, object]:
         raise HTTPException(
             status_code=404, detail=f"版本 {version_id} 不存在"
         )
+    pkg_id = detail.get("package_id")
+    if pkg_id:
+        pkg = repo.get_package(str(pkg_id))
+        if pkg:
+            verify_resource_access(_user, pkg.get("submitter_id", ""))
     return detail
 
 
@@ -303,6 +360,9 @@ def list_versions(
         pass
 
     if submitter_id is not None:
+        from schema.constants import UserRole
+        if _user.role != UserRole.ADMIN.value and _user.role != UserRole.REVIEWER.value:
+            submitter_id = _user.id
         return service.list_my_versions(submitter_id, limit=limit, offset=offset)
 
     if status is not None or since is not None or until is not None:

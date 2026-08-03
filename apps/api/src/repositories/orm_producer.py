@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database import Base
@@ -29,6 +29,7 @@ class UserRow(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(32), index=True)
     display_name: Mapped[str] = mapped_column(String(128))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now
     )

@@ -150,6 +150,20 @@ def require_role(min_role: str):
 # ── 启动安装 ──────────────────────────────────────────────
 
 
+def verify_resource_access(user: CurrentUser, owner_id: str) -> None:
+    """校验资源访问权限：非 reviewer/admin 角色的用户只能访问自己的资源。
+
+    用途：配合 require_role 在路由中使用，确保 submitter 只能操作/查看
+    自己提交的包和版本，admin 和 reviewer 不受此限制。
+    """
+    if user.role in (UserRole.ADMIN.value, UserRole.REVIEWER.value):
+        return
+    if not owner_id:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="只能访问您自己提交的资源")
+
+
 def install() -> None:
     """在应用启动时调用，将 JWT 验证注入到 FastAPI 依赖链。
 

@@ -16,6 +16,8 @@ interface DashboardStats {
   published: number;
   rejected: number;
   yanked: number;
+  total_users: number;
+  today_audit_actions: number;
 }
 
 interface StatCard {
@@ -85,6 +87,18 @@ export default function AdminDashboardClient() {
       count: stats?.rejected ?? null,
       description: t('admin.dashboard.rejected_desc'),
       path: '/admin/rejected',
+    },
+    {
+      title: t('admin.dashboard.users'),
+      count: stats?.total_users ?? null,
+      description: t('admin.dashboard.users_desc'),
+      path: '/admin/users',
+    },
+    {
+      title: t('admin.dashboard.audit_logs'),
+      count: stats?.today_audit_actions ?? null,
+      description: t('admin.dashboard.audit_logs_desc'),
+      path: '/admin/audit-logs',
     },
   ];
 

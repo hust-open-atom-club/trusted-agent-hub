@@ -79,7 +79,10 @@
               "memory_poisoning",
               "ssrf",
               "agent_snooping",
-              "tool_misuse"
+              "tool_misuse",
+              "mcp_security",
+              "plugin_security",
+              "subagent_security"
             ],
             "description": "风险分类"
           },
@@ -136,6 +139,11 @@
       "required": ["total", "critical", "high", "medium", "low", "info"],
       "properties": {
         "total": { "type": "integer", "minimum": 0 },
+        "effective_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "去重后有效发现数（critical+high+medium+low，不含 info）"
+        },
         "critical": { "type": "integer", "minimum": 0 },
         "high": { "type": "integer", "minimum": 0 },
         "medium": { "type": "integer", "minimum": 0 },
@@ -145,7 +153,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 100,
-          "description": "扫描通过率（百分比）"
+          "description": "扫描通过率（百分比，0-100）"
         }
       },
       "additionalProperties": false

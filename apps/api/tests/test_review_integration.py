@@ -56,7 +56,9 @@ def _register(client: TestClient, email: str, password: str, display_name: str =
         "display_name": display_name,
     })
     assert resp.status_code == 201, f"Register failed: {resp.text}"
-    return resp.json()
+    data = resp.json()
+    _TEST_USER_IDS.append(data["user"]["id"])
+    return data
 
 
 def _set_user_role(user_id: str, role: str):
@@ -257,9 +259,35 @@ def _get_db_version(version_id: str) -> dict | None:
     return {"status": row[0], "data": row[1]}
 
 
+def _db_query_audit_logs(target_id: str) -> list[dict]:
+    """Query audit_logs for a target (version), ordered by timestamp ascending."""
+    import psycopg2
+    from urllib.parse import urlparse
+    settings = get_settings()
+    url = urlparse(settings.database_url)
+    conn = psycopg2.connect(
+        host=url.hostname, port=url.port or 5432,
+        dbname=url.path.lstrip("/"), user=url.username, password=url.password,
+    )
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT action, operator_id, detail FROM audit_logs "
+        "WHERE target_id = %s ORDER BY timestamp",
+        (target_id,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [
+        {"action": r[0], "operator_id": r[1], "detail": r[2] if isinstance(r[2], dict) else {}}
+        for r in rows
+    ]
+
+
 # ── Cleanup helper ───────────────────────────────────────
 
 _CLEANUP_IDS: list[str] = []
+_TEST_USER_IDS: list[str] = []
 
 
 @pytest.fixture(autouse=True)
@@ -267,8 +295,9 @@ def _cleanup_test_ids():
     import psycopg2
     from urllib.parse import urlparse
     _CLEANUP_IDS.clear()
+    _TEST_USER_IDS.clear()
     yield
-    if _CLEANUP_IDS:
+    if _CLEANUP_IDS or _TEST_USER_IDS:
         settings = get_settings()
         if settings.database_url:
             url = urlparse(settings.database_url)
@@ -287,6 +316,11 @@ def _cleanup_test_ids():
                         cur.execute("DELETE FROM audit_logs WHERE target_id = %s", (vid,))
                         cur.execute("DELETE FROM package_versions WHERE id = %s", (vid,))
                         cur.execute("DELETE FROM packages WHERE id = %s", (ver[0],))
+                except Exception:
+                    pass
+            for uid in reversed(_TEST_USER_IDS):
+                try:
+                    cur.execute("DELETE FROM users WHERE id = %s", (uid,))
                 except Exception:
                     pass
             conn.commit()
@@ -455,3 +489,147 @@ class TestIntegrationAuditFlow:
         )
         assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
         assert "非法" in resp.json()["detail"] or "not allowed" in resp.json()["detail"].lower()
+
+    def test_scan_start_audit_log_written(self, monkeypatch):
+        """Submit → real /submit endpoint writes SCAN_START audit log.
+
+        Evidence chain: submit → scan_start → scan_complete.
+        Background scan task is replaced with a no-op to avoid real network.
+        """
+        _needs_db()
+        client = _get_client()
+
+        def _noop_scan(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr("src.routers.trust._run_scan_task", _noop_scan)
+
+        reg = _register_and_login_as(client, _random_email("sub"), "submitter")
+        stoken = reg["access_token"]
+        user_id = reg["user"]["id"]
+
+        pkg = _create_package(client, stoken, f"test-scanstart-{uuid.uuid4().hex[:6]}")
+        ver = _create_version(client, stoken, pkg["id"])
+        _CLEANUP_IDS.append(ver["id"])
+
+        resp = client.post(
+            f"/api/v0/producer/versions/{ver['id']}/submit",
+            headers={"Authorization": f"Bearer {stoken}"},
+        )
+        assert resp.status_code == 200, f"Submit failed: {resp.text}"
+        result = resp.json()
+        assert result["status"] == "scanning"
+        task_scan_id = result["scan_id"]
+
+        logs = _db_query_audit_logs(ver["id"])
+        actions = [log["action"] for log in logs]
+        assert "submit" in actions, f"submit audit missing: {actions}"
+        assert "scan_start" in actions, f"scan_start audit missing: {actions}"
+
+        scan_start = [log for log in logs if log["action"] == "scan_start"][0]
+        assert scan_start["operator_id"] == user_id
+        assert scan_start["detail"].get("scan_id") == task_scan_id
+
+    def test_scan_complete_persists_task_scan_id(self):
+        """handle_scan_complete writes task-level scan_id into scan_reports.scan_json.
+
+        The persisted scan_id must match the audit detail.scan_id so the
+        audit → report traceability chain is consistent.
+        """
+        _needs_db()
+        client = _get_client()
+
+        stoken = _register_and_login_as(client, _random_email("sub"), "submitter")["access_token"]
+        pkg = _create_package(client, stoken, f"test-scanid-{uuid.uuid4().hex[:6]}")
+        ver = _create_version(client, stoken, pkg["id"])
+        _CLEANUP_IDS.append(ver["id"])
+
+        import copy
+        full_report = {
+            "scan_id": f"scan-{uuid.uuid4().hex[:12]}",
+            "scan_report": copy.deepcopy(SCAN_CLEAN),
+            "trust_score": {
+                "risk_summary": {
+                    "grade": "A",
+                    "level": "trusted",
+                    "install_recommendation": "safe",
+                }
+            },
+            "file_contents": {"SKILL.md": "---\nname: test\n---\n"},
+            "local_source_dir": None,
+        }
+
+        from src.database import create_session_factory, get_runtime_engine
+        from src.repositories.producer_sqlalchemy import ProducerRepository
+        from src.services.producer import ProducerService
+        from src.settings import get_settings as _get_settings
+
+        settings = _get_settings()
+        repo = ProducerRepository(
+            create_session_factory(get_runtime_engine(settings.database_url))
+        )
+        ProducerService(repo).handle_scan_complete(ver["id"], full_report)
+
+        scan = repo.get_scan_report(ver["id"])
+        assert scan is not None, "scan_reports row missing"
+        scan_json = scan["scan_json"]
+        assert scan_json["scan_id"] == full_report["scan_id"]
+        assert scan_json["file_contents"] == full_report["file_contents"]
+
+        logs = _db_query_audit_logs(ver["id"])
+        complete = [log for log in logs if log["action"] == "scan_complete"]
+        assert complete, f"scan_complete audit missing: {logs}"
+        assert complete[-1]["detail"].get("scan_id") == full_report["scan_id"]
+
+    def test_review_audit_actions_normalized(self):
+        """Review conclusions map to AuditAction constants in audit logs.
+
+        approved → 'approve', rejected → 'reject', changes_requested → 'request_changes'
+        (must match packages/schema/constants.py, not the raw conclusion string).
+        """
+        _needs_db()
+        client = _get_client()
+
+        stoken = _register_and_login_as(client, _random_email("sub"), "submitter")["access_token"]
+        rtoken = _register_and_login_as(client, _random_email("rev"), "reviewer")["access_token"]
+
+        # ── rejected → 'reject' ──
+        pkg = _create_package(client, stoken, f"test-audit-rej-{uuid.uuid4().hex[:6]}")
+        ver = _create_version(client, stoken, pkg["id"])
+        _CLEANUP_IDS.append(ver["id"])
+        _simulate_scan_complete(ver["id"], SCAN_RISKY)
+        resp = client.post(
+            f"/api/v0/producer/versions/{ver['id']}/reviews",
+            json={"conclusion": "rejected", "comment": "risky"},
+            headers={"Authorization": f"Bearer {rtoken}"},
+        )
+        assert resp.status_code == 201
+        actions = [log["action"] for log in _db_query_audit_logs(ver["id"])]
+        assert "reject" in actions, f"expected 'reject' audit, got: {actions}"
+        assert "rejected" not in actions, f"legacy raw conclusion should not be written: {actions}"
+
+        # ── changes_requested → 'request_changes' ──
+        pkg2 = _create_package(client, stoken, f"test-audit-cr-{uuid.uuid4().hex[:6]}")
+        ver2 = _create_version(client, stoken, pkg2["id"])
+        _CLEANUP_IDS.append(ver2["id"])
+        _simulate_scan_complete(ver2["id"], SCAN_CLEAN)
+        resp = client.post(
+            f"/api/v0/producer/versions/{ver2['id']}/reviews",
+            json={"conclusion": "changes_requested", "comment": "add license"},
+            headers={"Authorization": f"Bearer {rtoken}"},
+        )
+        assert resp.status_code == 201
+        actions2 = [log["action"] for log in _db_query_audit_logs(ver2["id"])]
+        assert "request_changes" in actions2, f"expected 'request_changes' audit, got: {actions2}"
+
+        # ── approved → 'approve' ──
+        _simulate_scan_complete(ver2["id"], SCAN_CLEAN)
+        resp = client.post(
+            f"/api/v0/producer/versions/{ver2['id']}/reviews",
+            json={"conclusion": "approved", "comment": "fixed"},
+            headers={"Authorization": f"Bearer {rtoken}"},
+        )
+        assert resp.status_code == 201
+        actions3 = [log["action"] for log in _db_query_audit_logs(ver2["id"])]
+        assert "approve" in actions3, f"expected 'approve' audit, got: {actions3}"
+        assert "approved" not in actions3, f"legacy raw conclusion should not be written: {actions3}"

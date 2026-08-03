@@ -8,8 +8,6 @@
 
 from __future__ import annotations
 
-import re
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr, Field
 
@@ -143,6 +141,9 @@ def login(body: LoginRequest) -> TokenResponse:
         if user is None or not verify_password(body.password, user.password_hash):
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
 
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")
+
         access = create_access_token(user.id, user.role, email=user.email, display_name=user.display_name)
         refresh = create_refresh_token(user.id, user.role)
         return TokenResponse(
@@ -182,6 +183,16 @@ def refresh(body: RefreshRequest) -> TokenResponse:
     role = payload.get("role", "user")
     email = payload.get("email", "")
     display_name = payload.get("display_name", "")
+
+    session = _get_session()
+    try:
+        user = session.scalar(select(UserRow).where(UserRow.id == user_id))
+        if user is None:
+            raise HTTPException(status_code=401, detail="用户不存在")
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")
+    finally:
+        session.close()
 
     new_access = create_access_token(user_id, role, email=email, display_name=display_name)
     new_refresh = create_refresh_token(user_id, role)
