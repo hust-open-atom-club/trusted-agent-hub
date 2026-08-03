@@ -12,7 +12,17 @@ from src.main import create_app
 from src.scripts.export_openapi import build_consumer_openapi, write_snapshot
 
 
-ROOT = Path(__file__).resolve().parents[3]
+def _find_repo_root() -> Path:
+    """向上查找仓库根（宿主机或容器布局均可解析）。"""
+    for parent in Path(__file__).resolve().parents:
+        if (
+            parent / "packages" / "schema" / "openapi" / "consumer-v0.1.json"
+        ).exists():
+            return parent
+    return Path("/")  # 容器布局：/packages 挂载在根下
+
+
+ROOT = _find_repo_root()
 SNAPSHOT = ROOT / "packages" / "schema" / "openapi" / "consumer-v0.1.json"
 SCHEMA_REF_PREFIX = "#/components/schemas/"
 CONSUMER_PATHS = {

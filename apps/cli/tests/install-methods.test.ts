@@ -164,6 +164,19 @@ runTest('pip manifest validates with index_url', () => {
   assert.strictEqual(m.installation.steps[0].action, 'pip_install');
 });
 
+runTest('pip manifest rejects http index_url', () => {
+  assert.throws(
+    () =>
+      makeMethodManifest('pip_install', {
+        action: 'pip_install',
+        package: 'demo-pkg',
+        version: '1.0.0',
+        index_url: 'http://pypi.example.com/simple',
+      }),
+    ManifestValidationError,
+  );
+});
+
 runTest('docker manifest validates with options', () => {
   const m = makeMethodManifest('docker_run', {
     action: 'docker_run',

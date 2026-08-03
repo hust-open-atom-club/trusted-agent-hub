@@ -13,14 +13,18 @@ import pytest
 
 from scanners.risk_scanner.scanner import RiskScanner
 
-SCHEMA = json.loads(
-    (
-        Path(__file__).resolve().parents[3]
-        / "packages"
-        / "schema"
-        / "scan-report.schema.json"
-    ).read_text(encoding="utf-8")
-)
+def _find_scan_report_schema() -> Path:
+    """向上查找 scan-report.schema.json（宿主机或容器布局均可解析）。"""
+    for parent in Path(__file__).resolve().parents:
+        candidate = (
+            parent / "packages" / "schema" / "scan-report.schema.json"
+        )
+        if candidate.exists():
+            return candidate
+    return Path("/packages/schema/scan-report.schema.json")
+
+
+SCHEMA = json.loads(_find_scan_report_schema().read_text(encoding="utf-8"))
 
 CLEAN_SKILL = (
     "---\n"
