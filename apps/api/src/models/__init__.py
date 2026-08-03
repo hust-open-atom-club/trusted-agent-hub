@@ -63,6 +63,7 @@ from .packages import (
     TrustScore,
     TrustScoreDimension,
     TrustScoreExplanation,
+    TrustHistoryPoint,
     VersionDetail,
     VersionSummary,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "TrustScore",
     "TrustScoreDimension",
     "TrustScoreExplanation",
+    "TrustHistoryPoint",
     "TrustLevelName",
     "TrustLevelResponse",
     "VerifyInstallationStep",

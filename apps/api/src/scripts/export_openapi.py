@@ -18,6 +18,7 @@ CONSUMER_PATHS = (
     "/api/v0/health",
     "/api/v0/packages",
     "/api/v0/packages/{name}",
+    "/api/v0/packages/{name}/trust-history",
     "/api/v0/packages/{name}/versions",
     "/api/v0/packages/{name}/versions/{version}",
     "/api/v0/packages/{name}/install-manifest",

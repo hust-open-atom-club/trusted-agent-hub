@@ -15,6 +15,7 @@ from src.models.packages import (
     PackagePage,
     PackageStats,
     PackageSummary,
+    TrustHistoryPoint,
     TrustScore,
     VersionDetail,
     VersionSummary,
@@ -36,6 +37,17 @@ _GRADE_NUMERIC: dict[Grade | None, int] = {
     Grade.D: 2,
     Grade.E: 1,
     None: 0,
+}
+
+# Representative score per grade used only when a stored numeric score is
+# unavailable (e.g. legacy rows). Mirrors the documented 0-100 grade bands:
+# A >= 90, B >= 80, C >= 60, D >= 40, E < 20.
+_GRADE_MIDPOINT: dict[Grade, float] = {
+    Grade.A: 95.0,
+    Grade.B: 85.0,
+    Grade.C: 70.0,
+    Grade.D: 50.0,
+    Grade.E: 10.0,
 }
 
 
@@ -93,6 +105,33 @@ class PackageService:
                 for package in items
                 if self._supports_client(package, query.client)
             ]
+        if query.tag:
+            needle = query.tag.casefold()
+            items = [
+                package
+                for package in items
+                if any(needle in keyword.casefold() for keyword in package.keywords)
+            ]
+        if query.min_grade:
+            min_order = _grade_order(Grade(query.min_grade))
+            items = [
+                package
+                for package in items
+                if package.grade is not None
+                and _grade_order(package.grade) >= min_order
+            ]
+        if query.min_score is not None or query.max_score is not None:
+            items = [
+                package
+                for package in items
+                if self._matches_score_range(package, query.min_score, query.max_score)
+            ]
+        if query.updated_since is not None:
+            items = [
+                package
+                for package in items
+                if self._updated_since_matches(package, query.updated_since)
+            ]
 
         items = self._sort(items, query.sort_by, query.order)
         total = len(items)
@@ -112,6 +151,59 @@ class PackageService:
             version.status == "published" and client in version.compatibility
             for version in self.repository.list_versions(package.name)
         )
+
+    def _matches_score_range(
+        self,
+        package: PackageSummary,
+        min_score: float | None,
+        max_score: float | None,
+    ) -> bool:
+        score = self._effective_numeric_score(package)
+        if score is None:
+            return False
+        if min_score is not None and score < min_score:
+            return False
+        if max_score is not None and score > max_score:
+            return False
+        return True
+
+    def _effective_numeric_score(self, package: PackageSummary) -> float | None:
+        """Best-effort 0-100 numeric score for the latest published version.
+
+        Prefers the stored engine score; falls back to a representative
+        midpoint derived from the effective grade so the filter keeps working
+        for legacy rows that predate numeric-score persistence.
+        """
+        try:
+            version = self._get_public_latest(package)
+        except RepositoryDataError:
+            return None
+        trust_score = version.trust_score
+        if trust_score is None:
+            return _GRADE_MIDPOINT.get(package.grade) if package.grade else None
+        raw = getattr(trust_score, "score", None)
+        if raw is None and trust_score.model_extra:
+            raw = trust_score.model_extra.get("score")
+        if isinstance(raw, (int, float)):
+            return float(raw)
+        effective = version.effective_grade
+        if effective is None:
+            effective = package.grade
+        if effective is not None and effective in _GRADE_MIDPOINT:
+            return _GRADE_MIDPOINT[effective]
+        return None
+
+    @staticmethod
+    def _updated_since_matches(
+        package: PackageSummary,
+        since: datetime,
+    ) -> bool:
+        updated = PackageService._parse_updated_at(package)
+        if updated is None:
+            return False
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        return updated >= since.astimezone(timezone.utc)
 
     def _sort(
         self,
@@ -221,6 +313,44 @@ class PackageService:
             reverse=True,
         )
         return [self._version_summary(version) for version in versions]
+
+    def get_trust_history(self, name: str) -> list[TrustHistoryPoint]:
+        """Published-version trust-score history for the detail page trend."""
+        self.get_public_package(name)
+        versions = sorted(
+            (
+                version
+                for version in self.repository.list_versions(name)
+                if version.status == "published"
+            ),
+            key=lambda version: version.version,
+            reverse=True,
+        )
+        points: list[TrustHistoryPoint] = []
+        for version in versions:
+            grade = version.effective_grade
+            if grade is None and version.trust_score and version.trust_score.risk_summary:
+                grade = version.trust_score.risk_summary.grade
+            score: float | None = None
+            calculated_at: str | None = None
+            if version.trust_score is not None:
+                raw = getattr(version.trust_score, "score", None)
+                if raw is None and version.trust_score.model_extra:
+                    raw = version.trust_score.model_extra.get("score")
+                if isinstance(raw, (int, float)):
+                    score = float(raw)
+                elif grade is not None and grade in _GRADE_MIDPOINT:
+                    score = _GRADE_MIDPOINT[grade]
+                calculated_at = version.trust_score.calculated_at
+            points.append(
+                TrustHistoryPoint(
+                    version=version.version,
+                    score=score,
+                    grade=grade,
+                    calculated_at=calculated_at,
+                )
+            )
+        return points
 
     def get_public_version_by_id(self, version_id: str) -> VersionDetail:
         version = self.repository.get_version_by_id(version_id)

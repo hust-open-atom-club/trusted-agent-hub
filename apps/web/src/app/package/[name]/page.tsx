@@ -2,8 +2,8 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { fetchPackage, fetchPackageVersion, fetchPackageVersions } from '@/data/packages';
-import type { Package, VersionDetail, VersionSummary } from '@/types';
+import { fetchPackage, fetchPackageVersion, fetchPackageVersions, fetchTrustHistory } from '@/data/packages';
+import type { Package, TrustHistoryPoint, VersionDetail, VersionSummary } from '@/types';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
@@ -91,6 +91,7 @@ export default function PackageDetailPage() {
   const [pkg, setPkg] = useState<Package | null | undefined>(undefined);
   const [versionDetail, setVersionDetail] = useState<VersionDetail | null>(null);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
+  const [trustHistory, setTrustHistory] = useState<TrustHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -98,18 +99,21 @@ export default function PackageDetailPage() {
     setPkg(undefined);
     setVersionDetail(null);
     setVersions([]);
+    setTrustHistory([]);
 
     fetchPackage(name)
       .then(async (p) => {
         setPkg(p);
         if (p) {
           // 并行获取版本详情和版本列表
-          const [vDetail, vList] = await Promise.all([
+          const [vDetail, vList, history] = await Promise.all([
             fetchPackageVersion(name, p.latest_version).catch(() => null),
             fetchPackageVersions(name).catch(() => []),
+            fetchTrustHistory(name).catch(() => []),
           ]);
           setVersionDetail(vDetail);
           setVersions(vList as VersionSummary[]);
+          setTrustHistory(history);
         }
       })
       .catch(() => setPkg(null))
@@ -330,6 +334,51 @@ export default function PackageDetailPage() {
       </div>
 
       {/* ── Scan Findings ── */}
+      {/* Trust Score History */}
+      {trustHistory.length > 0 && (
+        <div className="detail-section">
+          <h2>Trust Score History</h2>
+          <table style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontSize: '0.82rem',
+          }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--color-muted)' }}>
+                <th style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>Version</th>
+                <th style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>Score</th>
+                <th style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>Grade</th>
+                <th style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>Calculated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trustHistory.map((point) => (
+                <tr key={point.version}>
+                  <td style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>
+                    <strong>v{point.version}</strong>
+                  </td>
+                  <td style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>
+                    {point.score !== null && point.score !== undefined ? point.score.toFixed(1) : '\u2014'}
+                  </td>
+                  <td style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)' }}>
+                    {point.grade ?? '\u2014'}
+                  </td>
+                  <td style={{ padding: '0.4rem 0.6rem', borderBottom: '1px solid var(--color-rule)', color: 'var(--color-muted)' }}>
+                    {point.calculated_at
+                      ? new Date(point.calculated_at).toLocaleString('en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })
+                      : '\u2014'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {versionDetail?.scan_report?.findings && versionDetail.scan_report.findings.length > 0 && (
         <div className="detail-section">
           <h2>

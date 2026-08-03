@@ -21,6 +21,7 @@ CONSUMER_PATHS = {
     "/api/v0/packages/{name}",
     "/api/v0/packages/{name}/versions",
     "/api/v0/packages/{name}/versions/{version}",
+    "/api/v0/packages/{name}/trust-history",
     "/api/v0/packages/{name}/install-manifest",
     "/api/v0/installs",
     "/api/v0/packages/{name}/feedback",

@@ -78,10 +78,10 @@ TrustedAgentHub/
 ### CLI 安装工具
 
 ```bash
-npx trusted-agent-hub search <keyword>
-npx trusted-agent-hub install <name>
-npx trusted-agent-hub update <name>
-npx trusted-agent-hub verify <name>
+npx tah search <keyword>
+npx tah install <name>
+npx tah update <name>
+npx tah verify <name>
 ```
 
 支持 Claude Code / Cursor / VS Code 等多种客户端，安装前展示权限声明和信任评分。

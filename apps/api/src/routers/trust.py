@@ -296,10 +296,12 @@ def _run_scan_task(
     source: str,
     *,
     on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
+    signals: Dict[str, Any] | None = None,
 ) -> None:
     """后台执行扫描流水线：acquire → scan → score → save。
 
     此函数在 BackgroundTasks 中异步运行。
+    signals: 提交时从数据库采集的平台信号（author_history / review_records / feedback）。
     """
     try:
         print(f"\n[TAH-trust] >>> _run_scan_task 开始 scan_id={scan_id}")
@@ -401,10 +403,21 @@ def _run_scan_task(
         repo_url = parsed["base_url"] if parsed else source
         package_metadata = _build_package_metadata(scan_report, scan_dir, repo_url=repo_url, subdirectory=subdir)
 
+        platform_signals = signals or {}
         trust_score_result = calculate_trust_score(
             package_metadata=package_metadata,
             scan_report=scan_report,
+            author_history=platform_signals.get("author_history"),
+            review_records=platform_signals.get("review_records"),
+            feedback=platform_signals.get("feedback"),
         )
+        if platform_signals:
+            print(
+                f"[TAH-trust]     平台信号接入: "
+                f"author={platform_signals.get('author_history')}, "
+                f"review={platform_signals.get('review_records', {}).get('status')}, "
+                f"installs={platform_signals.get('feedback', {}).get('total_installs')}"
+            )
         print(f"[TAH-trust]     评分完成: score={trust_score_result.get('score')}, level={trust_score_result.get('risk_summary', {}).get('level')}")
 
         # Step 4: 合并报告并保存到磁盘

@@ -252,6 +252,15 @@ class VersionSummary(StrictContractModel):
     created_at: str | None = None
 
 
+class TrustHistoryPoint(StrictContractModel):
+    """One point in a package's version-level trust-score history."""
+
+    version: str
+    score: float | None = None
+    grade: Grade | None = None
+    calculated_at: str | None = None
+
+
 class VersionDetail(StrictContractModel):
     id: str
     package_id: str

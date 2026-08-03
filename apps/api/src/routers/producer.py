@@ -133,6 +133,18 @@ def submit_version(
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    # ── 采集平台信号（作者历史 / 审核记录 / 安装反馈）供评分引擎使用 ──
+    from src.services.signals import collect_platform_signals
+    version_row = repo.get_version(version_id)
+    signals: dict[str, object] = {}
+    if version_row:
+        signals = collect_platform_signals(
+            repo,
+            version_id=version_id,
+            package_id=str(version_row.get("package_id", "")),
+            submitter_id=_user.id,
+        )
+
     if next_status != "scanning":
         repo.update_version_status(version_id, "scanning")
 
@@ -172,6 +184,7 @@ def submit_version(
         scan_id,
         repo_url,
         on_complete=on_scan_done,
+        signals=signals,
     )
 
     return SubmitResponse(

@@ -16,6 +16,12 @@ export default function HomeClient() {
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState('all');
   const [category, setCategory] = useState('');
+  const [client, setClient] = useState('');
+  const [tag, setTag] = useState('');
+  const [minGrade, setMinGrade] = useState('');
+  const [minScore, setMinScore] = useState('');
+  const [maxScore, setMaxScore] = useState('');
+  const [updatedDays, setUpdatedDays] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('updated_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [page, setPage] = useState(1);
@@ -34,10 +40,22 @@ export default function HomeClient() {
     setError(null);
 
     try {
+      const minScoreNum = minScore === '' ? undefined : Number(minScore);
+      const maxScoreNum = maxScore === '' ? undefined : Number(maxScore);
+      const updatedSince =
+        updatedDays === ''
+          ? undefined
+          : new Date(Date.now() - Number(updatedDays) * 86400000).toISOString();
       const result = await fetchPackages({
         q: query || undefined,
         type: activeType !== 'all' ? activeType : undefined,
         category: category || undefined,
+        client: client || undefined,
+        tag: tag || undefined,
+        min_grade: minGrade || undefined,
+        min_score: minScoreNum,
+        max_score: maxScoreNum,
+        updated_since: updatedSince,
         sort_by: sortBy,
         order: sortOrder,
         page,
@@ -55,7 +73,7 @@ export default function HomeClient() {
         setLoading(false);
       }
     }
-  }, [query, activeType, category, sortBy, sortOrder, page]);
+  }, [query, activeType, category, client, tag, minGrade, minScore, maxScore, updatedDays, sortBy, sortOrder, page]);
 
   useEffect(() => {
     load();
@@ -72,6 +90,30 @@ export default function HomeClient() {
   }, []);
   const handleCategoryChange = useCallback((v: string) => {
     setCategory(v);
+    setPage(1);
+  }, []);
+  const handleClientChange = useCallback((v: string) => {
+    setClient(v);
+    setPage(1);
+  }, []);
+  const handleTagChange = useCallback((v: string) => {
+    setTag(v);
+    setPage(1);
+  }, []);
+  const handleMinGradeChange = useCallback((v: string) => {
+    setMinGrade(v);
+    setPage(1);
+  }, []);
+  const handleMinScoreChange = useCallback((v: string) => {
+    setMinScore(v);
+    setPage(1);
+  }, []);
+  const handleMaxScoreChange = useCallback((v: string) => {
+    setMaxScore(v);
+    setPage(1);
+  }, []);
+  const handleUpdatedDaysChange = useCallback((v: string) => {
+    setUpdatedDays(v);
     setPage(1);
   }, []);
   const handleSortChange = useCallback((field: SortField, order: SortOrder) => {
@@ -133,10 +175,22 @@ export default function HomeClient() {
             sortBy={sortBy}
             sortOrder={sortOrder}
             category={category}
+            client={client}
+            tag={tag}
+            minGrade={minGrade}
+            minScore={minScore}
+            maxScore={maxScore}
+            updatedDays={updatedDays}
             onQueryChange={handleQueryChange}
             onTypeChange={handleTypeChange}
             onCategoryChange={handleCategoryChange}
             onSortChange={handleSortChange}
+            onClientChange={handleClientChange}
+            onTagChange={handleTagChange}
+            onMinGradeChange={handleMinGradeChange}
+            onMinScoreChange={handleMinScoreChange}
+            onMaxScoreChange={handleMaxScoreChange}
+            onUpdatedDaysChange={handleUpdatedDaysChange}
           />
 
           <div className="package-grid-skeleton">
@@ -215,17 +269,29 @@ export default function HomeClient() {
       </section>
 
       <div className="page-container">
-        <SearchBar
-          query={query}
-          activeType={activeType}
-          sortBy={sortBy}
-          sortOrder={sortOrder}
-          category={category}
-          onQueryChange={handleQueryChange}
-          onTypeChange={handleTypeChange}
-          onCategoryChange={handleCategoryChange}
-          onSortChange={handleSortChange}
-        />
+          <SearchBar
+            query={query}
+            activeType={activeType}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            category={category}
+            client={client}
+            tag={tag}
+            minGrade={minGrade}
+            minScore={minScore}
+            maxScore={maxScore}
+            updatedDays={updatedDays}
+            onQueryChange={handleQueryChange}
+            onTypeChange={handleTypeChange}
+            onCategoryChange={handleCategoryChange}
+            onSortChange={handleSortChange}
+            onClientChange={handleClientChange}
+            onTagChange={handleTagChange}
+            onMinGradeChange={handleMinGradeChange}
+            onMinScoreChange={handleMinScoreChange}
+            onMaxScoreChange={handleMaxScoreChange}
+            onUpdatedDaysChange={handleUpdatedDaysChange}
+          />
 
         {/* 加载指示条（已有数据时的刷新） */}
         {loading && (

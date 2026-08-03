@@ -108,7 +108,7 @@ export function checkInstall(
       allowed: false,
       grade: 'unknown',
       reason: 'Unable to determine safety grade. Installation blocked as a safety precaution.' +
-        ' Use `trusted-agent-hub info <name>` to inspect the package.',
+        ' Use `tah info <name>` to inspect the package.',
     };
   }
 
@@ -139,7 +139,7 @@ export function checkInstall(
         allowed: false,
         grade: 'C',
         reason: 'Grade C (medium risk) requires --yes to confirm installation.' +
-          ' Review with `trusted-agent-hub info <name>` first.',
+          ' Review with `tah info <name>` first.',
       };
     }
     return { allowed: true, grade: 'C', policy };

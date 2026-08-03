@@ -572,6 +572,7 @@ def rate(
     scan_report: dict[str, Any] | None = None,
     author_history: dict[str, Any] | None = None,
     review_records: dict[str, Any] | None = None,
+    feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full 9-step decision engine for trust scoring.
 
@@ -581,6 +582,8 @@ def rate(
         author_history: dict with packages_published, avg_historical_score,
                         violations_count
         review_records: dict with status, reviewer_count, last_reviewed_at
+        feedback: dict with avg_rating (0-5), total_ratings, total_installs,
+                  reports_count — feeds the user_feedback dimension
 
     Returns:
         dict with all fields required by trust-score.schema.json:
@@ -628,7 +631,16 @@ def rate(
         )
 
     # --- Step 9: Derive 0-100 score (weighted by declared dimension weights) ---
-    dimensions = _build_dimensions(package_metadata, p1, p2, i1_disc, i2_disc, c1, c2_disc)
+    dimensions = _build_dimensions(
+        package_metadata,
+        p1,
+        p2,
+        i1_disc,
+        i2_disc,
+        c1,
+        c2_disc,
+        fb_data=feedback,
+    )
 
     dimension_scores: dict[str, int] = {
         name: dim["score"] for name, dim in dimensions.items()

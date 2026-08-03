@@ -52,7 +52,7 @@ const program = new Command();
 program.enablePositionalOptions();
 
 program
-  .name('trusted-agent-hub')
+  .name('tah')
   .description(
     chalk.bold('TrustedAgentHub CLI — AI agent capability package registry'),
   )

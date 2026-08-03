@@ -696,6 +696,46 @@ def test_output_handling_medium_does_not_veto() -> None:
         f"Medium output_handling should NOT trigger veto, got {result['risk_summary']['level']}"
 
 
+def test_feedback_data_flows_into_user_feedback_dimension() -> None:
+    """Feedback (ratings/installs) must reach the user_feedback dimension."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 4.8,
+            "total_ratings": 12,
+            "total_installs": 321,
+            "reports_count": 1,
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    details = dim["details"]
+    assert details["total_installs"] == 321
+    assert details["total_ratings"] == 12
+    assert details["avg_rating"] == 4.8
+    assert details["reports_count"] == 1
+    # avg_rating 4.8/5 → 96 points
+    assert dim["score"] == 96
+
+
+def test_feedback_absent_keeps_neutral_default() -> None:
+    """Without feedback, user_feedback stays neutral (50) with zero installs."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["score"] == 50
+    assert dim["details"]["total_installs"] == 0
+    assert dim["details"]["total_ratings"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
