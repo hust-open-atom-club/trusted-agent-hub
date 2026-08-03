@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { fetchPackage, fetchPackageVersion, fetchPackageVersions, fetchTrustHistory } from '@/data/packages';
 import type { Package, TrustHistoryPoint, VersionDetail, VersionSummary } from '@/types';
+import { getInstallMethodInfo } from '@/lib/install-info';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
@@ -571,6 +572,44 @@ export default function PackageDetailPage() {
             color: 'var(--color-warning)',
           }}>
             &#x26A0; {install.pre_install_message}
+          </div>
+        )}
+        {install && (
+          <div
+            className="install-method-info"
+            style={{
+              padding: '0.75rem 1rem',
+              background: 'var(--color-paper-2)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-rule)',
+              marginBottom: '0.75rem',
+              fontSize: '0.85rem',
+            }}
+          >
+            <strong>安装方式：</strong>
+            {(() => {
+              const info = getInstallMethodInfo(install.method);
+              return (
+                <>
+                  <span>{info.label}</span>
+                  <p style={{ marginTop: '0.25rem', color: 'var(--color-ink-2)' }}>
+                    {info.description}
+                  </p>
+                  {info.requiresExternalCommand && (
+                    <p style={{ marginTop: '0.25rem', color: 'var(--color-warning)' }}>
+                      &#x26A0; 该方式会执行外部命令（npm / pip / docker），安装时需要显式确认
+                      （<code>--yes</code> 或交互确认）。
+                    </p>
+                  )}
+                  {deps?.mcp_servers && deps.mcp_servers.length > 0 && (
+                    <p style={{ marginTop: '0.25rem', color: 'var(--color-ink-2)' }}>
+                      安装时会写入 MCP 配置（claude-code → <code>~/.claude.json</code>；
+                      cursor → <code>~/.cursor/mcp.json</code>），写入前需要确认。
+                    </p>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
         <p style={{ marginBottom: 12 }}>
