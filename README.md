@@ -108,7 +108,7 @@ cd TrustedAgentHub
 pip install -r requirements.txt
 
 # 配置数据库连接 (apps/api/.env)
-echo "DATABASE_URL=postgresql://postgres:password@localhost:5432/trusted_agent_hub" > apps/api/.env
+    echo "DATABASE_URL=postgresql://postgres:password@127.0.0.1:5432/trusted_agent_hub" > apps/api/.env
 
 # 数据库迁移
 cd apps/api
@@ -135,7 +135,7 @@ docker compose up -d
 
 启动后访问：
 - **Web 前端**：http://localhost:3000
-- **Swagger API 文档**：http://localhost:8000/docs
+- **Swagger API 文档**：http://127.0.0.1:8000/docs
 
 ---
 

@@ -2,7 +2,7 @@
  * TrustedAgentHub Consumer API Client.
  *
  * API_BASE is read from TRUSTED_AGENT_HUB_API_URL env var, defaulting to
- * http://localhost:8000.  A custom fetch implementation can be injected
+ * http://127.0.0.1:8000.  A custom fetch implementation can be injected
  * (useful for testing).
  */
 
@@ -112,7 +112,7 @@ export interface InstallRecordResponse {
 const API_BASE =
   process.env.TRUSTED_AGENT_HUB_API_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
-  'http://localhost:8000';
+  'http://127.0.0.1:8000';
 
 const API_TOKEN = process.env.TRUSTED_AGENT_HUB_TOKEN || '';
 
