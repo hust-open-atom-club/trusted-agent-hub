@@ -6,10 +6,9 @@ import { fetchPackage, fetchPackageVersion, fetchPackageVersions, fetchTrustHist
 import type { Package, TrustHistoryPoint, VersionDetail, VersionSummary } from '@/types';
 import {
   buildInstallCommand,
-  CLIENT_OPTIONS,
+  getClientLabel,
   getClientTargetPath,
   getInstallMethodInfo,
-  isClientCompatible,
 } from '@/lib/install-info';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
@@ -622,7 +621,7 @@ export default function PackageDetailPage() {
             })()}
           </div>
         )}
-        {compat.length > 0 && (
+        {compat.length > 1 && (
           <div
             style={{
               marginBottom: '0.75rem',
@@ -643,17 +642,18 @@ export default function PackageDetailPage() {
                 color: 'var(--color-ink)',
               }}
             >
-              {CLIENT_OPTIONS.map((opt) => {
-                const enabled = isClientCompatible(opt.id, compat);
-                return (
-                  <option key={opt.id} value={opt.id} disabled={!enabled}>
-                    {opt.label}
-                    {enabled ? '' : '（该包未声明此客户端）'}
-                  </option>
-                );
-              })}
+              {compat.map((c) => (
+                <option key={c} value={c}>
+                  {getClientLabel(c)}
+                </option>
+              ))}
             </select>
           </div>
+        )}
+        {compat.length === 1 && (
+          <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem' }}>
+            <strong>目标客户端：</strong> {getClientLabel(compat[0])}
+          </p>
         )}
         <p style={{ marginBottom: 12 }}>
           Install this {typeLabel.toLowerCase()} using the TrustedAgentHub CLI:
