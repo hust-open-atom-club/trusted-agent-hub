@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildInstallCommand,
   CLIENT_OPTIONS,
+  getClientsForType,
   getClientLabel,
   getClientTargetPath,
   getInstallMethodInfo,
+  getSelectableClients,
   isClientCompatible,
 } from './install-info';
 
@@ -126,5 +128,55 @@ describe('CLIENT_OPTIONS / isClientCompatible', () => {
     expect(
       isClientCompatible('claude-code-plugin', ['claude-code', 'cursor']),
     ).toBe(false);
+  });
+});
+
+describe('getClientsForType', () => {
+  it('limits plugin packages to claude-code-plugin', () => {
+    expect(getClientsForType('plugin')).toEqual(['claude-code-plugin']);
+  });
+
+  it('allows skills to target claude-code and cursor only', () => {
+    expect(getClientsForType('skill')).toEqual(['claude-code', 'cursor']);
+  });
+
+  it('returns an empty list for unknown types', () => {
+    expect(getClientsForType('unknown')).toEqual([]);
+    expect(getClientsForType(null)).toEqual([]);
+  });
+});
+
+describe('getSelectableClients', () => {
+  it('removes plugin install from skills even if declared', () => {
+    expect(
+      getSelectableClients('skill', ['claude-code', 'claude-code-plugin']),
+    ).toEqual(['claude-code']);
+  });
+
+  it('removes skill/cursor installs from plugins even if declared', () => {
+    expect(
+      getSelectableClients('plugin', ['claude-code', 'cursor', 'claude-code-plugin']),
+    ).toEqual(['claude-code-plugin']);
+  });
+
+  it('falls back to type defaults when compatibility is missing', () => {
+    expect(getSelectableClients('skill', null)).toEqual([
+      'claude-code',
+      'cursor',
+    ]);
+    expect(getSelectableClients('plugin', [])).toEqual(['claude-code-plugin']);
+  });
+
+  it('falls back to type defaults when declared clients are unsupported', () => {
+    expect(getSelectableClients('skill', ['vscode', 'windsurf'])).toEqual([
+      'claude-code',
+      'cursor',
+    ]);
+  });
+
+  it('keeps only declared clients that are supported and type-valid', () => {
+    expect(
+      getSelectableClients('skill', ['claude-code', 'cursor', 'vscode']),
+    ).toEqual(['claude-code', 'cursor']);
   });
 });

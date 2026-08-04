@@ -68,6 +68,46 @@ export const CLIENT_OPTIONS: Array<{ id: string; label: string }> = [
   { id: 'cursor', label: 'Cursor' },
 ];
 
+/**
+ * Which install clients each package type may target.
+ * Mirrors packages/schema constants; the detail page and backend both
+ * use this as the single source of truth.
+ */
+const PACKAGE_TYPE_INSTALL_CLIENTS: Record<string, readonly string[]> = {
+  skill: ['claude-code', 'cursor'],
+  mcp_server: ['claude-code', 'cursor'],
+  plugin: ['claude-code-plugin'],
+  subagent: ['claude-code'],
+  command: ['claude-code'],
+  prompt: ['claude-code'],
+};
+
+/** All install clients the CLI currently supports. */
+const SUPPORTED_INSTALL_CLIENTS = CLIENT_OPTIONS.map((c) => c.id);
+
+export function getClientsForType(type?: string | null): string[] {
+  return [...(PACKAGE_TYPE_INSTALL_CLIENTS[type ?? ''] ?? [])];
+}
+
+/**
+ * Resolve the clients shown in the install selector.
+ * Declared compatibility is intersected with the clients allowed by the
+ * package type; when nothing is declared (or the declared list contains no
+ * supported client), the type defaults are used.
+ */
+export function getSelectableClients(
+  type?: string | null,
+  compatibility?: string[] | null,
+): string[] {
+  const allowed = getClientsForType(type);
+  const declared = (compatibility ?? []).filter((c) =>
+    SUPPORTED_INSTALL_CLIENTS.includes(c),
+  );
+  if (declared.length === 0) return allowed;
+  const selectable = declared.filter((c) => allowed.includes(c));
+  return selectable.length > 0 ? selectable : allowed;
+}
+
 export function getClientLabel(client: string): string {
   return CLIENT_LABELS[client] ?? client;
 }

@@ -271,6 +271,7 @@ RISK_TAG_LEVELS: Final[dict[str, str]] = {
 # ============================================================
 CLIENTS: Final[tuple[str, ...]] = (
     "claude-code",
+    "claude-code-plugin",
     "claude-ai",
     "cursor",
     "vscode",
@@ -283,6 +284,7 @@ CLIENTS: Final[tuple[str, ...]] = (
 
 CLIENT_LABELS: Final[dict[str, str]] = {
     "claude-code": "Claude Code",
+    "claude-code-plugin": "Claude Code 插件",
     "claude-ai": "claude.ai",
     "cursor": "Cursor",
     "vscode": "VS Code",
@@ -291,6 +293,18 @@ CLIENT_LABELS: Final[dict[str, str]] = {
     "github-copilot": "GitHub Copilot",
     "windsurf": "Windsurf",
     "cline": "Cline",
+}
+
+
+# 包类型允许安装到的客户端。
+# 详情页的安装目标选择与后端校验都以该映射为唯一依据。
+PACKAGE_TYPE_INSTALL_CLIENTS: Final[dict[str, tuple[str, ...]]] = {
+    "skill": ("claude-code", "cursor"),
+    "mcp_server": ("claude-code", "cursor"),
+    "plugin": ("claude-code-plugin",),
+    "subagent": ("claude-code",),
+    "command": ("claude-code",),
+    "prompt": ("claude-code",),
 }
 
 

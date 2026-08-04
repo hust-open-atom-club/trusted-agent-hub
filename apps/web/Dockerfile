@@ -5,9 +5,11 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+RUN npm config set registry https://registry.npmmirror.com
 RUN npm ci
 
 COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # Stage 2: 生产运行

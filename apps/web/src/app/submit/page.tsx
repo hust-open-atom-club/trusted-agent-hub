@@ -61,6 +61,15 @@ interface PackageMetadata {
 
 type ScanPhase = 'input' | 'scanning' | 'confirm' | 'submitting' | 'done';
 
+const TYPE_DEFAULT_CLIENTS: Record<string, string> = {
+  skill: 'claude-code, cursor',
+  mcp_server: 'claude-code, cursor',
+  plugin: 'claude-code-plugin',
+  subagent: 'claude-code',
+  command: 'claude-code',
+  prompt: 'claude-code',
+};
+
 function isPlaceholderStr(v: string | undefined | null): boolean {
   if (!v || v.trim() === '') return true;
   if (v === 'UNKNOWN' || v === 'unknown@unknown.org' || v === 'UNLICENSED') return true;
@@ -448,7 +457,12 @@ function SubmitForm() {
                 <label style={lbl}>类型</label>
                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                   {PACKAGE_TYPES.map((t) => (
-                    <button key={t.value} type="button" onClick={() => setPkgType(t.value)} disabled={isBusy}
+                    <button key={t.value} type="button" onClick={() => {
+                      setPkgType(t.value);
+                      setPkgCompatibility((prev) => (
+                        prev && prev.trim() ? prev : TYPE_DEFAULT_CLIENTS[t.value]
+                      ));
+                    }} disabled={isBusy}
                       style={{
                         padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-pill)',
                         border: pkgType === t.value ? '2px solid var(--color-accent)' : '1px solid var(--color-rule)',
@@ -565,7 +579,14 @@ function SubmitForm() {
                 <div style={fieldStyle}>
                   <label style={lbl}>兼容客户端</label>
                   <input type="text" value={pkgCompatibility} onChange={(e) => setPkgCompatibility(e.target.value)}
-                    disabled={isBusy} placeholder="逗号分隔: claude-code, vscode" style={inp} />
+                    disabled={isBusy} placeholder={'逗号分隔，如: ' + (TYPE_DEFAULT_CLIENTS[pkgType] ?? 'claude-code')} style={inp} />
+                  <span style={hint}>
+                    {pkgType === 'plugin'
+                      ? '插件仅支持 Claude Code 插件方式安装（claude-code-plugin）。'
+                      : pkgType === 'skill' || pkgType === 'mcp_server'
+                        ? '该类型可安装到 Claude Code / Cursor。'
+                        : '该类型仅支持安装到 Claude Code。'}
+                  </span>
                 </div>
 
                 {/* 原始元数据预览 */}

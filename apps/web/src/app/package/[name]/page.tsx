@@ -9,6 +9,7 @@ import {
   getClientLabel,
   getClientTargetPath,
   getInstallMethodInfo,
+  getSelectableClients,
 } from '@/lib/install-info';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
@@ -180,9 +181,10 @@ export default function PackageDetailPage() {
   const deps = versionDetail?.dependencies;
   const entry = versionDetail?.entry_points;
   const compat = versionDetail?.compatibility ?? [];
-  const effectiveClient = compat.includes(selectedClient)
+  const selectableClients = getSelectableClients(pkg.type, compat);
+  const effectiveClient = selectableClients.includes(selectedClient)
     ? selectedClient
-    : (compat[0] ?? 'claude-code');
+    : (selectableClients[0] ?? 'claude-code');
   const trustScore = versionDetail?.trust_score;
 
   return (
@@ -621,7 +623,7 @@ export default function PackageDetailPage() {
             })()}
           </div>
         )}
-        {compat.length > 1 && (
+        {selectableClients.length > 1 && (
           <div
             style={{
               marginBottom: '0.75rem',
@@ -642,7 +644,7 @@ export default function PackageDetailPage() {
                 color: 'var(--color-ink)',
               }}
             >
-              {compat.map((c) => (
+              {selectableClients.map((c) => (
                 <option key={c} value={c}>
                   {getClientLabel(c)}
                 </option>
@@ -650,9 +652,9 @@ export default function PackageDetailPage() {
             </select>
           </div>
         )}
-        {compat.length === 1 && (
+        {selectableClients.length === 1 && (
           <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem' }}>
-            <strong>目标客户端：</strong> {getClientLabel(compat[0])}
+            <strong>目标客户端：</strong> {getClientLabel(selectableClients[0])}
           </p>
         )}
         <p style={{ marginBottom: 12 }}>
@@ -663,7 +665,7 @@ export default function PackageDetailPage() {
           {'\n'}
           {buildInstallCommand(
             pkg.name,
-            compat,
+            selectableClients,
             install?.method,
             effectiveClient,
           )}

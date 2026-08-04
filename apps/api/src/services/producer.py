@@ -20,6 +20,7 @@ from src.models.producer import (
 from schema.constants import (
     STATUS_TRANSITIONS, VersionStatus, AuditAction,
     GRADE_TO_RISK_LEVEL, GRADE_TO_RECOMMENDATION,
+    PACKAGE_TYPE_INSTALL_CLIENTS,
 )
 
 _SEMVER_RE = re.compile(
@@ -41,6 +42,28 @@ class ProducerService:
 
     def __init__(self, repository: ProducerRepository) -> None:
         self.repository = repository
+
+    @staticmethod
+    def _normalize_compatibility(
+        package_type: str, compatibility: list[str] | None
+    ) -> list[str]:
+        """Validate and normalize install clients allowed by the package type."""
+        allowed = list(PACKAGE_TYPE_INSTALL_CLIENTS.get(package_type, ()))
+        values = [
+            str(c).strip()
+            for c in (compatibility or [])
+            if c and str(c).strip()
+        ]
+        invalid = [c for c in values if c not in allowed]
+        if invalid:
+            raise ProducerServiceError(
+                f"包类型 '{package_type}' 不允许安装到客户端: "
+                f"{', '.join(invalid)}；允许的客户端: "
+                f"{', '.join(allowed) or '无'}"
+            )
+        if values:
+            return values
+        return allowed or ["claude-code"]
 
     # ── 创建包 ────────────────────────────────────────────
 
@@ -72,7 +95,9 @@ class ProducerService:
             permissions=data.permissions.model_dump() if data.permissions else None,
             installation=data.installation.model_dump() if data.installation else None,
             source=data.source.model_dump() if data.source else None,
-            compatibility=data.compatibility,
+            compatibility=self._normalize_compatibility(
+                data.type.value, data.compatibility
+            ),
             field_source=data.field_source,
         )
         return PackageResponse(
@@ -99,6 +124,7 @@ class ProducerService:
         pkg = self.repository.get_package(package_id)
         if pkg is None:
             raise ProducerServiceError(f"包 {package_id} 不存在")
+        package_type = str(pkg.get("type") or "skill")
 
         # 校验 SemVer
         if not _SEMVER_RE.match(data.version):
@@ -115,7 +141,9 @@ class ProducerService:
             source=data.source.model_dump() if data.source else None,
             integrity=data.integrity.model_dump() if data.integrity else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
-            compatibility=data.compatibility,
+            compatibility=self._normalize_compatibility(
+                package_type, data.compatibility
+            ),
             installation=data.installation.model_dump() if data.installation else None,
             field_source=data.field_source,
         )
@@ -340,13 +368,28 @@ class ProducerService:
         integrity["download_size_bytes"] = artifact.get("download_size_bytes", 0)
         data["integrity"] = integrity
 
-        compatibility = data.get("compatibility") or ["claude-code"]
-        if isinstance(compatibility, list) and compatibility:
-            target_client = str(compatibility[0])
-        else:
-            target_client = "claude-code"
+        package = self.repository.get_package(version.get("package_id", ""))
+        package_type = str(package.get("type") or "skill") if package else "skill"
+        allowed_clients = list(
+            PACKAGE_TYPE_INSTALL_CLIENTS.get(package_type, ("claude-code",))
+        )
+        raw_compatibility = data.get("compatibility") or []
+        if not isinstance(raw_compatibility, list):
+            raw_compatibility = []
+        compatibility = [
+            str(c)
+            for c in raw_compatibility
+            if str(c) in allowed_clients
+        ] or allowed_clients
+        target_client = str(compatibility[0])
         data["compatibility"] = compatibility
 
+        client_roots = {
+            "claude-code": "~/.claude/skills/",
+            "claude-code-plugin": "~/.claude/plugins/",
+            "cursor": "~/.cursor/skills/",
+        }
+        destination_root = client_roots.get(target_client, "~/.claude/skills/")
         data["installation"] = {
             "method": "copy_directory",
             "target_client": target_client,
@@ -354,7 +397,7 @@ class ProducerService:
                 {"action": "download", "url": artifact.get("download_url", "")},
                 {"action": "verify", "algorithm": "sha256", "checksum": artifact.get("sha256", "")},
                 {"action": "extract"},
-                {"action": "copy", "client": target_client, "destination": f"~/.claude/skills/{package_name}/"},
+                {"action": "copy", "client": target_client, "destination": f"{destination_root}{package_name}/"},
             ],
             "pre_install_message": f"将安装 {package_name}@{pkg_version} 到 {target_client}",
             "post_install_message": "安装完成。请在客户端中确认工具可用。",
@@ -762,12 +805,14 @@ class ProducerService:
         validate_transition(current, target)
 
         # ── Pre-publish install validation ────────────────────
-        missing = _validate_install_readiness(version)
+        package = self.repository.get_package(version.get("package_id", ""))
+        package_type = str(package.get("type") or "skill") if package else "skill"
+        missing = _validate_install_readiness(version, package_type)
         if missing:
             # 兜底：安装资料缺失/产物丢失时尝试补打包
             if self._try_rebuild_artifact(version_id):
                 version = self.repository.get_version(version_id)
-                missing = _validate_install_readiness(version)
+                missing = _validate_install_readiness(version, package_type)
             if missing:
                 raise ProducerServiceError(
                     f"版本安装资料不完整，无法发布。缺失字段: {', '.join(missing)}"
@@ -1198,7 +1243,10 @@ _REQUIRED_INSTALL_FIELDS = [
 ]
 
 
-def _validate_install_readiness(version: dict[str, object]) -> list[str]:
+def _validate_install_readiness(
+    version: dict[str, object],
+    package_type: str = "skill",
+) -> list[str]:
     """Check that a version has all required install-manifest fields.
 
     Returns a list of human-readable missing-field descriptions.
@@ -1236,6 +1284,17 @@ def _validate_install_readiness(version: dict[str, object]) -> list[str]:
             val = parent.get(field_name)
             if val is None or val == "" or (isinstance(val, list) and len(val) == 0):
                 missing.append(field_path)
+
+    # compatibility must match the package type's allowed install clients
+    compat = version.get("compatibility")
+    if isinstance(compat, list):
+        allowed = PACKAGE_TYPE_INSTALL_CLIENTS.get(package_type, ())
+        invalid = [str(c) for c in compat if str(c) not in allowed]
+        if invalid:
+            missing.append(
+                f"compatibility (type '{package_type}' 不允许: "
+                f"{', '.join(invalid)})"
+            )
 
     # effective_grade check
     auto_grade = None

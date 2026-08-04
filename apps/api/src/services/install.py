@@ -5,7 +5,11 @@ import re
 
 from pydantic import TypeAdapter, ValidationError
 
-from schema.constants import GRADE_TO_RECOMMENDATION, GRADE_TO_RISK_LEVEL
+from schema.constants import (
+    GRADE_TO_RECOMMENDATION,
+    GRADE_TO_RISK_LEVEL,
+    PACKAGE_TYPE_INSTALL_CLIENTS,
+)
 from src.errors import ConsumerAPIError
 from src.models.install import (
     CopyInstallationStep,
@@ -76,7 +80,8 @@ class InstallManifestService:
 
         integrity = record.integrity
 
-        if client not in record.compatibility:
+        allowed_clients = PACKAGE_TYPE_INSTALL_CLIENTS.get(package.type, ())
+        if client not in allowed_clients or client not in record.compatibility:
             invalid_fields.append("compatibility")
 
         # 目标客户端解析：同一个包可通过 installation.targets 显式声明
