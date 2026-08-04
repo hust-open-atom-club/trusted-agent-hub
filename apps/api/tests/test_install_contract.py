@@ -5,11 +5,30 @@ from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 
 from src.models.install import ManifestInstallationStep
-from src.models.packages import InstallationStep
+from src.models.packages import Dependencies, InstallationStep
 from src.repositories.mock import JsonPackageRepository
 
 
 MANIFEST_PATH = "/api/v0/packages/code-review-skill/install-manifest"
+
+
+def test_dependencies_accept_mcp_server_args_and_env_arrays() -> None:
+    """mcp_servers entries must support command/args/env used by CLI config writers."""
+
+    deps = Dependencies(
+        mcp_servers=[
+            {
+                "name": "demo-mcp-config",
+                "command": "python",
+                "args": ["server.py"],
+                "env": {"LOG_LEVEL": "info"},
+            }
+        ]
+    )
+
+    assert deps.mcp_servers is not None
+    assert deps.mcp_servers[0]["args"] == ["server.py"]
+    assert deps.mcp_servers[0]["env"] == {"LOG_LEVEL": "info"}
 
 
 def test_install_manifest_defaults_to_latest_published_version(
@@ -213,13 +232,12 @@ def test_install_manifest_collects_all_unsafe_fields_deterministically(
                 "Install manifest for 'demo-filesystem@1.0.0' "
                 "is unavailable."
             ),
-            "details": {
-                "invalid_fields": [
-                    "source.download_url",
-                    "integrity.sha256",
-                    "installation.steps",
-                    "installation.target_client",
-                    "installation.method",
+                "details": {
+                    "invalid_fields": [
+                        "source.repository_url",
+                        "installation.steps",
+                        "installation.target_client",
+                        "installation.method",
                     "permissions",
                     "risk_summary.grade",
                 ]
@@ -267,12 +285,20 @@ def test_install_manifest_openapi_contract_is_strict(client: TestClient) -> None
         "#/components/schemas/VerifyInstallationStep",
         "#/components/schemas/ExtractInstallationStep",
         "#/components/schemas/CopyInstallationStep",
+        "#/components/schemas/NpmInstallationStep",
+        "#/components/schemas/PipInstallationStep",
+        "#/components/schemas/DockerRunInstallationStep",
+        "#/components/schemas/ManualStepsInstallationStep",
     }
     for schema_name, required in {
         "DownloadInstallationStep": ["action", "url"],
         "VerifyInstallationStep": ["action", "algorithm", "checksum"],
         "ExtractInstallationStep": ["action", "archive"],
         "CopyInstallationStep": ["action", "source", "destination"],
+        "NpmInstallationStep": ["action", "package", "version"],
+        "PipInstallationStep": ["action", "package"],
+        "DockerRunInstallationStep": ["action", "image"],
+        "ManualStepsInstallationStep": ["action", "text"],
     }.items():
         assert schemas[schema_name]["additionalProperties"] is False
         assert schemas[schema_name]["required"] == required
@@ -282,7 +308,6 @@ def test_install_manifest_openapi_contract_is_strict(client: TestClient) -> None
         "type",
         "description",
         "source",
-        "integrity",
         "installation",
         "permissions",
         "risk_summary",

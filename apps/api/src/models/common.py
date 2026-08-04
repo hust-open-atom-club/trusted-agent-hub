@@ -1,9 +1,10 @@
 """Shared models for the Consumer API contract."""
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PackageType(StrEnum):
@@ -41,11 +42,26 @@ class PackageListQuery(BaseModel):
     type: PackageType | None = None
     client: str | None = None
     category: str | None = None
+    tag: str | None = None
+    min_grade: Literal["A", "B", "C", "D", "E"] | None = None
+    min_score: float | None = Field(default=None, ge=0, le=100)
+    max_score: float | None = Field(default=None, ge=0, le=100)
+    updated_since: datetime | None = None
     status: Literal["published"] = "published"
     sort_by: SortField = SortField.UPDATED_AT
     order: SortOrder = SortOrder.DESC
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _score_range_is_ordered(self) -> "PackageListQuery":
+        if (
+            self.min_score is not None
+            and self.max_score is not None
+            and self.min_score > self.max_score
+        ):
+            raise ValueError("min_score must not be greater than max_score")
+        return self
 
 
 class Owner(StrictContractModel):

@@ -277,6 +277,13 @@ export interface VersionSummary {
   created_at?: string | null;
 }
 
+export interface TrustHistoryPoint {
+  version: string;
+  score: number | null;
+  grade: string | null;
+  calculated_at?: string | null;
+}
+
 /* ── 包详情（审核页扩展） ── */
 
 /* ── 用户反馈 ── */

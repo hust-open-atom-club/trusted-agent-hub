@@ -19,6 +19,7 @@ from src.models.packages import PackageDetail as CanonicalPackageDetail
 from src.models.packages import (
     CredentialsPermissions,
     EnvironmentPermissions,
+    Grade,
     PackagePage,
     PackageStats,
     PackageSummary,
@@ -237,6 +238,11 @@ def test_package_query_defaults_are_public_and_canonical() -> None:
         "type",
         "client",
         "category",
+        "tag",
+        "min_grade",
+        "min_score",
+        "max_score",
+        "updated_since",
         "status",
         "sort_by",
         "order",
@@ -328,6 +334,14 @@ def test_null_numeric_sort_values_are_always_last(
         ({"category": "Development"}, set()),
         ({"client": "claude-code"}, {"alpha-package", "beta-package"}),
         ({"client": "codex"}, {"Gamma-package"}),
+        ({"tag": "Quality"}, {"alpha-package"}),
+        ({"tag": "missing"}, set()),
+        ({"min_grade": "B"}, {"alpha-package"}),
+        ({"min_grade": "A"}, set()),
+        ({"min_score": 80}, {"alpha-package"}),
+        ({"max_score": 74}, {"Gamma-package"}),
+        ({"min_score": 60, "max_score": 74}, {"Gamma-package"}),
+        ({"updated_since": "2025-06-01T00:00:00Z"}, {"alpha-package"}),
         (
             {
                 "q": "AUTOMATION",
@@ -347,6 +361,16 @@ def test_list_filters_public_packages(
     page = PackageService(fake_repository).list_packages(PackageListQuery(**query))
 
     assert {item.name for item in page.items} == expected
+
+
+def test_trust_history_reports_published_version_scores(
+    fake_repository: FakeRepository,
+) -> None:
+    points = PackageService(fake_repository).get_trust_history("alpha-package")
+
+    assert [point.version for point in points] == ["2.0.0"]
+    assert points[0].grade == Grade.B
+    assert points[0].score == 85.0
 
 
 @pytest.mark.parametrize(
@@ -782,6 +806,33 @@ def test_http_versions_list_contains_only_published_versions(
         ({"category": "productivity"}, {"dev-toolkit-plugin"}),
         ({"type": "command"}, {"docker-deploy-command"}),
         ({"q": "postgresql"}, {"postgres-explorer"}),
+        ({"tag": "quality"}, {"code-review-skill"}),
+        (
+            {"min_grade": "B"},
+            {"code-review-skill", "postgres-explorer", "git-helper-skill"},
+        ),
+        ({"min_grade": "A"}, {"code-review-skill", "git-helper-skill"}),
+        ({"min_score": 90}, {"code-review-skill", "git-helper-skill"}),
+        (
+            {"max_score": 89},
+            {
+                "postgres-explorer",
+                "dev-toolkit-plugin",
+                "demo-filesystem",
+                "docker-deploy-command",
+            },
+        ),
+        (
+            {"updated_since": "2026-06-01T00:00:00Z"},
+            {
+                "code-review-skill",
+                "postgres-explorer",
+                "dev-toolkit-plugin",
+                "demo-filesystem",
+                "git-helper-skill",
+                "docker-deploy-command",
+            },
+        ),
         (
             {"status": "published"},
             {
@@ -827,6 +878,37 @@ def test_http_list_rejects_invalid_enums_and_ranges(
     assert response.status_code == 422
 
 
+def test_http_trust_history_endpoint_returns_published_version_scores(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/v0/packages/code-review-skill/trust-history")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "version": "1.0.0",
+            "score": 95.0,
+            "grade": "A",
+            "calculated_at": None,
+        }
+    ]
+
+
+def test_http_trust_history_uses_canonical_not_found(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/v0/packages/risky-executor/trust-history")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "package_not_found",
+            "message": "Package 'risky-executor' was not found.",
+            "details": {},
+        }
+    }
+
+
 def test_http_health_uses_canonical_response(client: TestClient) -> None:
     response = client.get("/api/v0/health")
 
@@ -854,6 +936,11 @@ def test_http_package_query_names_are_exactly_canonical(
         "type",
         "client",
         "category",
+        "tag",
+        "min_grade",
+        "min_score",
+        "max_score",
+        "updated_since",
         "status",
         "sort_by",
         "order",

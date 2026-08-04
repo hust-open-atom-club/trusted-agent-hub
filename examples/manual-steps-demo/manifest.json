@@ -1,0 +1,30 @@
+{
+  "name": "demo-manual-steps",
+  "version": "1.0.0",
+  "description": "演示 manual_steps 安装方式：只展示人工安装步骤，不执行任何命令",
+  "type": "skill",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": ["manual", "install-method", "demo"],
+  "compatibility": ["claude-code"],
+  "permissions": {
+    "filesystem": { "read": [], "write": [], "delete": false },
+    "shell": { "allowed": false, "commands": [] },
+    "network": { "allowed": false, "domains": [] }
+  },
+  "installation": {
+    "method": "manual_steps",
+    "target_client": "claude-code",
+    "steps": [
+      {
+        "action": "manual_steps",
+        "title": "demo-manual-steps",
+        "text": "请阅读 README，并手动将 skill 内容复制到你的客户端 skills 目录。"
+      }
+    ],
+    "post_install_message": "人工安装步骤已记录，未执行任何命令"
+  }
+}

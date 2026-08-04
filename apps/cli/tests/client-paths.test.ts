@@ -50,7 +50,11 @@ assert.deepStrictEqual(
 console.log('  ✓ CLIENT_MANIFEST_ROOTS has expected keys');
 
 // --- SUPPORTED_CLIENTS ---
-assert.deepStrictEqual(SUPPORTED_CLIENTS, ['claude-code', 'cursor']);
+assert.deepStrictEqual(SUPPORTED_CLIENTS, [
+  'claude-code',
+  'claude-code-plugin',
+  'cursor',
+]);
 console.log('  ✓ SUPPORTED_CLIENTS');
 
 // --- isSupportedClient ---

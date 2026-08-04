@@ -85,9 +85,12 @@ class InstallManifestQuery(StrictContractModel):
 class ManifestSource(StrictContractModel):
     type: SourceType
     repository_url: HttpsUrl
-    download_url: HttpsUrl
+    download_url: HttpsUrl | None = None
     ref: str = Field(min_length=1)
-    commit_hash: str = Field(pattern=r"^[a-f0-9]{40}$")
+    commit_hash: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{40}$",
+    )
 
 
 class ManifestIntegrity(StrictContractModel):
@@ -117,11 +120,63 @@ class CopyInstallationStep(StrictContractModel):
     destination: SafeInstallPath
 
 
+class NpmInstallationStep(StrictContractModel):
+    action: Literal["npm_install"]
+    package: NonBlankString
+    version: str = Field(pattern=SEMANTIC_VERSION_PATTERN)
+    registry: HttpsUrl | None = None
+
+
+class PipInstallationStep(StrictContractModel):
+    action: Literal["pip_install"]
+    package: NonBlankString
+    version: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-Za-z_.+\-]+$",
+    )
+    index_url: HttpsUrl | None = None
+
+
+class DockerRunInstallationStep(StrictContractModel):
+    action: Literal["docker_run"]
+    image: NonBlankString = Field(
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$"
+    )
+    tag: str | None = Field(
+        default=None,
+        pattern=r"^[a-zA-Z0-9._-]+$",
+    )
+    ports: list[str] = Field(
+        default_factory=list,
+        description="形如 8080:80/tcp 或 5432 的端口映射",
+    )
+    volumes: list[str] = Field(
+        default_factory=list,
+        description="形如 ./data:/var/lib/app 的卷映射",
+    )
+    env: list[str] = Field(
+        default_factory=list,
+        description="形如 KEY=VALUE 的环境变量",
+    )
+
+
+class ManualStepsInstallationStep(StrictContractModel):
+    action: Literal["manual_steps"]
+    title: str | None = Field(default=None, max_length=128)
+    text: NonBlankString = Field(
+        description="人工安装步骤说明，逐行展示"
+    )
+
+
 StepVariant = Annotated[
     DownloadInstallationStep
     | VerifyInstallationStep
     | ExtractInstallationStep
-    | CopyInstallationStep,
+    | CopyInstallationStep
+    | NpmInstallationStep
+    | PipInstallationStep
+    | DockerRunInstallationStep
+    | ManualStepsInstallationStep,
     Field(discriminator="action"),
 ]
 
@@ -145,7 +200,7 @@ class InstallManifest(StrictContractModel):
     type: PackageType
     description: str
     source: ManifestSource
-    integrity: ManifestIntegrity
+    integrity: ManifestIntegrity | None = None
     installation: ManifestInstallation
     permissions: Permissions
     risk_summary: RiskSummary

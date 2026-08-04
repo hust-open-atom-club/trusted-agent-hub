@@ -37,6 +37,26 @@ import {
 import { computeDirectoryDigest } from './content-integrity';
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
+import { runDockerInstall } from './executors/docker';
+import { runManualInstall } from './executors/manual';
+import { runNpmInstall } from './executors/npm';
+import { runPipInstall } from './executors/pip';
+import {
+  defaultRunCommand,
+  NO_ARTIFACT_SHA256,
+  type ExecutorContext,
+  type ExecutorResult,
+  type RunCommand,
+} from './executors/types';
+import {
+  describeMcpDiff,
+  mcpServersFromManifest,
+  readJsonConfig,
+  removeMcpEntries,
+  resolveMcpConfigPath,
+  writeMergedMcpConfig,
+  type McpWriteSummary,
+} from './config-writer';
 
 const streamPipeline = promisify(pipeline);
 
@@ -85,7 +105,7 @@ export interface InstallResult {
   success: true;
   manifest: InstallManifest;
   targetDir: string;
-  sha256: string;
+  sha256: string | null;
   record: LocalInstallRecord;
 }
 
@@ -112,6 +132,20 @@ export interface InstallOptions {
    *  activation without touching the existing installation.  Used by UpdateExecutor
    *  for a final TOCTOU check. */
   beforeActivate?: (targetDir: string) => void | Promise<void>;
+  /** Custom command runner for npm/pip/docker executors (testing). */
+  runCommand?: RunCommand;
+  /** Confirmation gate for writing MCP client config files. */
+  confirmMcpWrite?: (
+    summary: McpWriteSummary,
+  ) => boolean | Promise<boolean>;
+  /** Confirmation gate for executors that run external commands
+   *  (npm_install / pip_install / docker_run).  Fail-closed: when absent
+   *  or denied the install is blocked before any command runs. */
+  confirmManagedInstall?: (summary: {
+    method: string;
+    packageName: string;
+    version: string;
+  }) => boolean | Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +173,13 @@ export class InstallExecutor {
   private readonly beforeSaveRecord?: () => void;
   private readonly beforeDigest?: (stagingDir: string) => void;
   private readonly beforeActivate?: (targetDir: string) => void | Promise<void>;
+  private readonly runCommand: RunCommand;
+  private readonly confirmMcpWrite?: (
+    summary: McpWriteSummary,
+  ) => boolean | Promise<boolean>;
+  private readonly confirmManagedInstall?: (
+    summary: { method: string; packageName: string; version: string },
+  ) => boolean | Promise<boolean>;
   private readonly recordStore: LocalInstallStore;
 
   constructor(
@@ -154,6 +195,9 @@ export class InstallExecutor {
     this.beforeSaveRecord = options.beforeSaveRecord;
     this.beforeDigest = options.beforeDigest;
     this.beforeActivate = options.beforeActivate;
+    this.runCommand = options.runCommand || defaultRunCommand;
+    this.confirmMcpWrite = options.confirmMcpWrite;
+    this.confirmManagedInstall = options.confirmManagedInstall;
     this.recordStore = new LocalInstallStore(this.homeDir);
   }
 
@@ -246,6 +290,11 @@ export class InstallExecutor {
       );
     }
 
+    // 非 copy_directory 安装方式（npm/pip/docker/manual）委托给对应执行器
+    if (manifest.installation.method !== 'copy_directory') {
+      return this.installNonCopy(manifest, clientType);
+    }
+
     // Resolve target directory from the manifest's logical destination.
     // The server sends paths like `~/.claude/skills/<package>/` — we strip
     // the logical root prefix and join the remainder to the real HOME-based
@@ -281,8 +330,20 @@ export class InstallExecutor {
     let stagingPopulated = false;
     let backupCreated = false;
     let targetActivated = false; // P1: track whether staging→target rename succeeded
+    let mcpInfo: {
+      configFile: string;
+      configEntries: string[];
+      backupPath: string | null;
+    } | null = null;
 
     try {
+      if (!manifest.integrity) {
+        throw new InstallError(
+          'Install manifest is missing integrity data',
+          'missing_integrity',
+        );
+      }
+      const integrity = manifest.integrity;
       // 1. Download
       const dlStep = manifest.installation.steps.find(
         (s): s is DownloadStep => s.action === 'download',
@@ -291,11 +352,11 @@ export class InstallExecutor {
         throw new InstallError('No download step in manifest', 'missing_download_step');
       }
       archivePath = path.join(tempDir, 'package.zip');
-      await this.downloadFile(dlStep.url, archivePath, manifest.integrity.download_size_bytes);
+      await this.downloadFile(dlStep.url, archivePath, integrity.download_size_bytes);
 
       // 2. Verify SHA-256
       const actualSha256 = await this.computeSha256(archivePath);
-      const expectedSha256 = manifest.integrity.sha256;
+      const expectedSha256 = integrity.sha256;
       if (actualSha256 !== expectedSha256) {
         throw new InstallError(
           `SHA-256 mismatch.\n  Expected: ${expectedSha256}\n  Actual:   ${actualSha256}`,
@@ -351,6 +412,10 @@ export class InstallExecutor {
 
       // 10. Save local install record — MUST succeed before deleting backup.
       //    If this fails, we restore the backup and remove the new target.
+      mcpInfo = await this.writeMcpConfigsIfPresent(
+        manifest,
+        clientType,
+      );
       const record: LocalInstallRecord = {
         package_name: manifest.name,
         version: manifest.version,
@@ -360,8 +425,16 @@ export class InstallExecutor {
         integrity_verified: true,
         installed_at: new Date().toISOString(),
         manifest_version: manifest.manifest_version,
+        method: manifest.installation.method,
         content_hash_algorithm: contentDigest.algorithm,
         content_sha256: contentDigest.digest,
+        ...(mcpInfo
+          ? {
+              config_file: mcpInfo.configFile,
+              config_entries: mcpInfo.configEntries,
+              backup_path: mcpInfo.backupPath ?? undefined,
+            }
+          : {}),
       };
       // Allow test hooks to inject failure at this exact point
       if (this.beforeSaveRecord) this.beforeSaveRecord();
@@ -409,10 +482,173 @@ export class InstallExecutor {
       if (backupCreated && fs.existsSync(backupDir)) {
         try { fs.renameSync(backupDir, targetDir); } catch { /* best-effort restore */ }
       }
+      if (mcpInfo) {
+        try {
+          await removeMcpEntries(
+            mcpInfo.configFile,
+            mcpInfo.configEntries,
+          );
+        } catch { /* best-effort rollback */ }
+      }
       throw err;
     } finally {
       // Always cleanup temp dir (download + extract)
       try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Non-copy install methods (npm_install / pip_install / docker_run /
+  // manual_steps).  These never touch client directories — they install into
+  // managed directories under ~/.trusted-agent-hub/installed/.
+  // -----------------------------------------------------------------------
+
+  private async installNonCopy(
+    manifest: InstallManifest,
+    clientType: string,
+  ): Promise<InstallResult> {
+    // 外部命令执行确认（manual_steps 只展示文本，无需确认）
+    if (manifest.installation.method !== 'manual_steps') {
+      const ok = this.confirmManagedInstall
+        ? await this.confirmManagedInstall({
+            method: manifest.installation.method,
+            packageName: manifest.name,
+            version: manifest.version,
+          })
+        : false;
+      if (!ok) {
+        throw new InstallBlockedError(
+          `安装方式 ${manifest.installation.method} 需要执行外部命令，` +
+            '必须显式确认（--yes 或交互确认）后才能安装。',
+          'C',
+        );
+      }
+    }
+
+    const ctx: ExecutorContext = {
+      homeDir: this.homeDir,
+      manifest,
+      clientType,
+      runCommand: this.runCommand,
+    };
+
+    let result: ExecutorResult;
+    try {
+      switch (manifest.installation.method) {
+        case 'npm_install':
+          result = await runNpmInstall(ctx);
+          break;
+        case 'pip_install':
+          result = await runPipInstall(ctx);
+          break;
+        case 'docker_run':
+          result = await runDockerInstall(ctx);
+          break;
+        case 'manual_steps':
+          result = await runManualInstall(ctx);
+          break;
+        default:
+          throw new Error(
+            `Unsupported install method: ${manifest.installation.method}`,
+          );
+      }
+    } catch (err: unknown) {
+      if (err instanceof InstallError) throw err;
+      throw new InstallError(
+        err instanceof Error ? err.message : String(err),
+        'non_copy_install_failed',
+        err,
+      );
+    }
+
+    const mcpInfo = await this.writeMcpConfigsIfPresent(
+      manifest,
+      clientType,
+    );
+    if (mcpInfo) {
+      result.record.config_file = mcpInfo.configFile;
+      result.record.config_entries = mcpInfo.configEntries;
+      result.record.backup_path = mcpInfo.backupPath ?? undefined;
+    }
+    try {
+      if (this.beforeSaveRecord) this.beforeSaveRecord();
+      this.recordStore.save(result.record);
+    } catch (err) {
+      if (mcpInfo) {
+        try {
+          await removeMcpEntries(
+            mcpInfo.configFile,
+            mcpInfo.configEntries,
+          );
+        } catch { /* best-effort rollback */ }
+      }
+      throw err;
+    }
+    this.reportInstallAsync(
+      manifest,
+      clientType,
+      result.targetDir,
+      result.sha256 ?? NO_ARTIFACT_SHA256,
+    );
+
+    return {
+      success: true,
+      manifest,
+      targetDir: result.targetDir,
+      sha256: result.sha256,
+      record: result.record,
+    };
+  }
+
+  private async writeMcpConfigsIfPresent(
+    manifest: InstallManifest,
+    clientType: string,
+  ): Promise<{
+    configFile: string;
+    configEntries: string[];
+    backupPath: string | null;
+  } | null> {
+    const entries = mcpServersFromManifest(manifest);
+    if (!entries) return null;
+    const configPath = resolveMcpConfigPath(clientType, this.homeDir);
+    if (!configPath) return null;
+
+    const current = await readJsonConfig(configPath).catch(() => ({}));
+    const diff = describeMcpDiff(current, entries);
+    if (!this.confirmMcpWrite) {
+      console.warn(
+        '  ⚠ Manifest declares MCP servers, but no confirmation gate is configured — skipping config write.',
+      );
+      return null;
+    }
+    const ok = await this.confirmMcpWrite({
+      filePath: configPath,
+      keys: Object.keys(entries),
+      diff,
+    });
+    if (!ok) {
+      console.warn('  ⚠ MCP config write skipped (not confirmed).');
+      return null;
+    }
+
+    try {
+      const result = await writeMergedMcpConfig(
+        configPath,
+        entries,
+        this.homeDir,
+      );
+      return {
+        configFile: result.filePath,
+        configEntries: Object.keys(entries),
+        backupPath: result.backupPath,
+      };
+    } catch (err) {
+      if (err instanceof InstallError) throw err;
+      throw new InstallError(
+        `MCP config write failed: ${err instanceof Error ? err.message : String(err)}`,
+        'mcp_config_write_failed',
+        err,
+      );
     }
   }
 

@@ -1,0 +1,33 @@
+{
+  "name": "demo-mcp-config",
+  "version": "1.0.0",
+  "description": "演示 MCP 配置写入：安装只读 MCP Server 目录，并把 mcpServers 条目写入客户端配置",
+  "type": "mcp_server",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": ["mcp", "config-write", "demo"],
+  "compatibility": ["claude-code"],
+  "permissions": {
+    "filesystem": { "read": ["./", "~/"], "write": [], "delete": false },
+    "shell": { "allowed": false, "commands": [] },
+    "network": { "allowed": false, "domains": [] }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "target_client": "claude-code",
+    "steps": [],
+    "post_install_message": "已写入 ~/.claude.json 的 mcpServers.demo-mcp-config 条目（原文件已备份）"
+  },
+  "dependencies": {
+    "mcp_servers": [
+      {
+        "name": "demo-mcp-config",
+        "command": "python",
+        "args": ["server.py"]
+      }
+    ]
+  }
+}

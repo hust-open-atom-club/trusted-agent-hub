@@ -4790,3 +4790,46 @@ h3 {
   text-align: center;
   user-select: none;
 }
+
+/* ============================================================
+   Advanced filters (client / grade / score range / updated / tag)
+   ============================================================ */
+
+.search-filters-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.filter-input {
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  font-size: 0.83rem;
+  font-family: var(--font-sans);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  outline: none;
+  min-height: 36px;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.filter-input:focus {
+  border-color: var(--color-accent);
+}
+
+.sort-select {
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  font-size: 0.83rem;
+  font-family: var(--font-sans);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  outline: none;
+  min-height: 36px;
+  cursor: pointer;
+}

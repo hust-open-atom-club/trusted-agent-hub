@@ -1,0 +1,33 @@
+{
+  "name": "demo-docker-run",
+  "version": "1.0.0",
+  "description": "演示 docker_run 安装方式：拉取 nginx:alpine 镜像并生成运行配置，不自动启动容器",
+  "type": "mcp_server",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": ["docker", "container", "install-method", "demo"],
+  "compatibility": ["claude-code"],
+  "permissions": {
+    "filesystem": { "read": [], "write": [], "delete": false },
+    "shell": { "allowed": false, "commands": [] },
+    "network": { "allowed": true, "domains": ["docker.io"] }
+  },
+  "installation": {
+    "method": "docker_run",
+    "target_client": "claude-code",
+    "steps": [
+      {
+        "action": "docker_run",
+        "image": "nginx",
+        "tag": "alpine",
+        "ports": ["8080:80"],
+        "volumes": [],
+        "env": ["NGINX_HOST=localhost"]
+      }
+    ],
+    "post_install_message": "镜像已拉取，运行配置已生成（docker-run.json / run-command.txt），未自动启动容器"
+  }
+}

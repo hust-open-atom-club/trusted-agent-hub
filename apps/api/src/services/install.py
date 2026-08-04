@@ -38,6 +38,7 @@ COMMIT_PATTERN = re.compile(r"^[a-f0-9]{40}$")
 HTTPS_URL_ADAPTER = TypeAdapter(HttpsUrl)
 CLIENT_INSTALL_ROOTS = {
     "claude-code": "~/.claude/skills/",
+    "claude-code-plugin": "~/.claude/plugins/",
     "cursor": "~/.cursor/skills/",
 }
 
@@ -60,36 +61,24 @@ class InstallManifestService:
 
         invalid_fields: list[str] = []
         source = record.source
+        installation = record.installation
+        method = installation.method if installation is not None else None
+
         if source is None:
-            invalid_fields.append("source.download_url")
+            invalid_fields.append("source.repository_url")
         else:
             if source.type not in SUPPORTED_SOURCE_TYPES:
                 invalid_fields.append("source.type")
             if not self._is_https_url(source.repository_url):
                 invalid_fields.append("source.repository_url")
-            if not self._is_https_url(source.download_url):
-                invalid_fields.append("source.download_url")
             if not source.ref:
                 invalid_fields.append("source.ref")
-            if not COMMIT_PATTERN.fullmatch(source.commit_hash):
-                invalid_fields.append("source.commit_hash")
 
         integrity = record.integrity
-        if integrity is None:
-            invalid_fields.append("integrity.sha256")
-        else:
-            if not SHA256_PATTERN.fullmatch(integrity.sha256):
-                invalid_fields.append("integrity.sha256")
-            if (
-                integrity.download_size_bytes is None
-                or integrity.download_size_bytes < 0
-            ):
-                invalid_fields.append("integrity.download_size_bytes")
 
         if client not in record.compatibility:
             invalid_fields.append("compatibility")
 
-        installation = record.installation
         validated_steps: list[ManifestInstallationStep] | None = None
         if installation is None or not installation.steps:
             invalid_fields.append("installation.steps")
@@ -102,81 +91,38 @@ class InstallManifestService:
             except ValidationError:
                 invalid_fields.append("installation.steps")
             else:
-                actions = [step.root.action for step in validated_steps]
-                download_steps = [
-                    (index, step.root)
-                    for index, step in enumerate(validated_steps)
-                    if isinstance(step.root, DownloadInstallationStep)
-                ]
-                verify_steps = [
-                    (index, step.root)
-                    for index, step in enumerate(validated_steps)
-                    if isinstance(step.root, VerifyInstallationStep)
-                ]
-                copy_steps = [
-                    step.root
-                    for step in validated_steps
-                    if isinstance(step.root, CopyInstallationStep)
-                ]
-                consuming_indices = [
-                    index
-                    for index, step in enumerate(validated_steps)
-                    if isinstance(
-                        step.root,
-                        (ExtractInstallationStep, CopyInstallationStep),
-                    )
-                ]
-                valid_identity = (
-                    len(download_steps) == 1
-                    and len(verify_steps) == 1
-                    and download_steps[0][0] < verify_steps[0][0]
-                    and source is not None
-                    and integrity is not None
-                    and self._canonical_https_url(
-                        str(download_steps[0][1].url)
-                    )
-                    == self._canonical_https_url(source.download_url)
-                    and verify_steps[0][1].algorithm == "sha256"
-                    and verify_steps[0][1].checksum == integrity.sha256
-                )
-                if valid_identity:
-                    verify_index = verify_steps[0][0]
-                    if installation.method == "copy_directory":
-                        valid_identity = actions == [
-                            "download",
-                            "verify",
-                            "extract",
-                            "copy",
-                        ]
-                    else:
-                        valid_identity = (
-                            len(actions) == len(set(actions))
-                            and all(
-                                index > verify_index
-                                for index in consuming_indices
-                            )
-                        )
-
-                if valid_identity and copy_steps:
-                    client_root = CLIENT_INSTALL_ROOTS.get(
-                        installation.target_client or ""
-                    )
-                    valid_identity = client_root is not None and all(
-                        self._is_strict_child_path(
-                            step.destination,
-                            client_root,
-                        )
-                        for step in copy_steps
-                    )
-                if not valid_identity:
+                if not self._validate_steps_for_method(
+                    method,
+                    validated_steps,
+                    source,
+                    integrity,
+                    installation.target_client or "",
+                ):
                     invalid_fields.append("installation.steps")
         if installation is None or installation.target_client != client:
             invalid_fields.append("installation.target_client")
-        if (
-            installation is None
-            or installation.method not in SUPPORTED_INSTALL_METHODS
-        ):
+        if method not in SUPPORTED_INSTALL_METHODS:
             invalid_fields.append("installation.method")
+
+        # 目录复制必须携带可下载制品与完整性摘要；npm/pip/docker/manual
+        # 由各自 step 内容承载，不强制 ZIP 制品字段。
+        if method == "copy_directory":
+            if source is None or not self._is_https_url(source.download_url):
+                invalid_fields.append("source.download_url")
+            if source is None or not COMMIT_PATTERN.fullmatch(
+                source.commit_hash or ""
+            ):
+                invalid_fields.append("source.commit_hash")
+            if integrity is None:
+                invalid_fields.append("integrity.sha256")
+            else:
+                if not SHA256_PATTERN.fullmatch(integrity.sha256):
+                    invalid_fields.append("integrity.sha256")
+                if (
+                    integrity.download_size_bytes is None
+                    or integrity.download_size_bytes < 0
+                ):
+                    invalid_fields.append("integrity.download_size_bytes")
 
         if record.permissions is None:
             invalid_fields.append("permissions")
@@ -212,7 +158,6 @@ class InstallManifestService:
             )
 
         assert source is not None
-        assert integrity is not None
         assert installation is not None
         assert validated_steps is not None
         assert record.permissions is not None
@@ -251,9 +196,13 @@ class InstallManifestService:
                 ref=source.ref,
                 commit_hash=source.commit_hash,
             ),
-            integrity=ManifestIntegrity(
-                sha256=integrity.sha256,
-                download_size_bytes=integrity.download_size_bytes,
+            integrity=(
+                ManifestIntegrity(
+                    sha256=integrity.sha256,
+                    download_size_bytes=integrity.download_size_bytes,
+                )
+                if integrity is not None
+                else None
             ),
             installation=ManifestInstallation(
                 method=installation.method,
@@ -267,6 +216,71 @@ class InstallManifestService:
             compatibility=record.compatibility,
             dependencies=record.dependencies or Dependencies(),
         )
+
+    @staticmethod
+    def _validate_steps_for_method(
+        method: str | None,
+        steps: list[ManifestInstallationStep],
+        source,
+        integrity,
+        target_client: str,
+    ) -> bool:
+        """按安装方式校验步骤序列与制品字段的一致性。"""
+        actions = [step.root.action for step in steps]
+
+        if method == "copy_directory":
+            if actions != ["download", "verify", "extract", "copy"]:
+                return False
+            download_step = steps[0].root
+            verify_step = steps[1].root
+            copy_step = steps[3].root
+            if (
+                source is None
+                or integrity is None
+                or InstallManifestService._canonical_https_url(
+                    str(download_step.url)
+                )
+                != InstallManifestService._canonical_https_url(
+                    source.download_url
+                )
+                or verify_step.algorithm != "sha256"
+                or verify_step.checksum != integrity.sha256
+            ):
+                return False
+            client_root = CLIENT_INSTALL_ROOTS.get(target_client)
+            return (
+                client_root is not None
+                and InstallManifestService._is_strict_child_path(
+                    copy_step.destination,
+                    client_root,
+                )
+            )
+
+        if method == "npm_install":
+            return (
+                len(steps) == 1
+                and steps[0].root.action == "npm_install"
+            )
+
+        if method == "pip_install":
+            return (
+                len(steps) == 1
+                and steps[0].root.action == "pip_install"
+            )
+
+        if method == "docker_run":
+            return (
+                len(steps) == 1
+                and steps[0].root.action == "docker_run"
+            )
+
+        if method == "manual_steps":
+            return (
+                len(steps) == 1
+                and steps[0].root.action == "manual_steps"
+            )
+
+        return False
 
     _LOCALHOST_ORIGINS = {"localhost", "127.0.0.1", "[::1]"}
 

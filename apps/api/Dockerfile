@@ -16,11 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 安装 Python 依赖（使用阿里云 pypi 镜像）
 COPY apps/api/pyproject.toml .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -e ".[dev]" && \
-    pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ alembic
+    pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ alembic && \
+    pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ psycopg2-binary jsonschema numpy
 
 # 复制源码和共享包
 COPY apps/api/alembic.ini .
 COPY apps/api/src/ src/
+COPY apps/api/tests/ tests/
 COPY packages/ /packages/
 COPY scanners/ /scanners/
 

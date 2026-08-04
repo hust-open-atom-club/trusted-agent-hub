@@ -155,15 +155,16 @@ def test_sqlite_memory_url_variants_use_static_pool(database_url: str) -> None:
         engine.dispose()
 
 
-def test_insecure_user_header_is_rejected_without_explicit_flag(
+def test_spoofed_insecure_user_header_is_ignored_without_explicit_flag(
     monkeypatch: pytest.MonkeyPatch,
+    repository,
 ) -> None:
     from src.dependencies import get_package_repository
     from src.main import create_app
 
     monkeypatch.delenv("CONSUMER_ALLOW_INSECURE_USER_HEADER", raising=False)
     app = create_app()
-    app.dependency_overrides[get_package_repository] = lambda: object()
+    app.dependency_overrides[get_package_repository] = lambda: repository
 
     with TestClient(app) as client:
         response = client.post(
@@ -173,13 +174,16 @@ def test_insecure_user_header_is_rejected_without_explicit_flag(
                 "package_name": "code-review-skill",
                 "version": "1.0.0",
                 "client": "claude-code",
+                "event_id": "spoofed-install-event",
                 "install_path": "~/.claude/skills/code-review-skill",
                 "integrity_verified": True,
             },
         )
 
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "authentication_required"
+    # Install reporting is anonymous by design: the spoofed header must not
+    # authenticate, and the request proceeds to the persistence layer.
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "persistence_unavailable"
 
 
 def test_default_bearer_verifier_rejects_tokens_with_canonical_401() -> None:
@@ -335,6 +339,7 @@ def test_current_user_dependency_can_be_overridden_for_authenticated_writes(
                 "package_name": "code-review-skill",
                 "version": "1.0.0",
                 "client": "claude-code",
+                "event_id": "override-install-event",
                 "install_path": "~/.claude/skills/code-review-skill",
                 "integrity_verified": True,
             },

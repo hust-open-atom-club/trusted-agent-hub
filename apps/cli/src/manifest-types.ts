@@ -12,9 +12,9 @@
 export interface ManifestSource {
   type: 'github' | 'npm' | 'pypi' | 'docker' | 'local_upload';
   repository_url: string;
-  download_url: string;
+  download_url: string | null;
   ref: string;
-  commit_hash: string; // 40-char hex
+  commit_hash: string | null; // 40-char hex
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +52,44 @@ export interface CopyStep {
   destination: string; // relative path within client root
 }
 
-export type InstallStep = DownloadStep | VerifyStep | ExtractStep | CopyStep;
+export interface NpmInstallStep {
+  action: 'npm_install';
+  package: string;
+  version: string; // semver
+  registry?: string | null;
+}
+
+export interface PipInstallStep {
+  action: 'pip_install';
+  package: string;
+  version?: string | null;
+  index_url?: string | null;
+}
+
+export interface DockerRunStep {
+  action: 'docker_run';
+  image: string;
+  tag?: string | null;
+  ports?: string[];
+  volumes?: string[];
+  env?: string[];
+}
+
+export interface ManualStep {
+  action: 'manual_steps';
+  title?: string | null;
+  text: string;
+}
+
+export type InstallStep =
+  | DownloadStep
+  | VerifyStep
+  | ExtractStep
+  | CopyStep
+  | NpmInstallStep
+  | PipInstallStep
+  | DockerRunStep
+  | ManualStep;
 
 // ---------------------------------------------------------------------------
 // Manifest Installation
@@ -123,7 +160,7 @@ export interface ManifestDependencies {
   pip?: Array<Record<string, string>> | null;
   system?: string[] | null;
   docker?: Array<Record<string, string>> | null;
-  mcp_servers?: Array<Record<string, string>> | null;
+  mcp_servers?: Array<Record<string, unknown>> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +174,7 @@ export interface InstallManifest {
   type: string;
   description: string;
   source: ManifestSource;
-  integrity: ManifestIntegrity;
+  integrity: ManifestIntegrity | null;
   installation: ManifestInstallation;
   permissions: ManifestPermissions;
   risk_summary: ManifestRiskSummary;
@@ -152,8 +189,21 @@ export interface InstallManifest {
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const COMMIT_RE = /^[a-f0-9]{40}$/;
 
-const VALID_ACTIONS = ['download', 'verify', 'extract', 'copy'] as const;
+const VALID_ACTIONS = [
+  'download',
+  'verify',
+  'extract',
+  'copy',
+  'npm_install',
+  'pip_install',
+  'docker_run',
+  'manual_steps',
+] as const;
 const VALID_STEP_ORDER_COPY_DIR: InstallStep['action'][] = ['download', 'verify', 'extract', 'copy'];
+
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const DOCKER_IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$/;
+const NPM_PACKAGE_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 export class ManifestValidationError extends Error {
   constructor(
@@ -217,15 +267,7 @@ export function validateManifest(raw: unknown): InstallManifest {
   const validSourceTypes = ['github', 'npm', 'pypi', 'docker', 'local_upload'];
   check(validSourceTypes.includes(src!.type as string), 'source.type', 'invalid source type');
   check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL');
-  check(typeof src!.download_url === 'string' && isAllowedUrl(src!.download_url), 'source.download_url', 'must be an HTTPS URL (or localhost HTTP in dev)');
   check(typeof src!.ref === 'string' && src!.ref.length > 0, 'source.ref', 'must be a non-empty string');
-  check(typeof src!.commit_hash === 'string' && COMMIT_RE.test(src!.commit_hash), 'source.commit_hash', 'must be a 40-char hex string');
-
-  // --- integrity ---
-  const integ = m.integrity as Record<string, unknown> | undefined;
-  check(integ != null && typeof integ === 'object', 'integrity', 'must be an object');
-  check(typeof integ!.sha256 === 'string' && SHA256_RE.test(integ!.sha256), 'integrity.sha256', 'must be a 64-char hex string');
-  check(typeof integ!.download_size_bytes === 'number' && integ!.download_size_bytes >= 0, 'integrity.download_size_bytes', 'must be a non-negative integer');
 
   // --- installation ---
   const inst = m.installation as Record<string, unknown> | undefined;
@@ -243,8 +285,16 @@ export function validateManifest(raw: unknown): InstallManifest {
     validatedSteps.push(validateStep(step, i));
   }
 
-  // Validate step sequence for copy_directory
+  // Method-specific step sequence validation
   if (inst!.method === 'copy_directory') {
+    // copy_directory 必须携带可下载制品与完整性摘要
+    check(typeof src!.download_url === 'string' && isAllowedUrl(src!.download_url), 'source.download_url', 'must be an HTTPS URL (or localhost HTTP in dev)');
+    check(typeof src!.commit_hash === 'string' && COMMIT_RE.test(src!.commit_hash), 'source.commit_hash', 'must be a 40-char hex string');
+    const integ = m.integrity as Record<string, unknown> | undefined;
+    check(integ != null && typeof integ === 'object', 'integrity', 'must be an object');
+    check(typeof integ!.sha256 === 'string' && SHA256_RE.test(integ!.sha256), 'integrity.sha256', 'must be a 64-char hex string');
+    check(typeof integ!.download_size_bytes === 'number' && integ!.download_size_bytes >= 0, 'integrity.download_size_bytes', 'must be a non-negative integer');
+
     const actions = validatedSteps.map(s => s.action);
     const expected = VALID_STEP_ORDER_COPY_DIR;
     const match = actions.length === expected.length && actions.every((a, i) => a === expected[i]);
@@ -270,6 +320,19 @@ export function validateManifest(raw: unknown): InstallManifest {
         check(isSafeInstallPath(es.archive), `installation.steps.extract.archive`, `unsafe path: "${es.archive}"`);
       }
     }
+  }
+
+  if (inst!.method === 'npm_install') {
+    check(validatedSteps.length === 1 && validatedSteps[0].action === 'npm_install', 'installation.steps', 'npm_install requires exactly one npm_install step');
+  }
+  if (inst!.method === 'pip_install') {
+    check(validatedSteps.length === 1 && validatedSteps[0].action === 'pip_install', 'installation.steps', 'pip_install requires exactly one pip_install step');
+  }
+  if (inst!.method === 'docker_run') {
+    check(validatedSteps.length === 1 && validatedSteps[0].action === 'docker_run', 'installation.steps', 'docker_run requires exactly one docker_run step');
+  }
+  if (inst!.method === 'manual_steps') {
+    check(validatedSteps.length === 1 && validatedSteps[0].action === 'manual_steps', 'installation.steps', 'manual_steps requires exactly one manual_steps step');
   }
 
   // --- risk_summary ---
@@ -319,6 +382,70 @@ function validateStep(step: Record<string, unknown>, index: number): InstallStep
         check(allowed.has(key), `steps[${index}].${key}`, 'unknown field');
       }
       return { action: 'copy', source: source as string, destination: destination as string };
+    }
+    case 'npm_install': {
+      const pkg = step.package;
+      const version = step.version;
+      check(typeof pkg === 'string' && NPM_PACKAGE_RE.test(pkg), `steps[${index}].package`, 'must be a valid npm package name');
+      check(typeof version === 'string' && SEMVER_RE.test(version), `steps[${index}].version`, 'must be a valid semver version');
+      if (step.registry !== undefined && step.registry !== null) {
+        check(typeof step.registry === 'string' && isAllowedUrl(step.registry), `steps[${index}].registry`, 'must be an HTTPS URL');
+      }
+      const allowed = new Set(['action', 'package', 'version', 'registry']);
+      for (const key of Object.keys(step)) {
+        check(allowed.has(key), `steps[${index}].${key}`, 'unknown field');
+      }
+      return { action: 'npm_install', package: pkg as string, version: version as string, registry: step.registry as string | undefined };
+    }
+    case 'pip_install': {
+      const pkg = step.package;
+      check(typeof pkg === 'string' && pkg.length > 0 && !pkg.startsWith('/') && !pkg.includes('\\') && !pkg.startsWith('.'), `steps[${index}].package`, 'must be a plain package name');
+      if (step.version !== undefined && step.version !== null) {
+        check(typeof step.version === 'string' && step.version.length > 0, `steps[${index}].version`, 'must be a non-empty string');
+      }
+      if (step.index_url !== undefined && step.index_url !== null) {
+        check(typeof step.index_url === 'string' && isAllowedUrl(step.index_url), `steps[${index}].index_url`, 'must be an HTTPS URL');
+      }
+      const allowed = new Set(['action', 'package', 'version', 'index_url']);
+      for (const key of Object.keys(step)) {
+        check(allowed.has(key), `steps[${index}].${key}`, 'unknown field');
+      }
+      return { action: 'pip_install', package: pkg as string, version: step.version as string | undefined, index_url: step.index_url as string | undefined };
+    }
+    case 'docker_run': {
+      const image = step.image;
+      check(typeof image === 'string' && DOCKER_IMAGE_RE.test(image) && !image.includes(' '), `steps[${index}].image`, 'must be a valid docker image reference');
+      if (step.tag !== undefined && step.tag !== null) {
+        check(typeof step.tag === 'string' && step.tag.length > 0, `steps[${index}].tag`, 'must be a non-empty string');
+      }
+      for (const key of ['ports', 'volumes', 'env']) {
+        if (step[key] !== undefined) {
+          check(Array.isArray(step[key]) && (step[key] as unknown[]).every(v => typeof v === 'string'), `steps[${index}].${key}`, 'must be an array of strings');
+        }
+      }
+      const allowed = new Set(['action', 'image', 'tag', 'ports', 'volumes', 'env']);
+      for (const key of Object.keys(step)) {
+        check(allowed.has(key), `steps[${index}].${key}`, 'unknown field');
+      }
+      return {
+        action: 'docker_run',
+        image: image as string,
+        tag: step.tag as string | undefined,
+        ports: step.ports as string[] | undefined,
+        volumes: step.volumes as string[] | undefined,
+        env: step.env as string[] | undefined,
+      };
+    }
+    case 'manual_steps': {
+      check(typeof step.text === 'string' && step.text.length > 0, `steps[${index}].text`, 'must be a non-empty string');
+      if (step.title !== undefined && step.title !== null) {
+        check(typeof step.title === 'string', `steps[${index}].title`, 'must be a string');
+      }
+      const allowed = new Set(['action', 'title', 'text']);
+      for (const key of Object.keys(step)) {
+        check(allowed.has(key), `steps[${index}].${key}`, 'unknown field');
+      }
+      return { action: 'manual_steps', title: step.title as string | undefined, text: step.text as string };
     }
     default:
       fail(`steps[${index}].action`, `unknown action: ${action}`);

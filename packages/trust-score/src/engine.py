@@ -466,11 +466,37 @@ def _build_dimensions(
     total_ratings = fb_data.get("total_ratings", 0) or 0
     total_installs = fb_data.get("total_installs", 0) or 0
     reports_count = fb_data.get("reports_count", 0) or 0
+    _raw_level_counts = fb_data.get("level_counts") or {}
+    level_counts = {
+        "positive": int(_raw_level_counts.get("positive", 0) or 0),
+        "neutral": int(_raw_level_counts.get("neutral", 0) or 0),
+        "negative": int(_raw_level_counts.get("negative", 0) or 0),
+    }
+    positive = level_counts["positive"]
+    neutral = level_counts["neutral"]
+    negative = level_counts["negative"]
+    level_total = positive + neutral + negative
 
     if total_ratings > 0:
         feedback_score = round((avg_rating / 5.0) * 100)
+    elif level_total > 0:
+        # 无数值评分时用 level 反馈加权（positive=100, neutral=60, negative=20）
+        feedback_score = round(
+            (positive * 100 + neutral * 60 + negative * 20) / level_total
+        )
     else:
-        feedback_score = 50
+        # 无评分数据时，用安装量体现现实采用度（封顶 80；
+        # 一旦接入真实评分，评分将重新成为该维度主信号）。
+        if total_installs >= 100:
+            feedback_score = 80
+        elif total_installs >= 20:
+            feedback_score = 70
+        elif total_installs >= 5:
+            feedback_score = 60
+        elif total_installs >= 1:
+            feedback_score = 55
+        else:
+            feedback_score = 50
 
     user_feedback = {
         "score": feedback_score,
@@ -480,6 +506,7 @@ def _build_dimensions(
             "total_ratings": total_ratings,
             "total_installs": total_installs,
             "reports_count": reports_count,
+            "level_counts": level_counts,
         },
     }
 
@@ -572,6 +599,7 @@ def rate(
     scan_report: dict[str, Any] | None = None,
     author_history: dict[str, Any] | None = None,
     review_records: dict[str, Any] | None = None,
+    feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full 9-step decision engine for trust scoring.
 
@@ -581,6 +609,8 @@ def rate(
         author_history: dict with packages_published, avg_historical_score,
                         violations_count
         review_records: dict with status, reviewer_count, last_reviewed_at
+        feedback: dict with avg_rating (0-5), total_ratings, total_installs,
+                  reports_count — feeds the user_feedback dimension
 
     Returns:
         dict with all fields required by trust-score.schema.json:
@@ -628,7 +658,16 @@ def rate(
         )
 
     # --- Step 9: Derive 0-100 score (weighted by declared dimension weights) ---
-    dimensions = _build_dimensions(package_metadata, p1, p2, i1_disc, i2_disc, c1, c2_disc)
+    dimensions = _build_dimensions(
+        package_metadata,
+        p1,
+        p2,
+        i1_disc,
+        i2_disc,
+        c1,
+        c2_disc,
+        fb_data=feedback,
+    )
 
     dimension_scores: dict[str, int] = {
         name: dim["score"] for name, dim in dimensions.items()

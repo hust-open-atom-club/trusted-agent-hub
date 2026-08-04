@@ -1,0 +1,31 @@
+{
+  "name": "demo-pip-install",
+  "version": "1.0.0",
+  "description": "演示 pip_install 安装方式：将极小的 PyPI 包（idna）安装到受管目录",
+  "type": "skill",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": ["pip", "python", "install-method", "demo"],
+  "compatibility": ["claude-code"],
+  "permissions": {
+    "filesystem": { "read": [], "write": [], "delete": false },
+    "shell": { "allowed": false, "commands": [] },
+    "network": { "allowed": true, "domains": ["pypi.org"] }
+  },
+  "installation": {
+    "method": "pip_install",
+    "target_client": "claude-code",
+    "steps": [
+      {
+        "action": "pip_install",
+        "package": "idna",
+        "version": "3.7",
+        "index_url": "https://pypi.org/simple"
+      }
+    ],
+    "post_install_message": "idna==3.7 已安装到 ~/.trusted-agent-hub/installed/ 受管目录"
+  }
+}

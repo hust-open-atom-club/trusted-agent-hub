@@ -107,9 +107,7 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -170,6 +168,64 @@
           }
         },
         "title": "Dependencies",
+        "type": "object"
+      },
+      "DockerRunInstallationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "docker_run",
+            "title": "Action",
+            "type": "string"
+          },
+          "env": {
+            "description": "形如 KEY=VALUE 的环境变量",
+            "items": {
+              "type": "string"
+            },
+            "title": "Env",
+            "type": "array"
+          },
+          "image": {
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/-]*(?::[a-zA-Z0-9._-]+)?$",
+            "title": "Image",
+            "type": "string"
+          },
+          "ports": {
+            "description": "形如 8080:80/tcp 或 5432 的端口映射",
+            "items": {
+              "type": "string"
+            },
+            "title": "Ports",
+            "type": "array"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "pattern": "^[a-zA-Z0-9._-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag"
+          },
+          "volumes": {
+            "description": "形如 ./data:/var/lib/app 的卷映射",
+            "items": {
+              "type": "string"
+            },
+            "title": "Volumes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "image"
+        ],
+        "title": "DockerRunInstallationStep",
         "type": "object"
       },
       "DownloadInstallationStep": {
@@ -535,7 +591,14 @@
             "$ref": "#/components/schemas/ManifestInstallation"
           },
           "integrity": {
-            "$ref": "#/components/schemas/ManifestIntegrity"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManifestIntegrity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "manifest_version": {
             "const": "1.0",
@@ -571,7 +634,6 @@
           "type",
           "description",
           "source",
-          "integrity",
           "installation",
           "permissions",
           "risk_summary",
@@ -1024,8 +1086,12 @@
         "discriminator": {
           "mapping": {
             "copy": "#/components/schemas/CopyInstallationStep",
+            "docker_run": "#/components/schemas/DockerRunInstallationStep",
             "download": "#/components/schemas/DownloadInstallationStep",
             "extract": "#/components/schemas/ExtractInstallationStep",
+            "manual_steps": "#/components/schemas/ManualStepsInstallationStep",
+            "npm_install": "#/components/schemas/NpmInstallationStep",
+            "pip_install": "#/components/schemas/PipInstallationStep",
             "verify": "#/components/schemas/VerifyInstallationStep"
           },
           "propertyName": "action"
@@ -1042,6 +1108,18 @@
           },
           {
             "$ref": "#/components/schemas/CopyInstallationStep"
+          },
+          {
+            "$ref": "#/components/schemas/NpmInstallationStep"
+          },
+          {
+            "$ref": "#/components/schemas/PipInstallationStep"
+          },
+          {
+            "$ref": "#/components/schemas/DockerRunInstallationStep"
+          },
+          {
+            "$ref": "#/components/schemas/ManualStepsInstallationStep"
           }
         ],
         "title": "ManifestInstallationStep"
@@ -1071,16 +1149,30 @@
         "additionalProperties": false,
         "properties": {
           "commit_hash": {
-            "pattern": "^[a-f0-9]{40}$",
-            "title": "Commit Hash",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Hash"
           },
           "download_url": {
-            "format": "uri",
-            "maxLength": 2083,
-            "minLength": 1,
-            "title": "Download Url",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Download Url"
           },
           "ref": {
             "minLength": 1,
@@ -1109,11 +1201,43 @@
         "required": [
           "type",
           "repository_url",
-          "download_url",
-          "ref",
-          "commit_hash"
+          "ref"
         ],
         "title": "ManifestSource",
+        "type": "object"
+      },
+      "ManualStepsInstallationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "manual_steps",
+            "title": "Action",
+            "type": "string"
+          },
+          "text": {
+            "description": "人工安装步骤说明，逐行展示",
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "action",
+          "text"
+        ],
+        "title": "ManualStepsInstallationStep",
         "type": "object"
       },
       "NetworkPermissions": {
@@ -1144,6 +1268,47 @@
           }
         },
         "title": "NetworkPermissions",
+        "type": "object"
+      },
+      "NpmInstallationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "npm_install",
+            "title": "Action",
+            "type": "string"
+          },
+          "package": {
+            "minLength": 1,
+            "title": "Package",
+            "type": "string"
+          },
+          "registry": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry"
+          },
+          "version": {
+            "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "package",
+          "version"
+        ],
+        "title": "NpmInstallationStep",
         "type": "object"
       },
       "Owner": {
@@ -1699,6 +1864,53 @@
         "title": "Permissions",
         "type": "object"
       },
+      "PipInstallationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "pip_install",
+            "title": "Action",
+            "type": "string"
+          },
+          "index_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Url"
+          },
+          "package": {
+            "minLength": 1,
+            "title": "Package",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9A-Za-z_.+\\-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "action",
+          "package"
+        ],
+        "title": "PipInstallationStep",
+        "type": "object"
+      },
       "RiskSummary": {
         "additionalProperties": false,
         "properties": {
@@ -2061,8 +2273,15 @@
         "additionalProperties": false,
         "properties": {
           "commit_hash": {
-            "title": "Commit Hash",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Hash"
           },
           "download_url": {
             "anyOf": [
@@ -2151,10 +2370,56 @@
         "required": [
           "type",
           "repository_url",
-          "ref",
-          "commit_hash"
+          "ref"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "TrustHistoryPoint": {
+        "additionalProperties": false,
+        "description": "One point in a package's version-level trust-score history.",
+        "properties": {
+          "calculated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calculated At"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Grade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "TrustHistoryPoint",
         "type": "object"
       },
       "TrustLevelName": {
@@ -2882,6 +3147,98 @@
           },
           {
             "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tag"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_grade",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "A",
+                    "B",
+                    "C",
+                    "D",
+                    "E"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Grade"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Score"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_score",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Score"
+            }
+          },
+          {
+            "in": "query",
+            "name": "updated_since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated Since"
+            }
+          },
+          {
+            "in": "query",
             "name": "status",
             "required": false,
             "schema": {
@@ -3279,6 +3636,62 @@
         "summary": "Get Install Manifest",
         "tags": [
           "install"
+        ]
+      }
+    },
+    "/api/v0/packages/{name}/trust-history": {
+      "get": {
+        "operationId": "get_package_trust_history_api_v0_packages__name__trust_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrustHistoryPoint"
+                  },
+                  "title": "Response Get Package Trust History Api V0 Packages  Name  Trust History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Package Trust History",
+        "tags": [
+          "packages"
         ]
       }
     },

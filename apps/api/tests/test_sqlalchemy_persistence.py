@@ -274,6 +274,7 @@ def test_postgresql_concurrent_install_and_feedback_are_idempotent() -> None:
                         version_id=version_id,
                         user_id=user_id,
                         client="claude-code",
+                        event_id="evt-concurrent-001",
                         install_path="/tmp/concurrent-install",
                         integrity_verified=True,
                     ),

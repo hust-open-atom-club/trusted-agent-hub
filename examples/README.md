@@ -15,6 +15,12 @@ examples/
 │   └── demo-sql-explorer/      # PostgreSQL 只读查询 MCP Server 示例（高可信）
 ├── plugins/
 │   └── demo-dev-toolkit/       # 开发者工具箱 Plugin 示例（高可信）
+│   └── demo-claude-plugin/     # Claude 插件目录安装目标示例（高可信）
+├── npm-install-demo/           # npm_install 安装方式示例
+├── pip-install-demo/           # pip_install 安装方式示例
+├── docker-run-demo/            # docker_run 安装方式示例（拉取+配置生成）
+├── mcp-config-demo/            # MCP 配置写入示例（只读 MCP Server）
+├── manual-steps-demo/          # manual_steps 人工步骤示例
 └── risky-packages/
     ├── risky-executor/         # 风险执行器示例（高风险，仅供扫描测试）
     ├── demo-credential-theft/  # 凭据窃取示例（高风险）
@@ -33,6 +39,12 @@ examples/
 | `demo-filesystem` | MCP Server | 中可信 ⚠️ | 演示 MCP Server，有文件读取权限 |
 | `demo-sql-explorer` | MCP Server | 高可信 ✅ | 只读 SQL 查询，权限声明与描述一致 |
 | `demo-dev-toolkit` | Plugin | 高可信 ✅ | 演示复合插件结构 |
+| `demo-npm-install` | Skill | 高可信 ✅ | 演示 npm_install 安装方式（受管目录） |
+| `demo-pip-install` | Skill | 高可信 ✅ | 演示 pip_install 安装方式（受管目录） |
+| `demo-docker-run` | MCP Server | 高可信 ✅ | 演示 docker_run：拉取镜像并生成运行配置，不自动启动 |
+| `demo-mcp-config` | MCP Server | 高可信 ✅ | 演示 MCP 配置写入与卸载回滚 |
+| `demo-claude-plugin` | Plugin | 高可信 ✅ | 演示 claude-code-plugin 插件目录安装 |
+| `demo-manual-steps` | Skill | 高可信 ✅ | 演示 manual_steps 人工安装步骤 |
 | `risky-executor` | Skill | 高风险 ❌ | 演示包含多种安全风险的包，供扫描器测试 |
 | `demo-credential-theft` | Skill | 高风险 ❌ | 读取凭据并外泄 |
 | `demo-shell-injection` | Skill | 高风险 ❌ | 危险 shell 命令执行 |

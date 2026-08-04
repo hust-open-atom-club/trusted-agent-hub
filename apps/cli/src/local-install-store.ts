@@ -46,6 +46,10 @@ export interface LocalInstallRecord {
   installed_at: string;       // ISO 8601 — original install time
   updated_at?: string;        // ISO 8601 — last update time (absent for first install)
   manifest_version: string;
+  method?: 'copy_directory' | 'npm_install' | 'pip_install' | 'docker_run' | 'manual_steps';
+  config_file?: string;
+  config_entries?: string[];
+  backup_path?: string;
   content_hash_algorithm?: 'sha256-tree-v1';
   content_sha256?: string;      // installed content digest (may be absent for legacy records)
 }
@@ -63,6 +67,10 @@ export const RECORD_COMPARE_FIELDS: readonly (keyof LocalInstallRecord)[] = [
   'installed_at',
   'updated_at',
   'manifest_version',
+  'method',
+  'config_file',
+  'config_entries',
+  'backup_path',
   'content_hash_algorithm',
   'content_sha256',
 ];
@@ -200,6 +208,28 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
     content_sha256 = r.content_sha256 as string;
   }
 
+  const method =
+    r.method === undefined || r.method === null
+      ? undefined
+      : (r.method as LocalInstallRecord['method']);
+  if (method !== undefined && !['copy_directory', 'npm_install', 'pip_install', 'docker_run', 'manual_steps'].includes(method)) {
+    throw new RecordStoreError(
+      `Record at index ${index}: "method" must be a known install method`,
+      'record_invalid',
+    );
+  }
+
+  const config_entries =
+    r.config_entries === undefined || r.config_entries === null
+      ? undefined
+      : (r.config_entries as unknown[]);
+  if (config_entries !== undefined && !config_entries.every((v) => typeof v === 'string')) {
+    throw new RecordStoreError(
+      `Record at index ${index}: "config_entries" must be an array of strings`,
+      'record_invalid',
+    );
+  }
+
   return {
     package_name: r.package_name as string,
     version: r.version as string,
@@ -210,6 +240,10 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
     installed_at: r.installed_at as string,
     updated_at,
     manifest_version: r.manifest_version as string,
+    method,
+    config_file: r.config_file as string | undefined,
+    config_entries: config_entries as string[] | undefined,
+    backup_path: r.backup_path as string | undefined,
     content_hash_algorithm,
     content_sha256,
   };
@@ -221,7 +255,18 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
  */
 function recordsMatch(a: LocalInstallRecord, b: LocalInstallRecord): boolean {
   for (const key of RECORD_COMPARE_FIELDS) {
-    if (a[key] !== b[key]) return false;
+    const av = a[key];
+    const bv = b[key];
+    if (Array.isArray(av) && Array.isArray(bv)) {
+      if (
+        av.length !== bv.length ||
+        av.some((value, index) => value !== bv[index])
+      ) {
+        return false;
+      }
+    } else if (av !== bv) {
+      return false;
+    }
   }
   return true;
 }

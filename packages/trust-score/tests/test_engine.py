@@ -696,6 +696,155 @@ def test_output_handling_medium_does_not_veto() -> None:
         f"Medium output_handling should NOT trigger veto, got {result['risk_summary']['level']}"
 
 
+def test_feedback_data_flows_into_user_feedback_dimension() -> None:
+    """Feedback (ratings/installs) must reach the user_feedback dimension."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 4.8,
+            "total_ratings": 12,
+            "total_installs": 321,
+            "reports_count": 1,
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    details = dim["details"]
+    assert details["total_installs"] == 321
+    assert details["total_ratings"] == 12
+    assert details["avg_rating"] == 4.8
+    assert details["reports_count"] == 1
+    # avg_rating 4.8/5 → 96 points
+    assert dim["score"] == 96
+
+
+def test_feedback_absent_keeps_neutral_default() -> None:
+    """Without feedback, user_feedback stays neutral (50) with zero installs."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["score"] == 50
+    assert dim["details"]["total_installs"] == 0
+    assert dim["details"]["total_ratings"] == 0
+
+
+def test_feedback_installs_boost_score_without_ratings() -> None:
+    """No ratings yet: install adoption lifts user_feedback from neutral 50."""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 50,
+            "reports_count": 0,
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["score"] == 70
+    assert dim["details"]["total_installs"] == 50
+
+
+def test_feedback_installs_tiers_and_ceiling() -> None:
+    """Install tiers: 0->50, 1->55, 5->60, 20->70, 100+->80 (capped)."""
+    fx = _load_fixture("b1_code_review_skill")
+
+    def score_for(installs: int) -> int:
+        result = rate(
+            package_metadata=fx["package_metadata"],
+            scan_report=fx["scan_report"],
+            author_history=fx["author_history"],
+            review_records=fx["review_records"],
+            feedback={
+                "avg_rating": 0,
+                "total_ratings": 0,
+                "total_installs": installs,
+                "reports_count": 0,
+            },
+        )
+        return result["dimensions"]["user_feedback"]["score"]
+
+    assert score_for(0) == 50
+    assert score_for(1) == 55
+    assert score_for(5) == 60
+    assert score_for(20) == 70
+    assert score_for(100) == 80
+    assert score_for(1000) == 80
+
+
+def test_feedback_level_counts_drive_score_without_ratings() -> None:
+    """无数值评分时，level 反馈按权重折算（positive=100/neutral=60/negative=20）。"""
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 10,
+            "reports_count": 0,
+            "level_counts": {"positive": 5, "neutral": 2, "negative": 1},
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    # (5*100 + 2*60 + 1*20) / 8 = 640 / 8 = 80
+    assert dim["score"] == 80
+    assert dim["details"]["level_counts"] == {
+        "positive": 5,
+        "neutral": 2,
+        "negative": 1,
+    }
+
+
+def test_feedback_level_counts_negative_dominant() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+        feedback={
+            "avg_rating": 0,
+            "total_ratings": 0,
+            "total_installs": 100,
+            "reports_count": 0,
+            "level_counts": {"positive": 0, "neutral": 1, "negative": 3},
+        },
+    )
+    dim = result["dimensions"]["user_feedback"]
+    # (0 + 60 + 60) / 4 = 30
+    assert dim["score"] == 30
+
+
+def test_feedback_absent_level_counts_default_to_zero() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    dim = result["dimensions"]["user_feedback"]
+    assert dim["details"]["level_counts"] == {
+        "positive": 0,
+        "neutral": 0,
+        "negative": 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

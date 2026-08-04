@@ -1,0 +1,19 @@
+{
+  "name": "demo-claude-plugin",
+  "description": "只读演示插件：提供一个 echo Skill，用于验证插件目录安装闭环",
+  "version": "1.0.0",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/hust-open-atom-club/trusted-agent-hub",
+  "repository": "https://github.com/hust-open-atom-club/trusted-agent-hub",
+  "keywords": ["demo", "echo"],
+  "skills": ["./skills/demo-echo"],
+  "commands": [],
+  "settings": {
+    "type": "object",
+    "properties": {}
+  }
+}

@@ -30,7 +30,7 @@ class Source(StrictContractModel):
     repo: str | None = None
     ref_type: str | None = None
     ref: str
-    commit_hash: str
+    commit_hash: str | None = None
     verified_owner: bool = False
     stars: int | None = None
     last_commit_at: str | None = None
@@ -113,7 +113,7 @@ class Dependencies(StrictContractModel):
     pip: list[dict[str, str]] | None = None
     system: list[str] | None = None
     docker: list[dict[str, str]] | None = None
-    mcp_servers: list[dict[str, str]] | None = None
+    mcp_servers: list[dict[str, object]] | None = None
 
 
 class EntryPoints(StrictContractModel):
@@ -250,6 +250,15 @@ class VersionSummary(StrictContractModel):
     status: str
     submitted_at: str | None = None
     created_at: str | None = None
+
+
+class TrustHistoryPoint(StrictContractModel):
+    """One point in a package's version-level trust-score history."""
+
+    version: str
+    score: float | None = None
+    grade: Grade | None = None
+    calculated_at: str | None = None
 
 
 class VersionDetail(StrictContractModel):

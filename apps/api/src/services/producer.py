@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -27,6 +28,8 @@ _SEMVER_RE = re.compile(
     r"(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?"
     r"(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ProducerServiceError(Exception):
@@ -204,44 +207,63 @@ class ProducerService:
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")
+            install_method = str(
+                (version.get("installation") or {}).get("method")
+                or "copy_directory"
+            )
 
-            if repo_url and package_name and pkg_version:
-                try:
-                    artifact = build_artifact(
-                        repo_url=repo_url,
-                        commit_hash=str(commit_hash),
-                        package_name=package_name,
-                        version=str(pkg_version),
-                        local_source_dir=local_source_dir,
-                    )
-                    self._apply_artifact_to_version(
-                        version_id,
-                        artifact,
-                        package_name,
-                        pkg_version,
-                        str(commit_hash),
-                    )
-                except ArtifactError as exc:
-                    self.repository.update_version_status(version_id, "error")
-                    self.repository.update_version_data(
-                        version_id,
-                        {"scan_error": f"安装产物打包失败: {exc}"},
-                    )
-                    self.repository.create_audit_log(
-                        action=AuditAction.SCAN_COMPLETE.value,
-                        target_type="version",
-                        target_id=version_id,
-                        operator_id="system",
-                        detail={"error": f"artifact packaging failed: {exc}"},
-                    )
-                    return
-                finally:
-                    # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
-                    if local_source_dir:
-                        force_rmtree(local_source_dir)
-            elif local_source_dir:
-                # 无打包消费方（缺少 repo_url 等），直接清理扫描遗留目录
-                force_rmtree(local_source_dir)
+            if install_method == "copy_directory":
+                if repo_url and package_name and pkg_version:
+                    try:
+                        artifact = build_artifact(
+                            repo_url=repo_url,
+                            commit_hash=str(commit_hash),
+                            package_name=package_name,
+                            version=str(pkg_version),
+                            local_source_dir=local_source_dir,
+                        )
+                        self._apply_artifact_to_version(
+                            version_id,
+                            artifact,
+                            package_name,
+                            pkg_version,
+                            str(commit_hash),
+                        )
+                    except ArtifactError as exc:
+                        self.repository.update_version_status(
+                            version_id, "error"
+                        )
+                        self.repository.update_version_data(
+                            version_id,
+                            {"scan_error": f"安装产物打包失败: {exc}"},
+                        )
+                        self.repository.create_audit_log(
+                            action=AuditAction.SCAN_COMPLETE.value,
+                            target_type="version",
+                            target_id=version_id,
+                            operator_id="system",
+                            detail={
+                                "error": f"artifact packaging failed: {exc}"
+                            },
+                        )
+                        return
+                    finally:
+                        # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
+                        if local_source_dir:
+                            force_rmtree(local_source_dir)
+                elif local_source_dir:
+                    force_rmtree(local_source_dir)
+            else:
+                # npm/pip/docker/manual 不需要 ZIP 制品：
+                # 按安装方式生成 manifest 步骤
+                self._apply_installation_steps_to_version(
+                    version_id,
+                    package_name,
+                    pkg_version,
+                    install_method,
+                )
+                if local_source_dir:
+                    force_rmtree(local_source_dir)
 
         # 保存扫描报告
         file_contents = full_report.get("file_contents", {})
@@ -338,6 +360,83 @@ class ProducerService:
             "post_install_message": "安装完成。请在客户端中确认工具可用。",
         }
 
+        self.repository.update_version_data(version_id, data)
+
+    def _apply_installation_steps_to_version(
+        self,
+        version_id: str,
+        package_name: str,
+        pkg_version: str,
+        method: str,
+    ) -> None:
+        """为非 ZIP 安装方式生成 Manifest 安装步骤（npm/pip/docker/manual）。
+
+        若提交的元数据已带同 action 的步骤，则保留；否则生成默认步骤。
+        """
+        version = self.repository.get_version(version_id)
+        if version is None:
+            return
+        data = dict(version)
+        installation = dict(data.get("installation") or {})
+        existing_steps = installation.get("steps") or []
+        if (
+            existing_steps
+            and isinstance(existing_steps[0], dict)
+            and existing_steps[0].get("action") == method
+        ):
+            return
+
+        target_client = (
+            str(installation.get("target_client") or "")
+            or str((data.get("compatibility") or ["claude-code"])[0])
+        )
+        if method == "npm_install":
+            step: dict[str, object] = {
+                "action": "npm_install",
+                "package": package_name,
+                "version": pkg_version,
+                "registry": "https://registry.npmjs.org",
+            }
+        elif method == "pip_install":
+            step = {
+                "action": "pip_install",
+                "package": package_name,
+                "version": pkg_version,
+                "index_url": "https://pypi.org/simple",
+            }
+        elif method == "docker_run":
+            deps = data.get("dependencies") or {}
+            docker_images = []
+            if isinstance(deps, dict):
+                docker = deps.get("docker") or []
+                docker_images = [
+                    str(item.get("image") or "")
+                    for item in docker
+                    if isinstance(item, dict) and item.get("image")
+                ]
+            image = docker_images[0] if docker_images else package_name
+            step = {
+                "action": "docker_run",
+                "image": image,
+                "tag": pkg_version,
+                "ports": [],
+                "volumes": [],
+                "env": [],
+            }
+        else:  # manual_steps
+            step = {
+                "action": "manual_steps",
+                "title": package_name,
+                "text": (
+                    str(installation.get("post_install_message") or "")
+                    or f"请按 {package_name}@{pkg_version} 包说明手动安装"
+                ),
+            }
+
+        installation["method"] = method
+        installation["target_client"] = target_client
+        installation["steps"] = [step]
+        data["installation"] = installation
         self.repository.update_version_data(version_id, data)
 
     def handle_scan_error(self, version_id: str, error: str) -> None:
@@ -727,6 +826,18 @@ class ProducerService:
             operator_id=operator_id,
         )
 
+        # 发布后使用真实审核信号重算信任评分
+        # （manual_review / user_feedback 维度反映发布后的平台数据）
+        try:
+            from src.services.trust_refresh import TrustScoreRefreshService
+
+            TrustScoreRefreshService(self.repository).refresh(version_id)
+        except Exception:
+            logger.exception(
+                "trust score refresh failed after publish for %s",
+                version_id,
+            )
+
         return ReviewResponse(
             version_id=version_id,
             new_status=target,
@@ -814,8 +925,15 @@ class ProducerService:
         target = "yanked"
         validate_transition(current, target)
 
+        package_id = version.get("package_id", "")
+        pkg_version = version.get("version", "")
         self.repository.update_version_status(version_id, target)
         self.repository.update_version_data(version_id, {"yank_reason": reason} if reason else {})
+        # 下架的是当前最新版本时，同步包状态为 yanked，消费侧不再暴露该包
+        if package_id:
+            pkg = self.repository.get_package(package_id)
+            if pkg and pkg.get("latest_version") == pkg_version:
+                self.repository.update_package_status(package_id, "yanked")
         self.repository.create_audit_log(
             action=AuditAction.YANK.value,
             target_type="version",
@@ -848,8 +966,15 @@ class ProducerService:
         target = "published"
         validate_transition(current, target)
 
+        package_id = version.get("package_id", "")
+        pkg_version = version.get("version", "")
         self.repository.update_version_status(version_id, target)
         self.repository.update_version_data(version_id, {"yank_reason": None})
+        # 撤销下架的版本仍是包的最新版本时，恢复包为 published
+        if package_id:
+            pkg = self.repository.get_package(package_id)
+            if pkg and pkg.get("latest_version") == pkg_version:
+                self.repository.update_package_status(package_id, "published")
         self.repository.create_audit_log(
             action=AuditAction.UNYANK.value if hasattr(AuditAction, 'UNYANK') else "unyank",
             target_type="version",
@@ -1065,10 +1190,6 @@ def _deep_diff(
 # ── Install readiness validation ──────────────────────────────
 
 _REQUIRED_INSTALL_FIELDS = [
-    ("source.download_url", "source"),
-    ("source.commit_hash", "source"),
-    ("integrity.sha256", "integrity"),
-    ("integrity.download_size_bytes", "integrity"),
     ("compatibility", None),
     ("permissions", None),
     ("installation.method", "installation"),
@@ -1083,8 +1204,24 @@ def _validate_install_readiness(version: dict[str, object]) -> list[str]:
     Returns a list of human-readable missing-field descriptions.
     """
     missing: list[str] = []
+    installation = version.get("installation")
+    method = (
+        installation.get("method")
+        if isinstance(installation, dict)
+        else None
+    )
+    fields = list(_REQUIRED_INSTALL_FIELDS)
+    # 仅目录复制方式需要可下载 ZIP 制品与完整性摘要；
+    # npm/pip/docker/manual 由各自安装步骤承载。
+    if method == "copy_directory":
+        fields += [
+            ("source.download_url", "source"),
+            ("source.commit_hash", "source"),
+            ("integrity.sha256", "integrity"),
+            ("integrity.download_size_bytes", "integrity"),
+        ]
 
-    for field_path, parent_key in _REQUIRED_INSTALL_FIELDS:
+    for field_path, parent_key in fields:
         if parent_key is None:
             # Top-level field
             val = version.get(field_path)

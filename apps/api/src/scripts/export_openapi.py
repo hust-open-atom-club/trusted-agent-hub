@@ -18,6 +18,7 @@ CONSUMER_PATHS = (
     "/api/v0/health",
     "/api/v0/packages",
     "/api/v0/packages/{name}",
+    "/api/v0/packages/{name}/trust-history",
     "/api/v0/packages/{name}/versions",
     "/api/v0/packages/{name}/versions/{version}",
     "/api/v0/packages/{name}/install-manifest",
@@ -27,7 +28,17 @@ CONSUMER_PATHS = (
     "/api/v0/versions/{version_id}/trust-level",
     "/api/v0/stats/packages/{name}",
 )
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+def _find_repository_root() -> Path:
+    """向上查找仓库根（宿主机或容器布局均可解析）。"""
+    for parent in Path(__file__).resolve().parents:
+        if (
+            parent / "packages" / "schema" / "openapi"
+        ).exists():
+            return parent
+    return Path("/")  # 容器布局：/packages 挂载在根下
+
+
+REPOSITORY_ROOT = _find_repository_root()
 DEFAULT_DESTINATION = (
     REPOSITORY_ROOT
     / "packages"
