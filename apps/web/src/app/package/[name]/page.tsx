@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { fetchPackage, fetchPackageVersion, fetchPackageVersions, fetchTrustHistory } from '@/data/packages';
 import type { Package, TrustHistoryPoint, VersionDetail, VersionSummary } from '@/types';
-import { getInstallMethodInfo } from '@/lib/install-info';
+import { buildInstallCommand, getInstallMethodInfo } from '@/lib/install-info';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
@@ -618,9 +618,7 @@ export default function PackageDetailPage() {
         <div className="install-block">
           <span className="comment"># Install {pkg.name}</span>
           {'\n'}
-          {install?.command
-            ? install.command.replace('{name}', pkg.name)
-            : `tah install ${pkg.name}`}
+          {buildInstallCommand(pkg.name, compat, install?.method)}
         </div>
         {install?.post_install_message && (
           <p style={{

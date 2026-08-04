@@ -55,3 +55,25 @@ export function getInstallMethodInfo(
     }
   );
 }
+
+/**
+ * 生成可直接复制执行的安装命令：
+ * - 包只兼容非默认客户端（如 claude-code-plugin）时自动带 --client；
+ * - npm/pip/docker 外部命令方式自动带 --yes（显式确认）。
+ */
+export function buildInstallCommand(
+  packageName: string,
+  compatibility: string[] = [],
+  method?: string | null,
+): string {
+  const client =
+    compatibility.length === 1 && compatibility[0] !== 'claude-code'
+      ? ` --client ${compatibility[0]}`
+      : '';
+  const confirm = ['npm_install', 'pip_install', 'docker_run'].includes(
+    method ?? '',
+  )
+    ? ' --yes'
+    : '';
+  return `tah install ${packageName}${client}${confirm}`;
+}
