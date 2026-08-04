@@ -131,7 +131,7 @@ if (-not (Test-Path -LiteralPath $serversClone)) {
 
 # 真实来源包：SourceDir 指向克隆仓库内的子目录，Name 为安装名
 $copyPackages = @(
-    @{ Name = "docx";             Source = Join-Path $skillsClone "skills\docx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/docx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official DOCX skill: create, edit and convert Word documents." },
+    @{ Name = "docx";             Source = Join-Path $skillsClone "skills\docx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/docx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official DOCX skill: create, edit and convert Word documents."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/docx/" }, @{ client = "cursor"; destination = "~/.cursor/skills/docx/" }) },
     @{ Name = "pdf";              Source = Join-Path $skillsClone "skills\pdf";             Repo = "https://github.com/anthropics/skills/tree/main/skills/pdf";             Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official PDF skill: analyze and edit PDF documents." },
     @{ Name = "pptx";             Source = Join-Path $skillsClone "skills\pptx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/pptx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official PPTX skill: build and edit PowerPoint decks." },
     @{ Name = "xlsx";             Source = Join-Path $skillsClone "skills\xlsx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/xlsx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official XLSX skill: create and analyze spreadsheets." },
@@ -159,15 +159,17 @@ foreach ($pkg in $copyPackages) {
         Name = $pkg.Name; Type = $pkg.Type; Grade = $pkg.Grade; Client = $pkg.Client; Desc = $pkg.Desc
         Method = "copy_directory"; Repo = $pkg.Repo; ZipName = $zipName; Sha256 = $sha; Size = $size; RootName = $rootName
         McpServers = if ($pkg.ContainsKey('McpServers')) { $pkg.McpServers } else { $null }
+        Compat = if ($pkg.ContainsKey('Compat')) { $pkg.Compat } else { $null }
+        Targets = if ($pkg.ContainsKey('Targets')) { $pkg.Targets } else { $null }
     }
     Write-Host "  + $($pkg.Name) sha256=$($sha.Substring(0,12))… size=$size"
 }
 
 # 真实外部包（无需 ZIP 制品）
-$seeds += [pscustomobject]@{ Name = "npm-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real npm package is-number@7.0.0 into a managed directory."; Method = "npm_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
-$seeds += [pscustomobject]@{ Name = "pip-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real PyPI package six==1.16.0 into a managed directory."; Method = "pip_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
-$seeds += [pscustomobject]@{ Name = "docker-run-demo"; Type = "mcp_server"; Grade = "B"; Client = "claude-code"; Desc = "Pulls the real docker image alpine:3.21 and generates a run configuration."; Method = "docker_run"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
-$seeds += [pscustomobject]@{ Name = "manual-steps-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Manual installation steps demo with local record tracking."; Method = "manual_steps"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
+$seeds += [pscustomobject]@{ Name = "npm-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real npm package is-number@7.0.0 into a managed directory."; Method = "npm_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null; Compat = $null; Targets = $null }
+$seeds += [pscustomobject]@{ Name = "pip-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real PyPI package six==1.16.0 into a managed directory."; Method = "pip_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null; Compat = $null; Targets = $null }
+$seeds += [pscustomobject]@{ Name = "docker-run-demo"; Type = "mcp_server"; Grade = "B"; Client = "claude-code"; Desc = "Pulls the real docker image alpine:3.21 and generates a run configuration."; Method = "docker_run"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null; Compat = $null; Targets = $null }
+$seeds += [pscustomobject]@{ Name = "manual-steps-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Manual installation steps demo with local record tracking."; Method = "manual_steps"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null; Compat = $null; Targets = $null }
 
 Write-Host "=== 3. 插入 published 夹具 ==="
 $gitHash = (& git -C $RepoRoot rev-parse HEAD).Trim()
@@ -176,7 +178,18 @@ $repoUrl = "https://github.com/hust-open-atom-club/trusted-agent-hub"
 foreach ($pkg in $seeds) {
     $packageId = "pkg-" + $pkg.Name.Replace("-", "")
     $versionId = "ver-" + $pkg.Name.Replace("-", "")
-    $compat = $pkg.Client
+    $compatList = if ($pkg.PSObject.Properties['Compat'] -and $pkg.Compat) { $pkg.Compat } else { @($pkg.Client) }
+    $compatSql = "jsonb_build_array(" + (($compatList | ForEach-Object { "'$_'" }) -join ",") + ")"
+    $primaryClient = $compatList[0]
+
+    $targetsJson = "null"
+    if ($pkg.PSObject.Properties['Targets'] -and $pkg.Targets) {
+        $targetItems = @()
+        foreach ($t in $pkg.Targets) {
+            $targetItems += "jsonb_build_object('client','$($t.client)','destination','$($t.destination)')"
+        }
+        $targetsJson = "jsonb_build_array(" + ($targetItems -join ",") + ")"
+    }
     $artifactUrl = "http://127.0.0.1:8000/api/v0/artifacts/$($pkg.ZipName)"
 
     if ($pkg.Method -eq "copy_directory") {
@@ -244,7 +257,7 @@ VALUES (
     'id', '$packageId', 'name', '$($pkg.Name)', 'description', '$desc',
     'type', '$($pkg.Type)', 'license', 'MIT', 'keywords', jsonb_build_array('real','official'),
     'category', 'seed', 'homepage', '$repoUrl', 'status', 'published',
-    'latest_version', '1.0.0', 'compatibility', jsonb_build_array('$compat'),
+    'latest_version', '1.0.0', 'compatibility', $compatSql,
     'install_count', 0, 'grade', '$($pkg.Grade)', 'risk_level', '$level',
     'avg_rating', null, 'created_at', now(), 'updated_at', now()
   )::json
@@ -256,15 +269,16 @@ VALUES (
     'id', '$versionId', 'package_id', '$packageId', 'version', '1.0.0', 'status', 'published',
     'source', $sourceJson,
     'integrity', $integrityJson,
-    'compatibility', jsonb_build_array('$compat'),
+    'compatibility', $compatSql,
     'permissions', jsonb_build_object(
       'filesystem', jsonb_build_object('read', jsonb_build_array(), 'write', jsonb_build_array(), 'delete', false),
       'shell', jsonb_build_object('allowed', false, 'commands', jsonb_build_array()),
       'network', jsonb_build_object('allowed', false, 'domains', jsonb_build_array())
     ),
     'installation', jsonb_build_object(
-      'method', '$($pkg.Method)', 'target_client', '$compat',
+      'method', '$($pkg.Method)', 'target_client', '$primaryClient',
       'steps', $stepsJson,
+      'targets', $targetsJson,
       'pre_install_message', 'Verify the source before installing.',
       'post_install_message', 'Installed. Confirm the capability in your client.'
     ),

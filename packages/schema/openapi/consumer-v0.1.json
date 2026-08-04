@@ -852,11 +852,18 @@
             "title": "Target Client"
           },
           "targets": {
-            "items": {
-              "$ref": "#/components/schemas/InstallTarget"
-            },
-            "title": "Targets",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/InstallTarget"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targets"
           }
         },
         "required": [

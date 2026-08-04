@@ -100,7 +100,7 @@ class InstallationStep(StrictContractModel):
 
 class Installation(StrictContractModel):
     method: str
-    targets: list[InstallTarget] = Field(default_factory=list)
+    targets: list[InstallTarget] | None = None
     steps: list[InstallationStep] = Field(default_factory=list)
     target_client: str | None = None
     command: str | None = None

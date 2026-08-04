@@ -79,6 +79,19 @@ class InstallManifestService:
         if client not in record.compatibility:
             invalid_fields.append("compatibility")
 
+        # 目标客户端解析：同一个包可通过 installation.targets 显式声明
+        # 多个客户端的安装目标（client -> destination）。声明了 targets 时
+        # 必须存在匹配请求 client 的条目；未声明时保持原契约
+        # （installation.target_client 必须等于请求客户端）。
+        target_dest: str | None = None
+        targets = (installation.targets or []) if installation is not None else []
+        steps_client = installation.target_client if installation is not None else ""
+        for target in targets:
+            if target.client == client:
+                target_dest = target.destination
+                steps_client = client
+                break
+
         validated_steps: list[ManifestInstallationStep] | None = None
         if installation is None or not installation.steps:
             invalid_fields.append("installation.steps")
@@ -91,15 +104,24 @@ class InstallManifestService:
             except ValidationError:
                 invalid_fields.append("installation.steps")
             else:
+                # 按请求客户端覆盖 copy destination（支持多客户端安装）
+                for step in validated_steps:
+                    if step.root.action == "copy" and target_dest is not None:
+                        step.root.destination = target_dest
                 if not self._validate_steps_for_method(
                     method,
                     validated_steps,
                     source,
                     integrity,
-                    installation.target_client or "",
+                    steps_client,
                 ):
                     invalid_fields.append("installation.steps")
-        if installation is None or installation.target_client != client:
+        if installation is None:
+            invalid_fields.append("installation.target_client")
+        elif targets:
+            if target_dest is None:
+                invalid_fields.append("installation.target_client")
+        elif installation.target_client != client:
             invalid_fields.append("installation.target_client")
         if method not in SUPPORTED_INSTALL_METHODS:
             invalid_fields.append("installation.method")
@@ -206,7 +228,7 @@ class InstallManifestService:
             ),
             installation=ManifestInstallation(
                 method=installation.method,
-                target_client=installation.target_client,
+                target_client=client,
                 steps=validated_steps,
                 pre_install_message=installation.pre_install_message,
                 post_install_message=installation.post_install_message,
