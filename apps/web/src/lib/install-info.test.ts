@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildInstallCommand, getInstallMethodInfo } from './install-info';
+import {
+  buildInstallCommand,
+  CLIENT_OPTIONS,
+  getClientLabel,
+  getClientTargetPath,
+  getInstallMethodInfo,
+  isClientCompatible,
+} from './install-info';
 
 describe('getInstallMethodInfo', () => {
   it('maps copy_directory with label and no external command', () => {
@@ -57,5 +64,67 @@ describe('buildInstallCommand', () => {
     expect(
       buildInstallCommand('demo', ['cursor'], 'pip_install'),
     ).toBe('tah install demo --client cursor --yes');
+  });
+
+  it('uses explicitly selected client over default', () => {
+    expect(
+      buildInstallCommand('docx', ['claude-code', 'cursor'], 'copy_directory', 'cursor'),
+    ).toBe('tah install docx --client cursor');
+    expect(
+      buildInstallCommand('docx', ['claude-code', 'cursor'], 'copy_directory', 'claude-code'),
+    ).toBe('tah install docx');
+  });
+});
+
+describe('getClientLabel', () => {
+  it('maps known clients to labels', () => {
+    expect(getClientLabel('claude-code')).toBe('Claude Code');
+    expect(getClientLabel('claude-code-plugin')).toBe('Claude Code 插件');
+    expect(getClientLabel('cursor')).toBe('Cursor');
+    expect(getClientLabel('unknown')).toBe('unknown');
+  });
+});
+
+describe('getClientTargetPath', () => {
+  it('prefers declared targets', () => {
+    expect(
+      getClientTargetPath(
+        [
+          { client: 'claude-code', destination: '~/.claude/skills/docx/' },
+          { client: 'cursor', destination: '~/.cursor/skills/docx/' },
+        ],
+        'cursor',
+        'docx',
+      ),
+    ).toBe('~/.cursor/skills/docx/');
+  });
+
+  it('falls back to client root', () => {
+    expect(getClientTargetPath(null, 'claude-code-plugin', 'demo')).toBe(
+      '~/.claude/plugins/demo/',
+    );
+    expect(getClientTargetPath(null, 'cursor', 'demo')).toBe(
+      '~/.cursor/skills/demo/',
+    );
+  });
+});
+
+describe('CLIENT_OPTIONS / isClientCompatible', () => {
+  it('lists all supported clients', () => {
+    expect(CLIENT_OPTIONS.map((c) => c.id)).toEqual([
+      'claude-code',
+      'claude-code-plugin',
+      'cursor',
+    ]);
+  });
+
+  it('checks compatibility against declared clients', () => {
+    expect(isClientCompatible('claude-code', ['claude-code', 'cursor'])).toBe(
+      true,
+    );
+    expect(isClientCompatible('cursor', ['claude-code', 'cursor'])).toBe(true);
+    expect(
+      isClientCompatible('claude-code-plugin', ['claude-code', 'cursor']),
+    ).toBe(false);
   });
 });
