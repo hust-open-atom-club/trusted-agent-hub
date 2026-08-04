@@ -104,17 +104,29 @@ COMMIT;
 Write-Host "  cleared"
 
 Write-Host "=== 2. 拉取真实仓库并构建 ZIP 制品 ==="
-$skillsClone = Join-Path $tmpRoot "anthropic-skills"
-$serversClone = Join-Path $tmpRoot "mcp-servers"
-$gitEap = $ErrorActionPreference
-try {
-    $ErrorActionPreference = "Continue"
-    git clone --depth 1 https://github.com/anthropics/skills.git $skillsClone 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "git clone anthropics/skills failed" }
-    git clone --depth 1 https://github.com/modelcontextprotocol/servers.git $serversClone 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "git clone modelcontextprotocol/servers failed" }
-} finally {
-    $ErrorActionPreference = $gitEap
+$skillsCache = Join-Path $env:TEMP "tah-real-git\skills"
+$serversCache = Join-Path $env:TEMP "tah-real-git\servers"
+$skillsClone = if (Test-Path -LiteralPath $skillsCache) { $skillsCache } else { Join-Path $tmpRoot "anthropic-skills" }
+$serversClone = if (Test-Path -LiteralPath $serversCache) { $serversCache } else { Join-Path $tmpRoot "mcp-servers" }
+if (-not (Test-Path -LiteralPath $skillsClone)) {
+    $gitEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        git clone --depth 1 https://github.com/anthropics/skills.git $skillsClone 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git clone anthropics/skills failed" }
+    } finally {
+        $ErrorActionPreference = $gitEap
+    }
+}
+if (-not (Test-Path -LiteralPath $serversClone)) {
+    $gitEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        git clone --depth 1 https://github.com/modelcontextprotocol/servers.git $serversClone 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git clone modelcontextprotocol/servers failed" }
+    } finally {
+        $ErrorActionPreference = $gitEap
+    }
 }
 
 # 真实来源包：SourceDir 指向克隆仓库内的子目录，Name 为安装名
@@ -124,10 +136,11 @@ $copyPackages = @(
     @{ Name = "pptx";             Source = Join-Path $skillsClone "skills\pptx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/pptx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official PPTX skill: build and edit PowerPoint decks." },
     @{ Name = "xlsx";             Source = Join-Path $skillsClone "skills\xlsx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/xlsx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official XLSX skill: create and analyze spreadsheets." },
     @{ Name = "skill-creator";    Source = Join-Path $skillsClone "skills\skill-creator";   Repo = "https://github.com/anthropics/skills/tree/main/skills/skill-creator";   Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official skill-creator: design and scaffold new skills." },
-    @{ Name = "memory-mcp";       Source = Join-Path $serversClone "src\memory";            Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/memory";            Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: persistent memory with graph knowledge." },
+    @{ Name = "memory-mcp";       Source = Join-Path $serversClone "src\memory";            Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/memory";            Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: persistent memory with graph knowledge."; McpServers = @([pscustomobject]@{ name = "memory"; command = "npx"; args = @("-y", "@modelcontextprotocol/server-memory"); env = $null }) },
     @{ Name = "filesystem-mcp";   Source = Join-Path $serversClone "src\filesystem";        Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem";        Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: safe filesystem operations." },
     @{ Name = "time-mcp";         Source = Join-Path $serversClone "src\time";              Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/time";              Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: time and timezone utilities." },
-    @{ Name = "claude-skills-plugin"; Source = Join-Path $skillsClone "skills";             Repo = "https://github.com/anthropics/skills";             Type = "plugin";     Grade = "B"; Client = "claude-code-plugin"; Desc = "Claude skills plugin based on Anthropic official skills (docx/pdf/pptx/xlsx/skill-creator)." }
+    @{ Name = "claude-skills-plugin"; Source = Join-Path $skillsClone "skills";             Repo = "https://github.com/anthropics/skills";             Type = "plugin";     Grade = "B"; Client = "claude-code-plugin"; Desc = "Claude skills plugin based on Anthropic official skills (docx/pdf/pptx/xlsx/skill-creator)." },
+    @{ Name = "canvas-design";       Source = Join-Path $skillsClone "skills\canvas-design"; Repo = "https://github.com/anthropics/skills/tree/main/skills/canvas-design"; Type = "skill";      Grade = "A"; Client = "cursor";             Desc = "Anthropic official canvas-design skill for Cursor: create and iterate on web artifacts." }
 )
 
 $seeds = @()
@@ -145,15 +158,16 @@ foreach ($pkg in $copyPackages) {
     $seeds += [pscustomobject]@{
         Name = $pkg.Name; Type = $pkg.Type; Grade = $pkg.Grade; Client = $pkg.Client; Desc = $pkg.Desc
         Method = "copy_directory"; Repo = $pkg.Repo; ZipName = $zipName; Sha256 = $sha; Size = $size; RootName = $rootName
+        McpServers = if ($pkg.ContainsKey('McpServers')) { $pkg.McpServers } else { $null }
     }
     Write-Host "  + $($pkg.Name) sha256=$($sha.Substring(0,12))… size=$size"
 }
 
 # 真实外部包（无需 ZIP 制品）
-$seeds += [pscustomobject]@{ Name = "npm-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real npm package is-number@7.0.0 into a managed directory."; Method = "npm_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null }
-$seeds += [pscustomobject]@{ Name = "pip-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real PyPI package six==1.16.0 into a managed directory."; Method = "pip_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null }
-$seeds += [pscustomobject]@{ Name = "docker-run-demo"; Type = "mcp_server"; Grade = "B"; Client = "claude-code"; Desc = "Pulls the real docker image alpine:3.20 and generates a run configuration."; Method = "docker_run"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null }
-$seeds += [pscustomobject]@{ Name = "manual-steps-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Manual installation steps demo with local record tracking."; Method = "manual_steps"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null }
+$seeds += [pscustomobject]@{ Name = "npm-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real npm package is-number@7.0.0 into a managed directory."; Method = "npm_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
+$seeds += [pscustomobject]@{ Name = "pip-install-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Installs the real PyPI package six==1.16.0 into a managed directory."; Method = "pip_install"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
+$seeds += [pscustomobject]@{ Name = "docker-run-demo"; Type = "mcp_server"; Grade = "B"; Client = "claude-code"; Desc = "Pulls the real docker image alpine:3.21 and generates a run configuration."; Method = "docker_run"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
+$seeds += [pscustomobject]@{ Name = "manual-steps-demo"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Manual installation steps demo with local record tracking."; Method = "manual_steps"; ZipName = $null; Sha256 = $null; Size = $null; RootName = $null; McpServers = $null }
 
 Write-Host "=== 3. 插入 published 夹具 ==="
 $gitHash = (& git -C $RepoRoot rev-parse HEAD).Trim()
@@ -162,21 +176,23 @@ $repoUrl = "https://github.com/hust-open-atom-club/trusted-agent-hub"
 foreach ($pkg in $seeds) {
     $packageId = "pkg-" + $pkg.Name.Replace("-", "")
     $versionId = "ver-" + $pkg.Name.Replace("-", "")
-    $compat = if ($pkg.Client -eq "claude-code-plugin") { "claude-code-plugin" } else { "claude-code" }
+    $compat = $pkg.Client
     $artifactUrl = "http://127.0.0.1:8000/api/v0/artifacts/$($pkg.ZipName)"
 
     if ($pkg.Method -eq "copy_directory") {
         $sourceJson = "jsonb_build_object('type','github','repository_url','$($pkg.Repo)','download_url','$artifactUrl','ref','main','commit_hash','$gitHash','verified_owner',true)"
         $integrityJson = "jsonb_build_object('sha256','$($pkg.Sha256)','download_size_bytes',$($pkg.Size))"
+        $destRoot = switch ($pkg.Client) {
+            "claude-code-plugin" { "~/.claude/plugins/" }
+            "cursor" { "~/.cursor/skills/" }
+            default { "~/.claude/skills/" }
+        }
         $stepsJson = "jsonb_build_array(" +
             "jsonb_build_object('action','download','url','$artifactUrl')," +
             "jsonb_build_object('action','verify','algorithm','sha256','checksum','$($pkg.Sha256)')," +
             "jsonb_build_object('action','extract','archive','$($pkg.ZipName)')," +
-            "jsonb_build_object('action','copy','source','$($pkg.RootName)/','destination','~/.claude/skills/$($pkg.Name)/')" +
+            "jsonb_build_object('action','copy','source','$($pkg.RootName)/','destination','$destRoot$($pkg.Name)/')" +
             ")"
-        if ($pkg.Client -eq "claude-code-plugin") {
-            $stepsJson = $stepsJson.Replace("~/.claude/skills/", "~/.claude/plugins/")
-        }
     } elseif ($pkg.Method -eq "npm_install") {
         $sourceJson = "jsonb_build_object('type','npm','repository_url','https://github.com/jonschlinkert/is-number','ref','main')"
         $integrityJson = "null"
@@ -199,6 +215,18 @@ foreach ($pkg in $seeds) {
     $rec = if ($pkg.Grade -eq "A") { "safe" } else { "review_recommended" }
     $score = if ($pkg.Grade -eq "A") { 92 } else { 72 }
     $desc = $pkg.Desc.Replace("'", "''")
+
+    $mcpJson = "null"
+    if ($pkg.McpServers) {
+        $mcpItems = @()
+        foreach ($m in $pkg.McpServers) {
+            $argsJson = if ($m.args -and $m.args.Count -gt 0) {
+                "jsonb_build_array(" + (($m.args | ForEach-Object { "'$_'" }) -join ",") + ")"
+            } else { "jsonb_build_array()" }
+            $mcpItems += "jsonb_build_object('name','$($m.name)','command','$($m.command)','args',$argsJson,'env',null)"
+        }
+        $mcpJson = "jsonb_build_array(" + ($mcpItems -join ",") + ")"
+    }
 
     $sql = @"
 BEGIN;
@@ -240,7 +268,7 @@ VALUES (
       'pre_install_message', 'Verify the source before installing.',
       'post_install_message', 'Installed. Confirm the capability in your client.'
     ),
-    'dependencies', jsonb_build_object('npm', null, 'pip', null, 'system', null, 'docker', null, 'mcp_servers', null),
+    'dependencies', jsonb_build_object('npm', null, 'pip', null, 'system', null, 'docker', null, 'mcp_servers', $mcpJson),
     'trust_score', jsonb_build_object(
       'model_version', '0.2.0', 'score', $score,
       'risk_summary', jsonb_build_object(
@@ -275,7 +303,9 @@ $failList = @()
 foreach ($n in $published) {
     $n = $n.Trim()
     if (-not $n) { continue }
-    $client = if ($n -eq "claude-skills-plugin") { "claude-code-plugin" } else { "claude-code" }
+    $client = if ($n -eq "claude-skills-plugin") { "claude-code-plugin" }
+              elseif ($n -eq "canvas-design") { "cursor" }
+              else { "claude-code" }
     try {
         $r = Invoke-WebRequest -Uri "$api/api/v0/packages/$([uri]::EscapeDataString($n))/install-manifest?client=$client" -UseBasicParsing -TimeoutSec 10
         if ($r.StatusCode -eq 200) { $okCount++ } else { $failList += "$n($($r.StatusCode))" }
