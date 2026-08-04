@@ -69,7 +69,7 @@ VALID_CATEGORIES: set[str] = {
 
 # 有效 compatibility 枚举（对齐 schema items.enum）
 VALID_CLIENTS: set[str] = {
-    "claude-code", "claude-ai", "cursor", "vscode",
+    "claude-code", "claude-code-plugin", "claude-ai", "cursor", "vscode",
     "mcp-client-generic", "openai-agents", "github-copilot",
     "windsurf", "cline",
 }

@@ -292,6 +292,7 @@ export const RISK_TAG_LEVELS: Record<RiskTag, 'high' | 'medium' | 'low'> = {
 // ============================================================
 export const CLIENTS = [
   'claude-code',
+  'claude-code-plugin',
   'claude-ai',
   'cursor',
   'vscode',
@@ -305,6 +306,7 @@ export type Client = (typeof CLIENTS)[number];
 
 export const CLIENT_LABELS: Record<Client, string> = {
   'claude-code': 'Claude Code',
+  'claude-code-plugin': 'Claude Code 插件',
   'claude-ai': 'claude.ai',
   cursor: 'Cursor',
   vscode: 'VS Code',
@@ -313,6 +315,19 @@ export const CLIENT_LABELS: Record<Client, string> = {
   'github-copilot': 'GitHub Copilot',
   windsurf: 'Windsurf',
   cline: 'Cline',
+};
+
+/**
+ * 包类型允许安装到的客户端。
+ * 详情页的安装目标选择与后端校验都以该映射为唯一依据。
+ */
+export const PACKAGE_TYPE_INSTALL_CLIENTS: Record<PackageType, readonly string[]> = {
+  skill: ['claude-code', 'cursor'],
+  mcp_server: ['claude-code', 'cursor'],
+  plugin: ['claude-code-plugin'],
+  subagent: ['claude-code'],
+  command: ['claude-code'],
+  prompt: ['claude-code'],
 };
 
 // ============================================================

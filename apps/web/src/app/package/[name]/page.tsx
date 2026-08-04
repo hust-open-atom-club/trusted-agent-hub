@@ -4,7 +4,13 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { fetchPackage, fetchPackageVersion, fetchPackageVersions, fetchTrustHistory } from '@/data/packages';
 import type { Package, TrustHistoryPoint, VersionDetail, VersionSummary } from '@/types';
-import { getInstallMethodInfo } from '@/lib/install-info';
+import {
+  buildInstallCommand,
+  getClientLabel,
+  getClientTargetPath,
+  getInstallMethodInfo,
+  getSelectableClients,
+} from '@/lib/install-info';
 import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
@@ -94,6 +100,7 @@ export default function PackageDetailPage() {
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [trustHistory, setTrustHistory] = useState<TrustHistoryPoint[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedClient, setSelectedClient] = useState('claude-code');
 
   useEffect(() => {
     setLoading(true);
@@ -174,6 +181,10 @@ export default function PackageDetailPage() {
   const deps = versionDetail?.dependencies;
   const entry = versionDetail?.entry_points;
   const compat = versionDetail?.compatibility ?? [];
+  const selectableClients = getSelectableClients(pkg.type, compat);
+  const effectiveClient = selectableClients.includes(selectedClient)
+    ? selectedClient
+    : (selectableClients[0] ?? 'claude-code');
   const trustScore = versionDetail?.trust_score;
 
   return (
@@ -612,16 +623,56 @@ export default function PackageDetailPage() {
             })()}
           </div>
         )}
+        {selectableClients.length > 1 && (
+          <div
+            style={{
+              marginBottom: '0.75rem',
+              fontSize: '0.85rem',
+            }}
+          >
+            <strong>目标客户端：</strong>
+            <select
+              value={effectiveClient}
+              onChange={(e) => setSelectedClient(e.target.value)}
+              aria-label="Target client"
+              style={{
+                marginLeft: '0.5rem',
+                padding: '0.25rem 0.5rem',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--color-rule)',
+                background: 'var(--color-paper)',
+                color: 'var(--color-ink)',
+              }}
+            >
+              {selectableClients.map((c) => (
+                <option key={c} value={c}>
+                  {getClientLabel(c)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {selectableClients.length === 1 && (
+          <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem' }}>
+            <strong>目标客户端：</strong> {getClientLabel(selectableClients[0])}
+          </p>
+        )}
         <p style={{ marginBottom: 12 }}>
           Install this {typeLabel.toLowerCase()} using the TrustedAgentHub CLI:
         </p>
         <div className="install-block">
           <span className="comment"># Install {pkg.name}</span>
           {'\n'}
-          {install?.command
-            ? install.command.replace('{name}', pkg.name)
-            : `tah install ${pkg.name}`}
+          {buildInstallCommand(
+            pkg.name,
+            selectableClients,
+            install?.method,
+            effectiveClient,
+          )}
         </div>
+        <p style={{ marginTop: 8, fontSize: '0.82rem', color: 'var(--color-ink-2)' }}>
+          安装到：{getClientTargetPath(install?.targets, effectiveClient, pkg.name)}
+        </p>
         {install?.post_install_message && (
           <p style={{
             marginTop: 12,

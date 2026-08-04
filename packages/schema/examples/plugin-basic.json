@@ -25,7 +25,7 @@
   "integrity": {
     "sha256": "f5d4c3b2a1fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b801"
   },
-  "compatibility": ["claude-code", "vscode", "cursor"],
+  "compatibility": ["claude-code-plugin"],
   "keywords": ["dev-tools", "code-review", "git", "pr", "productivity"],
   "category": "productivity",
   "homepage": "https://devtools.io/toolkit",
@@ -61,7 +61,7 @@
     "method": "copy_directory",
     "targets": [
       {
-        "client": "claude-code",
+        "client": "claude-code-plugin",
         "destination": "~/.claude/plugins/dev-toolkit/",
         "config_template": "{\n  \"plugins\": {\n    \"dev-toolkit\": {\n      \"enabled\": true,\n      \"settings\": ${settings}\n    }\n  }\n}"
       }

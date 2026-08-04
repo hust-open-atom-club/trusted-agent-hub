@@ -183,6 +183,7 @@
         "type": "string",
         "enum": [
           "claude-code",
+          "claude-code-plugin",
           "claude-ai",
           "cursor",
           "vscode",
@@ -447,6 +448,7 @@
                 "type": "string",
                 "enum": [
                   "claude-code",
+                  "claude-code-plugin",
                   "cursor",
                   "vscode",
                   "mcp-client-generic",
@@ -797,7 +799,14 @@
         "properties": { "type": { "const": "skill" } }
       },
       "then": {
-        "required": ["skill_config"]
+        "required": ["skill_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code", "cursor"]
+            }
+          }
+        }
       }
     },
     {
@@ -805,7 +814,14 @@
         "properties": { "type": { "const": "mcp_server" } }
       },
       "then": {
-        "required": ["mcp_server_config"]
+        "required": ["mcp_server_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code", "cursor", "mcp-client-generic"]
+            }
+          }
+        }
       }
     },
     {
@@ -813,7 +829,14 @@
         "properties": { "type": { "const": "plugin" } }
       },
       "then": {
-        "required": ["plugin_config"]
+        "required": ["plugin_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code-plugin"]
+            }
+          }
+        }
       }
     },
     {
@@ -821,7 +844,14 @@
         "properties": { "type": { "const": "subagent" } }
       },
       "then": {
-        "required": ["subagent_config"]
+        "required": ["subagent_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code"]
+            }
+          }
+        }
       }
     },
     {
@@ -829,7 +859,14 @@
         "properties": { "type": { "const": "command" } }
       },
       "then": {
-        "required": ["command_config"]
+        "required": ["command_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code"]
+            }
+          }
+        }
       }
     },
     {
@@ -837,7 +874,14 @@
         "properties": { "type": { "const": "prompt" } }
       },
       "then": {
-        "required": ["prompt_config"]
+        "required": ["prompt_config"],
+        "properties": {
+          "compatibility": {
+            "items": {
+              "enum": ["claude-code"]
+            }
+          }
+        }
       }
     }
   ],
