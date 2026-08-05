@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "4bc076214f070d5a7270046379348c2e887cd00b99870fd2f421eda98a51c7cd"
+    "sha256": "127d4a5d65db37353f9e220ead1c628d3e02b2b4c921354716ec536d7631e3eb"
   },
   "compatibility": ["claude-code-plugin"],
   "keywords": ["plugin", "skills", "anthropic", "claude-code", "marketplace"],

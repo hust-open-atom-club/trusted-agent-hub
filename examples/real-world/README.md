@@ -35,7 +35,9 @@ Each `manifest.json` contains a `sha256` digest computed with a deterministic tr
 sha256(path\0<file bytes>\0 for every file, sorted by relative path)
 ```
 
-`manifest.json` itself is excluded from the digest. To reproduce:
+`manifest.json` itself is excluded from the digest. Text files (no NUL byte) are
+canonicalized to LF line endings before hashing, so digests are identical on
+Windows and Linux checkouts. To reproduce:
 
 ```powershell
 python scripts/compute_package_hash.py examples/real-world/skills/skill-creator

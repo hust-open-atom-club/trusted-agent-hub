@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "653d9e3298411a065ab40c3bf81c10f47086ff01dc87eeba9ad26505333b9f40"
+    "sha256": "cf2c2c791d9c82d334a2687669d8f13d4b9e0f0471bec55d556f3324ad7f78ec"
   },
   "compatibility": ["claude-code", "cursor"],
   "keywords": ["art", "generative", "canvas", "animation", "creative"],

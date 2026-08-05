@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "137606c94fd6407ad7695917d789381fb4bcc177e432cf5af538d311ce8c74d5"
+    "sha256": "177072b846da7703460e7f968f680cdf214f5776382d3e5f5f82053309549f73"
   },
   "compatibility": ["claude-code-plugin"],
   "keywords": ["plugin", "web", "brand", "testing", "theme", "anthropic"],

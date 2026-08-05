@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "1a4ffd3d519b5547ad990314cc24b606040d0de47f29ffd5efbfb886c1e73d8a"
+    "sha256": "fe468c572dc976891d0804f6440f178b5ca444f5a0103f81c36992040777ac8a"
   },
   "compatibility": ["claude-code", "cursor"],
   "keywords": ["webapp", "testing", "automation", "playwright", "anthropic"],

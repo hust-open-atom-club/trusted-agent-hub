@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-29T16:09:46-07:00"
   },
   "integrity": {
-    "sha256": "e1832b3a53e895b9f5d056aac89d941bd37587c5e55e2bffc9cf0ad0c027797b"
+    "sha256": "2170ecf53ae9fef417f0fd0d8471cd22a1fc10d0dad5eb4742ad804fe2cd228a"
   },
   "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
   "keywords": ["mcp", "sequential-thinking", "reasoning", "official"],

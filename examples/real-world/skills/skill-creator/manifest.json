@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "21cf2a66301ed16fd5f112b16adb851fc73497366e960e84344c59b4783206ed"
+    "sha256": "7eb3309b948ffe4df2667ad6503f63412b13deda4ebd95be7b3f6c14f29263b1"
   },
   "compatibility": ["claude-code", "cursor"],
   "keywords": ["skill-creator", "scaffold", "skill", "claude", "anthropic"],

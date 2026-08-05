@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "1a42081034f2bf8db935d5296a8ae16d03acd19ad9559d13a861b726987ec7ff"
+    "sha256": "c23c05e6215e0758f38ab29a1595050135f229032d4d31c1c219b53fed6b4bf1"
   },
   "compatibility": ["claude-code", "cursor"],
   "keywords": ["frontend", "design", "ui", "accessibility", "anthropic"],

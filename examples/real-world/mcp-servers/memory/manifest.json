@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-29T16:09:46-07:00"
   },
   "integrity": {
-    "sha256": "9c8bce5339577d68cb528bc043b262c85fe6460af7a3dc2bf256d66df7e527dd"
+    "sha256": "d944f4229833786dcc1c3d6ea2886c9ba16a7fa2fc543b656537c399f2fbb114"
   },
   "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
   "keywords": ["mcp", "memory", "knowledge-graph", "persistent", "official"],

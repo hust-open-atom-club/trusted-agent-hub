@@ -8,6 +8,10 @@ The hash covers every file under the directory (sorted by relative POSIX path):
 
 `manifest.json` is excluded from the digest so the manifest can reference its own
 package content without creating a self-reference.
+
+Line endings are canonicalized: text files (no NUL byte) have CRLF/CR normalized
+to LF before hashing, so the digest is identical on Windows and Linux checkouts.
+Binary files are hashed as-is.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ def tree_hash(directory: str) -> str:
     for rel, path in sorted(entries):
         with open(path, "rb") as fh:
             data = fh.read()
+        if b"\0" not in data:
+            data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
         digest.update(data)

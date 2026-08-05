@@ -23,7 +23,7 @@
     "last_commit_at": "2026-07-24T16:12:34-04:00"
   },
   "integrity": {
-    "sha256": "b0799b92c383462bb05376bc9f5923204055cb01c78e5a7d266887f937c5052c"
+    "sha256": "ecd5c0616d63438c759dca13a80f45f648949b5a2cebc48e9c6d618329774c37"
   },
   "compatibility": ["claude-code", "cursor"],
   "keywords": ["theme", "design", "visual", "branding", "anthropic"],
