@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Package, PackageListResponse } from '@/types';
+import type { Package } from '@/types';
 import { fetchPackages, type SortField, type SortOrder } from '@/data/packages';
 import SearchBar from '@/components/SearchBar';
 import PackageCard from '@/components/PackageCard';
@@ -24,29 +24,29 @@ export default function HomeClient() {
   const [updatedDays, setUpdatedDays] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('updated_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const [page, setPage] = useState(1);
 
   /* ── 数据状态 ── */
-  const [data, setData] = useState<PackageListResponse | null>(null);
+  const [items, setItems] = useState<Package[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   /* 追踪请求序号以避免竞态 */
   const requestIdRef = useRef(0);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const load = useCallback(async () => {
-    const rid = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-
-    try {
+  const buildQuery = useCallback(
+    (targetPage: number) => {
       const minScoreNum = minScore === '' ? undefined : Number(minScore);
       const maxScoreNum = maxScore === '' ? undefined : Number(maxScore);
       const updatedSince =
         updatedDays === ''
           ? undefined
           : new Date(Date.now() - Number(updatedDays) * 86400000).toISOString();
-      const result = await fetchPackages({
+      return {
         q: query || undefined,
         type: activeType !== 'all' ? activeType : undefined,
         category: category || undefined,
@@ -58,26 +58,78 @@ export default function HomeClient() {
         updated_since: updatedSince,
         sort_by: sortBy,
         order: sortOrder,
-        page,
+        page: targetPage,
         page_size: PAGE_SIZE,
-      });
+      };
+    },
+    [query, activeType, category, client, tag, minGrade, minScore, maxScore, updatedDays, sortBy, sortOrder],
+  );
 
-      // 只有最新请求的结果才生效
-      if (rid === requestIdRef.current) {
-        setData(result);
-        setLoading(false);
-      }
+  /* 首页/筛选变化时加载第一页 */
+  const loadFirstPage = useCallback(async () => {
+    const rid = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+    setItems([]);
+    setPage(1);
+    try {
+      const result = await fetchPackages(buildQuery(1));
+      if (rid !== requestIdRef.current) return;
+      setItems(result.items);
+      setTotal(result.total);
+      setTotalPages(result.total_pages);
+      setPage(1);
     } catch (err: unknown) {
       if (rid === requestIdRef.current) {
         setError(err instanceof Error ? err.message : 'Failed to load packages');
-        setLoading(false);
       }
+    } finally {
+      if (rid === requestIdRef.current) setLoading(false);
     }
-  }, [query, activeType, category, client, tag, minGrade, minScore, maxScore, updatedDays, sortBy, sortOrder, page]);
+  }, [buildQuery]);
+
+  /* 无限滚动：追加下一页 */
+  const loadMore = useCallback(async () => {
+    if (loading || loadingMore || page >= totalPages || error) return;
+    const rid = requestIdRef.current;
+    const nextPage = page + 1;
+    setLoadingMore(true);
+    try {
+      const result = await fetchPackages(buildQuery(nextPage));
+      if (rid !== requestIdRef.current) return;
+      setItems((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...result.items.filter((p) => !seen.has(p.id))];
+      });
+      setPage(nextPage);
+      setTotal(result.total);
+      setTotalPages(result.total_pages);
+    } catch {
+      if (rid === requestIdRef.current) {
+        setError('Failed to load more packages');
+      }
+    } finally {
+      if (rid === requestIdRef.current) setLoadingMore(false);
+    }
+  }, [buildQuery, loading, loadingMore, page, totalPages, error]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadFirstPage();
+  }, [loadFirstPage]);
+
+  /* 滚动哨兵：进入视口时加载下一页 */
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { rootMargin: '400px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
 
   /* 筛选变更时回到第 1 页 */
   const handleQueryChange = useCallback((v: string) => {
@@ -122,22 +174,17 @@ export default function HomeClient() {
     setPage(1);
   }, []);
 
-  const handlePageChange = useCallback((next: number) => {
-    setPage(next);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
-
   /* ── 派生数据 ── */
-  const packages = data?.items ?? [];
-  const totalPackages = data?.total ?? 0;
-  const totalPages = data?.total_pages ?? 1;
+  const packages = items;
+  const totalPackages = total;
+  const hasMore = page < totalPages;
 
   /* ── 统计（来自 API 实际返回的 total） ── */
   const publishedCount = totalPackages;
   const topRatedCount = packages.filter(p => p.grade === 'A' || p.grade === 'B').length;
 
   /* ── 加载骨架屏 ── */
-  if (loading && !data) {
+  if (loading && packages.length === 0) {
     return (
       <>
         <section className="hero">
@@ -209,7 +256,7 @@ export default function HomeClient() {
   }
 
   /* ── 错误状态 ── */
-  if (error && !data) {
+  if (error && packages.length === 0) {
     return (
       <>
         <section className="hero">
@@ -229,7 +276,7 @@ export default function HomeClient() {
             <div className="empty-state-icon">&#x26A0;</div>
             <h3>Failed to load packages</h3>
             <p>{error}</p>
-            <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={load}>
+            <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={loadFirstPage}>
               Retry
             </button>
           </div>
@@ -299,10 +346,10 @@ export default function HomeClient() {
         )}
 
         {/* 错误提示（已有缓存数据时） */}
-        {error && (
+        {error && packages.length > 0 && (
           <div className="error-banner">
             <span>{error}</span>
-            <button className="btn btn-sm btn-secondary" onClick={load}>Retry</button>
+            <button className="btn btn-sm btn-secondary" onClick={loadFirstPage}>Retry</button>
           </div>
         )}
 
@@ -326,27 +373,21 @@ export default function HomeClient() {
               ))}
             </div>
 
-            {totalPages > 1 && (
-              <div className="package-pagination">
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={page <= 1 || loading}
-                  onClick={() => handlePageChange(page - 1)}
-                >
-                  ← {t('home.prev')}
-                </button>
-                <span className="package-pagination-info">
-                  {page} / {totalPages}
-                </span>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={page >= totalPages || loading}
-                  onClick={() => handlePageChange(page + 1)}
-                >
-                  {t('home.next')} →
-                </button>
+            {hasMore ? (
+              <>
+                <div ref={sentinelRef} className="infinite-scroll-sentinel" />
+                {loadingMore && (
+                  <div className="infinite-scroll-status" role="status">
+                    <span className="infinite-scroll-spinner" aria-hidden="true" />
+                    <span>{t('home.loading_more')}</span>
+                  </div>
+                )}
+              </>
+            ) : packages.length > 0 ? (
+              <div className="infinite-scroll-status infinite-scroll-end">
+                <span>{t('home.all_loaded', { count: totalPackages })}</span>
               </div>
-            )}
+            ) : null}
           </>
         )}
       </div>

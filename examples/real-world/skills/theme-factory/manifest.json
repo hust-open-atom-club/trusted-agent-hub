@@ -1,0 +1,76 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-theme-factory",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Anthropic official theme-factory skill: create and iterate on cohesive visual themes for applications.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills/theme-factory",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "ecd5c0616d63438c759dca13a80f45f648949b5a2cebc48e9c6d618329774c37"
+  },
+  "compatibility": ["claude-code", "cursor"],
+  "keywords": ["theme", "design", "visual", "branding", "anthropic"],
+  "category": "design",
+  "homepage": "https://github.com/anthropics/skills/tree/main/skills/theme-factory",
+  "dependencies": {
+    "system": []
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./"],
+      "write": ["./themes/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/anthropic-theme-factory/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/anthropic-theme-factory/"
+      }
+    ],
+    "post_install_message": "anthropic-theme-factory installed. Ask Claude to design a theme."
+  },
+  "skill_config": {
+    "skill_md_path": "SKILL.md",
+    "tools": ["Read", "Write", "Edit"],
+    "resources": ["themes/"]
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  }
+}

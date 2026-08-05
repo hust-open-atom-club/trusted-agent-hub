@@ -1,0 +1,97 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "mcp-server-sequential-thinking",
+  "version": "0.6.2",
+  "type": "mcp_server",
+  "description": "Official Model Context Protocol sequential-thinking server: structured step-by-step problem solving.",
+  "author": {
+    "name": "Model Context Protocol",
+    "email": "opensource@lfprojects.org",
+    "url": "https://github.com/modelcontextprotocol/servers"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/modelcontextprotocol/servers",
+    "owner": "modelcontextprotocol",
+    "repo": "servers",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "76d64c822f5125032f89eb71dbdb94e42b434821",
+    "subdirectory": "src/sequentialthinking",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-29T16:09:46-07:00"
+  },
+  "integrity": {
+    "sha256": "2170ecf53ae9fef417f0fd0d8471cd22a1fc10d0dad5eb4742ad804fe2cd228a"
+  },
+  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "keywords": ["mcp", "sequential-thinking", "reasoning", "official"],
+  "category": "ai-tools",
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+  "dependencies": {
+    "npm": [
+      {
+        "name": "@modelcontextprotocol/server-sequential-thinking",
+        "version": "0.6.2"
+      }
+    ],
+    "mcp_servers": [
+      {
+        "name": "sequentialthinking",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [],
+      "write": [],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/mcp-server-sequential-thinking/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/mcp-server-sequential-thinking/"
+      }
+    ],
+    "post_install_message": "mcp-server-sequential-thinking installed. Add the MCP server config to your client."
+  },
+  "mcp_server_config": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    "env": {},
+    "tools": [
+      {
+        "name": "sequentialthinking",
+        "description": "Facilitates detailed problem solving through sequential thinking steps"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "index.ts",
+    "config": "package.json",
+    "scripts": ["index.ts", "lib.ts"]
+  }
+}

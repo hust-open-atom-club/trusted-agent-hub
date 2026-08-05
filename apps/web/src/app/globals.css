@@ -718,6 +718,8 @@ h3 {
    ============================================================ */
 
 .package-card {
+  position: relative;
+  overflow: hidden;
   background: var(--color-paper-2);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-lg);
@@ -733,6 +735,57 @@ h3 {
   border-color: var(--color-rule-2);
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);
+}
+
+.package-card:active {
+  transform: translateY(0);
+}
+
+/* 顶部类型色条 */
+.package-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-cyan));
+  opacity: 0.9;
+}
+
+.package-card.card-accent-skill::before {
+  background: linear-gradient(90deg, var(--color-lavender), var(--color-cyan));
+}
+
+.package-card.card-accent-mcp_server::before {
+  background: linear-gradient(90deg, var(--color-cyan), var(--color-mint));
+}
+
+.package-card.card-accent-plugin::before {
+  background: linear-gradient(90deg, var(--color-coral), var(--color-accent));
+}
+
+.package-card.card-accent-command::before {
+  background: linear-gradient(90deg, var(--color-warning), var(--color-coral));
+}
+
+.package-card.card-accent-subagent::before {
+  background: linear-gradient(90deg, var(--color-mint), var(--color-lavender));
+}
+
+.package-card.card-accent-prompt::before {
+  background: linear-gradient(90deg, var(--color-lavender), var(--color-coral));
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.card-type-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .card-header {
@@ -782,6 +835,44 @@ h3 {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+/* ============================================================
+   无限滚动
+   ============================================================ */
+
+.infinite-scroll-sentinel {
+  height: 1px;
+}
+
+.infinite-scroll-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1.5rem 0 3rem;
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.infinite-scroll-end {
+  opacity: 0.85;
+}
+
+.infinite-scroll-spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 2px solid var(--color-rule-2);
+  border-top-color: var(--color-accent-deep);
+  animation: infinite-scroll-spin 0.8s linear infinite;
+}
+
+@keyframes infinite-scroll-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ============================================================

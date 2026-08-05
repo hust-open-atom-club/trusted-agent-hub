@@ -1,0 +1,129 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "mcp-server-filesystem",
+  "version": "0.6.3",
+  "type": "mcp_server",
+  "description": "Official Model Context Protocol filesystem server: safe file read/write, search and directory operations.",
+  "author": {
+    "name": "Model Context Protocol",
+    "email": "opensource@lfprojects.org",
+    "url": "https://github.com/modelcontextprotocol/servers"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/modelcontextprotocol/servers",
+    "owner": "modelcontextprotocol",
+    "repo": "servers",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "76d64c822f5125032f89eb71dbdb94e42b434821",
+    "subdirectory": "src/filesystem",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-29T16:09:46-07:00"
+  },
+  "integrity": {
+    "sha256": "8a9e50b4fbb2ddbb51c8e4aa7a45a0ee93717605b7b748525a2c0bde3efc5e35"
+  },
+  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "keywords": ["mcp", "filesystem", "official", "file", "server"],
+  "category": "infrastructure",
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+  "dependencies": {
+    "npm": [
+      {
+        "name": "@modelcontextprotocol/server-filesystem",
+        "version": "0.6.3"
+      }
+    ],
+    "mcp_servers": [
+      {
+        "name": "filesystem",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["<allowed-roots>"],
+      "write": ["<allowed-roots>"],
+      "delete": true
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/mcp-server-filesystem/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/mcp-server-filesystem/"
+      }
+    ],
+    "post_install_message": "mcp-server-filesystem installed. Add the MCP server config to your client and grant the allowed roots."
+  },
+  "mcp_server_config": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+    "env": {},
+    "tools": [
+      {
+        "name": "read_file",
+        "description": "Read a file within an allowed directory"
+      },
+      {
+        "name": "write_file",
+        "description": "Write a file within an allowed directory"
+      },
+      {
+        "name": "list_directory",
+        "description": "List files and directories"
+      },
+      {
+        "name": "search_files",
+        "description": "Search files by glob pattern"
+      },
+      {
+        "name": "get_file_info",
+        "description": "Get file metadata"
+      },
+      {
+        "name": "move_file",
+        "description": "Move or rename a file"
+      },
+      {
+        "name": "delete_file",
+        "description": "Delete a file within an allowed directory"
+      },
+      {
+        "name": "create_directory",
+        "description": "Create a new directory"
+      },
+      {
+        "name": "list_allowed_directories",
+        "description": "List directories the server may access"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "index.ts",
+    "config": "package.json",
+    "scripts": ["index.ts", "lib.ts", "path-utils.ts", "path-validation.ts", "roots-utils.ts"]
+  }
+}

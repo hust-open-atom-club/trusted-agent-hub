@@ -1,0 +1,125 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "mcp-server-everything",
+  "version": "2.0.0",
+  "type": "mcp_server",
+  "description": "Official Model Context Protocol everything server: reference implementation exercising all MCP protocol features.",
+  "author": {
+    "name": "Model Context Protocol",
+    "email": "opensource@lfprojects.org",
+    "url": "https://github.com/modelcontextprotocol/servers"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/modelcontextprotocol/servers",
+    "owner": "modelcontextprotocol",
+    "repo": "servers",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "76d64c822f5125032f89eb71dbdb94e42b434821",
+    "subdirectory": "src/everything",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-29T16:09:46-07:00"
+  },
+  "integrity": {
+    "sha256": "d7ce054eb6b4facd08d47d4639903b595814e65368f38ccaae26010665b3071a"
+  },
+  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "keywords": ["mcp", "everything", "reference", "demo", "official"],
+  "category": "developer-tools",
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+  "dependencies": {
+    "npm": [
+      {
+        "name": "@modelcontextprotocol/server-everything",
+        "version": "2.0.0"
+      }
+    ],
+    "mcp_servers": [
+      {
+        "name": "everything",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-everything", "stdio"]
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["<demo-roots>"],
+      "write": ["<demo-roots>"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/mcp-server-everything/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/mcp-server-everything/"
+      }
+    ],
+    "post_install_message": "mcp-server-everything installed. Add the MCP server config to explore MCP protocol features."
+  },
+  "mcp_server_config": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-everything", "stdio"],
+    "env": {},
+    "tools": [
+      {
+        "name": "echo",
+        "description": "Echoes back the input message"
+      },
+      {
+        "name": "add",
+        "description": "Adds two integers"
+      },
+      {
+        "name": "longRunningOperation",
+        "description": "Simulates a long-running operation with progress updates"
+      },
+      {
+        "name": "getTinyImage",
+        "description": "Returns a tiny image resource"
+      },
+      {
+        "name": "sampleLLM",
+        "description": "Samples an LLM through the MCP sampling protocol"
+      },
+      {
+        "name": "getRandomNumber",
+        "description": "Returns a random number"
+      },
+      {
+        "name": "listFiles",
+        "description": "Lists files in the demo workspace"
+      },
+      {
+        "name": "getResourceLinks",
+        "description": "Lists resource links provided by the server"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "index.ts",
+    "config": "package.json",
+    "scripts": ["index.ts", "args.ts", "completions.ts"]
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-web-skills-plugin",
+  "version": "1.0.0",
+  "type": "plugin",
+  "description": "Claude Code plugin bundling four Apache-2.0 Anthropic web skills: brand-guidelines, webapp-testing, theme-factory and frontend-design.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "177072b846da7703460e7f968f680cdf214f5776382d3e5f5f82053309549f73"
+  },
+  "compatibility": ["claude-code-plugin"],
+  "keywords": ["plugin", "web", "brand", "testing", "theme", "anthropic"],
+  "category": "developer-tools",
+  "homepage": "https://github.com/anthropics/skills",
+  "dependencies": {
+    "system": ["python", "node"]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./", "~/.claude/skills/"],
+      "write": ["./", "~/.claude/skills/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": true,
+      "commands": ["python", "node", "npm"],
+      "description": "webapp-testing runs browser automation scripts"
+    },
+    "network": {
+      "allowed": true,
+      "domains": ["localhost", "127.0.0.1"]
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code-plugin",
+        "destination": "~/.claude/plugins/anthropic-web-skills-plugin/"
+      }
+    ],
+    "post_install_message": "anthropic-web-skills-plugin installed. Enable the plugin in Claude Code to use the bundled web skills."
+  },
+  "plugin_config": {
+    "components": {
+      "skills": [
+        "skills/brand-guidelines",
+        "skills/webapp-testing",
+        "skills/theme-factory",
+        "skills/frontend-design"
+      ]
+    },
+    "settings_schema": {}
+  },
+  "entry_points": {
+    "main": ".claude-plugin/plugin.json"
+  }
+}

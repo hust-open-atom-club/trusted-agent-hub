@@ -10,6 +10,15 @@ interface PackageCardProps {
   pkg: Package;
 }
 
+const TYPE_ICONS: Record<string, string> = {
+  skill: '🛠️',
+  mcp_server: '🧩',
+  plugin: '🔌',
+  command: '⌨️',
+  subagent: '🤖',
+  prompt: '📝',
+};
+
 export default function PackageCard({ pkg }: PackageCardProps) {
   const router = useRouter();
 
@@ -26,9 +35,14 @@ export default function PackageCard({ pkg }: PackageCardProps) {
       : pkg.install_count;
 
   return (
-    <div className="package-card" onClick={handleClick}>
+    <div className={`package-card card-accent-${pkg.type}`} onClick={handleClick}>
       <div className="card-header">
-        <h3 className="card-name">{pkg.name}</h3>
+        <div className="card-title-row">
+          <span className="card-type-icon" aria-hidden="true">
+            {TYPE_ICONS[pkg.type] ?? '📦'}
+          </span>
+          <h3 className="card-name">{pkg.name}</h3>
+        </div>
         <div className="card-header-right">
           <ScoreBadge grade={pkg.grade} />
         </div>

@@ -1,0 +1,75 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-frontend-design",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Anthropic official frontend-design skill: design accessible, polished frontend interfaces and interactions.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills/frontend-design",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "c23c05e6215e0758f38ab29a1595050135f229032d4d31c1c219b53fed6b4bf1"
+  },
+  "compatibility": ["claude-code", "cursor"],
+  "keywords": ["frontend", "design", "ui", "accessibility", "anthropic"],
+  "category": "design",
+  "homepage": "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+  "dependencies": {
+    "system": []
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./"],
+      "write": ["./"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/anthropic-frontend-design/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/anthropic-frontend-design/"
+      }
+    ],
+    "post_install_message": "anthropic-frontend-design installed. Ask Claude to design a frontend."
+  },
+  "skill_config": {
+    "skill_md_path": "SKILL.md",
+    "tools": ["Read", "Write", "Edit", "Bash"]
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  }
+}
