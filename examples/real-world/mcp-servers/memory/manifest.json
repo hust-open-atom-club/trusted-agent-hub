@@ -1,0 +1,129 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "mcp-server-memory",
+  "version": "0.6.3",
+  "type": "mcp_server",
+  "description": "Official Model Context Protocol memory server: persistent knowledge graph memory for Claude.",
+  "author": {
+    "name": "Model Context Protocol",
+    "email": "opensource@lfprojects.org",
+    "url": "https://github.com/modelcontextprotocol/servers"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/modelcontextprotocol/servers",
+    "owner": "modelcontextprotocol",
+    "repo": "servers",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "76d64c822f5125032f89eb71dbdb94e42b434821",
+    "subdirectory": "src/memory",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-29T16:09:46-07:00"
+  },
+  "integrity": {
+    "sha256": "9c8bce5339577d68cb528bc043b262c85fe6460af7a3dc2bf256d66df7e527dd"
+  },
+  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "keywords": ["mcp", "memory", "knowledge-graph", "persistent", "official"],
+  "category": "data",
+  "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+  "dependencies": {
+    "npm": [
+      {
+        "name": "@modelcontextprotocol/server-memory",
+        "version": "0.6.3"
+      }
+    ],
+    "mcp_servers": [
+      {
+        "name": "memory",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-memory"]
+      }
+    ]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["<memory-file-path>"],
+      "write": ["<memory-file-path>"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/mcp-server-memory/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/mcp-server-memory/"
+      }
+    ],
+    "post_install_message": "mcp-server-memory installed. Add the MCP server config to your client to persist memory across chats."
+  },
+  "mcp_server_config": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"],
+    "env": {},
+    "tools": [
+      {
+        "name": "create_entities",
+        "description": "Create new entities in the knowledge graph"
+      },
+      {
+        "name": "create_relations",
+        "description": "Create relations between entities"
+      },
+      {
+        "name": "add_observations",
+        "description": "Add observations to entities"
+      },
+      {
+        "name": "read_graph",
+        "description": "Read the whole knowledge graph"
+      },
+      {
+        "name": "search_nodes",
+        "description": "Search entities by name"
+      },
+      {
+        "name": "open_nodes",
+        "description": "Open entities by name"
+      },
+      {
+        "name": "delete_entities",
+        "description": "Delete entities from the graph"
+      },
+      {
+        "name": "delete_observations",
+        "description": "Delete observations from an entity"
+      },
+      {
+        "name": "delete_relations",
+        "description": "Delete relations from the graph"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "index.ts",
+    "config": "package.json",
+    "scripts": ["index.ts"]
+  }
+}

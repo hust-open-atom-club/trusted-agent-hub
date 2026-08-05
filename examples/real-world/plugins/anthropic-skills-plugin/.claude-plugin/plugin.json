@@ -1,0 +1,10 @@
+{
+  "name": "anthropic-skills-plugin",
+  "description": "Bundled Anthropic skills: skill-creator, mcp-builder and algorithmic-art",
+  "version": "1.0.0",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com"
+  },
+  "license": "Apache-2.0"
+}

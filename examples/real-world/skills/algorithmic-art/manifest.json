@@ -1,0 +1,77 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-algorithmic-art",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Anthropic official algorithmic-art skill: create animated generative art with HTML canvas and JavaScript.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills/algorithmic-art",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "653d9e3298411a065ab40c3bf81c10f47086ff01dc87eeba9ad26505333b9f40"
+  },
+  "compatibility": ["claude-code", "cursor"],
+  "keywords": ["art", "generative", "canvas", "animation", "creative"],
+  "category": "creative",
+  "homepage": "https://github.com/anthropics/skills/tree/main/skills/algorithmic-art",
+  "dependencies": {
+    "system": ["python", "node"]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./"],
+      "write": ["./output/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": true,
+      "commands": ["python", "node", "bash"],
+      "description": "Generates and serves HTML canvas animations"
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/anthropic-algorithmic-art/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/anthropic-algorithmic-art/"
+      }
+    ],
+    "post_install_message": "anthropic-algorithmic-art installed. Ask Claude to generate algorithmic art to use it."
+  },
+  "skill_config": {
+    "skill_md_path": "SKILL.md",
+    "tools": ["Read", "Write", "Bash", "Glob"],
+    "resources": ["templates/"]
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  }
+}

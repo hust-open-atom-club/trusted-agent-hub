@@ -1,0 +1,79 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-skill-creator",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Anthropic official skill-creator: design, scaffold, validate, evaluate and package new Claude Code skills.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills/skill-creator",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "21cf2a66301ed16fd5f112b16adb851fc73497366e960e84344c59b4783206ed"
+  },
+  "compatibility": ["claude-code", "cursor"],
+  "keywords": ["skill-creator", "scaffold", "skill", "claude", "anthropic"],
+  "category": "developer-tools",
+  "homepage": "https://github.com/anthropics/skills/tree/main/skills/skill-creator",
+  "dependencies": {
+    "system": ["python", "node"]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./", "~/.claude/skills/"],
+      "write": ["./", "~/.claude/skills/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": true,
+      "commands": ["python", "node", "npm", "bash", "mkdir"],
+      "description": "Runs Python/Node scripts to scaffold, validate and package skills"
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/anthropic-skill-creator/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/anthropic-skill-creator/"
+      }
+    ],
+    "post_install_message": "anthropic-skill-creator installed. Ask Claude to create a new skill to use it."
+  },
+  "skill_config": {
+    "skill_md_path": "SKILL.md",
+    "tools": ["Read", "Write", "Edit", "Bash", "Glob"],
+    "resources": ["assets/", "agents/"],
+    "references": ["references/schemas.md"]
+  },
+  "entry_points": {
+    "main": "SKILL.md",
+    "scripts": ["scripts/quick_validate.py", "scripts/package_skill.py"]
+  }
+}

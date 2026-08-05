@@ -1,0 +1,74 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "superpowers",
+  "version": "6.2.0",
+  "type": "plugin",
+  "description": "Superpowers: MIT-licensed core skills library for Claude Code with TDD, debugging and collaboration workflows.",
+  "author": {
+    "name": "Jesse Vincent",
+    "email": "jesse@fsck.com",
+    "url": "https://github.com/obra"
+  },
+  "license": "MIT",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/obra/superpowers",
+    "owner": "obra",
+    "repo": "superpowers",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "44c9b2d6e889982ac18c27d05a19fefe335194e1",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-28T19:25:36Z"
+  },
+  "integrity": {
+    "sha256": "6196c9beb22933d753263959b251afca862313be91012d2d38c30d119a78ee3a"
+  },
+  "compatibility": ["claude-code-plugin"],
+  "keywords": ["superpowers", "tdd", "debugging", "skills", "workflows"],
+  "category": "developer-tools",
+  "homepage": "https://github.com/obra/superpowers",
+  "dependencies": {
+    "system": ["node", "npm", "python"]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./", "~/.claude/"],
+      "write": ["./", "~/.claude/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": true,
+      "commands": ["node", "npm", "npx", "python", "bash"],
+      "description": "Superpowers skills run shell commands for TDD, debugging and automation"
+    },
+    "network": {
+      "allowed": true,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code-plugin",
+        "destination": "~/.claude/plugins/superpowers/"
+      }
+    ],
+    "post_install_message": "superpowers installed. Enable the plugin in Claude Code to use the bundled skills and hooks."
+  },
+  "plugin_config": {
+    "components": {
+      "skills": ["skills"],
+      "agents": [".agents"]
+    },
+    "settings_schema": {}
+  },
+  "entry_points": {
+    "main": ".claude-plugin/plugin.json"
+  }
+}

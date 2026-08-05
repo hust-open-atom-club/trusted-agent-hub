@@ -3,8 +3,6 @@
 # 停止：docker compose down
 # 重建：docker compose up -d --build
 
-version: "3.9"
-
 name: tah-dev
 
 services:

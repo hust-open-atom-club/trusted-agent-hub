@@ -1,0 +1,78 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-skills-plugin",
+  "version": "1.0.0",
+  "type": "plugin",
+  "description": "Claude Code plugin bundling three Apache-2.0 Anthropic skills: skill-creator, mcp-builder and algorithmic-art.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "4bc076214f070d5a7270046379348c2e887cd00b99870fd2f421eda98a51c7cd"
+  },
+  "compatibility": ["claude-code-plugin"],
+  "keywords": ["plugin", "skills", "anthropic", "claude-code", "marketplace"],
+  "category": "developer-tools",
+  "homepage": "https://github.com/anthropics/skills",
+  "dependencies": {
+    "system": ["python", "node", "npm"]
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./", "~/.claude/skills/"],
+      "write": ["./", "~/.claude/skills/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": true,
+      "commands": ["python", "node", "npm", "npx", "bash"],
+      "description": "Skills bundled in this plugin run Python/Node scripts"
+    },
+    "network": {
+      "allowed": true,
+      "domains": ["registry.npmjs.org", "github.com", "pypi.org"]
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code-plugin",
+        "destination": "~/.claude/plugins/anthropic-skills-plugin/"
+      }
+    ],
+    "post_install_message": "anthropic-skills-plugin installed. Enable the plugin in Claude Code to use the bundled skills."
+  },
+  "plugin_config": {
+    "components": {
+      "skills": [
+        "skills/skill-creator",
+        "skills/mcp-builder",
+        "skills/algorithmic-art"
+      ]
+    },
+    "settings_schema": {}
+  },
+  "entry_points": {
+    "main": ".claude-plugin/plugin.json"
+  }
+}

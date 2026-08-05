@@ -2,6 +2,9 @@
 
 本目录包含各种类型的能力包示例，供测试、演示和扫描器调优使用。
 
+> **真实世界能力包**（来自开源社区的官方内容，含 Skill / MCP Server / Plugin）见
+> [`examples/real-world/`](./real-world/README.md)。
+
 ## 目录结构
 
 ```

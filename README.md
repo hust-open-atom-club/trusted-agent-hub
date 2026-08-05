@@ -13,11 +13,11 @@ TrustedAgentHub/
 │   ├── cli/              CLI 安装工具 (TypeScript/Node.js, Commander.js)
 │   └── web/              Web 前端 (Next.js 14 App Router + React 18)
 ├── scanners/
-│   └── risk_scanner/     安全扫描器 — 20 条规则 + LLM 审查
+│   └── risk_scanner/     安全扫描器 — 19 条规则 + LLM 审查
 ├── packages/
 │   ├── schema/           统一数据契约 (JSON Schema) + 元数据提取器
 │   └── trust-score/      信任评分引擎 — 3 层 9 步漏斗模型
-├── examples/             示范能力包 (Skill/MCP/Plugin/风险样例)
+├── examples/             示范能力包 + 真实能力包 (Skill/MCP/Plugin/风险样例)
 ├── scripts/              数据库种子脚本
 ├── deploy/               部署配置
 ├── docker-compose.yml
@@ -30,12 +30,12 @@ TrustedAgentHub/
 ### Hub 平台 (Web + API)
 
 - **包浏览与搜索**：按类型、分类、评分、更新时间筛选
-- **提交与扫描**：输入 GitHub URL → 自动 git clone → 20 条规则安全扫描 → 信任评分 → 提交审核
+- **提交与扫描**：输入 GitHub URL → 自动 git clone → 19 条规则安全扫描 → 信任评分 → 提交审核
 - **审核流程**：审核员查看 Diff、扫描报告、风险提示 → 通过/驳回/要求修改
 - **管理面板**：下架、手动评级覆盖、审计日志查询
 - **中英双语**：i18next 国际化，导航栏 + 所有管理页面全覆盖
 
-### 安全扫描器 (20 条规则)
+### 安全扫描器 (19 条规则 + LLM 审查)
 
 | 规则 ID | 检测内容 |
 |---------|----------|
@@ -104,8 +104,10 @@ npx tah verify <name>
 git clone <repo-url>
 cd TrustedAgentHub
 
-# Python 依赖
-pip install -r requirements.txt
+# Python 依赖 (pyproject.toml 位于 apps/api)
+cd apps/api
+pip install -e ".[dev]"
+cd ../..
 
 # 配置数据库连接 (apps/api/.env)
     echo "DATABASE_URL=postgresql://postgres:password@127.0.0.1:5432/trusted_agent_hub" > apps/api/.env
@@ -136,6 +138,29 @@ docker compose up -d
 启动后访问：
 - **Web 前端**：http://localhost:3000
 - **Swagger API 文档**：http://127.0.0.1:8000/docs
+
+## 真实能力包
+
+`examples/real-world/` 内置了来自开源社区的**真实能力包**（Apache-2.0）：
+
+| 包名 | 类型 | 上游来源 |
+|---|---|---|
+| `anthropic-skill-creator` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-mcp-builder` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-algorithmic-art` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-brand-guidelines` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-webapp-testing` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-theme-factory` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-frontend-design` | Skill | [anthropics/skills](https://github.com/anthropics/skills) |
+| `mcp-server-filesystem` | MCP Server | [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) |
+| `mcp-server-memory` | MCP Server | [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) |
+| `mcp-server-sequential-thinking` | MCP Server | [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) |
+| `mcp-server-everything` | MCP Server | [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) |
+| `anthropic-skills-plugin` | Plugin | [anthropics/skills](https://github.com/anthropics/skills) |
+| `anthropic-web-skills-plugin` | Plugin | [anthropics/skills](https://github.com/anthropics/skills) |
+| `superpowers` | Plugin | [obra/superpowers](https://github.com/obra/superpowers) |
+
+每个包都带有符合 `agent-package.schema.json` 的 `manifest.json`、来源 commit 和许可证说明，可直接提交、扫描、审核、发布和安装。详见 `examples/real-world/README.md`。
 
 ---
 

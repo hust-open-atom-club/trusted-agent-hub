@@ -24,6 +24,8 @@
     "no_results_hint": "Try adjusting your search or filter criteria.",
     "results_count": "{{count}} package found",
     "results_count_plural": "{{count}} packages found",
+    "loading_more": "Loading more packages…",
+    "all_loaded": "All {{count}} packages loaded",
     "prev": "Previous",
     "next": "Next"
   },

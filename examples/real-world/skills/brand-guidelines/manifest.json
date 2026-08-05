@@ -1,0 +1,75 @@
+{
+  "$schema": "../../../packages/schema/agent-package.schema.json",
+  "name": "anthropic-brand-guidelines",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Anthropic official brand-guidelines skill: produce on-brand copy and visual assets using documented brand rules.",
+  "author": {
+    "name": "Anthropic",
+    "email": "klazuka@anthropic.com",
+    "url": "https://github.com/anthropics"
+  },
+  "license": "Apache-2.0",
+  "source": {
+    "type": "github",
+    "repository_url": "https://github.com/anthropics/skills",
+    "owner": "anthropics",
+    "repo": "skills",
+    "ref_type": "branch",
+    "ref": "main",
+    "commit_hash": "b29e7cf65e5cb78a5ac33d582270551bc74a14eb",
+    "subdirectory": "skills/brand-guidelines",
+    "verified_owner": true,
+    "last_commit_at": "2026-07-24T16:12:34-04:00"
+  },
+  "integrity": {
+    "sha256": "d11f37a28a5fe0ed6ab47bf6fec3648bca41f84585ca35535d32a3f9057d6182"
+  },
+  "compatibility": ["claude-code", "cursor"],
+  "keywords": ["brand", "guidelines", "design", "copy", "anthropic"],
+  "category": "design",
+  "homepage": "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines",
+  "dependencies": {
+    "system": []
+  },
+  "permissions": {
+    "filesystem": {
+      "read": ["./"],
+      "write": ["./output/"],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/skills/anthropic-brand-guidelines/"
+      },
+      {
+        "client": "cursor",
+        "destination": "~/.cursor/skills/anthropic-brand-guidelines/"
+      }
+    ],
+    "post_install_message": "anthropic-brand-guidelines installed. Ask Claude to follow your brand guidelines."
+  },
+  "skill_config": {
+    "skill_md_path": "SKILL.md",
+    "tools": ["Read", "Write", "Edit"]
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  }
+}

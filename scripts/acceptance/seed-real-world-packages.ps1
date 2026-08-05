@@ -4,10 +4,10 @@
 
 .DESCRIPTION
 包来源（全部真实，非项目 examples）：
-- Skills：Anthropic 官方 anthropics/skills（docx / pdf / pptx / xlsx / skill-creator）
+- Skills：Anthropic 官方 anthropics/skills（docx / pdf / pptx / xlsx / skill-creator / mcp-builder / algorithmic-art / brand-guidelines / webapp-testing / theme-factory / frontend-design / canvas-design）
 - MCP Servers：Model Context Protocol 官方 modelcontextprotocol/servers
-  （memory / filesystem / time）
-- Plugin：基于 anthropics/skills 官方内容组织的 claude-skills-plugin
+  （memory / filesystem / time / sequential-thinking / everything）
+- Plugin：基于 anthropics/skills 官方内容组织的 claude-skills-plugin / anthropic-skills-plugin / anthropic-web-skills-plugin，以及 MIT 开源 obra/superpowers
 - 外部真实包：npm is-number@7.0.0、PyPI six==1.16.0、Docker alpine:3.20
 - manual-steps-demo：人工安装方式演示
 
@@ -103,7 +103,7 @@ COMMIT;
 "@
 Write-Host "  cleared"
 
-Write-Host "=== 2. 拉取真实仓库并构建 ZIP 制品 ==="
+Write-Host "=== 2. 拉取真实仓库并构建 ZIP 制品（优先使用 examples/real-world 内置内容） ==="
 $skillsCache = Join-Path $env:TEMP "tah-real-git\skills"
 $serversCache = Join-Path $env:TEMP "tah-real-git\servers"
 $skillsClone = if (Test-Path -LiteralPath $skillsCache) { $skillsCache } else { Join-Path $tmpRoot "anthropic-skills" }
@@ -135,11 +135,22 @@ $copyPackages = @(
     @{ Name = "pdf";              Source = Join-Path $skillsClone "skills\pdf";             Repo = "https://github.com/anthropics/skills/tree/main/skills/pdf";             Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official PDF skill: analyze and edit PDF documents."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/pdf/" }, @{ client = "cursor"; destination = "~/.cursor/skills/pdf/" }) },
     @{ Name = "pptx";             Source = Join-Path $skillsClone "skills\pptx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/pptx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official PPTX skill: build and edit PowerPoint decks."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/pptx/" }, @{ client = "cursor"; destination = "~/.cursor/skills/pptx/" }) },
     @{ Name = "xlsx";             Source = Join-Path $skillsClone "skills\xlsx";            Repo = "https://github.com/anthropics/skills/tree/main/skills/xlsx";            Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official XLSX skill: create and analyze spreadsheets."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/xlsx/" }, @{ client = "cursor"; destination = "~/.cursor/skills/xlsx/" }) },
-    @{ Name = "skill-creator";    Source = Join-Path $skillsClone "skills\skill-creator";   Repo = "https://github.com/anthropics/skills/tree/main/skills/skill-creator";   Type = "skill";      Grade = "A"; Client = "claude-code";        Desc = "Anthropic official skill-creator: design and scaffold new skills."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/skill-creator/" }, @{ client = "cursor"; destination = "~/.cursor/skills/skill-creator/" }) },
-    @{ Name = "memory-mcp";       Source = Join-Path $serversClone "src\memory";            Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/memory";            Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: persistent memory with graph knowledge."; McpServers = @([pscustomobject]@{ name = "memory"; command = "npx"; args = @("-y", "@modelcontextprotocol/server-memory"); env = $null }); Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/memory-mcp/" }, @{ client = "cursor"; destination = "~/.cursor/skills/memory-mcp/" }) },
-    @{ Name = "filesystem-mcp";   Source = Join-Path $serversClone "src\filesystem";        Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem";        Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: safe filesystem operations."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/filesystem-mcp/" }, @{ client = "cursor"; destination = "~/.cursor/skills/filesystem-mcp/" }) },
+    @{ Name = "anthropic-skill-creator"; Source = Join-Path $RepoRoot "examples\real-world\skills\skill-creator"; Repo = "https://github.com/anthropics/skills/tree/main/skills/skill-creator"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official skill-creator: design and scaffold new skills."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-skill-creator/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-skill-creator/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/skill-creator" },
+    @{ Name = "anthropic-mcp-builder"; Source = Join-Path $RepoRoot "examples\real-world\skills\mcp-builder"; Repo = "https://github.com/anthropics/skills/tree/main/skills/mcp-builder"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official mcp-builder: design and implement MCP servers."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-mcp-builder/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-mcp-builder/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/mcp-builder" },
+    @{ Name = "anthropic-algorithmic-art"; Source = Join-Path $RepoRoot "examples\real-world\skills\algorithmic-art"; Repo = "https://github.com/anthropics/skills/tree/main/skills/algorithmic-art"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official algorithmic-art: generate animated generative art."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-algorithmic-art/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-algorithmic-art/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/algorithmic-art" },
+    @{ Name = "anthropic-brand-guidelines"; Source = Join-Path $RepoRoot "examples\real-world\skills\brand-guidelines"; Repo = "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official brand-guidelines: produce on-brand copy and visual assets."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-brand-guidelines/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-brand-guidelines/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/brand-guidelines" },
+    @{ Name = "anthropic-webapp-testing"; Source = Join-Path $RepoRoot "examples\real-world\skills\webapp-testing"; Repo = "https://github.com/anthropics/skills/tree/main/skills/webapp-testing"; Type = "skill"; Grade = "B"; Client = "claude-code"; Desc = "Anthropic official webapp-testing: automated web application testing workflows."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-webapp-testing/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-webapp-testing/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/webapp-testing" },
+    @{ Name = "anthropic-theme-factory"; Source = Join-Path $RepoRoot "examples\real-world\skills\theme-factory"; Repo = "https://github.com/anthropics/skills/tree/main/skills/theme-factory"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official theme-factory: create cohesive visual themes for apps."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-theme-factory/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-theme-factory/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/theme-factory" },
+    @{ Name = "anthropic-frontend-design"; Source = Join-Path $RepoRoot "examples\real-world\skills\frontend-design"; Repo = "https://github.com/anthropics/skills/tree/main/skills/frontend-design"; Type = "skill"; Grade = "A"; Client = "claude-code"; Desc = "Anthropic official frontend-design: accessible, polished frontend interfaces."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/anthropic-frontend-design/" }, @{ client = "cursor"; destination = "~/.cursor/skills/anthropic-frontend-design/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills/tree/main/skills/frontend-design" },
+    @{ Name = "mcp-server-memory"; Source = Join-Path $RepoRoot "examples\real-world\mcp-servers\memory";  Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/memory";            Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: persistent memory with graph knowledge."; Version = "0.6.3"; McpServers = @([pscustomobject]@{ name = "memory"; command = "npx"; args = @("-y", "@modelcontextprotocol/server-memory"); env = $null }); Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/mcp-server-memory/" }, @{ client = "cursor"; destination = "~/.cursor/skills/mcp-server-memory/" }); CommitHash = "76d64c822f5125032f89eb71dbdb94e42b434821"; License = "Apache-2.0"; Homepage = "https://github.com/modelcontextprotocol/servers/tree/main/src/memory" },
+    @{ Name = "mcp-server-filesystem"; Source = Join-Path $RepoRoot "examples\real-world\mcp-servers\filesystem"; Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem";        Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: safe filesystem operations."; Version = "0.6.3"; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/mcp-server-filesystem/" }, @{ client = "cursor"; destination = "~/.cursor/skills/mcp-server-filesystem/" }); CommitHash = "76d64c822f5125032f89eb71dbdb94e42b434821"; License = "Apache-2.0"; Homepage = "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem" },
+    @{ Name = "mcp-server-sequential-thinking"; Source = Join-Path $RepoRoot "examples\real-world\mcp-servers\sequentialthinking"; Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"; Type = "mcp_server"; Grade = "A"; Client = "claude-code"; Desc = "Official MCP reference server: sequential thinking and problem solving."; Version = "0.6.2"; McpServers = @([pscustomobject]@{ name = "sequentialthinking"; command = "npx"; args = @("-y", "@modelcontextprotocol/server-sequential-thinking"); env = $null }); Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/mcp-server-sequential-thinking/" }, @{ client = "cursor"; destination = "~/.cursor/skills/mcp-server-sequential-thinking/" }); CommitHash = "76d64c822f5125032f89eb71dbdb94e42b434821"; License = "Apache-2.0"; Homepage = "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking" },
+    @{ Name = "mcp-server-everything"; Source = Join-Path $RepoRoot "examples\real-world\mcp-servers\everything"; Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/everything"; Type = "mcp_server"; Grade = "B"; Client = "claude-code"; Desc = "Official MCP reference server: exercises all MCP protocol features."; Version = "2.0.0"; McpServers = @([pscustomobject]@{ name = "everything"; command = "npx"; args = @("-y", "@modelcontextprotocol/server-everything", "stdio"); env = $null }); Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/mcp-server-everything/" }, @{ client = "cursor"; destination = "~/.cursor/skills/mcp-server-everything/" }); CommitHash = "76d64c822f5125032f89eb71dbdb94e42b434821"; License = "Apache-2.0"; Homepage = "https://github.com/modelcontextprotocol/servers/tree/main/src/everything" },
     @{ Name = "time-mcp";         Source = Join-Path $serversClone "src\time";              Repo = "https://github.com/modelcontextprotocol/servers/tree/main/src/time";              Type = "mcp_server"; Grade = "B"; Client = "claude-code";        Desc = "Official MCP reference server: time and timezone utilities."; Compat = @("claude-code", "cursor"); Targets = @(@{ client = "claude-code"; destination = "~/.claude/skills/time-mcp/" }, @{ client = "cursor"; destination = "~/.cursor/skills/time-mcp/" }) },
     @{ Name = "claude-skills-plugin"; Source = Join-Path $skillsClone "skills";             Repo = "https://github.com/anthropics/skills";             Type = "plugin";     Grade = "B"; Client = "claude-code-plugin"; Desc = "Claude skills plugin based on Anthropic official skills (docx/pdf/pptx/xlsx/skill-creator)." },
+    @{ Name = "anthropic-skills-plugin"; Source = Join-Path $RepoRoot "examples\real-world\plugins\anthropic-skills-plugin"; Repo = "https://github.com/anthropics/skills"; Type = "plugin"; Grade = "A"; Client = "claude-code-plugin"; Desc = "Claude Code plugin bundling Apache-2.0 Anthropic skills (skill-creator/mcp-builder/algorithmic-art)."; Compat = @("claude-code-plugin"); Targets = @(@{ client = "claude-code-plugin"; destination = "~/.claude/plugins/anthropic-skills-plugin/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills" },
+    @{ Name = "anthropic-web-skills-plugin"; Source = Join-Path $RepoRoot "examples\real-world\plugins\anthropic-web-skills-plugin"; Repo = "https://github.com/anthropics/skills"; Type = "plugin"; Grade = "B"; Client = "claude-code-plugin"; Desc = "Claude Code plugin bundling Anthropic web skills (brand/webapp-testing/theme/frontend)."; Compat = @("claude-code-plugin"); Targets = @(@{ client = "claude-code-plugin"; destination = "~/.claude/plugins/anthropic-web-skills-plugin/" }); CommitHash = "b29e7cf65e5cb78a5ac33d582270551bc74a14eb"; License = "Apache-2.0"; Homepage = "https://github.com/anthropics/skills" },
+    @{ Name = "superpowers"; Source = Join-Path $RepoRoot "examples\real-world\plugins\superpowers"; Repo = "https://github.com/obra/superpowers"; Type = "plugin"; Grade = "B"; Client = "claude-code-plugin"; Desc = "Superpowers: MIT core skills library for Claude Code (TDD, debugging, collaboration)."; Version = "6.2.0"; Compat = @("claude-code-plugin"); Targets = @(@{ client = "claude-code-plugin"; destination = "~/.claude/plugins/superpowers/" }); CommitHash = "44c9b2d6e889982ac18c27d05a19fefe335194e1"; License = "MIT"; Homepage = "https://github.com/obra/superpowers" },
     @{ Name = "canvas-design";       Source = Join-Path $skillsClone "skills\canvas-design"; Repo = "https://github.com/anthropics/skills/tree/main/skills/canvas-design"; Type = "skill";      Grade = "A"; Client = "cursor";             Desc = "Anthropic official canvas-design skill for Cursor: create and iterate on web artifacts." }
 )
 
@@ -161,6 +172,10 @@ foreach ($pkg in $copyPackages) {
         McpServers = if ($pkg.ContainsKey('McpServers')) { $pkg.McpServers } else { $null }
         Compat = if ($pkg.ContainsKey('Compat')) { $pkg.Compat } else { $null }
         Targets = if ($pkg.ContainsKey('Targets')) { $pkg.Targets } else { $null }
+        CommitHash = if ($pkg.ContainsKey('CommitHash')) { $pkg.CommitHash } else { $null }
+        License = if ($pkg.ContainsKey('License')) { $pkg.License } else { $null }
+        Homepage = if ($pkg.ContainsKey('Homepage')) { $pkg.Homepage } else { $null }
+        Version = if ($pkg.ContainsKey('Version')) { $pkg.Version } else { $null }
     }
     Write-Host "  + $($pkg.Name) sha256=$($sha.Substring(0,12))… size=$size"
 }
@@ -191,9 +206,10 @@ foreach ($pkg in $seeds) {
         $targetsJson = "jsonb_build_array(" + ($targetItems -join ",") + ")"
     }
     $artifactUrl = "http://127.0.0.1:8000/api/v0/artifacts/$($pkg.ZipName)"
+    $commitHash = if ($pkg.PSObject.Properties['CommitHash'] -and $pkg.CommitHash) { $pkg.CommitHash } else { $gitHash }
 
     if ($pkg.Method -eq "copy_directory") {
-        $sourceJson = "jsonb_build_object('type','github','repository_url','$($pkg.Repo)','download_url','$artifactUrl','ref','main','commit_hash','$gitHash','verified_owner',true)"
+        $sourceJson = "jsonb_build_object('type','github','repository_url','$($pkg.Repo)','download_url','$artifactUrl','ref','main','commit_hash','$commitHash','verified_owner',true)"
         $integrityJson = "jsonb_build_object('sha256','$($pkg.Sha256)','download_size_bytes',$($pkg.Size))"
         $destRoot = switch ($pkg.Client) {
             "claude-code-plugin" { "~/.claude/plugins/" }
@@ -228,6 +244,9 @@ foreach ($pkg in $seeds) {
     $rec = if ($pkg.Grade -eq "A") { "safe" } else { "review_recommended" }
     $score = if ($pkg.Grade -eq "A") { 92 } else { 72 }
     $desc = $pkg.Desc.Replace("'", "''")
+    $license = if ($pkg.PSObject.Properties['License'] -and $pkg.License) { $pkg.License } else { "MIT" }
+    $homepage = if ($pkg.PSObject.Properties['Homepage'] -and $pkg.Homepage) { $pkg.Homepage } else { $repoUrl }
+    $version = if ($pkg.PSObject.Properties['Version'] -and $pkg.Version) { $pkg.Version } else { "1.0.0" }
 
     $mcpJson = "null"
     if ($pkg.McpServers) {
@@ -252,21 +271,21 @@ DELETE FROM package_versions WHERE id = '$versionId';
 DELETE FROM packages WHERE id = '$packageId';
 INSERT INTO packages (id, name, status, latest_version, data)
 VALUES (
-  '$packageId', '$($pkg.Name)', 'published', '1.0.0',
+  '$packageId', '$($pkg.Name)', 'published', '$version',
   jsonb_build_object(
     'id', '$packageId', 'name', '$($pkg.Name)', 'description', '$desc',
-    'type', '$($pkg.Type)', 'license', 'MIT', 'keywords', jsonb_build_array('real','official'),
-    'category', 'seed', 'homepage', '$repoUrl', 'status', 'published',
-    'latest_version', '1.0.0', 'compatibility', $compatSql,
+    'type', '$($pkg.Type)', 'license', '$license', 'keywords', jsonb_build_array('real','official'),
+    'category', 'seed', 'homepage', '$homepage', 'status', 'published',
+    'latest_version', '$version', 'compatibility', $compatSql,
     'install_count', 0, 'grade', '$($pkg.Grade)', 'risk_level', '$level',
     'avg_rating', null, 'created_at', now(), 'updated_at', now()
   )::json
 );
 INSERT INTO package_versions (id, package_id, version, status, data)
 VALUES (
-  '$versionId', '$packageId', '1.0.0', 'published',
+  '$versionId', '$packageId', '$version', 'published',
   jsonb_build_object(
-    'id', '$versionId', 'package_id', '$packageId', 'version', '1.0.0', 'status', 'published',
+    'id', '$versionId', 'package_id', '$packageId', 'version', '$version', 'status', 'published',
     'source', $sourceJson,
     'integrity', $integrityJson,
     'compatibility', $compatSql,
@@ -317,7 +336,7 @@ $failList = @()
 foreach ($n in $published) {
     $n = $n.Trim()
     if (-not $n) { continue }
-    $client = if ($n -eq "claude-skills-plugin") { "claude-code-plugin" }
+    $client = if ($n -in @("claude-skills-plugin", "anthropic-skills-plugin", "anthropic-web-skills-plugin", "superpowers")) { "claude-code-plugin" }
               elseif ($n -eq "canvas-design") { "cursor" }
               else { "claude-code" }
     try {
