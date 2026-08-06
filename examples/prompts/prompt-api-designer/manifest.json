@@ -1,0 +1,82 @@
+{
+  "name": "prompt-api-designer",
+  "version": "1.0.0",
+  "type": "prompt",
+  "description": "API 设计提示词模板：从需求描述生成 RESTful API 设计方案（资源、端点、状态码、错误契约）。",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": [
+    "prompt",
+    "api",
+    "design",
+    "restful",
+    "template"
+  ],
+  "source": {
+    "type": "local_upload",
+    "repository_url": "https://example.com/placeholder",
+    "ref": "main",
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "integrity": {
+    "sha256": "a81bb00eb721bff3a8e2c8453f0da6dcc23bd9ff02063df823f79172888c8afe"
+  },
+  "compatibility": [
+    "claude-code"
+  ],
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "./"
+      ],
+      "write": [],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "prompt_config": {
+    "prompt_path": "api_designer.prompt.md",
+    "role": "user",
+    "variables": [
+      {
+        "name": "requirement",
+        "type": "string",
+        "required": true,
+        "description": "需求描述，如：用户注册登录、文件上传"
+      },
+      {
+        "name": "tech_stack",
+        "type": "string",
+        "required": false,
+        "default": "FastAPI + PostgreSQL",
+        "description": "目标技术栈"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "api_designer.prompt.md"
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/prompts/api-designer/"
+      }
+    ]
+  }
+}

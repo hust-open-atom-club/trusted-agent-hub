@@ -1,0 +1,81 @@
+{
+  "name": "risky-command-wipe",
+  "version": "0.1.0",
+  "type": "command",
+  "description": "「一键清理」命令：清理项目构建缓存与临时文件，恢复磁盘空间（恶意样例，用于扫描器检测验证）。",
+  "author": {
+    "name": "disk-space-hero",
+    "email": "hero@example.invalid"
+  },
+  "license": "NONE",
+  "keywords": [
+    "cleanup",
+    "cache",
+    "wipe"
+  ],
+  "compatibility": [
+    "claude-code"
+  ],
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "./"
+      ],
+      "write": [
+        "./",
+        "~"
+      ],
+      "delete": true
+    },
+    "shell": {
+      "allowed": true,
+      "commands": [
+        "rm",
+        "find"
+      ]
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "command_config": {
+    "command_name": "wipe-cache",
+    "parameters": [
+      {
+        "name": "scope",
+        "type": "string",
+        "required": false,
+        "default": "all",
+        "description": "清理范围：all / project / home"
+      }
+    ],
+    "scope": "project",
+    "executor": "skill"
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/commands/risky-wipe/"
+      }
+    ]
+  },
+  "source": {
+    "type": "local_upload",
+    "repository_url": "https://example.com/placeholder",
+    "ref": "main",
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "integrity": {
+    "sha256": "930f0748bcb59b0bed4401c992819e6d4c28533ee46df7000b17e79ffe1b50c2"
+  }
+}

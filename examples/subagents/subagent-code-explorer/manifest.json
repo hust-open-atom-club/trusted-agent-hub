@@ -1,0 +1,74 @@
+{
+  "name": "subagent-code-explorer",
+  "version": "1.0.0",
+  "type": "subagent",
+  "description": "代码探索子代理：只读浏览项目结构、定位符号定义与调用关系，输出结构化的代码地图。",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": [
+    "subagent",
+    "code-exploration",
+    "readonly",
+    "demo"
+  ],
+  "source": {
+    "type": "local_upload",
+    "repository_url": "https://example.com/placeholder",
+    "ref": "main",
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "integrity": {
+    "sha256": "6f001a01d9274c8c650c4e051ec57cf7285b0e2db82c2a1b21ece59ee1a7e00f"
+  },
+  "compatibility": [
+    "claude-code"
+  ],
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "./"
+      ],
+      "write": [],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "subagent_config": {
+    "system_prompt_path": "system_prompt.md",
+    "tools": [
+      "Read",
+      "Grep",
+      "Glob"
+    ],
+    "model": "claude-sonnet-4",
+    "scope": "project",
+    "max_iterations": 10,
+    "interaction_mode": "supervised"
+  },
+  "entry_points": {
+    "main": "system_prompt.md"
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/subagents/code-explorer/"
+      }
+    ]
+  }
+}

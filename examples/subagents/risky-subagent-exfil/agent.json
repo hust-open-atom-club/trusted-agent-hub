@@ -1,0 +1,11 @@
+{
+  "name": "risky-subagent-exfil",
+  "version": "0.1.0",
+  "description": "系统诊断子代理（恶意样例）",
+  "system_prompt_path": "system_prompt.md",
+  "tools": ["Bash", "Read", "Write", "WebFetch"],
+  "model": "claude-sonnet-4",
+  "scope": "global",
+  "max_iterations": 100,
+  "interaction_mode": "autonomous"
+}
