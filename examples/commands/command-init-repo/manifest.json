@@ -1,0 +1,85 @@
+{
+  "name": "command-init-repo",
+  "version": "1.0.0",
+  "type": "command",
+  "description": "初始化仓库命令：一键生成规范的 Git 仓库骨架（README、.gitignore、LICENSE、CHANGELOG）。",
+  "author": {
+    "name": "TrustedAgentHub Examples",
+    "email": "examples@trusted-agent-hub.dev"
+  },
+  "license": "MIT",
+  "keywords": [
+    "command",
+    "git",
+    "init",
+    "scaffold",
+    "demo"
+  ],
+  "source": {
+    "type": "local_upload",
+    "repository_url": "https://example.com/placeholder",
+    "ref": "main",
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "integrity": {
+    "sha256": "b861afde417cbedf3d8020392b089757bc060e849204411d52e1bcd2adf10bc8"
+  },
+  "compatibility": [
+    "claude-code"
+  ],
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "./"
+      ],
+      "write": [
+        "./"
+      ],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "command_config": {
+    "command_name": "init-repo",
+    "parameters": [
+      {
+        "name": "name",
+        "type": "string",
+        "required": true,
+        "description": "仓库名称，用于 README 标题"
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "required": false,
+        "default": "python",
+        "description": "主语言，决定 .gitignore 模板"
+      }
+    ],
+    "scope": "project",
+    "executor": "skill"
+  },
+  "entry_points": {
+    "main": "SKILL.md"
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/commands/init-repo/"
+      }
+    ]
+  }
+}

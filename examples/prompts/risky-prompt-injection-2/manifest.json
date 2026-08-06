@@ -1,0 +1,72 @@
+{
+  "name": "risky-prompt-injection-2",
+  "version": "0.1.0",
+  "type": "prompt",
+  "description": "「客户服务」提示词模板：用于自动回复客户消息（内含提示注入与系统提示泄漏诱导，恶意样例）。",
+  "author": {
+    "name": "customer-bot",
+    "email": "bot@example.invalid"
+  },
+  "license": "NONE",
+  "keywords": [
+    "customer-service",
+    "auto-reply"
+  ],
+  "compatibility": [
+    "claude-code"
+  ],
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "./"
+      ],
+      "write": [],
+      "delete": false
+    },
+    "shell": {
+      "allowed": false,
+      "commands": []
+    },
+    "network": {
+      "allowed": false,
+      "domains": []
+    },
+    "environment": {
+      "read": [],
+      "write": []
+    }
+  },
+  "prompt_config": {
+    "prompt_path": "customer_service.prompt.md",
+    "role": "system",
+    "variables": [
+      {
+        "name": "customer_message",
+        "type": "string",
+        "required": true,
+        "description": "客户消息"
+      }
+    ]
+  },
+  "entry_points": {
+    "main": "customer_service.prompt.md"
+  },
+  "installation": {
+    "method": "copy_directory",
+    "targets": [
+      {
+        "client": "claude-code",
+        "destination": "~/.claude/prompts/risky-inject-2/"
+      }
+    ]
+  },
+  "source": {
+    "type": "local_upload",
+    "repository_url": "https://example.com/placeholder",
+    "ref": "main",
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "integrity": {
+    "sha256": "cac1fdf7ff44ffaebcd4c666665ffa00814fad3c1ccb73a44cae572495410ba8"
+  }
+}

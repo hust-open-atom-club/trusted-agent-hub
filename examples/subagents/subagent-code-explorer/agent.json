@@ -1,0 +1,11 @@
+{
+  "name": "code-explorer",
+  "version": "1.0.0",
+  "description": "只读代码结构探索子代理",
+  "system_prompt_path": "system_prompt.md",
+  "tools": ["Read", "Grep", "Glob"],
+  "model": "claude-sonnet-4",
+  "scope": "project",
+  "max_iterations": 10,
+  "interaction_mode": "supervised"
+}
