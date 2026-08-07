@@ -24,6 +24,7 @@ function makePackage(overrides: Partial<Package> = {}): Package {
     grade: 'B',
     install_count: 1500,
     avg_rating: 4.2,
+    feedback_counts: { positive: 3, neutral: 1, negative: 1 },
     created_at: '2026-07-01T00:00:00Z',
     updated_at: '2026-07-20T00:00:00Z',
     ...overrides,
@@ -37,7 +38,7 @@ describe('PackageCard', () => {
     expect(screen.getByText('demo-summarizer')).toBeInTheDocument();
     expect(screen.getByText('Summarizes documents safely.')).toBeInTheDocument();
     expect(screen.getByText('B')).toBeInTheDocument();
-    expect(screen.getByText('4.2')).toBeInTheDocument();
+    expect(screen.getByText('好评 3 · 差评 1')).toBeInTheDocument();
     expect(screen.getByText('1.5k')).toBeInTheDocument();
     expect(screen.getByText('v1.2.0')).toBeInTheDocument();
   });
@@ -47,9 +48,11 @@ describe('PackageCard', () => {
     expect(screen.getByText('999')).toBeInTheDocument();
   });
 
-  it('shows a dash for null rating', () => {
-    render(<PackageCard pkg={makePackage({ avg_rating: null })} />);
-    expect(screen.getByText('--')).toBeInTheDocument();
+  it('shows no-rating hint when feedback counts are missing', () => {
+    render(
+      <PackageCard pkg={makePackage({ feedback_counts: null })} />,
+    );
+    expect(screen.getByText('暂无评分')).toBeInTheDocument();
   });
 
   it('navigates to the package detail page on click', () => {

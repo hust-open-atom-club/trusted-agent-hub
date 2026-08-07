@@ -33,6 +33,11 @@ export interface PackageSummary {
   grade: string | null;
   install_count: number;
   avg_rating: number | null;
+  feedback_counts: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  } | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -164,6 +169,21 @@ function requireNumberOrNull(val: unknown, field: string, context: string): numb
   throw new ApiError(`Invalid ${context}: "${field}" must be a number or null`);
 }
 
+function parseFeedbackCounts(
+  raw: unknown,
+): { positive: number; neutral: number; negative: number } | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object') {
+    throw new ApiError('Invalid PackageSummary.feedback_counts: expected object');
+  }
+  const o = raw as Record<string, unknown>;
+  return {
+    positive: requireInt(o.positive, 'feedback_counts.positive', 'PackageSummary', 0),
+    neutral: requireInt(o.neutral, 'feedback_counts.neutral', 'PackageSummary', 0),
+    negative: requireInt(o.negative, 'feedback_counts.negative', 'PackageSummary', 0),
+  };
+}
+
 function requireString(val: unknown, field: string, context: string): string {
   if (typeof val !== 'string') {
     throw new ApiError(`Invalid ${context}: "${field}" must be a string, got ${typeof val}`);
@@ -222,6 +242,7 @@ function validatePackageSummary(raw: unknown): PackageSummary {
     grade: requireNullableString(o.grade, 'grade', 'PackageSummary'),
     install_count: requireInt(o.install_count, 'install_count', 'PackageSummary', 0),
     avg_rating: requireNumberOrNull(o.avg_rating, 'avg_rating', 'PackageSummary'),
+    feedback_counts: parseFeedbackCounts(o.feedback_counts),
     created_at: requireNullableString(o.created_at, 'created_at', 'PackageSummary'),
     updated_at: requireNullableString(o.updated_at, 'updated_at', 'PackageSummary'),
   };

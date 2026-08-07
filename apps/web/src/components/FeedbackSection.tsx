@@ -14,10 +14,10 @@ interface FeedbackSectionProps {
 export default function FeedbackSection({ packageName, user, token }: FeedbackSectionProps) {
   const { t } = useTranslation();
 
-  const levelLabels: Record<FeedbackLevel, { label: string; emoji: string }> = {
-    positive: { label: t('feedback.positive'), emoji: '👍' },
-    neutral: { label: t('feedback.neutral'), emoji: '😐' },
-    negative: { label: t('feedback.negative'), emoji: '👎' },
+  const levelLabels: Record<FeedbackLevel, { label: string; dot: string }> = {
+    positive: { label: t('feedback.positive'), dot: 'var(--color-success)' },
+    neutral: { label: t('feedback.neutral'), dot: 'var(--color-warning)' },
+    negative: { label: t('feedback.negative'), dot: 'var(--color-danger)' },
   };
   const [feedbackPage, setFeedbackPage] = useState<FeedbackPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,7 +92,7 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
 
       {/* Feedback counts */}
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.75rem' }}>
-        {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
+        {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; dot: string }][]).map(([level, { label, dot }]) => (
           <div key={level} style={{
             display: 'flex',
             alignItems: 'center',
@@ -100,7 +100,13 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
             fontSize: '0.82rem',
             color: 'var(--color-ink-2)',
           }}>
-            <span>{emoji}</span>
+            <span style={{
+              width: '0.5rem',
+              height: '0.5rem',
+              borderRadius: '50%',
+              background: dot,
+              flexShrink: 0,
+            }} />
             <span>{label}</span>
             <strong style={{ color: 'var(--color-ink)' }}>{counts[level] ?? 0}</strong>
           </div>
@@ -118,14 +124,14 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
         }}>
           <p style={{ fontSize: '0.82rem', fontWeight: 600, marginBottom: '0.5rem' }}>{t('feedback.share')}</p>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
-            {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; emoji: string }][]).map(([level, { label, emoji }]) => (
+            {(Object.entries(levelLabels) as [FeedbackLevel, { label: string; dot: string }][]).map(([level, { label }]) => (
               <button
                 key={level}
                 className={`btn btn-sm ${selectedLevel === level ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => setSelectedLevel(level)}
                 disabled={submitting}
               >
-                {emoji} {label}
+                {label}
               </button>
             ))}
           </div>
@@ -187,8 +193,13 @@ export default function FeedbackSection({ packageName, user, token }: FeedbackSe
               borderBottom: '1px solid var(--color-rule)',
               fontSize: '0.82rem',
             }}>
-              <span style={{ marginRight: '0.5rem' }}>
-                {levelLabels[fb.level]?.emoji ?? '❓'}
+              <span style={{
+                marginRight: '0.5rem',
+                fontWeight: 600,
+                fontSize: '0.78rem',
+                color: levelLabels[fb.level]?.dot ?? 'var(--color-muted)',
+              }}>
+                {levelLabels[fb.level]?.label ?? fb.level}
               </span>
               <span style={{ color: 'var(--color-ink-2)' }}>
                 {fb.comment || (levelLabels[fb.level]?.label ?? fb.level)}

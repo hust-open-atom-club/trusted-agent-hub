@@ -18,6 +18,21 @@ import type {
 } from '../../../packages/schema/constants';
 import type { PackageSummary, VersionDetail } from './api-client';
 
+// ── Feedback helpers ───────────────────────────────────────────────────
+
+/** 把用户反馈等级计数格式化为 好评/差评 摘要。 */
+function formatFeedback(
+  counts: PackageSummary['feedback_counts'],
+): string {
+  if (
+    !counts ||
+    counts.positive + counts.neutral + counts.negative === 0
+  ) {
+    return '暂无评分';
+  }
+  return `好评 ${counts.positive} · 差评 ${counts.negative}`;
+}
+
 // ── Color helpers ───────────────────────────────────────────────────────
 
 /** Return a chalk colour for a risk level string. */
@@ -127,7 +142,7 @@ export function formatPackageCard(pkg: PackageSummary): string {
     `${chalk.dim('Status:')} ${statusColor(pkg.status)(statusLabel)}`,
     `${chalk.dim('v')}${pkg.latest_version}`,
     `${chalk.dim('Installs:')} ${pkg.install_count.toLocaleString()}`,
-    `${chalk.dim('Rating:')} ${pkg.avg_rating != null ? pkg.avg_rating.toString() : 'N/A'}`,
+    `${chalk.dim('Feedback:')} ${formatFeedback(pkg.feedback_counts)}`,
   ].filter(Boolean) as string[];
   lines.push(`    ${stats.join('  ')}`);
 
@@ -221,7 +236,7 @@ export function formatPackageDetail(
     `  ${chalk.dim('Installs:')}    ${pkg.install_count.toLocaleString()}`,
   );
   lines.push(
-    `  ${chalk.dim('Rating:')}      ${pkg.avg_rating != null ? '★'.repeat(Math.round(pkg.avg_rating)) + ` (${pkg.avg_rating})` : 'N/A'}`,
+    `  ${chalk.dim('Feedback:')}    ${formatFeedback(pkg.feedback_counts)}`,
   );
 
   // Keywords

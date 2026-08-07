@@ -13,7 +13,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.models.packages import PackageStats, PackageSummary, VersionDetail
+from src.models.packages import (
+    FeedbackCounts,
+    PackageStats,
+    PackageSummary,
+    VersionDetail,
+)
 
 from .base import (
     PackageRepository,
@@ -51,14 +56,25 @@ class SqlAlchemyPackageRepository(PackageRepository):
             rows = session.scalars(
                 select(PackageRow).order_by(PackageRow.name)
             ).all()
-            return tuple(_package_from_row(row) for row in rows)
+            counts = _feedback_counts_by_package(session)
+            return tuple(
+                _package_from_row(row).model_copy(
+                    update={"feedback_counts": counts.get(row.id)}
+                )
+                for row in rows
+            )
 
     def get_package(self, name: str) -> PackageSummary | None:
         with self.session_factory() as session:
             row = session.scalar(
                 select(PackageRow).where(PackageRow.name == name)
             )
-            return None if row is None else _package_from_row(row)
+            if row is None:
+                return None
+            counts = _feedback_counts_by_package(session)
+            return _package_from_row(row).model_copy(
+                update={"feedback_counts": counts.get(row.id)}
+            )
 
     def list_versions(self, name: str) -> Sequence[VersionDetail]:
         with self.session_factory() as session:
@@ -419,6 +435,28 @@ def _safe_validate(model_cls, data: dict[str, object]):
     allowed = set(model_cls.model_fields.keys())
     filtered = {k: v for k, v in data.items() if k in allowed}
     return model_cls.model_validate(filtered)
+
+
+def _feedback_counts_by_package(session) -> dict[str, FeedbackCounts]:
+    """按包聚合 feedback_records 的 positive/neutral/negative 计数。"""
+    rows = session.execute(
+        select(
+            FeedbackRecordRow.package_id,
+            FeedbackRecordRow.level,
+            func.count(),
+        )
+        .group_by(FeedbackRecordRow.package_id, FeedbackRecordRow.level)
+    )
+    counts: dict[str, FeedbackCounts] = {}
+    for package_id, level, count in rows:
+        item = counts.setdefault(str(package_id), FeedbackCounts())
+        if level == "positive":
+            item.positive = int(count)
+        elif level == "neutral":
+            item.neutral = int(count)
+        elif level == "negative":
+            item.negative = int(count)
+    return counts
 
 
 def _package_from_row(row: PackageRow) -> PackageSummary:

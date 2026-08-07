@@ -72,7 +72,9 @@ export default function SearchBar({
   return (
     <div className="search-section">
       <div className="search-bar">
-        <span className="search-icon">&#x1F50D;</span>
+        <span className="search-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </span>
         <input
           type="text"
           className="search-input"
@@ -95,93 +97,112 @@ export default function SearchBar({
           ))}
         </div>
 
-        <div className="search-filters-row">
-          <select
-            className="sort-select"
-            value={client}
-            onChange={(e) => onClientChange(e.target.value)}
-            aria-label="Filter by client"
-          >
-            <option value="">All clients</option>
-            {CLIENT_OPTIONS.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
+        <div className="search-filters-panel">
+          <div className="filter-group">
+            <span className="filter-label">客户端</span>
+            <select
+              className="sort-select"
+              value={client}
+              onChange={(e) => onClientChange(e.target.value)}
+              aria-label="Filter by client"
+            >
+              <option value="">全部客户端</option>
+              {CLIENT_OPTIONS.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
 
-          <select
-            className="sort-select"
-            value={minGrade}
-            onChange={(e) => onMinGradeChange(e.target.value)}
-            aria-label="Filter by minimum trust grade"
-          >
-            <option value="">Any grade</option>
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g} value={g}>{g} and above</option>
-            ))}
-          </select>
+          <div className="filter-group">
+            <span className="filter-label">信任等级</span>
+            <select
+              className="sort-select"
+              value={minGrade}
+              onChange={(e) => onMinGradeChange(e.target.value)}
+              aria-label="Filter by minimum trust grade"
+            >
+              <option value="">不限等级</option>
+              {GRADE_OPTIONS.map((g) => (
+                <option key={g} value={g}>{g} 及以上</option>
+              ))}
+            </select>
+          </div>
 
-          <input
-            type="number"
-            className="filter-input"
-            min={0}
-            max={100}
-            placeholder="Min score"
-            value={minScore}
-            onChange={(e) => onMinScoreChange(e.target.value)}
-            aria-label="Minimum trust score"
-            style={{ width: '7rem' }}
-          />
-          <input
-            type="number"
-            className="filter-input"
-            min={0}
-            max={100}
-            placeholder="Max score"
-            value={maxScore}
-            onChange={(e) => onMaxScoreChange(e.target.value)}
-            aria-label="Maximum trust score"
-            style={{ width: '7rem' }}
-          />
+          <div className="filter-group">
+            <span className="filter-label">评分范围</span>
+            <div className="score-range">
+              <input
+                type="number"
+                className="filter-input"
+                min={0}
+                max={100}
+                placeholder="最低"
+                value={minScore}
+                onChange={(e) => onMinScoreChange(e.target.value)}
+                aria-label="Minimum trust score"
+                style={{ width: '5.5rem' }}
+              />
+              <span className="score-sep">–</span>
+              <input
+                type="number"
+                className="filter-input"
+                min={0}
+                max={100}
+                placeholder="最高"
+                value={maxScore}
+                onChange={(e) => onMaxScoreChange(e.target.value)}
+                aria-label="Maximum trust score"
+                style={{ width: '5.5rem' }}
+              />
+            </div>
+          </div>
 
-          <select
-            className="sort-select"
-            value={updatedDays}
-            onChange={(e) => onUpdatedDaysChange(e.target.value)}
-            aria-label="Filter by last updated"
-          >
-            <option value="">Any time</option>
-            {UPDATED_OPTIONS.map((d) => (
-              <option key={d} value={d}>Updated in {d}d</option>
-            ))}
-          </select>
+          <div className="filter-group">
+            <span className="filter-label">更新时间</span>
+            <select
+              className="sort-select"
+              value={updatedDays}
+              onChange={(e) => onUpdatedDaysChange(e.target.value)}
+              aria-label="Filter by last updated"
+            >
+              <option value="">不限时间</option>
+              {UPDATED_OPTIONS.map((d) => (
+                <option key={d} value={d}>{d} 天内更新</option>
+              ))}
+            </select>
+          </div>
 
-          <input
-            type="text"
-            className="filter-input"
-            placeholder="Tag / keyword"
-            value={tag}
-            onChange={(e) => onTagChange(e.target.value)}
-            aria-label="Filter by tag"
-            style={{ width: '9rem' }}
-          />
-        </div>
+          <div className="filter-group">
+            <span className="filter-label">标签</span>
+            <input
+              type="text"
+              className="filter-input"
+              placeholder="标签关键词"
+              value={tag}
+              onChange={(e) => onTagChange(e.target.value)}
+              aria-label="Filter by tag"
+              style={{ width: '8rem' }}
+            />
+          </div>
 
-        <div className="search-extras">
-          <select
-            className="sort-select"
-            value={activeSortKey}
-            onChange={(e) => {
-              const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
-              onSortChange(field, order);
-            }}
-            aria-label="Sort packages"
-          >
-            {SORT_OPTIONS.map((opt) => (
-              <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
-                {t(`sort.${opt.key}`)}
-              </option>
-            ))}
-          </select>
+          <div className="filter-group">
+            <span className="filter-label">排序</span>
+            <select
+              className="sort-select"
+              value={activeSortKey}
+              onChange={(e) => {
+                const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
+                onSortChange(field, order);
+              }}
+              aria-label="Sort packages"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
+                  {t(`sort.${opt.key}`)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
     </div>

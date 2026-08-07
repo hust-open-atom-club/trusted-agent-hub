@@ -223,6 +223,14 @@ class ScanReport(StrictContractModel):
     scanned_at: str | None = None
 
 
+class FeedbackCounts(StrictContractModel):
+    """用户反馈等级计数（positive / neutral / negative）。"""
+
+    positive: int = 0
+    neutral: int = 0
+    negative: int = 0
+
+
 class PackageSummary(StrictContractModel):
     id: str
     name: str
@@ -240,6 +248,7 @@ class PackageSummary(StrictContractModel):
     grade: Grade | None = None
     install_count: int = 0
     avg_rating: float | None = None
+    feedback_counts: FeedbackCounts | None = None
     created_at: str | None = None
     updated_at: str | None = None
 

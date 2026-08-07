@@ -29,6 +29,11 @@ export interface Package {
   grade: string | null;
   install_count: number;
   avg_rating: number | null;
+  feedback_counts?: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  } | null;
   created_at: string;
   updated_at: string;
 }
