@@ -176,8 +176,12 @@ program
   }) => {
     const clientType = options.client || 'claude-code';
     let manifestVersion = '';
+    // 交互确认（外部命令安装 / MCP 配置写入）期间必须先停止 ora 转圈，
+    // 否则 readline 输入与 spinner 的终端光标控制冲突，会看起来卡死。
+    let installSpinner: ora.Ora | null = null;
     const executor = new InstallExecutor(client, {
       confirmManagedInstall: async (summary) => {
+        installSpinner?.stop();
         console.log('');
         console.log(
           chalk.yellow(
@@ -189,32 +193,47 @@ program
             '  安装会执行包管理器的安装脚本，请确认来源可信后再继续。',
           ),
         );
-        if (options.yes) return true;
-        const confirm = createTerminalConfirm();
-        if (!confirm) return false;
-        return await confirm({
-          packageName: summary.packageName,
-          version: summary.version,
-          client: clientType,
-          installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
-          contentState: 'external-command',
-        });
+        let confirmed: boolean;
+        if (options.yes) {
+          confirmed = true;
+        } else {
+          const confirm = createTerminalConfirm();
+          confirmed = confirm
+            ? await confirm({
+                packageName: summary.packageName,
+                version: summary.version,
+                client: clientType,
+                installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
+                contentState: 'external-command',
+              })
+            : false;
+        }
+        installSpinner?.start();
+        return confirmed;
       },
       confirmMcpWrite: async (summary: McpWriteSummary) => {
+        installSpinner?.stop();
         console.log('');
         console.log(chalk.yellow('  MCP config write requires confirmation:'));
         console.log(`  ${chalk.dim('File:')} ${summary.filePath}`);
         for (const line of summary.diff) console.log(line);
-        if (options.yes) return true;
-        const confirm = createTerminalConfirm();
-        if (!confirm) return false;
-        return await confirm({
-          packageName: name,
-          version: manifestVersion || '—',
-          client: clientType,
-          installPath: summary.filePath,
-          contentState: 'mcp-config',
-        });
+        let confirmed: boolean;
+        if (options.yes) {
+          confirmed = true;
+        } else {
+          const confirm = createTerminalConfirm();
+          confirmed = confirm
+            ? await confirm({
+                packageName: name,
+                version: manifestVersion || '—',
+                client: clientType,
+                installPath: summary.filePath,
+                contentState: 'mcp-config',
+              })
+            : false;
+        }
+        installSpinner?.start();
+        return confirmed;
       },
     });
 
@@ -317,7 +336,7 @@ program
     console.log('');
 
     // ── Phase 3: Execute install (reuse pre-fetched manifest) ──
-    const installSpinner = ora('Installing…').start();
+    installSpinner = ora('Installing…').start();
     try {
       const result = await executor.installWithManifest(
         manifest,
@@ -329,7 +348,7 @@ program
         },
       );
 
-      installSpinner.succeed(chalk.green('Installation complete'));
+      installSpinner?.succeed(chalk.green('Installation complete'));
 
       console.log('');
       console.log(`  ${chalk.dim('Installed to:')} ${chalk.cyan(result.targetDir)}`);
@@ -362,7 +381,7 @@ program
 
       console.log('');
     } catch (err: unknown) {
-      installSpinner.stop();
+      installSpinner?.stop();
 
       if (err instanceof InstallBlockedError) {
         const header =
@@ -554,28 +573,38 @@ program
     }
     console.log('');
 
-    const spinner = ora('Checking for updates…').start();
+    // 与 install 相同：确认外部命令更新前先停止转圈，避免 readline 输入冲突。
+    let updateSpinner: ora.Ora | null = null;
 
     const executor = new UpdateExecutor(client, {
       confirmManagedInstall: async (summary) => {
+        updateSpinner?.stop();
         console.log('');
         console.log(
           chalk.yellow(
             `  ${summary.method} 将执行外部命令更新 ${summary.packageName}@${summary.version}`,
           ),
         );
-        if (options.yes) return true;
-        const confirm = createTerminalConfirm();
-        if (!confirm) return false;
-        return await confirm({
-          packageName: summary.packageName,
-          version: summary.version,
-          client: clientType,
-          installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
-          contentState: 'external-command',
-        });
+        let confirmed: boolean;
+        if (options.yes) {
+          confirmed = true;
+        } else {
+          const confirm = createTerminalConfirm();
+          confirmed = confirm
+            ? await confirm({
+                packageName: summary.packageName,
+                version: summary.version,
+                client: clientType,
+                installPath: 'managed-directory (~/.trusted-agent-hub/installed)',
+                contentState: 'external-command',
+              })
+            : false;
+        }
+        updateSpinner?.start();
+        return confirmed;
       },
     });
+    updateSpinner = ora('Checking for updates…').start();
     let result: UpdateResult;
     try {
       result = await executor.update(name, clientType, {
@@ -584,7 +613,7 @@ program
         acceptHighRisk: options.acceptHighRisk,
       });
     } catch (err: unknown) {
-      spinner.stop();
+      updateSpinner?.stop();
       console.log('');
       console.log(chalk.red.bold('  ✗ Update failed'));
       console.log(chalk.red(`    ${err instanceof Error ? err.message : String(err)}`));
@@ -592,7 +621,7 @@ program
       process.exit(1);
     }
 
-    spinner.stop();
+    updateSpinner?.stop();
 
     if (result.status === 'updated') {
       console.log(chalk.green(`  ✓ Updated ${name} from v${result.localVersion} → v${result.remoteVersion}`));
