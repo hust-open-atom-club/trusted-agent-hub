@@ -20,6 +20,7 @@ import { validateManifest } from '../src/manifest-types';
 import type { InstallManifest } from '../src/manifest-types';
 import {
   describeMcpDiff,
+  expandHomePath,
   mcpServersFromManifest,
   readJsonConfig,
   removeMcpEntries,
@@ -193,6 +194,35 @@ runTest('writeMergedMcpConfig creates file when missing', async () => {
     (config.mcpServers as Record<string, unknown>).demo,
     { url: 'http://127.0.0.1:9000' },
   );
+});
+
+runTest('writeMergedMcpConfig expands ~ in command/args/env', async () => {
+  const home = path.join(TEST_HOME, 'unit-home');
+  const configPath = resolveMcpConfigPath('claude-code', home)!;
+  await writeMergedMcpConfig(
+    configPath,
+    {
+      filesystem: {
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-filesystem', '~'],
+        env: { DATA_DIR: '~/data' },
+      },
+    },
+    home,
+  );
+  const config = await readJsonConfig(configPath);
+  const entry = (config.mcpServers as Record<string, any>).filesystem;
+  assert.strictEqual(entry.args[2], home);
+  assert.strictEqual(entry.env.DATA_DIR, path.join(home, 'data'));
+});
+
+runTest('expandHomePath handles ~, ~/x and plain values', () => {
+  assert.strictEqual(expandHomePath('~', 'C:\\Users\\tester'), 'C:\\Users\\tester');
+  assert.strictEqual(
+    expandHomePath('~/data', 'C:\\Users\\tester'),
+    'C:\\Users\\tester\\data',
+  );
+  assert.strictEqual(expandHomePath('npx', 'C:\\Users\\tester'), 'npx');
 });
 
 runTest('removeMcpEntries deletes only the given keys', async () => {

@@ -40,7 +40,7 @@
       {
         "name": "filesystem",
         "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"]
       }
     ]
   },
@@ -75,12 +75,12 @@
         "destination": "~/.cursor/skills/mcp-server-filesystem/"
       }
     ],
-    "post_install_message": "mcp-server-filesystem installed. Add the MCP server config to your client and grant the allowed roots."
+    "post_install_message": "mcp-server-filesystem installed and registered with the user home directory as its allowed root (expandable to other roots in ~/.claude.json)."
   },
   "mcp_server_config": {
     "transport": "stdio",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "~"],
     "env": {},
     "tools": [
       {
