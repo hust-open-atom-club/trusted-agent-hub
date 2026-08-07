@@ -386,7 +386,7 @@ class ProducerService:
 
         client_roots = {
             "claude-code": "~/.claude/skills/",
-            "claude-code-plugin": "~/.claude/plugins/",
+            "claude-code-plugin": "~/.claude/skills/",
             "cursor": "~/.cursor/skills/",
         }
         destination_root = client_roots.get(target_client, "~/.claude/skills/")

@@ -57,10 +57,10 @@
     "targets": [
       {
         "client": "claude-code-plugin",
-        "destination": "~/.claude/plugins/anthropic-web-skills-plugin/"
+        "destination": "~/.claude/skills/anthropic-web-skills-plugin/"
       }
     ],
-    "post_install_message": "anthropic-web-skills-plugin installed. Enable the plugin in Claude Code to use the bundled web skills."
+    "post_install_message": "anthropic-web-skills-plugin installed to ~/.claude/skills/. Claude Code auto-loads it next session; confirm in /plugin."
   },
   "plugin_config": {
     "components": {

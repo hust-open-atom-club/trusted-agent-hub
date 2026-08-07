@@ -14,7 +14,10 @@ import * as os from 'os';
 
 export const CLIENT_INSTALL_ROOTS: Record<string, string> = {
   'claude-code': '.claude/skills',
-  'claude-code-plugin': '.claude/plugins',
+  // Claude Code auto-loads plugins from ~/.claude/skills/<name>/ when the
+  // directory contains .claude-plugin/plugin.json (`<name>@skills-dir`).
+  // A bare directory under ~/.claude/plugins/ is NOT registered/enabled.
+  'claude-code-plugin': '.claude/skills',
   cursor: '.cursor/skills',
 } as const;
 
@@ -25,7 +28,7 @@ export const CLIENT_INSTALL_ROOTS: Record<string, string> = {
  */
 export const CLIENT_MANIFEST_ROOTS: Record<string, string> = {
   'claude-code': '~/.claude/skills/',
-  'claude-code-plugin': '~/.claude/plugins/',
+  'claude-code-plugin': '~/.claude/skills/',
   cursor: '~/.cursor/skills/',
 } as const;
 

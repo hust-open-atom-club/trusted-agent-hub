@@ -134,12 +134,10 @@ export function getClientTargetPath(
   if (match?.destination) {
     return match.destination;
   }
+  // claude-code and claude-code-plugin share the skills root: Claude Code
+  // auto-loads plugins from ~/.claude/skills/<name>/ (skills-dir plugins).
   const root =
-    client === 'claude-code-plugin'
-      ? '~/.claude/plugins/'
-      : client === 'cursor'
-        ? '~/.cursor/skills/'
-        : '~/.claude/skills/';
+    client === 'cursor' ? '~/.cursor/skills/' : '~/.claude/skills/';
   return `${root}${packageName}/`;
 }
 

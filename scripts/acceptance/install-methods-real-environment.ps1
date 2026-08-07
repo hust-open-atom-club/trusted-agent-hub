@@ -1,6 +1,7 @@
 # 多安装方式真实环境验收（Consumer 侧）
 # 目标：对 npm_install / pip_install / docker_run / manual_steps 四种受管安装方式，
-#       以及 copy_directory + MCP 配置写入、claude-code-plugin 插件目录安装，
+#       以及 copy_directory + MCP 配置写入、claude-code-plugin 插件安装
+#       （安装到 ~/.claude/skills/ 后由 Claude Code 自动加载），
 #       在隔离 HOME 中真实完成 tah install -> verify -> (update) -> uninstall 闭环。
 #
 # 前置：docker compose 三服务运行（api/db/web），API 健康；node/npm/python/docker 可用。
@@ -37,7 +38,7 @@ $packages = @(
     @{ Name = "demo-pip-install";      SourceDir = "pip-install-demo";      Method = "pip_install";      Client = "claude-code";        Kind = "managed"; SourceType = "pypi";         Type = "skill";     AssertRel = ".trusted-agent-hub\installed\demo-pip-install-pip\idna";                    Update = $false },
     @{ Name = "demo-docker-run";       SourceDir = "docker-run-demo";       Method = "docker_run";       Client = "claude-code";        Kind = "managed"; SourceType = "docker";       Type = "mcp_server"; AssertRel = ".trusted-agent-hub\installed\demo-docker-run-docker\docker-run.json"; Update = $false },
     @{ Name = "demo-mcp-config";       SourceDir = "mcp-config-demo";       Method = "copy_directory";   Client = "claude-code";        Kind = "copy";     SourceType = "local_upload"; Type = "mcp_server"; AssertRel = ".claude\skills\demo-mcp-config\server.py";             McpKey = "demo-mcp-config"; Update = $false },
-    @{ Name = "demo-claude-plugin";    SourceDir = "claude-plugin-demo";    Method = "copy_directory";   Client = "claude-code-plugin"; Kind = "copy";     SourceType = "local_upload"; Type = "plugin";    AssertRel = ".claude\plugins\demo-claude-plugin\plugin.json";      Update = $false },
+    @{ Name = "demo-claude-plugin";    SourceDir = "claude-plugin-demo";    Method = "copy_directory";   Client = "claude-code-plugin"; Kind = "copy";     SourceType = "local_upload"; Type = "plugin";    AssertRel = ".claude\skills\demo-claude-plugin\.claude-plugin\plugin.json"; Update = $false },
     @{ Name = "demo-manual-steps";     SourceDir = "manual-steps-demo";     Method = "manual_steps";     Client = "claude-code";        Kind = "managed"; SourceType = "local_upload"; Type = "skill";     AssertRel = ".trusted-agent-hub\installed\demo-manual-steps-manual\steps.txt";        Update = $false }
 )
 
@@ -192,11 +193,9 @@ foreach ($pkg in $packages) {
 
     if ($pkg.Kind -eq "copy") {
         $artifactUrl = "https://127.0.0.1:$artifactPort/$($pkg.ZipName)"
-        $copyDestination = if ($pkg.Client -eq "claude-code-plugin") {
-            "~/.claude/plugins/$($pkg.Name)/"
-        } else {
-            "~/.claude/skills/$($pkg.Name)/"
-        }
+        # claude-code-plugin 与 claude-code 共用 skills 根目录：Claude Code
+        # 会自动加载 ~/.claude/skills/<name>/ 下的插件（<name>@skills-dir）。
+        $copyDestination = "~/.claude/skills/$($pkg.Name)/"
         $depsSql = "jsonb_build_object()"
         if ($pkg.McpKey) {
             $depsSql = "jsonb_build_object('mcp_servers', jsonb_build_array(jsonb_build_object('name', '$($pkg.McpKey)', 'command', 'python', 'args', jsonb_build_array('server.py'))))"
