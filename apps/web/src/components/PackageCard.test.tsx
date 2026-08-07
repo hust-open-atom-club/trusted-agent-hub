@@ -58,6 +58,8 @@ describe('PackageCard', () => {
       push,
       replace: vi.fn(),
       back: vi.fn(),
+      forward: vi.fn(),
+      refresh: vi.fn(),
       prefetch: vi.fn(),
     });
 

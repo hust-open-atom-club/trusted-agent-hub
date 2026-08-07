@@ -755,10 +755,6 @@ h3 {
   background: linear-gradient(90deg, var(--color-lavender), var(--color-cyan));
 }
 
-.package-card.card-accent-mcp_server::before {
-  background: linear-gradient(90deg, var(--color-cyan), var(--color-mint));
-}
-
 .package-card.card-accent-plugin::before {
   background: linear-gradient(90deg, var(--color-coral), var(--color-accent));
 }
@@ -783,9 +779,11 @@ h3 {
 }
 
 .card-type-icon {
-  font-size: 1.15rem;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  color: var(--color-accent);
 }
 
 .card-header {
