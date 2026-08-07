@@ -220,7 +220,7 @@ runTest('expandHomePath handles ~, ~/x and plain values', () => {
   assert.strictEqual(expandHomePath('~', 'C:\\Users\\tester'), 'C:\\Users\\tester');
   assert.strictEqual(
     expandHomePath('~/data', 'C:\\Users\\tester'),
-    'C:\\Users\\tester\\data',
+    path.join('C:\\Users\\tester', 'data'),
   );
   assert.strictEqual(expandHomePath('npx', 'C:\\Users\\tester'), 'npx');
 });
