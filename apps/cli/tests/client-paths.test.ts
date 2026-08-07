@@ -33,6 +33,10 @@ assert.deepStrictEqual(
   '.claude/skills',
 );
 assert.deepStrictEqual(
+  CLIENT_INSTALL_ROOTS['claude-code-plugin'],
+  '.claude/skills',
+);
+assert.deepStrictEqual(
   CLIENT_INSTALL_ROOTS['cursor'],
   '.cursor/skills',
 );
@@ -41,6 +45,10 @@ console.log('  ✓ CLIENT_INSTALL_ROOTS has expected keys');
 // --- CLIENT_MANIFEST_ROOTS ---
 assert.deepStrictEqual(
   CLIENT_MANIFEST_ROOTS['claude-code'],
+  '~/.claude/skills/',
+);
+assert.deepStrictEqual(
+  CLIENT_MANIFEST_ROOTS['claude-code-plugin'],
   '~/.claude/skills/',
 );
 assert.deepStrictEqual(
@@ -78,6 +86,14 @@ console.log('  ✓ isSupportedClient');
   const root = getClientRoot('cursor', home);
   assert.strictEqual(root, path.resolve(home, '.cursor/skills'));
   console.log('  ✓ getClientRoot cursor');
+}
+
+{
+  // claude-code-plugin shares the skills root so Claude Code auto-loads the
+  // installed plugin as <name>@skills-dir.
+  const root = getClientRoot('claude-code-plugin', home);
+  assert.strictEqual(root, path.resolve(home, '.claude/skills'));
+  console.log('  ✓ getClientRoot claude-code-plugin -> skills dir');
 }
 
 {
@@ -146,6 +162,18 @@ console.log('  ✓ isSupportedClient');
   );
   assert.strictEqual(result, path.resolve(home, '.cursor/skills/example'));
   console.log('  ✓ resolveManifestDestination cursor correct');
+}
+
+// Correct destination for claude-code-plugin (skills dir auto-load)
+{
+  const clientRoot = path.resolve(home, '.claude/skills');
+  const result = resolveManifestDestination(
+    '~/.claude/skills/example/',
+    'claude-code-plugin',
+    clientRoot,
+  );
+  assert.strictEqual(result, path.resolve(home, '.claude/skills/example'));
+  console.log('  ✓ resolveManifestDestination claude-code-plugin correct');
 }
 
 // Rejects wrong client root (cursor destination with claude-code client)

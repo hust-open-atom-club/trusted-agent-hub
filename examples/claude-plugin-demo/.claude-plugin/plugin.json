@@ -1,6 +1,6 @@
 {
   "name": "demo-claude-plugin",
-  "description": "只读演示插件：提供一个 echo Skill，用于验证插件目录安装闭环",
+  "description": "只读演示插件：提供一个 echo Skill，验证安装到 ~/.claude/skills/ 后由 Claude Code 自动加载",
   "version": "1.0.0",
   "author": {
     "name": "TrustedAgentHub Examples",

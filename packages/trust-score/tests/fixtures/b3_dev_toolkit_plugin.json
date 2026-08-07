@@ -47,7 +47,7 @@
     "installation": {
       "method": "copy_directory",
       "targets": [
-        {"client": "claude-code", "destination": "~/.claude/plugins/dev-toolkit/"}
+        {"client": "claude-code", "destination": "~/.claude/skills/dev-toolkit/"}
       ]
     },
     "plugin_config": {

@@ -1,7 +1,7 @@
 {
   "name": "demo-claude-plugin",
   "version": "1.0.0",
-  "description": "演示 claude-code-plugin 目标：将 Claude 插件安装到 ~/.claude/plugins/",
+  "description": "演示 claude-code-plugin 目标：插件安装到 ~/.claude/skills/ 后被 Claude Code 自动加载",
   "type": "plugin",
   "author": {
     "name": "TrustedAgentHub Examples",
@@ -19,6 +19,6 @@
     "method": "copy_directory",
     "target_client": "claude-code-plugin",
     "steps": [],
-    "post_install_message": "插件已安装到 ~/.claude/plugins/demo-claude-plugin/"
+    "post_install_message": "插件已安装到 ~/.claude/skills/demo-claude-plugin/，Claude Code 会在下次会话自动加载（可在 /plugin 中确认）"
   }
 }

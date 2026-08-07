@@ -344,6 +344,22 @@ program
         console.log(chalk.cyan(`  ℹ ${manifest.installation.post_install_message}`));
       }
 
+      // Plugin packages installed into the Claude Code skills dir are
+      // auto-loaded as <name>@skills-dir — tell the user how to confirm.
+      if (manifest.type === 'plugin' && clientType === 'claude-code-plugin') {
+        console.log('');
+        console.log(
+          chalk.cyan(
+            '  ℹ Claude Code 会自动加载 ~/.claude/skills/ 下的插件（<name>@skills-dir）。',
+          ),
+        );
+        console.log(
+          chalk.cyan(
+            '    新开会话后在 /plugin 中可见；可用 `claude plugin list --json` 验证。',
+          ),
+        );
+      }
+
       console.log('');
     } catch (err: unknown) {
       installSpinner.stop();

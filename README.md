@@ -86,6 +86,11 @@ npx tah verify <name>
 
 支持 Claude Code / Cursor / VS Code 等多种客户端，安装前展示权限声明和信任评分。
 
+插件类能力包安装到 `~/.claude/skills/<name>/`（与技能共用目录）。只要包内含
+`.claude-plugin/plugin.json`，Claude Code 就会自动加载为
+`<name>@skills-dir` 插件，无需手工注册 marketplace；安装后新开会话即可在
+`/plugin` 中看到并启用。
+
 ---
 
 ## 快速开始

@@ -62,7 +62,7 @@
     "targets": [
       {
         "client": "claude-code-plugin",
-        "destination": "~/.claude/plugins/dev-toolkit/",
+        "destination": "~/.claude/skills/dev-toolkit/",
         "config_template": "{\n  \"plugins\": {\n    \"dev-toolkit\": {\n      \"enabled\": true,\n      \"settings\": ${settings}\n    }\n  }\n}"
       }
     ],
