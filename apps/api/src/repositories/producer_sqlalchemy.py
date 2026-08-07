@@ -70,6 +70,7 @@ class ProducerRepository:
         author: dict[str, object] | None = None,
         permissions: dict[str, object] | None = None,
         installation: dict[str, object] | None = None,
+        dependencies: dict[str, object] | None = None,
         source: dict[str, object] | None = None,
         compatibility: list[str] | None = None,
         field_source: dict[str, str] | None = None,
@@ -91,6 +92,7 @@ class ProducerRepository:
             "author": author,
             "permissions": permissions,
             "installation": installation,
+            "dependencies": dependencies,
             "source": source,
             "field_source": field_source,
             "compatibility": compatibility or [],
@@ -228,6 +230,7 @@ class ProducerRepository:
         permissions: dict[str, object] | None = None,
         compatibility: list[str] | None = None,
         installation: dict[str, object] | None = None,
+        dependencies: dict[str, object] | None = None,
         field_source: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """创建新版本，返回版本信息。"""
@@ -245,6 +248,7 @@ class ProducerRepository:
             "compatibility": compatibility or [],
             "description": description,
             "installation": installation,
+            "dependencies": dependencies,
             "field_source": field_source,
             "submitted_at": None,
             "trust_score": None,

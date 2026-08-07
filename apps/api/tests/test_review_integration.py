@@ -30,7 +30,8 @@ def _mock_artifact_build(monkeypatch):
     def _fake_build_artifact(*, repo_url, commit_hash, package_name, version, local_source_dir=None):
         zip_name = f"{package_name}-{version}-{commit_hash[:8]}.zip"
         return {
-            "download_url": f"/api/v0/artifacts/{zip_name}",
+            # 消费侧 install-manifest 校验要求 https 或 localhost http 地址
+            "download_url": f"http://127.0.0.1:8000/api/v0/artifacts/{zip_name}",
             "sha256": "a" * 64,
             "download_size_bytes": 1024,
         }
@@ -163,9 +164,12 @@ def _simulate_scan_complete(version_id: str, scan_data: dict):
         pkg_version = scan_data.get("version", "1.0.0")
         commit_hash = "a" * 40
         zip_name = f"{pkg_name}-{pkg_version}-{commit_hash[:8]}.zip"
-        download_url = f"/api/v0/artifacts/{zip_name}"
+        # 消费侧 install-manifest 校验要求 https 或 localhost http 的下载地址
+        download_url = f"http://127.0.0.1:8000/api/v0/artifacts/{zip_name}"
 
         source = dict(data.get("source") or {})
+        source.setdefault("type", "github")
+        source.setdefault("ref", "main")
         source["download_url"] = download_url
         source["commit_hash"] = commit_hash
         data["source"] = source
@@ -188,8 +192,8 @@ def _simulate_scan_complete(version_id: str, scan_data: dict):
             "steps": [
                 {"action": "download", "url": download_url},
                 {"action": "verify", "algorithm": "sha256", "checksum": "a" * 64},
-                {"action": "extract"},
-                {"action": "copy", "client": target_client,
+                {"action": "extract", "archive": zip_name},
+                {"action": "copy", "source": pkg_name + "/",
                  "destination": f"~/.claude/skills/{pkg_name}/"},
             ],
         }
@@ -754,3 +758,102 @@ class TestIntegrationAuditFlow:
         actions3 = [log["action"] for log in _db_query_audit_logs(ver2["id"])]
         assert "approve" in actions3, f"expected 'approve' audit, got: {actions3}"
         assert "approved" not in actions3, f"legacy raw conclusion should not be written: {actions3}"
+
+
+def test_upload_mcp_dependencies_persist_through_producer():
+    """用户上传的 MCP 包必须保留 dependencies.mcp_servers，发布后消费侧可安装注册。"""
+    _needs_db()
+    client = _get_client()
+    stoken = _register_and_login_as(
+        client, _random_email("sub"), "submitter"
+    )["access_token"]
+    rtoken = _register_and_login_as(
+        client, _random_email("rev"), "reviewer"
+    )["access_token"]
+    atoken = _register_and_login_as(
+        client, _random_email("adm"), "admin"
+    )["access_token"]
+
+    pkg = _create_package(
+        client, stoken, f"mcp-upload-{uuid.uuid4().hex[:6]}", ptype="mcp_server"
+    )
+    resp = client.post(
+        f"/api/v0/producer/packages/{pkg['id']}/versions",
+        json={
+            "version": "1.0.0",
+            "repo_url": f"https://github.com/test/{pkg['name']}",
+            "compatibility": ["claude-code"],
+            "source": {
+                "type": "github",
+                "repository_url": f"https://github.com/test/{pkg['name']}",
+                "ref": "main",
+                "commit_hash": "a" * 40,
+            },
+            "dependencies": {
+                "npm": None,
+                "pip": None,
+                "system": None,
+                "docker": None,
+                "mcp_servers": [
+                    {
+                        "name": "time",
+                        "command": "uvx",
+                        "args": [
+                            "--with",
+                            "mcp==1.9.0",
+                            "mcp-server-time==2025.9.25",
+                        ],
+                        "env": None,
+                    }
+                ],
+            },
+        },
+        headers={"Authorization": f"Bearer {stoken}"},
+    )
+    assert resp.status_code == 201, f"Create version failed: {resp.text}"
+    version_id = resp.json()["id"]
+    _CLEANUP_IDS.append(version_id)
+
+    # 提交 → 扫描完成（注入）→ 审核通过 → 发布
+    _submit_version(client, stoken, version_id)
+    _simulate_scan_complete(version_id, SCAN_CLEAN)
+    resp = client.post(
+        f"/api/v0/producer/versions/{version_id}/reviews",
+        json={"conclusion": "approved", "comment": "ok"},
+        headers={"Authorization": f"Bearer {rtoken}"},
+    )
+    assert resp.status_code == 201, f"Review failed: {resp.text}"
+    resp = client.post(
+        f"/api/v0/producer/versions/{version_id}/publish",
+        headers={"Authorization": f"Bearer {atoken}"},
+    )
+    assert resp.status_code == 200, f"Publish failed: {resp.text}"
+    assert resp.json()["new_status"] == "published"
+
+    # 供给侧版本详情保留 dependencies
+    detail = client.get(
+        f"/api/v0/producer/versions/{version_id}",
+        headers={"Authorization": f"Bearer {stoken}"},
+    )
+    assert detail.status_code == 200, f"Version detail failed: {detail.text}"
+    deps = detail.json().get("dependencies") or {}
+    mcp_servers = deps.get("mcp_servers") or []
+    assert len(mcp_servers) == 1
+    assert mcp_servers[0]["name"] == "time"
+    assert mcp_servers[0]["command"] == "uvx"
+    assert mcp_servers[0]["args"] == [
+        "--with",
+        "mcp==1.9.0",
+        "mcp-server-time==2025.9.25",
+    ]
+
+    # 消费侧 install-manifest 必须携带 mcp_servers，供 CLI 写客户端配置
+    manifest = client.get(
+        f"/api/v0/packages/{pkg['name']}/install-manifest",
+        params={"client": "claude-code"},
+    )
+    assert manifest.status_code == 200, f"Install manifest failed: {manifest.text}"
+    manifest_mcp = (manifest.json().get("dependencies") or {}).get("mcp_servers") or []
+    assert len(manifest_mcp) == 1
+    assert manifest_mcp[0]["name"] == "time"
+    assert manifest_mcp[0]["command"] == "uvx"
