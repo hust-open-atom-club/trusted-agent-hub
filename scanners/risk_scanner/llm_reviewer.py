@@ -20,6 +20,10 @@ import os
 from typing import Any
 
 
+# 只对高/严重级发现做 LLM 复核，低/中危发现不消耗调用
+REVIEWED_SEVERITIES: frozenset[str] = frozenset({"critical", "high"})
+
+
 LLM_REVIEW_PROMPT = """\
 You are a security analyst evaluating an AI agent skill for vulnerabilities.
 
@@ -179,6 +183,7 @@ def run_llm_review(
     result: dict[str, Any] = {
         "triggered": bool(findings),
         "findings_reviewed": 0,
+        "findings_skipped": 0,
         "labels": {},
         "labels_summary": {
             "suspected_malicious": 0,
@@ -200,6 +205,11 @@ def run_llm_review(
     for finding in findings:
         fid = finding.get("id", "")
         if not fid:
+            continue
+        severity = str(finding.get("severity", "info")).lower()
+        if severity not in REVIEWED_SEVERITIES:
+            # 低/中危发现由静态规则覆盖即可，不浪费 LLM 调用
+            result["findings_skipped"] += 1
             continue
 
         context = _get_code_context(file_cache, finding.get("location", {}))

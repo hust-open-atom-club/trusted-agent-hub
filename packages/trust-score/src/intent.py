@@ -282,6 +282,7 @@ def assess_prompt_safety(
             "medium_count": 0,
             "low_count": 0,
             "scan_available": False,
+            "confirmed_malicious": False,
         }
 
     summary: dict[str, Any] = scan_report.get("summary", {}) or {}
@@ -311,8 +312,9 @@ def assess_prompt_safety(
             llm_note = ""
             llm_label = f.get("llm_label", "")
             if llm_label == "llm:likely-benign":
-                llm_note = " [LLM:likely-benign, downgraded]"
-            elif llm_label == "llm:suspected-malicious":
+                # LLM 判定良性：即使静态严重度是 critical/high，也不纳入危险集
+                continue
+            if llm_label == "llm:suspected-malicious":
                 llm_note = " [LLM:suspected-malicious, upgraded]"
             dangerous_findings.append(
                 f"[{sev}] {f.get('title', 'Unknown')} ({category}){llm_note}"
@@ -324,6 +326,13 @@ def assess_prompt_safety(
             f"Found {len(dangerous_findings)} critical/high finding(s) in dangerous categories"
         )
         evidence.extend(dangerous_findings)
+        confirmed_malicious = any(
+            f.get("llm_label") == "llm:suspected-malicious"
+            for f in findings
+            if adjusted_severities.get(f.get("id", ""), f.get("severity", ""))
+            in ("critical", "high")
+            and f.get("category", "") in _DANGEROUS_CATEGORIES
+        )
         score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
@@ -334,6 +343,7 @@ def assess_prompt_safety(
             "medium_count": medium_count,
             "low_count": low_count,
             "scan_available": True,
+            "confirmed_malicious": confirmed_malicious,
         }
     elif critical_count > 0 or high_count > 0:
         level = "suspicious"
@@ -351,6 +361,7 @@ def assess_prompt_safety(
             "medium_count": medium_count,
             "low_count": low_count,
             "scan_available": True,
+            "confirmed_malicious": False,
         }
     elif medium_count > 2 or low_count > 5:
         level = "suspicious"
@@ -365,6 +376,7 @@ def assess_prompt_safety(
             "medium_count": medium_count,
             "low_count": low_count,
             "scan_available": True,
+            "confirmed_malicious": False,
         }
     else:
         level = "safe"
@@ -386,6 +398,7 @@ def assess_prompt_safety(
             "medium_count": medium_count,
             "low_count": low_count,
             "scan_available": True,
+            "confirmed_malicious": False,
         }
 
 

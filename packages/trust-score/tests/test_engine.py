@@ -120,6 +120,81 @@ def test_b5_risky_executor_dangerous_scan_veto() -> None:
     _assert_valid_output(result, fx["expected_level"])
 
 
+def _scan_with_critical_prompt_injection(llm_label: str | None) -> dict:
+    return {
+        "summary": {
+            "total": 1, "critical": 1, "high": 0,
+            "medium": 0, "low": 0, "info": 0,
+        },
+        "findings": [
+            {
+                "id": "f1",
+                "rule_id": "SR-001",
+                "severity": "critical",
+                "category": "prompt_injection",
+                "title": "prompt injection pattern",
+                "llm_label": llm_label,
+            }
+        ],
+    }
+
+
+def _excessive_permission_metadata() -> dict:
+    fx = _load_fixture("b1_code_review_skill")
+    meta = dict(fx["package_metadata"])
+    meta["permissions"] = {
+        # 5 个危险信号 → I1=excessive（非 dangerous），
+        # 与 I2=dangerous 组合不会触发 V3/V4，可单独验证 V2。
+        "filesystem": {
+            "read": ["/", "~/"], "write": ["/", "~/"], "delete": True,
+        },
+        "shell": {"allowed": True, "commands": []},
+        "network": {"allowed": True, "domains": []},
+        "environment": {"read": [], "write": []},
+    }
+    return meta
+
+
+def test_veto_requires_llm_confirmed_malicious() -> None:
+    """放宽规则：critical 必须 LLM 确认恶意才触发 V2 否决（E）。"""
+    meta = _excessive_permission_metadata()
+    fx = _load_fixture("b1_code_review_skill")
+
+    # 无 LLM 标签：不判 E（降为 high_risk/D）
+    result = rate(
+        package_metadata=meta,
+        scan_report=_scan_with_critical_prompt_injection(None),
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] != "untrusted", \
+        "critical 无 LLM 确认恶意时不应直接判 E"
+
+    # LLM 确认恶意：判 E
+    result_malicious = rate(
+        package_metadata=meta,
+        scan_report=_scan_with_critical_prompt_injection(
+            "llm:suspected-malicious"
+        ),
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result_malicious["risk_summary"]["level"] == "untrusted", \
+        "LLM 确认恶意的 critical 应判 E"
+
+    # LLM 判定良性：不判 E
+    result_benign = rate(
+        package_metadata=meta,
+        scan_report=_scan_with_critical_prompt_injection(
+            "llm:likely-benign"
+        ),
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result_benign["risk_summary"]["level"] != "untrusted", \
+        "LLM 判定良性的 critical 不应判 E"
+
+
 def test_b6_empty_package_opaque_source() -> None:
     """B6: Opaque source, no scan → medium_risk."""
     fx = _load_fixture("b6_empty_package")
@@ -204,6 +279,7 @@ def test_edge_full_veto_chain() -> None:
             "severity": "critical",
             "category": "remote_code_execution",
             "title": "Hidden RCE",
+            "llm_label": "llm:suspected-malicious",
             "location": {"file": "SKILL.md", "line": 1},
         }],
         "summary": {"total": 1, "critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0},
@@ -451,6 +527,7 @@ def test_new_dangerous_category_triggers_v2_ssrf() -> None:
         "id": "f-ssrf-1",
         "rule_id": "SR-014",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "ssrf",
         "title": "SSRF to cloud metadata endpoint",
         "description": "Package makes requests to 169.254.169.254",
@@ -480,6 +557,7 @@ def test_new_dangerous_category_triggers_v2_supply_chain() -> None:
         "id": "f-sc-1",
         "rule_id": "SR-008",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "supply_chain",
         "title": "Dependency confusion detected",
         "description": "Package name matches internal private package",
@@ -555,6 +633,7 @@ def test_dangerous_category_memory_poisoning_veto() -> None:
         "id": "f-mp-1",
         "rule_id": "SR-013",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "memory_poisoning",
         "title": "Agent memory poisoning via skill instructions",
         "description": "Skill injects persistent instructions into agent memory",
@@ -580,6 +659,7 @@ def test_dangerous_category_system_prompt_leakage_veto() -> None:
         "id": "f-spl-1",
         "rule_id": "SR-012",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "system_prompt_leakage",
         "title": "System prompt exfiltration attempt",
         "description": "Skill attempts to send system prompt to external URL",
@@ -605,6 +685,7 @@ def test_dangerous_category_agent_snooping_veto() -> None:
         "id": "f-as-1",
         "rule_id": "SR-015",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "agent_snooping",
         "title": "Agent conversation history exfiltration",
         "description": "Skill reads and transmits full conversation log",
@@ -630,6 +711,7 @@ def test_dangerous_category_output_handling_veto() -> None:
         "id": "f-oh-1",
         "rule_id": "SR-011",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "output_handling",
         "title": "Unsanitized command output rendered to user",
         "description": "Shell command output is rendered without HTML escaping",
@@ -655,6 +737,7 @@ def test_dangerous_category_tool_misuse_critical_veto() -> None:
         "id": "f-tm-1",
         "rule_id": "SR-016",
         "severity": "critical",
+        "llm_label": "llm:suspected-malicious",
         "category": "tool_misuse",
         "title": "Dangerous tool chain: BashTool → write → execute",
         "description": "Skill chains file write with bash execution without user confirmation",

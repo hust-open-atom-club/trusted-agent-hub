@@ -111,6 +111,7 @@ class RiskScanner:
             except (ModuleNotFoundError, AttributeError) as e:
                 logger.warning("Rule module %s failed to load: %s", rule_module, e)
 
+        self._downgrade_documentation_findings()
         self._deduplicate_findings()
 
         end = datetime.now(timezone.utc)
@@ -197,6 +198,44 @@ class RiskScanner:
                 return True
         return False
 
+    def _is_documentation_file(self, rel_path: str) -> bool:
+        """判断文件是否为说明性文档（README/docs/CHANGELOG 等）。
+
+        真正的能力内容（SKILL.md、*.prompt.md、system_prompt.md、agent.json）
+        不视为文档，避免削弱提示注入等专项检测。
+        """
+        normalized = rel_path.replace("\\", "/").lower()
+        basename = normalized.rsplit("/", 1)[-1]
+        if basename in {
+            "skill.md",
+            "system_prompt.md",
+            "agent.json",
+        } or basename.endswith(".prompt.md"):
+            return False
+        if normalized.startswith("docs/"):
+            return True
+        if basename.startswith(("readme", "changelog", "release-notes", "notice", "license")):
+            return True
+        return basename.endswith((".md", ".markdown", ".txt", ".rst"))
+
+    def _downgrade_documentation_findings(self) -> None:
+        """把说明性文档中的 critical/high/medium 发现降级为 low。
+
+        真实仓库的 README/文档常包含示例命令、token 占位符、curl | sh 等字面量，
+        这些不是可执行的能力内容，不应直接触发一票否决。
+        """
+        for finding in self.findings:
+            location = finding.get("location") or {}
+            file_path = str(location.get("file") or "")
+            severity = finding.get("severity", "info")
+            if (
+                file_path
+                and self._is_documentation_file(file_path)
+                and severity in ("critical", "high", "medium")
+            ):
+                finding["severity"] = "low"
+                finding["downgraded"] = "documentation"
+                finding["title"] = f"{finding.get('title', '')} [文档示例/说明文本]"
     def _add_finding(
         self,
         rule_id: str,
