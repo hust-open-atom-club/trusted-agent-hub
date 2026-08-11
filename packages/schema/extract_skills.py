@@ -74,6 +74,18 @@ VALID_CLIENTS: set[str] = {
     "windsurf", "cline",
 }
 
+# 有效能力包类型（对齐 schema items.enum）
+VALID_PACKAGE_TYPES: set[str] = {
+    "skill", "mcp_server", "plugin", "subagent", "command", "prompt",
+}
+
+# 多能力仓库发现时跳过的目录
+_SKIP_CAPABILITY_DIRS: set[str] = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", "dist",
+    "build", ".next", ".idea", ".vscode", "tests", "test", "docs",
+    "assets", "images", ".github",
+}
+
 # LICENSE 文本关键词 → SPDX 标识符
 LICENSE_SPDX_MAP: list[tuple[str, str]] = [
     ("MIT License", "MIT"),
@@ -211,6 +223,9 @@ class ScanResult:
     skill_type: str = "prompt"        # "prompt" | "tool"
     frontmatter: dict[str, Any] = field(default_factory=dict)
     skill_md_body: str = ""           # SKILL.md 正文（不含 frontmatter）
+    has_manifest: bool = False        # 是否存在 manifest.json / plugin.json
+    has_plugin_manifest: bool = False  # 是否存在 .claude-plugin/plugin.json 或 plugin.json
+    manifest_data: dict[str, Any] = field(default_factory=dict)
 
 
 def scan_directory(skill_dir: Path) -> ScanResult:
@@ -261,11 +276,124 @@ def scan_directory(skill_dir: Path) -> ScanResult:
     # 判定类型
     result.skill_type = "tool" if result.has_code else "prompt"
 
+    # 识别能力包 manifest（plugin.json / manifest.json）
+    manifest_candidates = [
+        skill_dir / ".claude-plugin" / "plugin.json",
+        skill_dir / "manifest.json",
+        skill_dir / "plugin.json",
+    ]
+    for manifest_path in manifest_candidates:
+        if manifest_path.is_file():
+            result.has_manifest = True
+            if manifest_path.name == "plugin.json":
+                result.has_plugin_manifest = True
+            try:
+                result.manifest_data = json.loads(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+            except (json.JSONDecodeError, OSError):
+                result.manifest_data = {}
+            break
+
     log.info("  [%s] 类型=%s, 文件数=%d, SKILL.md=%s",
              result.directory_name, result.skill_type,
              len(result.all_files), result.has_skill_md)
     return result
 
+
+def _infer_package_type(result: ScanResult) -> str:
+    """根据仓库结构推断能力包类型（skill/mcp_server/plugin/...）。"""
+    manifest = result.manifest_data or {}
+    if result.has_plugin_manifest:
+        return "plugin"
+    if manifest:
+        declared = manifest.get("type")
+        if declared in VALID_PACKAGE_TYPES:
+            return str(declared)
+        deps = manifest.get("dependencies") or {}
+        if isinstance(deps, dict) and deps.get("mcp_servers"):
+            return "mcp_server"
+        if manifest.get("transport") or manifest.get("command") or manifest.get("tools"):
+            return "mcp_server"
+    return "skill"
+
+
+def discover_capabilities(
+    source_dir: str | Path,
+    max_depth: int = 4,
+) -> list[dict[str, str]]:
+    """发现仓库中的多个能力包目录（多 Skill / MCP / Plugin 仓库）。
+
+    命中 manifest / SKILL.md 的目录视为一个能力包边界，不再深入其子目录。
+    返回按深度排序的 [{path, name, type}]。
+    """
+    root = Path(source_dir).resolve()
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for current, dirs, files in os.walk(root):
+        current = Path(current)
+        dirs[:] = [
+            d for d in dirs
+            if d not in _SKIP_CAPABILITY_DIRS and not d.startswith(".")
+        ]
+        rel_dir = current.relative_to(root)
+        depth = 0 if str(rel_dir) == "." else len(rel_dir.parts)
+        if depth > max_depth:
+            dirs[:] = []
+            continue
+
+        ptype: str | None = None
+        name: str | None = None
+        skill_md = current / "SKILL.md"
+        plugin_manifest = current / ".claude-plugin" / "plugin.json"
+        plugin_json = current / "plugin.json"
+        manifest_json = current / "manifest.json"
+
+        if skill_md.is_file():
+            ptype = "skill"
+            try:
+                name = extract_frontmatter(skill_md).get("name")
+            except Exception:
+                pass
+        elif plugin_manifest.is_file() or plugin_json.is_file():
+            ptype = "plugin"
+        elif manifest_json.is_file():
+            try:
+                manifest = json.loads(
+                    manifest_json.read_text(encoding="utf-8")
+                )
+                mtype = manifest.get("type")
+                if mtype in VALID_PACKAGE_TYPES:
+                    ptype = str(mtype)
+                else:
+                    deps = manifest.get("dependencies") or {}
+                    if (
+                        isinstance(deps, dict) and deps.get("mcp_servers")
+                    ) or manifest.get("transport") or manifest.get("tools"):
+                        ptype = "mcp_server"
+                name = manifest.get("name")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if ptype is None:
+            continue
+
+        rel = "" if depth == 0 else rel_dir.as_posix()
+        key = rel or "."
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append({
+            "path": rel,
+            "name": name or to_kebab_case(current.name),
+            "type": ptype,
+        })
+        # manifest / SKILL.md 标记能力包边界：命中后不深入子目录
+        dirs[:] = []
+
+    found.sort(key=lambda item: (item["path"].count("/"), item["path"]))
+    return found
 
 # ═══════════════════════════════════════════════════════════════════
 # Step 5: LICENSE 检测
@@ -1040,8 +1168,13 @@ def extract_single_skill(
         raise FileNotFoundError(f"目录不存在: {source_path}")
 
     result = scan_directory(source_path)
-    if not result.has_skill_md:
-        raise ValueError(f"目录内无 SKILL.md 或其他 .md 文件: {source_path}")
+    if not result.has_skill_md and not (
+        result.has_manifest or result.has_plugin_manifest
+    ):
+        raise ValueError(
+            f"目录内无 SKILL.md/其他 .md 文件，也无 manifest.json/plugin.json: "
+            f"{source_path}"
+        )
 
     git_root = _find_git_root(source_path)
 
@@ -1139,6 +1272,7 @@ def build_metadata_json(
     # dependencies & entry_points
     dependencies = build_dependencies(result)
     entry_points = extract_entry_points(result)
+    pkg_type = _infer_package_type(result)
 
     # ── 若仓库自带 agent-package manifest.json，优先保留其显式声明 ──
     # 扫描器无法可靠推断 MCP server 注册信息（dependencies.mcp_servers）
@@ -1166,7 +1300,7 @@ def build_metadata_json(
         "$schema": "https://trusted-agent-hub.dev/schemas/agent-package.schema.json",
         "name": name_kebab,
         "version": extract_version(result),
-        "type": "skill",
+        "type": pkg_type,
         "description": description,
         "author": author,
         "license": extract_license(result),
@@ -1175,8 +1309,9 @@ def build_metadata_json(
         "compatibility": compatibility,
         "permissions": infer_permissions(result),
         "installation": installation,
-        "skill_config": build_skill_config(result),
     }
+    if pkg_type == "skill":
+        data["skill_config"] = build_skill_config(result)
 
     # 可选字段（有值才加）
     if keywords:
@@ -1278,10 +1413,11 @@ def validate_metadata(data: dict[str, Any], skill_name: str) -> list[str]:
     if "targets" not in inst:
         issues.append("installation 缺少必填字段: targets")
 
-    # skill_config required
-    sc = data.get("skill_config", {})
-    if "skill_md_path" not in sc:
-        issues.append("skill_config 缺少必填字段: skill_md_path")
+    # skill_config 仅对 skill 类型必填
+    if data.get("type") == "skill":
+        sc = data.get("skill_config", {})
+        if "skill_md_path" not in sc:
+            issues.append("skill_config 缺少必填字段: skill_md_path")
 
     return issues
 

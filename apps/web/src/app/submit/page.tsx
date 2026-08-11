@@ -88,6 +88,12 @@ function SubmitForm() {
   const [phase, setPhase] = useState<ScanPhase>('input');
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [metadata, setMetadata] = useState<PackageMetadata | null>(null);
+  const [capabilities, setCapabilities] = useState<
+    { path: string; name: string; type: string }[]
+  >([]);
+  const [selectedCapability, setSelectedCapability] = useState('');
+  const [scanBase, setScanBase] = useState('');
+  const [scanRef, setScanRef] = useState('main');
 
   const [pkgName, setPkgName] = useState('');
   const [pkgType, setPkgType] = useState('skill');
@@ -133,13 +139,16 @@ function SubmitForm() {
   }
 
   /* ── 扫描 ── */
-  const handleStartScan = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const runScan = async (url: string) => {
     setError('');
-    if (!repoUrl.trim() || !repoUrl.trim().startsWith('https://github.com/')) {
-      setError('请输入有效的 GitHub 仓库地址'); return;
-    }
-    const body = { repo_url: repoUrl.trim() };
+    const body = { repo_url: url.trim() };
+
+    // 记录仓库 base 与 ref，供“多能力子目录重扫”拼接 URL
+    const m = url.trim().match(
+      /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\/tree\/([^/]+)(?:\/(.*))?)?$/,
+    );
+    setScanBase(m ? `https://github.com/${m[1]}` : url.trim().replace(/\/tree\/.*$/, ''));
+    setScanRef(m?.[2] || 'main');
 
     setPhase('scanning');
     setStatusMsg('正在提交扫描任务...');
@@ -158,13 +167,20 @@ function SubmitForm() {
 
         if (data.status === 'complete') {
           let meta: PackageMetadata | null = null;
+          let caps: { path: string; name: string; type: string }[] = [];
           try {
             const mr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}/metadata`, { headers: { Authorization: `Bearer ${token}` } });
-            if (mr.ok) { const md = await mr.json(); meta = md.metadata; }
+            if (mr.ok) {
+              const md = await mr.json();
+              meta = md.metadata;
+              caps = Array.isArray(md.capabilities) ? md.capabilities : [];
+            }
           } catch { /* ignore */ }
 
           setScanResult(data);
           setMetadata(meta);
+          setCapabilities(caps);
+          setSelectedCapability('');
 
           const nameV = meta?.name || '';
           const verV = meta?.version || '';
@@ -218,6 +234,14 @@ function SubmitForm() {
       setError(err instanceof Error ? err.message : '扫描失败');
       setPhase('input');
     }
+  };
+
+  const handleStartScan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!repoUrl.trim() || !repoUrl.trim().startsWith('https://github.com/')) {
+      setError('请输入有效的 GitHub 仓库地址'); return;
+    }
+    await runScan(repoUrl);
   };
 
   /* ── 提交 ── */
@@ -414,6 +438,43 @@ function SubmitForm() {
         {/* ══ Phase: 确认 ══ */}
         {phase === 'confirm' && scanResult && (
           <>
+            {/* 多能力仓库：选择要提交的子目录 */}
+            {capabilities.length > 1 && (
+              <div style={sectionStyle}>
+                <p style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--color-warning)' }}>
+                  仓库包含 {capabilities.length} 个能力，请选择要提交的子目录（选择后会重新扫描该目录）：
+                </p>
+                <select
+                  value={selectedCapability}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setSelectedCapability(value);
+                    if (value && scanBase) {
+                      setPhase('scanning');
+                      setStatusMsg(`正在扫描子目录 ${value} ...`);
+                      runScan(`${scanBase}/tree/${scanRef}/${value}`);
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '0.5rem 0.75rem',
+                    fontSize: '0.85rem',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--color-rule)',
+                    background: 'var(--color-paper)',
+                    color: 'var(--color-ink)',
+                  }}
+                >
+                  <option value="">保持当前扫描（整个仓库）</option>
+                  {capabilities.map((cap) => (
+                    <option key={cap.path || '.'} value={cap.path}>
+                      {cap.name}（{cap.type}）{cap.path ? ` — ${cap.path}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {/* 扫描摘要 */}
             <div style={sectionStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>

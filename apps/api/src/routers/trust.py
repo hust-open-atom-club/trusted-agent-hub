@@ -339,6 +339,23 @@ def _run_scan_task(
 
         # ── 确定扫描目标目录（子目录优先） ──
         subdir = parsed.get("subdir") if parsed else None
+        if not subdir:
+            root_manifest = Path(repo_root) / "manifest.json"
+            if root_manifest.is_file():
+                try:
+                    root_data = json.loads(
+                        root_manifest.read_text(encoding="utf-8")
+                    )
+                    declared = (root_data.get("source") or {}).get(
+                        "subdirectory"
+                    )
+                    if declared and (Path(repo_root) / declared).is_dir():
+                        subdir = declared
+                        print(
+                            f"[TAH-trust]     manifest 声明子目录: {subdir}"
+                        )
+                except (json.JSONDecodeError, OSError):
+                    pass
         if subdir:
             scan_dir = os.path.join(repo_root, subdir)
             if not os.path.isdir(scan_dir):
@@ -348,6 +365,40 @@ def _run_scan_task(
                 print(f"[TAH-trust]     扫描子目录: {subdir}")
         else:
             scan_dir = repo_root
+
+        # ── 多能力发现（供提交页选择子目录） ──
+        capabilities: list[dict[str, str]] = []
+        try:
+            if not hasattr(
+                sys.modules.get("extract_skills", None),
+                "discover_capabilities",
+            ):
+                spec = importlib.util.spec_from_file_location(
+                    "extract_skills", str(_EXTRACTOR_PATH)
+                )
+                if spec and spec.loader:
+                    extract_mod = importlib.util.module_from_spec(spec)
+                    sys.modules["extract_skills"] = extract_mod
+                    spec.loader.exec_module(extract_mod)
+            capabilities = sys.modules["extract_skills"].discover_capabilities(
+                repo_root
+            )
+            if subdir:
+                prefix = str(subdir).rstrip("/")
+                filtered = [
+                    c for c in capabilities
+                    if c["path"] == prefix
+                    or c["path"].startswith(prefix + "/")
+                ]
+                if filtered:
+                    capabilities = filtered
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[TAH-trust]     能力发现失败（忽略）: {exc}")
+            capabilities = []
+        _scans[scan_id]["capabilities"] = capabilities
+        print(
+            f"[TAH-trust]     发现能力包: {len(capabilities)} 个"
+        )
 
         # Step 2: 运行扫描器
         _scans[scan_id]["status"] = "scanning"
@@ -875,6 +926,7 @@ def get_scan_metadata(
     return {
         "scan_id": scan_id,
         "metadata": metadata,
+        "capabilities": info.get("capabilities", []),
     }
 
 
