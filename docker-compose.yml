@@ -35,6 +35,12 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/trusted_agent_hub
       ARTIFACTS_ROOT: /artifacts
       CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
+      # LLM 审查（可选）：不配置时扫描发现不打 LLM 标签
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      SKILLSPECTOR_MODEL: ${SKILLSPECTOR_MODEL:-}
+      SKILLSPECTOR_PROVIDER: ${SKILLSPECTOR_PROVIDER:-}
     ports:
       - "8000:8000"
     depends_on:

@@ -34,6 +34,10 @@ def force_rmtree(path: str | os.PathLike[str]) -> None:
         return
 
     def _clear_readonly(func, target, exc) -> None:
+        # Python 3.11 的 onerror 回调传 (type, value, traceback)，
+        # Python 3.12+ 的 onexc 回调直接传异常对象。
+        if isinstance(exc, tuple) and exc:
+            exc = exc[1]
         if isinstance(exc, PermissionError):
             try:
                 os.chmod(target, stat.S_IWRITE)
@@ -43,7 +47,11 @@ def force_rmtree(path: str | os.PathLike[str]) -> None:
 
     for attempt in range(3):
         try:
-            shutil.rmtree(p, onexc=_clear_readonly)
+            try:
+                shutil.rmtree(p, onexc=_clear_readonly)
+            except TypeError:
+                # Python 3.11 不支持 onexc 参数，回退到 onerror
+                shutil.rmtree(p, onerror=_clear_readonly)
             return
         except OSError:
             time.sleep(0.5 * (attempt + 1))
