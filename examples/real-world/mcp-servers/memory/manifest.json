@@ -25,7 +25,7 @@
   "integrity": {
     "sha256": "d944f4229833786dcc1c3d6ea2886c9ba16a7fa2fc543b656537c399f2fbb114"
   },
-  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "compatibility": ["claude-code", "cursor"],
   "keywords": ["mcp", "memory", "knowledge-graph", "persistent", "official"],
   "category": "data",
   "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",

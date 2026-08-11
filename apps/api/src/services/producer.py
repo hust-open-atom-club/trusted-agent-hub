@@ -396,6 +396,13 @@ class ProducerService:
         data["installation"] = {
             "method": "copy_directory",
             "target_client": target_client,
+            "targets": [
+                {
+                    "client": c,
+                    "destination": f"{client_roots.get(c, '~/.claude/skills/')}{package_name}/",
+                }
+                for c in compatibility
+            ],
             "steps": [
                 {"action": "download", "url": artifact.get("download_url", "")},
                 {"action": "verify", "algorithm": "sha256", "checksum": artifact.get("sha256", "")},

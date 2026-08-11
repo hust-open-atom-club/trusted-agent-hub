@@ -18,7 +18,7 @@ ZIP 制品放入 API artifacts 卷（/api/v0/artifacts/*.zip），容器重启�
 #>
 
 param(
-    [string]$RepoRoot = "D:\Github\Documents\GitHub\trusted-agent-hub"
+    [string]$RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
 
 Set-StrictMode -Version Latest

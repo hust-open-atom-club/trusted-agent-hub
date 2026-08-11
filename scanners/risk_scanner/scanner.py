@@ -475,6 +475,7 @@ if __name__ == "__main__":
     report = scanner.scan()
 
     if "--json" in sys.argv:
+        sys.stdout.reconfigure(encoding="utf-8")
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         summary = report["summary"]

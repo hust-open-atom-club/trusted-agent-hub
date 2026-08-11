@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
+import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../../packages/schema/constants';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -61,14 +62,9 @@ interface PackageMetadata {
 
 type ScanPhase = 'input' | 'scanning' | 'confirm' | 'submitting' | 'done';
 
-const TYPE_DEFAULT_CLIENTS: Record<string, string> = {
-  skill: 'claude-code, cursor',
-  mcp_server: 'claude-code, cursor',
-  plugin: 'claude-code-plugin',
-  subagent: 'claude-code',
-  command: 'claude-code',
-  prompt: 'claude-code',
-};
+const TYPE_DEFAULT_CLIENTS: Record<string, string> = Object.fromEntries(
+  Object.entries(PACKAGE_TYPE_INSTALL_CLIENTS).map(([type, clients]) => [type, clients.join(', ')])
+);
 
 function isPlaceholderStr(v: string | undefined | null): boolean {
   if (!v || v.trim() === '') return true;
