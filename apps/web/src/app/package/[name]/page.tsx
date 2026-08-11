@@ -35,6 +35,18 @@ const RISK_LEVEL_LABELS: Record<string, string> = {
   untrusted: 'Untrusted',
 };
 
+function formatFeedback(
+  counts?: { positive: number; neutral: number; negative: number } | null,
+): string {
+  if (
+    !counts ||
+    counts.positive + counts.neutral + counts.negative === 0
+  ) {
+    return '暂无评分';
+  }
+  return `好评 ${counts.positive} · 差评 ${counts.negative}`;
+}
+
 function getGradeClass(grade: string | null): string {
   if (grade === null) return 'unknown';
   const g = grade.toUpperCase();
@@ -159,9 +171,6 @@ export default function PackageDetailPage() {
     ? (RISK_LEVEL_LABELS[pkg.risk_level] ?? pkg.risk_level)
     : 'Unknown';
   const typeLabel = TYPE_LABELS[pkg.type] ?? pkg.type;
-  const ratingDisplay =
-    pkg.avg_rating !== null ? pkg.avg_rating.toFixed(1) : 'N/A';
-
   const trustAdvice =
     pkg.grade === null
       ? 'This package has not been evaluated yet.'
@@ -227,9 +236,9 @@ export default function PackageDetailPage() {
             </span>
           </div>
           <div className="detail-meta-item">
-            <span className="detail-meta-label">Rating</span>
+            <span className="detail-meta-label">Feedback</span>
             <span className="detail-meta-value">
-              &#11088; {ratingDisplay}
+              {formatFeedback(pkg.feedback_counts)}
             </span>
           </div>
         </div>

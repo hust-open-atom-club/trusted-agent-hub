@@ -56,10 +56,10 @@
     "targets": [
       {
         "client": "claude-code-plugin",
-        "destination": "~/.claude/plugins/superpowers/"
+        "destination": "~/.claude/skills/superpowers/"
       }
     ],
-    "post_install_message": "superpowers installed. Enable the plugin in Claude Code to use the bundled skills and hooks."
+    "post_install_message": "superpowers installed to ~/.claude/skills/. Claude Code auto-loads it next session; confirm in /plugin."
   },
   "plugin_config": {
     "components": {

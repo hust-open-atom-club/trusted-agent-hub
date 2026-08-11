@@ -1,7 +1,7 @@
 {
   "name": "demo-docker-run",
   "version": "1.0.0",
-  "description": "演示 docker_run 安装方式：拉取 nginx:alpine 镜像并生成运行配置，不自动启动容器",
+  "description": "演示 docker_run 安装方式：拉取 nginx:alpine 镜像并生成运行配置，不自动启动容器；注意 nginx 不是 MCP server，本包仅演示安装方法，不会注册到 Claude MCP",
   "type": "mcp_server",
   "author": {
     "name": "TrustedAgentHub Examples",
@@ -28,6 +28,6 @@
         "env": ["NGINX_HOST=localhost"]
       }
     ],
-    "post_install_message": "镜像已拉取，运行配置已生成（docker-run.json / run-command.txt），未自动启动容器"
+    "post_install_message": "镜像已拉取，运行配置已生成（docker-run.json / run-command.txt），未自动启动容器；本包仅演示 docker_run 安装方式，不会注册 MCP server"
   }
 }

@@ -1140,6 +1140,27 @@ def build_metadata_json(
     dependencies = build_dependencies(result)
     entry_points = extract_entry_points(result)
 
+    # ── 若仓库自带 agent-package manifest.json，优先保留其显式声明 ──
+    # 扫描器无法可靠推断 MCP server 注册信息（dependencies.mcp_servers）
+    # 以及 npm/pip/docker 等安装方式与 targets；仓库 manifest 是权威来源。
+    installation = build_installation(result)
+    manifest_path = result.directory_path / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_deps = manifest.get("dependencies")
+            if isinstance(manifest_deps, dict):
+                merged = dict(dependencies or {})
+                for dep_key, dep_value in manifest_deps.items():
+                    if dep_value is not None:
+                        merged[dep_key] = dep_value
+                dependencies = merged or None
+            manifest_install = manifest.get("installation")
+            if isinstance(manifest_install, dict) and manifest_install.get("method"):
+                installation = {**installation, **manifest_install}
+        except (json.JSONDecodeError, OSError):
+            pass
+
     # 构建 JSON
     data: dict[str, Any] = {
         "$schema": "https://trusted-agent-hub.dev/schemas/agent-package.schema.json",
@@ -1153,7 +1174,7 @@ def build_metadata_json(
         "integrity": extract_integrity(result),
         "compatibility": compatibility,
         "permissions": infer_permissions(result),
-        "installation": build_installation(result),
+        "installation": installation,
         "skill_config": build_skill_config(result),
     }
 

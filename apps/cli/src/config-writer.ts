@@ -118,11 +118,47 @@ export async function writeMergedMcpConfig(
       ? (current.mcpServers as Record<string, unknown>)
       : {};
   for (const [key, entry] of Object.entries(entries)) {
-    mcpServers[key] = entry;
+    // Expand `~` / `~/...` so MCP servers receive a real absolute path
+    // (e.g. `@modelcontextprotocol/server-filesystem ~`).
+    mcpServers[key] = expandMcpEntry(entry, homeDir);
   }
   current.mcpServers = mcpServers;
   await atomicWriteJson(filePath, current);
   return { filePath, backupPath };
+}
+
+/** Expand a leading `~` / `~/...` segment to the real home directory. */
+export function expandHomePath(value: string, homeDir: string): string {
+  if (value === '~') return homeDir;
+  if (value.startsWith('~/') || value.startsWith('~\\')) {
+    return path.join(homeDir, value.slice(2));
+  }
+  return value;
+}
+
+function expandMcpEntry(
+  entry: McpServerEntry,
+  homeDir: string,
+): McpServerEntry {
+  const out: McpServerEntry = {};
+  if (entry.command !== undefined) {
+    out.command = expandHomePath(entry.command, homeDir);
+  }
+  if (entry.args !== undefined) {
+    out.args = entry.args.map((arg) => expandHomePath(arg, homeDir));
+  }
+  if (entry.url !== undefined) {
+    out.url = entry.url;
+  }
+  if (entry.env !== undefined) {
+    out.env = Object.fromEntries(
+      Object.entries(entry.env).map(([key, value]) => [
+        key,
+        expandHomePath(value, homeDir),
+      ]),
+    );
+  }
+  return out;
 }
 
 export async function removeMcpEntries(

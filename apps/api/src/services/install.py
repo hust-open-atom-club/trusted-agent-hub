@@ -42,7 +42,10 @@ COMMIT_PATTERN = re.compile(r"^[a-f0-9]{40}$")
 HTTPS_URL_ADAPTER = TypeAdapter(HttpsUrl)
 CLIENT_INSTALL_ROOTS = {
     "claude-code": "~/.claude/skills/",
-    "claude-code-plugin": "~/.claude/plugins/",
+    # Claude Code auto-loads plugins from ~/.claude/skills/<name>/ when the
+    # directory contains .claude-plugin/plugin.json; ~/.claude/plugins/ is not
+    # auto-discovered.
+    "claude-code-plugin": "~/.claude/skills/",
     "cursor": "~/.cursor/skills/",
 }
 

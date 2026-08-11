@@ -7,6 +7,7 @@ from pydantic import Field
 from .common import PackageType, StrictContractModel
 from .packages import (
     Author,
+    Dependencies,
     Installation,
     Integrity,
     Permissions,
@@ -29,6 +30,7 @@ class CreatePackageRequest(StrictContractModel):
     author: Author | None = None
     permissions: Permissions | None = None
     installation: Installation | None = None
+    dependencies: Dependencies | None = None
     source: Source | None = None
     compatibility: list[str] = Field(default_factory=list)
     field_source: dict[str, str] | None = Field(
@@ -48,6 +50,7 @@ class CreateVersionRequest(StrictContractModel):
     permissions: Permissions | None = None
     compatibility: list[str] = Field(default_factory=list)
     installation: Installation | None = None
+    dependencies: Dependencies | None = None
     field_source: dict[str, str] | None = Field(
         default=None,
         description="字段来源标记：key 为字段名，value 为 'auto'（自动提取）或 'manual'（用户补充）",

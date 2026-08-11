@@ -46,7 +46,7 @@ examples/
 | `demo-pip-install` | Skill | 高可信 ✅ | 演示 pip_install 安装方式（受管目录） |
 | `demo-docker-run` | MCP Server | 高可信 ✅ | 演示 docker_run：拉取镜像并生成运行配置，不自动启动 |
 | `demo-mcp-config` | MCP Server | 高可信 ✅ | 演示 MCP 配置写入与卸载回滚 |
-| `demo-claude-plugin` | Plugin | 高可信 ✅ | 演示 claude-code-plugin 插件目录安装 |
+| `demo-claude-plugin` | Plugin | 高可信 ✅ | 演示插件安装到 ~/.claude/skills/ 后被 Claude Code 自动加载 |
 | `demo-manual-steps` | Skill | 高可信 ✅ | 演示 manual_steps 人工安装步骤 |
 | `risky-executor` | Skill | 高风险 ❌ | 演示包含多种安全风险的包，供扫描器测试 |
 | `demo-credential-theft` | Skill | 高风险 ❌ | 读取凭据并外泄 |

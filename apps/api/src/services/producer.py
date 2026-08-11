@@ -94,6 +94,7 @@ class ProducerService:
             author=data.author.model_dump() if data.author else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
             installation=data.installation.model_dump() if data.installation else None,
+            dependencies=data.dependencies.model_dump() if data.dependencies else None,
             source=data.source.model_dump() if data.source else None,
             compatibility=self._normalize_compatibility(
                 data.type.value, data.compatibility
@@ -145,6 +146,7 @@ class ProducerService:
                 package_type, data.compatibility
             ),
             installation=data.installation.model_dump() if data.installation else None,
+            dependencies=data.dependencies.model_dump() if data.dependencies else None,
             field_source=data.field_source,
         )
         return result
@@ -386,18 +388,19 @@ class ProducerService:
 
         client_roots = {
             "claude-code": "~/.claude/skills/",
-            "claude-code-plugin": "~/.claude/plugins/",
+            "claude-code-plugin": "~/.claude/skills/",
             "cursor": "~/.cursor/skills/",
         }
         destination_root = client_roots.get(target_client, "~/.claude/skills/")
+        archive_name = str(artifact.get("download_url", "")).rsplit("/", 1)[-1]
         data["installation"] = {
             "method": "copy_directory",
             "target_client": target_client,
             "steps": [
                 {"action": "download", "url": artifact.get("download_url", "")},
                 {"action": "verify", "algorithm": "sha256", "checksum": artifact.get("sha256", "")},
-                {"action": "extract"},
-                {"action": "copy", "client": target_client, "destination": f"{destination_root}{package_name}/"},
+                {"action": "extract", "archive": archive_name},
+                {"action": "copy", "source": package_name + "/", "destination": f"{destination_root}{package_name}/"},
             ],
             "pre_install_message": f"将安装 {package_name}@{pkg_version} 到 {target_client}",
             "post_install_message": "安装完成。请在客户端中确认工具可用。",

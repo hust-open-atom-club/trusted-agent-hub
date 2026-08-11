@@ -371,6 +371,29 @@
         "title": "ExtractInstallationStep",
         "type": "object"
       },
+      "FeedbackCounts": {
+        "additionalProperties": false,
+        "description": "用户反馈等级计数（positive / neutral / negative）。",
+        "properties": {
+          "negative": {
+            "default": 0,
+            "title": "Negative",
+            "type": "integer"
+          },
+          "neutral": {
+            "default": 0,
+            "title": "Neutral",
+            "type": "integer"
+          },
+          "positive": {
+            "default": 0,
+            "title": "Positive",
+            "type": "integer"
+          }
+        },
+        "title": "FeedbackCounts",
+        "type": "object"
+      },
       "FeedbackLevel": {
         "enum": [
           "positive",
@@ -1404,6 +1427,16 @@
             "title": "Description",
             "type": "string"
           },
+          "feedback_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "grade": {
             "anyOf": [
               {
@@ -1647,6 +1680,16 @@
           "description": {
             "title": "Description",
             "type": "string"
+          },
+          "feedback_counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "grade": {
             "anyOf": [

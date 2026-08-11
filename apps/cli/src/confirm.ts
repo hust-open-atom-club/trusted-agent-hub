@@ -78,7 +78,7 @@ export function createTerminalConfirm(io: ConfirmIO = defaultIo): ConfirmCallbac
     const rl = readline.createInterface({ input: io.input, output: io.output });
     try {
       io.output.write(formatSanitizedSummary(summary));
-      const answer = (await rl.question('Continue uninstall? [y/N] ')).trim().toLowerCase();
+      const answer = (await rl.question('Continue? [y/N] ')).trim().toLowerCase();
       return answer === 'y' || answer === 'yes';
     } finally {
       rl.close();

@@ -103,7 +103,7 @@ describe('getClientTargetPath', () => {
 
   it('falls back to client root', () => {
     expect(getClientTargetPath(null, 'claude-code-plugin', 'demo')).toBe(
-      '~/.claude/plugins/demo/',
+      '~/.claude/skills/demo/',
     );
     expect(getClientTargetPath(null, 'cursor', 'demo')).toBe(
       '~/.cursor/skills/demo/',

@@ -266,6 +266,7 @@ function SubmitForm() {
           permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
           compatibility: compatList,
           installation: meta.installation || null,
+          dependencies: meta.dependencies || null,
           field_source: fs,
         };
         const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
@@ -290,6 +291,7 @@ function SubmitForm() {
         homepage: pkgHomepage.trim() || meta.homepage || null, author: authorObj,
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
         compatibility: compatList, installation: meta.installation, source: sourceObj,
+        dependencies: meta.dependencies || null,
         field_source: fs,
       };
 
@@ -305,6 +307,7 @@ function SubmitForm() {
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
         compatibility: compatList,
         installation: meta.installation || null,
+        dependencies: meta.dependencies || null,
         field_source: fs,
       };
       const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${createdPkgId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
