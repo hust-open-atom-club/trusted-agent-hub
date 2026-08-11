@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
-import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../../packages/schema/constants';
+import { PACKAGE_TYPE_INSTALL_CLIENTS } from '@/lib/schema-constants';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 

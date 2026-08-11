@@ -2,8 +2,8 @@
  * Install method display helpers for the package detail page.
  */
 
-import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../packages/schema/constants';
-import type { PackageType } from '../../../../packages/schema/constants';
+import { PACKAGE_TYPE_INSTALL_CLIENTS } from './schema-constants';
+import type { PackageType } from './schema-constants';
 
 export interface InstallMethodInfo {
   key: string;
