@@ -489,6 +489,11 @@ def extract_version(result: ScanResult) -> str:
         if meta_ver and re.match(r"^\d+\.\d+\.\d+", str(meta_ver)):
             return str(meta_ver)
 
+    # 2c) manifest.json / plugin.json 中的 version（能力包权威来源）
+    manifest_ver = (result.manifest_data or {}).get("version")
+    if manifest_ver and re.match(r"^\d+\.\d+\.\d+", str(manifest_ver)):
+        return str(manifest_ver)
+
     # 3) package.json
     pkg_path = result.directory_path / "package.json"
     if pkg_path.exists():
@@ -1200,8 +1205,12 @@ def build_metadata_json(
         repo_url: 外部传入的 GitHub 仓库 URL（git clone 场景有值）
         git_root: Git 仓库根目录（用于提取 commit_hash/ref）
     """
+    # 名称优先级：SKILL.md frontmatter → manifest.json/plugin.json 声明的 name
+    # → 目录名。不能直接回退到目录名，否则临时克隆目录（tah_repo_xxx）
+    # 会被当成包名。
+    declared_name = (result.manifest_data or {}).get("name")
     name_kebab = to_kebab_case(
-        result.frontmatter.get("name") or result.directory_name)
+        result.frontmatter.get("name") or declared_name or result.directory_name)
 
     # description
     description = ""
@@ -1209,7 +1218,11 @@ def build_metadata_json(
     if fm_desc and isinstance(fm_desc, str) and fm_desc.strip():
         description = fm_desc.strip()[:200]
     else:
-        description = first_paragraph(result.skill_md_body, 200)
+        declared_desc = (result.manifest_data or {}).get("description")
+        if isinstance(declared_desc, str) and declared_desc.strip():
+            description = declared_desc.strip()[:200]
+        else:
+            description = first_paragraph(result.skill_md_body, 200)
     if not description or len(description) < 10:
         description = "No description available — manual review required"
 

@@ -136,6 +136,31 @@ def test_extract_allows_manifest_without_markdown() -> None:
         assert meta["type"] == "mcp_server"
 
 
+def test_extract_prefers_manifest_name_over_temp_dir_name() -> None:
+    """临时克隆目录名（tah_repo_xxx）不应成为包名，应取 manifest 的 name。"""
+    with tempfile.TemporaryDirectory(prefix="tah_repo_") as tmp:
+        root = Path(tmp)
+        manifest = {
+            "name": "superpowers",
+            "version": "6.2.0",
+            "type": "plugin",
+            "description": "A real plugin name from manifest",
+        }
+        (root / "manifest.json").write_text(
+            json.dumps(manifest),
+            encoding="utf-8",
+        )
+        (root / "README.md").write_text(
+            "# Superpowers\nTemporary clone directory must not leak into the name.\n",
+            encoding="utf-8",
+        )
+        meta = extract_single_skill(root)
+        assert meta["name"] == "superpowers"
+        assert meta["version"] == "6.2.0"
+        assert "tah_repo_" not in meta["name"]
+        assert meta["description"] == "A real plugin name from manifest"
+
+
 def test_discover_capabilities_finds_multiple_packages() -> None:
     """真实能力包目录应能发现多个 skill/mcp/plugin 能力。"""
     caps = discover_capabilities(EXAMPLES / "real-world")
