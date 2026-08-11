@@ -81,7 +81,8 @@ export const CLIENT_OPTIONS: Array<{ id: string; label: string }> = [
 const SUPPORTED_INSTALL_CLIENTS = CLIENT_OPTIONS.map((c) => c.id);
 
 export function getClientsForType(type?: string | null): string[] {
-  return [...(PACKAGE_TYPE_INSTALL_CLIENTS[(type as PackageType) ?? 'skill'] ?? [])];
+  const key = (type || '') as PackageType;
+  return [...(PACKAGE_TYPE_INSTALL_CLIENTS[key] ?? [])];
 }
 
 /**
