@@ -25,7 +25,7 @@
   "integrity": {
     "sha256": "8a9e50b4fbb2ddbb51c8e4aa7a45a0ee93717605b7b748525a2c0bde3efc5e35"
   },
-  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "compatibility": ["claude-code", "cursor"],
   "keywords": ["mcp", "filesystem", "official", "file", "server"],
   "category": "infrastructure",
   "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",

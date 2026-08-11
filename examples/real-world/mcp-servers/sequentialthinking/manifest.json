@@ -25,7 +25,7 @@
   "integrity": {
     "sha256": "2170ecf53ae9fef417f0fd0d8471cd22a1fc10d0dad5eb4742ad804fe2cd228a"
   },
-  "compatibility": ["claude-code", "cursor", "mcp-client-generic"],
+  "compatibility": ["claude-code", "cursor"],
   "keywords": ["mcp", "sequential-thinking", "reasoning", "official"],
   "category": "ai-tools",
   "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",

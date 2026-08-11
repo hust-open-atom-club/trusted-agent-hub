@@ -818,7 +818,7 @@
         "properties": {
           "compatibility": {
             "items": {
-              "enum": ["claude-code", "cursor", "mcp-client-generic"]
+              "enum": ["claude-code", "cursor"]
             }
           }
         }

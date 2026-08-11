@@ -2,6 +2,9 @@
  * Install method display helpers for the package detail page.
  */
 
+import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../packages/schema/constants';
+import type { PackageType } from '../../../../packages/schema/constants';
+
 export interface InstallMethodInfo {
   key: string;
   label: string;
@@ -70,23 +73,15 @@ export const CLIENT_OPTIONS: Array<{ id: string; label: string }> = [
 
 /**
  * Which install clients each package type may target.
- * Mirrors packages/schema constants; the detail page and backend both
- * use this as the single source of truth.
+ * Canonical source: packages/schema/constants.ts PACKAGE_TYPE_INSTALL_CLIENTS.
  */
-const PACKAGE_TYPE_INSTALL_CLIENTS: Record<string, readonly string[]> = {
-  skill: ['claude-code', 'cursor'],
-  mcp_server: ['claude-code', 'cursor'],
-  plugin: ['claude-code-plugin'],
-  subagent: ['claude-code'],
-  command: ['claude-code'],
-  prompt: ['claude-code'],
-};
+
 
 /** All install clients the CLI currently supports. */
 const SUPPORTED_INSTALL_CLIENTS = CLIENT_OPTIONS.map((c) => c.id);
 
 export function getClientsForType(type?: string | null): string[] {
-  return [...(PACKAGE_TYPE_INSTALL_CLIENTS[type ?? ''] ?? [])];
+  return [...(PACKAGE_TYPE_INSTALL_CLIENTS[(type as PackageType) ?? 'skill'] ?? [])];
 }
 
 /**

@@ -29,7 +29,7 @@ interface SearchBarProps {
 
 const FILTER_KEYS = ['all', 'skill', 'mcp_server', 'plugin', 'command', 'subagent', 'prompt'] as const;
 
-const CLIENT_OPTIONS = ['claude-code', 'cursor'] as const;
+const CLIENT_OPTIONS = ['claude-code', 'cursor', 'claude-code-plugin'] as const;
 
 const GRADE_OPTIONS = ['A', 'B', 'C', 'D', 'E'] as const;
 
