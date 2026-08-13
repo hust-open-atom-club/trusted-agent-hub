@@ -418,7 +418,7 @@
     "status": {
       "draft": "Draft",
       "scanning": "Scanning",
-      "scan_failed": "Scan Failed",
+      "error": "Scan Failed",
       "pending_review": "Pending Review",
       "under_review": "Under Review",
       "changes_requested": "Changes Requested",
@@ -532,7 +532,7 @@
     "status": {
       "draft": "Draft",
       "scanning": "Scanning",
-      "scan_failed": "Scan Failed",
+      "error": "Scan Failed",
       "pending_review": "Pending Review",
       "under_review": "Under Review",
       "changes_requested": "Changes Requested",

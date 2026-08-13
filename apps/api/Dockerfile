@@ -19,6 +19,21 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -e ".[
     pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ alembic && \
     pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ psycopg2-binary jsonschema numpy
 
+# 可选：本地语义模型（SR-017 fastembed + MiniLM-L12 嵌入模型）
+# 启用方式：docker compose build --build-arg ENABLE_SEMANTIC_MODEL=true
+#   或用 deploy/build.ps1 交互式选择
+# 启用后：构建时预下载模型 (~241MB) 到镜像内缓存，镜像约增大 300MB，语义检测完全离线可用
+# 未启用：镜像更小，SR-017 语义检测自动降级为纯规则模式（默认）
+ARG ENABLE_SEMANTIC_MODEL=false
+RUN if [ "$ENABLE_SEMANTIC_MODEL" = "true" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/* && \
+        pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ fastembed && \
+        HF_ENDPOINT=https://hf-mirror.com python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')" && \
+        echo "[semantic-model] enabled: fastembed installed + MiniLM-L12 model cached" ; \
+    else \
+        echo "[semantic-model] disabled: SR-017 semantic check falls back to rule-only mode" ; \
+    fi
+
 # 复制源码和共享包
 COPY apps/api/alembic.ini .
 COPY apps/api/src/ src/

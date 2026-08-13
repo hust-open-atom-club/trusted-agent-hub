@@ -56,7 +56,7 @@ export default function MySubmissionsPage() {
     published:    { label: t('submissions.status.published'),   className: 'published' },
     rejected:     { label: t('submissions.status.rejected'),   className: 'rejected' },
     changes_requested: { label: t('submissions.status.changes_requested'), className: 'changes_requested' },
-    error:        { label: t('submissions.status.scan_failed'),     className: 'error' },
+    error:        { label: t('submissions.status.error'),     className: 'error' },
     yanked:       { label: t('submissions.status.yanked'),   className: 'yanked' },
   };
 

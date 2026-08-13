@@ -417,7 +417,7 @@
     "status": {
       "draft": "草稿",
       "scanning": "扫描中",
-      "scan_failed": "扫描失败",
+      "error": "扫描失败",
       "pending_review": "待审核",
       "under_review": "审核中",
       "changes_requested": "需修改",
@@ -531,7 +531,7 @@
     "status": {
       "draft": "草稿",
       "scanning": "扫描中",
-      "scan_failed": "扫描失败",
+      "error": "扫描失败",
       "pending_review": "等待审核",
       "under_review": "审核中",
       "changes_requested": "需修改",

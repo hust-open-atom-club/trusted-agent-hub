@@ -11,7 +11,7 @@ const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trusteda
 
 const POLL_INTERVAL_MS = 10_000;
 const MAX_SCAN_POLLS = 18; // 18 × 10s = 3 分钟超时
-const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error', 'scan_failed']);
+const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error']);
 
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
@@ -23,7 +23,6 @@ const STATUS_LABELS: Record<string, string> = {
   yanked: '已下架',
   rejected: '已驳回',
   changes_requested: '需要修改',
-  scan_failed: '扫描失败',
   error: '扫描错误',
 };
 
@@ -35,7 +34,6 @@ const STATUS_ORDER = [
 const TERMINAL_BAD: Record<string, string> = {
   rejected: '已驳回',
   changes_requested: '需要修改',
-  scan_failed: '扫描失败',
   error: '扫描错误',
   yanked: '已下架',
 };
@@ -208,7 +206,7 @@ function StatusContent() {
     router.push(`/submit?packageId=${detail.package_id}`);
   };
 
-  const RESUBMITABLE = new Set(['rejected', 'changes_requested', 'error', 'scan_failed']);
+  const RESUBMITABLE = new Set(['rejected', 'changes_requested', 'error']);
 
   const buildTimeline = () => {
     if (!detail) return [];
