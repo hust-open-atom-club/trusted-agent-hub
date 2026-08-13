@@ -257,7 +257,6 @@ export interface ScanReport {
   metadata_validation?: Record<string, unknown> | null;
   structure_check?: Record<string, unknown> | null;
   dependency_check?: Record<string, unknown> | null;
-  llm_review?: Record<string, unknown> | null;
   scanned_at?: string | null;
 }
 

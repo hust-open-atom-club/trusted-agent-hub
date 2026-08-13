@@ -95,7 +95,6 @@ class ScanStatusResponse(BaseModel):
     finished_at: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
     trust_score: Optional[Dict[str, Any]] = None
-    llm_review: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
@@ -412,50 +411,6 @@ def _run_scan_task(
         _scans[scan_id]["package_name"] = pkg_name
         print(f"[TAH-trust]     扫描完成: {pkg_name} v{pkg_version}, findings={scan_report['summary']['total']}")
 
-        # Step 2.5: LLM 深度审查（当有 findings 时触发）
-        findings = scan_report.get("findings", [])
-        if findings:
-            _scans[scan_id]["status"] = "llm_review"
-            print(f"[TAH-trust]     LLM 审查: {len(findings)} findings 待审查...")
-            try:
-                _LLM_REVIEWER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "llm_reviewer.py"
-                spec_lr = importlib.util.spec_from_file_location(
-                    "llm_reviewer", str(_LLM_REVIEWER_PATH)
-                )
-                if spec_lr and spec_lr.loader:
-                    mod_lr = importlib.util.module_from_spec(spec_lr)
-                    spec_lr.loader.exec_module(mod_lr)
-                    file_cache = {}
-                    for f in scanner.scanned_files:
-                        file_cache[f] = scanner._read_file_content(f)
-                    llm_result = mod_lr.run_llm_review(
-                        findings=findings,
-                        file_cache=file_cache,
-                        manifest=scanner._package_metadata,
-                    )
-                    for f_item in findings:
-                        fid = f_item.get("id", "")
-                        if fid in llm_result.get("labels", {}):
-                            f_item["llm_label"] = llm_result["labels"][fid]
-                    scan_report["llm_review"] = llm_result
-                    print(
-                        f"[TAH-trust]     LLM 审查完成: "
-                        f"malicious={llm_result['labels_summary']['suspected_malicious']}, "
-                        f"negligent={llm_result['labels_summary']['suspected_negligent']}, "
-                        f"benign={llm_result['labels_summary']['likely_benign']}, "
-                        f"uncertain={llm_result['labels_summary']['uncertain']}, "
-                        f"unavailable={llm_result['labels_summary']['unavailable']}"
-                    )
-            except Exception as e:
-                print(f"[TAH-trust]     LLM 审查跳过（{e}）")
-                scan_report["llm_review"] = {
-                    "triggered": True,
-                    "error": str(e),
-                    "fallback": "LLM review unavailable, all findings preserved",
-                }
-        else:
-            scan_report["llm_review"] = {"triggered": False}
-
         # Step 3: 运行评分引擎
         _scans[scan_id]["status"] = "scoring"
         print(f"[TAH-trust]     加载评分引擎...")
@@ -511,7 +466,6 @@ def _run_scan_task(
                 "grade": trust_score_result.get("risk_summary", {}).get("grade"),
                 "recommendation": trust_score_result.get("risk_summary", {}).get("install_recommendation"),
             },
-            "llm_review": scan_report.get("llm_review"),
         })
 
         # 临时目录保留给提交阶段打包产物，由 handle_scan_complete / 过期清理负责删除
@@ -824,7 +778,6 @@ def get_scan_status(
         "finished_at": info.get("finished_at"),
         "summary": info.get("summary"),
         "trust_score": info.get("trust_score"),
-        "llm_review": info.get("llm_review"),
         "error": info.get("error"),
     }
 

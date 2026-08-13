@@ -968,92 +968,6 @@
         "title": "Integrity",
         "type": "object"
       },
-      "LLMReview": {
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "fallback": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fallback"
-          },
-          "findings_reviewed": {
-            "default": 0,
-            "title": "Findings Reviewed",
-            "type": "integer"
-          },
-          "labels_summary": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LLMReviewLabelsSummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "triggered": {
-            "default": false,
-            "title": "Triggered",
-            "type": "boolean"
-          }
-        },
-        "title": "LLMReview",
-        "type": "object"
-      },
-      "LLMReviewLabelsSummary": {
-        "additionalProperties": false,
-        "properties": {
-          "likely_benign": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Likely Benign",
-            "type": "integer"
-          },
-          "suspected_malicious": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Suspected Malicious",
-            "type": "integer"
-          },
-          "suspected_negligent": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Suspected Negligent",
-            "type": "integer"
-          },
-          "unavailable": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Unavailable",
-            "type": "integer"
-          },
-          "uncertain": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Uncertain",
-            "type": "integer"
-          }
-        },
-        "title": "LLMReviewLabelsSummary",
-        "type": "object"
-      },
       "ManifestInstallation": {
         "additionalProperties": false,
         "properties": {
@@ -2174,16 +2088,6 @@
               }
             ],
             "title": "Findings"
-          },
-          "llm_review": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LLMReview"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "metadata_validation": {
             "anyOf": [

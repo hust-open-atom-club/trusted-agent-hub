@@ -56,7 +56,6 @@
     "safe": "Safe to install",
     "review_recommended": "Review recommended",
     "blocked": "Blocked",
-    "llm_review": "LLM Review",
     "findings": "findings",
     "pass_rate": "Pass Rate",
     "submit_btn": "Submit for Review",
@@ -418,7 +417,7 @@
     "status": {
       "draft": "Draft",
       "scanning": "Scanning",
-      "scan_failed": "Scan Failed",
+      "error": "Scan Failed",
       "pending_review": "Pending Review",
       "under_review": "Under Review",
       "changes_requested": "Changes Requested",
@@ -532,7 +531,7 @@
     "status": {
       "draft": "Draft",
       "scanning": "Scanning",
-      "scan_failed": "Scan Failed",
+      "error": "Scan Failed",
       "pending_review": "Pending Review",
       "under_review": "Under Review",
       "changes_requested": "Changes Requested",

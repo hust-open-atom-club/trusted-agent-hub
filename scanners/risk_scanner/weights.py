@@ -10,7 +10,6 @@ Usage:
 Used by:
     - intent.py (I2 prompt safety scoring)
     - engine.py (_compute_pass_rate)
-    - llm_reviewer.py (label constants)
 """
 
 from __future__ import annotations
