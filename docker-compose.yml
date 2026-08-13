@@ -27,6 +27,9 @@ services:
     build:
       context: .
       dockerfile: ./apps/api/Dockerfile
+      args:
+        # 语义模型开关: 用 deploy/build.ps1 交互选择, 或设环境变量 ENABLE_SEMANTIC_MODEL=true
+        ENABLE_SEMANTIC_MODEL: ${ENABLE_SEMANTIC_MODEL:-false}
     restart: unless-stopped
     volumes:
       - ./examples:/examples:ro

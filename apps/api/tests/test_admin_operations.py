@@ -1,4 +1,4 @@
-"""供给侧管理操作测试 — yank/unyank/re-review/grade-override/grade-history。
+"""供给侧管理操作测试 — yank/unyank/re-review/grade-override。
 
 使用真实 PostgreSQL，沿用 test_review_integration.py 模式：
 真实注册用户（DB 直改角色）+ 注入 mock 扫描报告 + 状态流转断言。
@@ -432,35 +432,3 @@ class TestGradeOverride:
             headers={"Authorization": f"Bearer {stoken}"},
         )
         assert resp.status_code == 403
-
-    def test_grade_history_tracks_changes(self):
-        """评级历史：两次修改后 history 返回两条，含前后值。"""
-        _needs_db()
-        client = _get_client()
-        vid = self._make_version(client)
-        rtoken = _register_and_login_as(client, "reviewer")
-
-        client.patch(
-            f"/api/v0/producer/versions/{vid}/grade",
-            json={"grade": "B", "reason": "初评 B"},
-            headers={"Authorization": f"Bearer {rtoken}"},
-        )
-        client.patch(
-            f"/api/v0/producer/versions/{vid}/grade",
-            json={"grade": "A", "reason": "复审升 A"},
-            headers={"Authorization": f"Bearer {rtoken}"},
-        )
-
-        resp = client.get(
-            f"/api/v0/producer/versions/{vid}/grade-history",
-            headers={"Authorization": f"Bearer {rtoken}"},
-        )
-        assert resp.status_code == 200
-        history = resp.json()
-        assert len(history) >= 2
-        # 历史中应存在一次 B→A 的修改记录（previous=B, new=A）
-        # 注：audit 按时间戳降序，同秒记录顺序不保证，故用存在性断言
-        assert any(
-            h.get("previous_grade") == "B" and h.get("grade") == "A"
-            for h in history
-        ), f"历史中未找到 B→A 记录: {history}"

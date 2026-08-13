@@ -59,7 +59,7 @@ TrustedAgentHub/
 | SR-018 | Plugin 安全 (内联 MCP + Hook 注入) |
 | SR-019 | Subagent 安全 (自主模式 + 危险工具) |
 
-另有 LLM 深度语义审查（`llm_reviewer.py`）：对扫描发现的问题进行二次确认，区分 `suspected-malicious` / `likely-benign` / `uncertain`。
+另有本地语义检测（`mcp_security.py` + fastembed 嵌入模型）：SR-017 对 MCP 工具描述与权限声明做语义对比，检测"描述投毒"；未安装模型时自动降级为纯规则模式。
 
 ### 信任评分引擎
 

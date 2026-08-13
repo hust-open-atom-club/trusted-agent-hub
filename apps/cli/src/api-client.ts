@@ -7,7 +7,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// Shared types (kept here so CLI does not depend on mock-loader at runtime)
+// Shared types
 // ---------------------------------------------------------------------------
 
 export interface PackageOwner {

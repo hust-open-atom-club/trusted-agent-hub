@@ -162,14 +162,13 @@ export default function ReviewDetailPage() {
   const statusLabels: Record<string, string> = {
     draft: t('review.status.draft'),
     scanning: t('review.status.scanning'),
-    scan_failed: t('review.status.scan_failed'),
     pending_review: t('review.status.pending_review'),
     approved: t('review.status.approved'),
     rejected: t('review.status.rejected'),
     changes_requested: t('review.status.changes_requested'),
     published: t('review.status.published'),
     yanked: t('review.status.yanked'),
-    error: t('review.status.scan_failed'),
+    error: t('review.status.error'),
   };
 
   const severityFilters = [
