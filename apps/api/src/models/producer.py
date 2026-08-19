@@ -45,6 +45,8 @@ class CreateVersionRequest(StrictContractModel):
     version: str = Field(description="SemVer 版本号，如 1.0.0")
     repo_url: str | None = Field(default=None, description="GitHub 仓库 HTTPS URL")
     description: str | None = None
+    author: Author | None = None
+    license: str | None = None
     source: Source | None = None
     integrity: Integrity | None = None
     permissions: Permissions | None = None

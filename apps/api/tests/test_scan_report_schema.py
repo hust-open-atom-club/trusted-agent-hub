@@ -131,3 +131,24 @@ def test_schema_accepts_report_with_new_category_and_fields():
         },
     }
     jsonschema.validate(minimal, SCHEMA)
+
+
+def test_cross_file_duplicates_merged(tmp_path):
+    """同规则+同匹配内容跨文件 → 只保留一条 + duplicates 汇总，且输出符合 schema。"""
+    report = _scan(tmp_path, {
+        "SKILL.md": CLEAN_SKILL,
+        "a.md": "data = conversation_history\n",
+        "b.md": "data = conversation_history\n",
+    })
+    merged = [
+        f for f in report["findings"]
+        if f["rule_id"] == "SR-013" and "conversation_history" in f.get("evidence", "")
+    ]
+    assert len(merged) == 1, "同问题跨文件应合并为一条"
+    dup = merged[0].get("duplicates")
+    assert isinstance(dup, dict) and dup.get("count") == 1
+    files = [d["file"] for d in dup["files"]]
+    assert files[0] in ("a.md", "b.md")
+    # 合并提示写入 evidence（审核页可见）
+    assert "另有 1 个文件存在相同问题" in merged[0].get("evidence", "")
+    jsonschema.validate(report, SCHEMA)

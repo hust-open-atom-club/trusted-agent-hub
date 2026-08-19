@@ -362,6 +362,34 @@ def _needs_db():
 # ═══════════════════════════════════════════════════════════
 
 class TestIntegrationAuditFlow:
+    def test_create_version_with_author_license(self):
+        """创建版本时提交 author/license → 落库并可读回（断点①修复）。"""
+        client = _get_client()
+        email = _random_email("vermeta")
+        login = _register_and_login_as(client, email, "submitter")
+        token = login["access_token"]
+        pkg = _create_package(client, token, f"pkg-{uuid.uuid4().hex[:8]}")
+        _CLEANUP_IDS.append(pkg["id"])
+
+        resp = client.post(
+            f"/api/v0/producer/packages/{pkg['id']}/versions",
+            json={
+                "version": "1.2.3",
+                "repo_url": f"https://github.com/test/{pkg['id']}",
+                "author": {"name": "Ziyang Dong", "email": "ziyang@example.com"},
+                "license": "Apache-2.0",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, f"Create version failed: {resp.text}"
+        version_id = resp.json()["id"]
+
+        detail = client.get(
+            f"/api/v0/producer/versions/{version_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        ).json()
+        assert detail.get("author", {}).get("name") == "Ziyang Dong"
+        assert detail.get("license") == "Apache-2.0"
 
     def test_case1_high_risk_rejected(self):
         """High risk package → scan finds critical issues → reviewer rejects."""

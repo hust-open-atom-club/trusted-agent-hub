@@ -51,3 +51,12 @@ class TestSR015AgentSnooping:
         })
         agent_snooping.run(s)
         assert s.findings == []
+
+    def test_conversation_reference_prose_no_finding(self):
+        """"earlier in this conversation"（引用当前对话）→ 不报。"""
+        s = MockScanner(files={
+            "SKILL.md": "A study diagnosis was emitted earlier in this "
+                        "conversation and the user is asking to build from it.\n",
+        })
+        agent_snooping.run(s)
+        assert s.findings == []

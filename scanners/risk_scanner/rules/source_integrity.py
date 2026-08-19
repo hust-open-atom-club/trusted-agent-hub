@@ -43,7 +43,11 @@ def run(scanner: Any) -> None:
         issues.append("来源未锁定 commit hash")
 
     if issues:
-        severity = "medium" if missing_sig else "low"
+        # 分级：sha256 或 commit_hash 缺失/非法 → medium；
+        # 仅缺签名/证明/SBOM（生态常态）→ low
+        sha256_ok = bool(re.fullmatch(r"^[a-f0-9]{64}$", sha256))
+        commit_ok = bool(re.fullmatch(r"^[a-f0-9]{40}$", commit_hash))
+        severity = "medium" if (not sha256_ok or not commit_ok) else "low"
         manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
         scanner._add_finding(
             rule_id=rule_id,

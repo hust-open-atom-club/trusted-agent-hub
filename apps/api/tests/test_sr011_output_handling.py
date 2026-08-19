@@ -49,3 +49,12 @@ class TestSR011OutputHandling:
         output_handling.run(s)
         assert len(s.findings) == 1
         assert s.findings[0]["severity"] == "medium"
+
+    def test_prose_save_above_no_finding(self):
+        """"save themes for reuse" + 隔句 above（散文）→ 不再误报。"""
+        s = MockScanner(files={
+            "SKILL.md": "Use this to save themes for reuse. "
+                        "The skill does not write above the fold.\n",
+        })
+        output_handling.run(s)
+        assert s.findings == []

@@ -53,3 +53,11 @@ class TestSR016ToolMisuse:
         s = MockScanner(files={"main.py": "print('hello')\n"})
         tool_misuse.run(s)
         assert s.findings == []
+
+    def test_prose_run_reads_no_finding(self):
+        """"run reads it. The user read"（小写动词散文）→ 不再误报。"""
+        s = MockScanner(files={
+            "SKILL.md": "The run reads it. The user read the output carefully.\n",
+        })
+        tool_misuse.run(s)
+        assert s.findings == []

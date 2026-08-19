@@ -50,8 +50,8 @@ class TestSR009SourceIntegrity:
         assert f["severity"] == "medium"
         assert "来源完整性不足" in f["title"]
 
-    def test_missing_signature_is_medium_even_with_sha256(self, tmp_path):
-        """sha256 present but no signature → still medium (missing_sig)."""
+    def test_missing_signature_only_is_low(self, tmp_path):
+        """sha256/commit 齐全但无签名/SBOM（生态常态）→ low。"""
         meta = _full_meta()
         del meta["integrity"]["signature"]
         del meta["integrity"]["sbom_url"]
@@ -62,10 +62,10 @@ class TestSR009SourceIntegrity:
         )
         source_integrity.run(s)
         assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "medium"
+        assert s.findings[0]["severity"] == "low"
 
-    def test_invalid_sha256_low_severity(self, tmp_path):
-        """Signature present but sha256 invalid → low finding."""
+    def test_invalid_sha256_is_medium(self, tmp_path):
+        """sha256 非法（核心完整性缺失）→ medium。"""
         meta = _full_meta()
         meta["integrity"]["sha256"] = "not-a-hash"
         s = MockScanner(
@@ -75,7 +75,7 @@ class TestSR009SourceIntegrity:
         )
         source_integrity.run(s)
         assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "low"
+        assert s.findings[0]["severity"] == "medium"
 
     def test_full_integrity_no_finding(self, tmp_path):
         """Complete integrity + locked commit hash → no findings."""

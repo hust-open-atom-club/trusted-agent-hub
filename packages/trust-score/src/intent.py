@@ -333,6 +333,14 @@ def assess_prompt_safety(
             in ("critical", "high")
             and f.get("category", "") in _DANGEROUS_CATEGORIES
         )
+        # LLM 审查已运行但调用失败/未配置 → 无法排除恶意(fail-closed 信号)
+        llm_unavailable = any(
+            f.get("llm_label") == "llm:unavailable"
+            for f in findings
+            if adjusted_severities.get(f.get("id", ""), f.get("severity", ""))
+            in ("critical", "high")
+            and f.get("category", "") in _DANGEROUS_CATEGORIES
+        )
         score = _compute_i2_score(findings, adjusted_severities)
         return {
             "level": level,
@@ -344,6 +352,7 @@ def assess_prompt_safety(
             "low_count": low_count,
             "scan_available": True,
             "confirmed_malicious": confirmed_malicious,
+            "llm_unavailable": llm_unavailable,
         }
     elif critical_count > 0 or high_count > 0:
         level = "suspicious"

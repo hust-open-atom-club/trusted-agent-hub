@@ -195,6 +195,51 @@ def test_veto_requires_llm_confirmed_malicious() -> None:
         "LLM 判定良性的 critical 不应判 E"
 
 
+def test_veto_when_llm_unavailable_on_dangerous_findings() -> None:
+    """fail-closed:LLM 审查不可用(llm:unavailable)时,dangerous finding
+    无法排除恶意 → 触发 V2 否决,判 E。"""
+    meta = _excessive_permission_metadata()
+    fx = _load_fixture("b1_code_review_skill")
+
+    result = rate(
+        package_metadata=meta,
+        scan_report=_scan_with_critical_prompt_injection("llm:unavailable"),
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] == "untrusted", \
+        "LLM 不可用时 dangerous finding 应 fail-closed 判 E"
+    assert 0 <= result["score"] <= 24
+    veto_msgs = [e["message"] for e in result["explanations"]
+                 if "Veto" in e.get("message", "")]
+    assert len(veto_msgs) > 0, "Expected a veto explanation in output"
+    _assert_valid_output(result, "untrusted")
+
+
+def test_no_veto_when_llm_unavailable_on_non_dangerous_findings() -> None:
+    """LLM 不可用但 finding 不在危险类别(非 dangerous 判级)→ 不触发否决。"""
+    meta = _excessive_permission_metadata()
+    fx = _load_fixture("b1_code_review_skill")
+
+    # high finding 但类别不是危险类别(如 metadata_quality)→ I2 最高 suspicious
+    scan = _scan_with_critical_prompt_injection("llm:unavailable")
+    scan["findings"][0]["category"] = "metadata_quality"
+    scan["findings"][0]["severity"] = "high"
+    scan["summary"] = {
+        "total": 1, "critical": 0, "high": 1,
+        "medium": 0, "low": 0, "info": 0,
+    }
+
+    result = rate(
+        package_metadata=meta,
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    assert result["risk_summary"]["level"] != "untrusted", \
+        "非危险类别的 finding 即使 LLM 不可用也不应否决"
+
+
 def test_b6_empty_package_opaque_source() -> None:
     """B6: Opaque source, no scan → medium_risk."""
     fx = _load_fixture("b6_empty_package")
