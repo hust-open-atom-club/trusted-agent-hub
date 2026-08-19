@@ -281,6 +281,8 @@ function SubmitForm() {
       if (isNewVersion) {
         const verBody: Record<string, unknown> = {
           version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
+          author: authorObj,
+          license: pkgLicense.trim(),
           source: sourceObj,
           integrity: meta.integrity || null,
           permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
@@ -322,6 +324,8 @@ function SubmitForm() {
 
       const verBody: Record<string, unknown> = {
         version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
+        author: authorObj,
+        license: pkgLicense.trim(),
         source: sourceObj,
         integrity: meta.integrity || null,
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),

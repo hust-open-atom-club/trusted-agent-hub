@@ -118,6 +118,10 @@
             ],
             "description": "LLM 审查标签"
           },
+          "downgraded": {
+            "type": "string",
+            "description": "严重度降级原因标记（如 documentation=说明性文档降级）"
+          },
           "evidence": {
             "type": "string",
             "description": "证据说明"
@@ -129,6 +133,33 @@
           "cwe_id": {
             "type": "string",
             "description": "关联的 CWE 编号"
+          },
+          "duplicates": {
+            "type": "object",
+            "description": "跨文件重复合并：相同规则+相同匹配内容出现在多个文件时，仅保留一条（最高严重度），其余文件汇总于此",
+            "required": ["count", "files"],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "存在相同问题的其他文件总数"
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 5,
+                "description": "相同问题的文件清单（最多 5 个，超出仅计数）",
+                "items": {
+                  "type": "object",
+                  "required": ["file"],
+                  "properties": {
+                    "file": { "type": "string", "description": "文件路径" },
+                    "line": { "type": "integer", "minimum": 1, "description": "起始行号" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

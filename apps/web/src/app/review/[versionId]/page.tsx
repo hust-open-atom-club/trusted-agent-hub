@@ -602,10 +602,10 @@ export default function ReviewDetailPage() {
               <span className="review-meta-value">{pkg.description}</span>
             </div>
           )}
-          {pkg?.license && (
+          {(version?.license || pkg?.license) && (
             <div className="review-meta-field">
               <span className="review-meta-label">{t('review.detail.meta_license')}</span>
-              <span className="review-meta-value">{pkg.license}</span>
+              <span className="review-meta-value">{version?.license || pkg?.license}</span>
             </div>
           )}
           {pkg?.category && (
@@ -614,11 +614,15 @@ export default function ReviewDetailPage() {
               <span className="review-meta-value">{pkg.category}</span>
             </div>
           )}
-          {pkg?.author && (
+          {(version?.author || pkg?.author) && (
             <div className="review-meta-field">
               <span className="review-meta-label">{t('review.detail.meta_author')}</span>
               <span className="review-meta-value">
-                {pkg.author.name || pkg.author.email || pkg.author.url || '—'}
+                {(version?.author || pkg?.author) &&
+                  ((version?.author || pkg?.author)!.name ||
+                    (version?.author || pkg?.author)!.email ||
+                    (version?.author || pkg?.author)!.url ||
+                    '—')}
               </span>
             </div>
           )}

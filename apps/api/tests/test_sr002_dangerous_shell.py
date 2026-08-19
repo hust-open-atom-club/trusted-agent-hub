@@ -8,6 +8,14 @@ class TestSR002DangerousShell:
 
     # ── Positive cases ────────────────────────────────────
 
+    def test_shebang_alone_not_flagged(self):
+        """"#!/bin/bash" 只是声明解释器 → 不报危险命令。"""
+        s = MockScanner(files={
+            "scripts/recon.sh": "#!/bin/bash\n# gather challenge binary info\necho ok\n",
+        })
+        run(s)
+        assert s.findings == []
+
     def test_curl_pipe_bash(self):
         """curl | bash should be detected as critical."""
         s = MockScanner(files={

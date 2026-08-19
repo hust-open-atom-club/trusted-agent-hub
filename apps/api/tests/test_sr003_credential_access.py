@@ -34,6 +34,28 @@ class TestSR003CredentialAccess:
         run(s)
         assert len(s.findings) >= 1
 
+    def test_process_env_access_not_flagged(self):
+        """process.env 环境变量访问（Node 常规操作）→ 不误报。"""
+        s = MockScanner(files={
+            "bin/install.js": "const home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');\n",
+        })
+        run(s)
+        assert not any(
+            "读取 .env 环境文件" in f.get("title", "")
+            for f in s.findings
+        )
+
+    def test_env_var_name_with_dot_not_flagged(self):
+        """foo.env 这类词内出现 .env（非文件路径）→ 不误报。"""
+        s = MockScanner(files={
+            "main.js": "const x = my.env.value;\n",
+        })
+        run(s)
+        assert not any(
+            "读取 .env 环境文件" in f.get("title", "")
+            for f in s.findings
+        )
+
     def test_env_grep_secrets(self):
         """Reading .env files should be detected (credential access)."""
         s = MockScanner(files={
@@ -89,3 +111,14 @@ class TestSR003CredentialAccess:
         assert len(s.findings) >= 1
         # Verify it's a credential_access category
         assert s.findings[0]["category"] == "credential_access"
+
+    def test_prose_lowercase_post_no_exfil_finding(self):
+        """散文中的小写 post（非 HTTP 动词）不再命中「发送对话内容到外部」。"""
+        s = MockScanner(files={
+            "SKILL.md": "This conversation is a post about safe coding.\n",
+        })
+        run(s)
+        assert not any(
+            "发送对话内容到外部" in f.get("title", "")
+            for f in s.findings
+        )

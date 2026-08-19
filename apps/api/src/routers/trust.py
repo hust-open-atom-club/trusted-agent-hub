@@ -493,6 +493,7 @@ def _run_scan_task(
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "scan_report": scan_report,
             "trust_score": trust_score_result,
+            "package_metadata": package_metadata,
             "file_contents": scanner._file_contents,
             # 保留本地代码目录供提交时打包安装产物（不重新拉取）。
             # 由 handle_scan_complete 消费后清理，或随扫描记录过期清理。

@@ -75,7 +75,6 @@ DANGEROUS_SHELL_PATTERNS: list[tuple[str, str, str]] = [
     (r"chmod\s+777", "chmod 777 全员可写权限", "high"),
     (r"chmod\s+-R\s+777", "递归 chmod 777", "high"),
     (r">\s*/dev/sda", "写入块设备（可能破坏磁盘）", "high"),
-    (r"^\s*#!/.*\b(ba)?sh\b", "Shell 脚本 shebang", "high"),
     # --- New: environment variable poisoning ---
     (r"(?:PATH|PYTHONPATH)\s*=\s*(?!(?:\"|')?(?:/usr|/bin|/opt))", "修改 PATH 指向不可信目录", "high"),
 ]
@@ -97,7 +96,7 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
     # --- High: other credential files / env vars ---
     (r"~?\.aws/credentials", "读取 AWS 凭据", "high"),
     (r"~?\.aws/config", "读取 AWS 配置", "high"),
-    (r"\.env\b", "读取 .env 环境文件", "high"),
+    (r"(?<![.\w])\.env\b", "读取 .env 环境文件", "high"),
     (r"DATABASE_URL", "访问数据库连接字符串", "high"),
     (r"GITHUB_TOKEN", "访问 GitHub Token", "high"),
     (r"AWS_ACCESS_KEY", "访问 AWS 访问密钥", "high"),
@@ -109,10 +108,11 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
     (r"SSH_AUTH_SOCK", "访问 SSH agent socket", "high"),
     (r"KUBECONFIG", "访问 Kubernetes 配置", "high"),
     # --- New: Filesystem enumeration for creds (E3) ---
-    (r"(?:glob|walk|find|scandir|listdir).*\.env", "文件系统遍历搜索 .env", "high"),
+    (r"(?:glob|walk|find|scandir|listdir).*(?<![.\w])\.env", "文件系统遍历搜索 .env", "high"),
     (r"(?:listdir|os\.walk|glob).*(?:secrets?|credentials?|tokens?|keys?)", "文件系统遍历搜索凭据文件", "high"),
     # --- New: Context / conversation exfiltration (E4) ---
-    (r"(?:conversation|chat|message|dialog).*(?:POST|send|upload|forward|transmit)", "发送对话内容到外部", "critical"),
+    # HTTP 动词大写敏感（(?-i:...)），避免散文中的普通单词 post 误报
+    (r"(?:conversation|chat|message|dialog).*(?:(?-i:\bPOST\b)|send|upload|forward|transmit)", "发送对话内容到外部", "critical"),
     (r"(?:exfiltrat|leak|steal|collect).*(?:conversation|chat|message)", "外泄对话内容", "critical"),
     # --- New: Cloud storage exfiltration (E5) ---
     (r"(?:aws\s+s3\s+cp|gsutil\s+cp|azcopy|rclone\s+(?:copy|sync))", "数据复制到云存储", "high"),
@@ -269,7 +269,8 @@ OUTPUT_HANDLING_PATTERNS: list[tuple[str, str, str]] = [
     (r"\.write_text\s*\(.*\+", "拼接内容写入文件", "medium"),
     # --- New: cross-context output (OH2) ---
     (r"(?:write|save|output).*(?:\.\./|\.\.\\)", "将输出写入沙箱外路径", "medium"),
-    (r"(?:write|save|output).*(?:outside|parent|above|escape)", "输出到沙箱外", "medium"),
+    # 收紧为完整措辞 + 60 字符窗口，避免 "save themes ... above" 等隔句口语误报
+    (r"(?:write|save|output)[^.\n]{0,60}outside\s+(?:the\s+)?(?:sandbox|workspace|project)", "输出到沙箱外", "medium"),
     # --- New: unbounded output (OH3) ---
     (r"while\s+True[:\s].*(?:print|write|send|output|log)", "无限循环输出（可能 DoS）", "low"),
 ]
@@ -297,14 +298,22 @@ SYSTEM_PROMPT_LEAK_PATTERNS: list[tuple[str, str, str]] = [
 # =============================================================================
 
 MEMORY_POISONING_PATTERNS: list[tuple[str, str, str]] = [
-    # --- High: manipulating persistent memory ---
-    (r"(?:write|append|save).*(?:memory|context|history)", "写入记忆/上下文", "high"),
+    # --- High: 精准 — 真实 Agent 记忆机制（工具调用 / 记忆文件 / 明确指令） ---
+    (r"\b(?:write_to_memory|update_memory|save_to_memory|save_memory|write_memory|"
+     r"store_memory|persist_memory|memory_edit|memory_update|memory_save|memory_write|"
+     r"memory_store|memory_create)\b", "调用记忆编辑类工具", "high"),
+    (r"(?:CLAUDE|AGENTS)\.md", "写入 Agent 常驻记忆文件", "high"),
+    (r"\.claude[/\\]?memory", "操作 Agent 记忆文件", "high"),
+    (r"(?:save|store|remember|memorize)\s+(?:this|that|it|the\s+following)"
+     r"\s+(?:to|in)\s+(?:your\s+)?(?:memory|context)", "指令 Agent 写入自身记忆", "high"),
     (r"conversation_history", "操作对话历史", "high"),
-    (r"long.?term.*(?:memory|storage)", "操作长期记忆存储", "high"),
-    (r"(?:\.claude|\.cursor|skills).*(?:memory|context|history)", "操作 Agent 记忆文件", "high"),
-    # --- New: context window stuffing (MP2) ---
+    # --- Medium: context window stuffing (MP2) ---
     (r"(?:repeat|copy|paste|duplicate).*(?:many|several|\d+).*(?:times?|copies?)", "大规模重复填充上下文窗口", "medium"),
     (r"(?:flood|spam|stuff).*(?:context|window|memory)", "填塞/洪水攻击上下文窗口", "medium"),
+    # --- Info: 泛化兜底 — 仅提示人工复核，不再直接判高危（避免 "project memory" 等修辞误报） ---
+    (r"(?:write|append|save).*(?:memory|context|history)", "写入记忆/上下文（泛化提示）", "info"),
+    (r"long.?term.*(?:memory|storage)", "操作长期记忆存储（泛化提示）", "info"),
+    (r"(?:\.claude|\.cursor|skills).*(?:memory|context|history)", "操作 Agent 记忆文件（泛化提示）", "info"),
 ]
 
 # =============================================================================
@@ -338,9 +347,10 @@ AGENT_SNOOPING_PATTERNS: list[tuple[str, str, str]] = [
     # --- High: reading agent configuration ---
     (r"(?:read|list|walk|scan).*(?:\.claude|\.cursor)", "读取 Agent 配置目录", "high"),
     (r"listdir.*(?:\.claude|\.cursor|skills)", "列举其他 skill 目录", "high"),
-    (r"conversation.*(?:history|log)", "读取对话历史", "high"),
-    (r"read.*(?:conversation|chat|message).*(?:history|log|file)", "读取聊天记录", "high"),
-    (r"(?:glob|walk|list).*conversation", "遍历对话目录", "high"),
+    # 窗口收紧 + 指代性措辞负向排除（规则层实现），避免 "earlier in this conversation" 散文误报
+    (r"conversation[^.\n]{0,60}(?:history|log)", "读取对话历史", "high"),
+    (r"read[^.\n]{0,80}(?:conversation|chat|message)[^.\n]{0,80}(?:history|log|file)", "读取聊天记录", "high"),
+    (r"(?:glob|walk|list)[^.\n]{0,80}conversation", "遍历对话目录", "high"),
     # --- New: MCP config access (AS2) ---
     (r"(?:read|cat|open).*(?:mcp\.json|mcp_server|\.codex)", "读取 MCP 配置文件", "high"),
     # --- New: cross-agent filesystem scan ---
@@ -353,7 +363,8 @@ AGENT_SNOOPING_PATTERNS: list[tuple[str, str, str]] = [
 
 TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
     # --- High: impersonation / hidden instructions ---
-    (r'(?:tool_name|toolName)\s*[=:]\s*["\'](?:Read|Write|Bash|Grep|Glob|WebFetch|Edit)', "伪装已有工具名称", "high"),
+    # 工具名大写敏感（(?-i:...)）：只认 Claude 工具名的大写写法，普通动词 read/save 不误报
+    (r'(?:tool_name|toolName)\s*[=:]\s*["\'](?:(?-i:Read|Write|Bash|Grep|Glob|WebFetch|Edit))["\']', "伪装已有工具名称", "high"),
     (r'description\s*[=:].*"(?:ignore|bypass|skip)', "在参数描述中隐藏指令", "high"),
     (r'[\u200b\u200c\u200d\u2060\uFEFF]', "零宽字符", "high"),
     # --- Medium: Unicode escapes ---
@@ -361,7 +372,7 @@ TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
     # --- Low: hex escapes ---
     (r'\\x[0-9a-fA-F]{2}', "十六进制转义序列", "low"),
     # --- New: chaining abuse (TM2) ---
-    (r'(?:run|exec|call|invoke).*(?:Read|Write|Bash|Grep).*(?:Read|Write|Bash|Grep)', "工具链式调用（可能组合攻击）", "high"),
+    (r'(?:run|exec|call|invoke).*(?:(?-i:\bRead\b|\bWrite\b|\bBash\b|\bGrep\b)).*(?:(?-i:\bRead\b|\bWrite\b|\bBash\b|\bGrep\b))', "工具链式调用（可能组合攻击）", "high"),
     # --- New: unsafe defaults (TM3) ---
     (r'(?:verify\s*=\s*False|ssl_verify\s*=\s*False|check_hostname\s*=\s*False)', "关闭 TLS 证书验证", "medium"),
     (r'(?:insecure\s*=\s*True|allow_insecure\s*=\s*True)', "允许不安全连接", "medium"),

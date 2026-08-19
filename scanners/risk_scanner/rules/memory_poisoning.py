@@ -29,9 +29,15 @@ def run(scanner: Any) -> None:
             continue
         lines = content.split("\n")
 
+        # 精准模式（high/medium）已在同行命中时，泛化兜底（info）不再重复报告
+        claimed: set[tuple[str, int]] = set()
+
         for pattern, desc, severity in MEMORY_POISONING_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
+                if severity == "info" and (fname, line_no) in claimed:
+                    continue
+                claimed.add((fname, line_no))
                 snippet = "\n".join(lines[max(0, line_no - 1):line_no])
                 if scanner._is_code_example(fname, line_no):
                     severity = "medium" if severity == "high" else severity

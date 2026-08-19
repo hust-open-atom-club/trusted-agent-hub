@@ -14,10 +14,10 @@ Pipeline (9 steps):
 
 Six veto rules:
   V1: C1 = rejected        → untrusted
-  V2: I2 = dangerous       → untrusted
-  V3: I3 = deceptive       → untrusted
-  V4: I3 = malicious       → untrusted
-  V5: P1 = opaque & I2 = dangerous → untrusted
+  V2: I2 = dangerous AND (LLM 确认恶意 或 LLM 不可用) → untrusted
+  V3: I3 = deceptive AND LLM 确认恶意 → untrusted
+  V4: I3 = malicious AND LLM 确认恶意 → untrusted
+  V5: P1 = opaque & I2 = dangerous AND (LLM 确认恶意 或 LLM 不可用) → untrusted
   V6: P1 = opaque & C2 = tainted   → untrusted
 
 All functions operate on plain dicts. Uses only the Python standard library.
@@ -189,11 +189,14 @@ def _check_veto(
     """Step 6: Check all six veto rules.  Returns the triggered veto name or None.
 
     V1: C1 = rejected        → untrusted
-    V2: I2 = dangerous AND LLM 确认恶意 → untrusted
-    V3: I3 = deceptive       → untrusted
-    V4: I3 = malicious       → untrusted
-    V5: P1 = opaque & I2 = dangerous(LLM 确认恶意) → untrusted
+    V2: I2 = dangerous AND (LLM 确认恶意 或 LLM 不可用) → untrusted
+    V3: I3 = deceptive AND LLM 确认恶意 → untrusted
+    V4: I3 = malicious AND LLM 确认恶意 → untrusted
+    V5: P1 = opaque & I2 = dangerous AND (LLM 确认恶意 或 LLM 不可用) → untrusted
     V6: P1 = opaque & C2 = tainted   → untrusted
+
+    fail-closed: dangerous 级别的 finding 若 LLM 审查不可用
+    (llm:unavailable), 视为无法排除恶意, 同样触发 V2/V5 否决。
     """
     p1_level = p1.get("level", "")
     i2_level = i2.get("level", "")
@@ -205,6 +208,8 @@ def _check_veto(
         return "V1: manual review rejected"
     if i2_level == "dangerous" and i2.get("confirmed_malicious"):
         return "V2: LLM-confirmed malicious content"
+    if i2_level == "dangerous" and i2.get("llm_unavailable"):
+        return "V2: LLM unavailable on dangerous findings (fail-closed)"
     if i3_level == "deceptive" and i2.get("confirmed_malicious"):
         return "V3: deceptive behavior detected"
     if i3_level == "malicious" and i2.get("confirmed_malicious"):
@@ -215,6 +220,12 @@ def _check_veto(
         and i2.get("confirmed_malicious")
     ):
         return "V5: opaque source with LLM-confirmed malicious findings"
+    if (
+        p1_level == "opaque"
+        and i2_level == "dangerous"
+        and i2.get("llm_unavailable")
+    ):
+        return "V5: opaque source with LLM unavailable on dangerous findings (fail-closed)"
     if p1_level == "opaque" and c2_level == "tainted":
         return "V6: opaque source with tainted author history"
 

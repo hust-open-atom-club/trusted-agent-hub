@@ -218,6 +218,7 @@ export interface VersionDetail {
   version: string;
   status: string;
   author?: PackageAuthor | null;
+  license?: string | null;
   source?: VersionSource | null;
   integrity?: VersionIntegrity | null;
   compatibility?: string[];

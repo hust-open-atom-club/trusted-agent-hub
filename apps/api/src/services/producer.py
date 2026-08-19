@@ -33,6 +33,45 @@ _SEMVER_RE = re.compile(
 logger = logging.getLogger(__name__)
 
 
+def _author_has_real_name(author: object) -> bool:
+    """author 是否含真实姓名（缺失 / UNKNOWN 占位 → False）。"""
+    if not isinstance(author, dict):
+        return False
+    name = str(author.get("name") or "").strip()
+    return bool(name) and name.upper() != "UNKNOWN"
+
+
+def _backfill_author_license(
+    repository: ProducerRepository,
+    version_id: str,
+    extracted: dict[str, object],
+) -> None:
+    """用扫描提取的真实 author/license 补齐版本元数据。
+
+    规则：手动值优先（已有真实值不覆盖）；提取器的占位兜底值
+    （UNKNOWN / UNLICENSED / 空）不写回，避免污染数据。
+    """
+    version = repository.get_version(version_id)
+    if not version:
+        return
+
+    updates: dict[str, object] = {}
+
+    if not _author_has_real_name(version.get("author")):
+        new_author = extracted.get("author")
+        if _author_has_real_name(new_author):
+            updates["author"] = new_author
+
+    current_license = str(version.get("license") or "").strip()
+    if not current_license or current_license.upper() in ("NONE", "UNLICENSED"):
+        new_license = str(extracted.get("license") or "").strip()
+        if new_license and new_license.upper() not in ("NONE", "UNLICENSED", "UNKNOWN"):
+            updates["license"] = new_license
+
+    if updates:
+        repository.update_version_data(version_id, updates)
+
+
 class ProducerServiceError(Exception):
     """供给侧业务逻辑错误。"""
 
@@ -139,6 +178,8 @@ class ProducerService:
             submitter_id=submitter_id,
             repo_url=data.repo_url,
             description=data.description,
+            author=data.author.model_dump() if data.author else None,
+            license=data.license,
             source=data.source.model_dump() if data.source else None,
             integrity=data.integrity.model_dump() if data.integrity else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
@@ -309,6 +350,11 @@ class ProducerService:
             scan_json=scan_data,
             report_path=str(report_path) if report_path else None,
         )
+
+        # 用扫描提取的真实 author/license 补齐版本元数据（手动值优先，占位值不写回）
+        extracted_meta = full_report.get("package_metadata")
+        if isinstance(extracted_meta, dict):
+            _backfill_author_license(self.repository, version_id, extracted_meta)
 
         # 更新版本数据（附加完整信任评分信息）
         trust_data: dict[str, object] = trust_score if isinstance(trust_score, dict) else {}

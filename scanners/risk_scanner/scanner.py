@@ -168,6 +168,22 @@ class RiskScanner:
             except (OSError, UnicodeDecodeError):
                 pass
 
+        # 回退：package.json 补充 SKILL.md frontmatter 未声明的字段
+        # （version/license/author 等常见于 npm 风格仓库的 package.json）
+        pkg_json_path = self.target_dir / "package.json"
+        if pkg_json_path.is_file():
+            try:
+                with pkg_json_path.open(encoding="utf-8") as f:
+                    pkg_json = json.load(f)
+                if not self._package_metadata:
+                    self._package_metadata = pkg_json
+                else:
+                    for key in ("name", "version", "description", "license", "author"):
+                        if not self._package_metadata.get(key) and pkg_json.get(key):
+                            self._package_metadata[key] = pkg_json[key]
+            except (json.JSONDecodeError, OSError):
+                pass
+
     def _read_file_content(self, rel_path: str) -> str:
         if rel_path in self._file_contents:
             return self._file_contents[rel_path]
@@ -271,6 +287,7 @@ class RiskScanner:
         _SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
         seen: dict[tuple, int] = {}
 
+        # 第一轮: 文件内去重 — 同规则+同匹配内容+同文件 → 保留最高严重度
         for i, f in enumerate(self.findings):
             rule_id = f.get("rule_id", "")
             loc = f.get("location", {}) or {}
@@ -287,7 +304,10 @@ class RiskScanner:
             else:
                 seen[key] = i
 
+        # 第二轮: 跨文件合并 — 同规则+同匹配内容出现在多个文件时只保留一条
+        # （取最高严重度），其余文件位置记入 duplicates（清单最多 5 个，超出只计数）。
         cross_seen: dict[tuple, int] = {}
+        removed: set[int] = set()
         for i, f in enumerate(self.findings):
             rule_id = f.get("rule_id", "")
             evidence = f.get("evidence", "")
@@ -296,18 +316,61 @@ class RiskScanner:
                 continue
             key = (rule_id, matched_text)
             if key in cross_seen:
-                existing_idx = cross_seen[key]
-                existing_sev = self.findings[existing_idx].get("severity", "info")
+                primary_idx = cross_seen[key]
+                primary = self.findings[primary_idx]
+                primary_sev = primary.get("severity", "info")
                 current_sev = f.get("severity", "info")
-                if _SEVERITY_RANK.get(current_sev, 0) <= _SEVERITY_RANK.get(existing_sev, 0):
-                    f["severity"] = "info"
-                    f["title"] = f["title"] + " [跨文件重复]"
-                else:
-                    self.findings[existing_idx]["severity"] = "info"
-                    self.findings[existing_idx]["title"] = self.findings[existing_idx]["title"] + " [跨文件重复]"
+                if _SEVERITY_RANK.get(current_sev, 0) > _SEVERITY_RANK.get(primary_sev, 0):
+                    # 当前更严重 → 取代原 primary，并继承其 duplicates
+                    self._promote_to_primary(f, primary)
+                    removed.add(primary_idx)
                     cross_seen[key] = i
+                else:
+                    self._merge_duplicate_into(primary, f)
+                    removed.add(i)
             else:
                 cross_seen[key] = i
+
+        if removed:
+            self.findings = [f for idx, f in enumerate(self.findings) if idx not in removed]
+
+        # 给合并后的 finding 追加人读提示（evidence 在审核页可见）
+        for f in self.findings:
+            dup = f.get("duplicates")
+            if isinstance(dup, dict) and dup.get("count"):
+                count = int(dup["count"])
+                names = [d.get("file", "") for d in dup.get("files", []) if isinstance(d, dict)]
+                shown = "、".join(n for n in names if n)
+                note = f"另有 {count} 个文件存在相同问题: {shown}"
+                if count > len(names):
+                    note += " 等"
+                f["evidence"] = f"{f.get('evidence', '')} | {note}"
+
+    @staticmethod
+    def _merge_duplicate_into(primary: dict[str, Any], other: dict[str, Any]) -> None:
+        """把 other 的文件位置并入 primary.duplicates。"""
+        dup = primary.setdefault("duplicates", {"count": 0, "files": []})
+        files: list[dict[str, Any]] = dup.get("files", [])
+        loc = other.get("location", {}) or {}
+        if len(files) < 5:
+            entry: dict[str, Any] = {"file": str(loc.get("file", "(unknown)"))}
+            if loc.get("line"):
+                entry["line"] = int(loc["line"])
+            files.append(entry)
+        dup["count"] = int(dup.get("count", 0)) + 1
+
+    def _promote_to_primary(self, new_p: dict[str, Any], old_p: dict[str, Any]) -> None:
+        """new_p 更严重，取代 old_p：继承其 duplicates 并把 old_p 位置并入。"""
+        old_dup = old_p.get("duplicates")
+        if isinstance(old_dup, dict):
+            new_dup = new_p.setdefault("duplicates", {"count": 0, "files": []})
+            merged: list[dict[str, Any]] = list(new_dup.get("files", []))
+            for item in old_dup.get("files", []):
+                if isinstance(item, dict) and len(merged) < 5:
+                    merged.append(item)
+            new_dup["files"] = merged
+            new_dup["count"] = int(new_dup.get("count", 0)) + int(old_dup.get("count", 0))
+        self._merge_duplicate_into(new_p, old_p)
 
     def _build_report(self, start_time: datetime, duration_ms: int) -> dict[str, Any]:
         severity_counts: dict[str, int] = {
