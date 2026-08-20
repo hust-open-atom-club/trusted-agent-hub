@@ -20,6 +20,7 @@ import re
 import time
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +51,26 @@ _DEPRECATION_BASED_DESCS = frozenset({
     "包声明已废弃/不再维护",
 })
 
+_DEPENDENCY_CONTEXT = re.compile(
+    r"\b(?:pip|npm|pnpm|yarn|cargo|install|registry|dependency|download|curl|wget)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_code_file(fname: str) -> bool:
     ext = Path(fname).suffix.lower()
     return ext in CODE_FILE_EXTENSIONS
+
+
+def _is_whitelisted_url(value: str) -> bool:
+    """Match a parsed hostname exactly or as a real subdomain of an allowlisted host."""
+    try:
+        url_match = re.search(r"https?://[^\s\"'<>`)]+", value, re.IGNORECASE)
+        url = (url_match.group(0) if url_match else value).rstrip(".,;:!?")
+        hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return any(hostname == host or hostname.endswith(f".{host}") for host in DOMAIN_WHITELIST)
 
 
 def _is_inside_html_comment(lines: list[str], line_no: int) -> bool:
@@ -177,8 +194,7 @@ def run(scanner: Any) -> None:
 
                 if is_url_based:
                     if "://" in matched_url:
-                        domain = matched_url.split("://", 1)[-1].split("/")[0].split(":")[0]
-                        if any(wl in domain for wl in DOMAIN_WHITELIST):
+                        if _is_whitelisted_url(matched_url):
                             continue
 
                 line_no = content[: match.start()].count("\n") + 1
@@ -187,12 +203,17 @@ def run(scanner: Any) -> None:
                     continue
 
                 snippet = "\n".join(lines[max(0, line_no - 1):line_no])
+                finding_severity = severity
+                if desc == "非官方包源 URL" and not _DEPENDENCY_CONTEXT.search(snippet):
+                    # A logo/API/static-resource URL is not evidence of dependency
+                    # compromise. Keep it visible as a low-confidence review hint.
+                    finding_severity = "low"
                 if scanner._is_code_example(fname, line_no):
-                    severity = "medium" if severity == "critical" else "low"
+                    finding_severity = "medium" if finding_severity == "critical" else "low"
 
                 scanner._add_finding(
                     rule_id=rule_id,
-                    severity=severity,
+                    severity=finding_severity,
                     category="supply_chain",
                     title=f"供应链风险 — {desc}",
                     description=f"在 {fname} 中发现供应链风险模式：{desc}",

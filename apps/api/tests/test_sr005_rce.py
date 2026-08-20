@@ -81,6 +81,12 @@ class TestSR005RCE:
         run_rce(s)
         assert len(s.findings) == 0
 
+    def test_regex_exec_method_is_not_dynamic_execution(self):
+        """RegExp.exec() 是普通正则 API，不应命中 Python exec 内建函数规则。"""
+        s = MockScanner(files={"render-graphs.js": "regex.exec(markdown)\n"})
+        run_rce(s)
+        assert s.findings == []
+
     # ── AST should not process non-Python ─────────────────
 
     def test_ast_skips_non_python(self):

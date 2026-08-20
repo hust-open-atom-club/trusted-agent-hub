@@ -17,6 +17,11 @@ _CODE_ONLY_PATTERNS = frozenset({
     "文件系统遍历搜索凭据文件",
 })
 
+_DEFENSIVE_EXFIL_PHRASES = (
+    "never leak", "do not leak", "don't leak", "avoid leaking",
+    "must not leak", "prevent leaks", "not leak",
+)
+
 
 def _is_code_file(fname: str) -> bool:
     ext = Path(fname).suffix.lower()
@@ -47,6 +52,10 @@ def run(scanner: Any) -> None:
                     continue
 
                 line_no = content[: match.start()].count("\n") + 1
+                if desc == "外泄对话内容":
+                    line_text = lines[line_no - 1].lower()
+                    if any(phrase in line_text for phrase in _DEFENSIVE_EXFIL_PHRASES):
+                        continue
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])

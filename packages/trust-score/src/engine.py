@@ -4,7 +4,7 @@ Decision Engine: orchestrates the three-layer trust assessment funnel.
 Pipeline (9 steps):
   1. Calculate P1, P2 (Layer 1 — Provenance)
   2. Calculate I1, I2, I3 (Layer 2 — Intent)
-  3. Apply Layer 1 discount to Layer 2 results
+  3. Apply provenance confidence only to claimed permission signals (I1)
   4. Calculate C1, C2 (Layer 3 — Community)
   5. Apply layer discounts to Layer 3
   6. Veto check (V1–V6)
@@ -78,11 +78,10 @@ def _apply_layer1_discount(
     p1_result: dict[str, Any],
     p2_result: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Step 3: Apply Layer 1 provenance discount to Layer 2 intent scores.
+    """Step 3: Apply provenance confidence to declared permission signals only.
 
-    When source is opaque or signature chain is broken, the intent assessments
-    carry less weight — both their numeric scores AND their severity counts
-    are discounted, because we have less confidence in the signal.
+    I2 static findings are observed scanner facts. They must never be weakened
+    because the package source is opaque or unsigned.
 
     Args:
         i1_result: I1 assessment result dict
@@ -110,18 +109,12 @@ def _apply_layer1_discount(
     i1_discounted = dict(i1_result)
     i2_discounted = dict(i2_result)
     i1_discounted["score"] = max(5, round(i1_result.get("score", 50) * factor))
-    i2_discounted["score"] = max(5, round(i2_result.get("score", 50) * factor))
     i1_discounted["discount_applied"] = factor < 1.0
-    i2_discounted["discount_applied"] = factor < 1.0
+    i2_discounted["discount_applied"] = False
 
-    # Also discount count fields so baseline risk assessment sees weaker signals
+    # Only declared-permission signals are confidence-discounted.
     if factor < 1.0:
         i1_discounted["danger_count"] = max(0, round(i1_result.get("danger_count", 0) * factor))
-        i2_discounted["critical_count"] = max(0, round(i2_result.get("critical_count", 0) * factor))
-        i2_discounted["high_count"] = max(0, round(i2_result.get("high_count", 0) * factor))
-        i2_discounted["medium_count"] = max(0, round(i2_result.get("medium_count", 0) * factor))
-        i2_discounted["low_count"] = max(0, round(i2_result.get("low_count", 0) * factor))
-
         # Re-evaluate I1 level from discounted danger_count so baseline uses
         # the discounted severity consistently.
         dc = i1_discounted["danger_count"]
@@ -133,24 +126,6 @@ def _apply_layer1_discount(
             i1_discounted["level"] = "excessive"
         else:
             i1_discounted["level"] = "dangerous"
-
-        # Re-evaluate I2 level from discounted counts (downgrade only).
-        # Without the original findings list we cannot distinguish between
-        # dangerous-category and non-dangerous-category findings, so we
-        # conservatively only downgrade when counts drop below thresholds.
-        old_i2_level = i2_result.get("level", "safe")
-        i2_dc = i2_discounted.get("critical_count", 0)
-        i2_dh = i2_discounted.get("high_count", 0)
-        i2_dm = i2_discounted.get("medium_count", 0)
-        i2_dl = i2_discounted.get("low_count", 0)
-
-        # dangerous → suspicious when no more critical/high (count only)
-        if old_i2_level == "dangerous" and i2_dc == 0 and i2_dh == 0:
-            i2_discounted["level"] = "suspicious"
-        # suspicious → safe when all counts are below thresholds
-        if old_i2_level in ("dangerous", "suspicious") \
-                and i2_dc == 0 and i2_dh == 0 and i2_dm <= 2 and i2_dl <= 5:
-            i2_discounted["level"] = "safe"
 
     return i1_discounted, i2_discounted
 
@@ -252,7 +227,7 @@ def _determine_baseline(
       - P2 = none (only when P1 is NOT opaque — expected otherwise)
       - I1 = excessive  (+1), I1 = dangerous (+2)
       - I2 = suspicious (+1)   [only for actual findings, not missing-scan default]
-                                [I2=dangerous already caught by veto]
+      - I2 = dangerous (+3)    [when not already caught by a confirmed-malicious veto]
       - I3 = overreaching (+1) [I3=deceptive/malicious caught by veto]
       - C2 = inconsistent (+1), C2 = tainted (+2)
     """
@@ -279,8 +254,10 @@ def _determine_baseline(
     # not when the scan report is missing entirely.
     if i2_level == "suspicious" and i2.get("scan_available", True) \
             and (i2.get("critical_count", 0) > 0 or i2.get("high_count", 0) > 0
-                 or i2.get("medium_count", 0) > 2):
+                 or i2.get("medium_count", 0) > 2 or i2.get("low_count", 0) > 2):
         risk += 1
+    elif i2_level == "dangerous":
+        risk += 3
     if i3_level == "overreaching":
         risk += 1
     # I3=gap is "no data" — does not count as a risk factor
@@ -641,7 +618,7 @@ def rate(
     i2 = assess_prompt_safety(package_metadata, scan_report)
     i3 = assess_behavior_consistency(i1, i2)
 
-    # --- Step 3: Layer 1 discount on Layer 2 ---
+    # --- Step 3: provenance affects declared permissions, never static findings ---
     i1_disc, i2_disc = _apply_layer1_discount(i1, i2, p1, p2)
 
     # --- Step 3b: Re-compute I3 from discounted I1/I2 for baseline consistency ---

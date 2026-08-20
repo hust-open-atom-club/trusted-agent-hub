@@ -15,11 +15,12 @@ PROMPT_INJECTION_PATTERNS: list[tuple[str, str, str]] = [
     # --- Instruction Override (现有 / P1) ---
     (r"ignore\s+(all\s+)?previous\s+instructions?", "忽略之前的指令", "critical"),
     (r"do\s+not\s+(ask|tell|inform|warn)", "要求不询问/不告知用户", "critical"),
-    (r"trust\s+me\b", "要求无条件信任", "critical"),
-    (r"you\s+must\s+(not\s+)?(ask|confirm|verify|validate)", "禁止确认/验证", "critical"),
+    (r"trust\s+me(?:\s*,|\s+(?:and|because|that)\b)", "要求无条件信任", "critical"),
+    (r"you\s+must\s+not\s+(ask|confirm|verify|validate)", "禁止确认/验证", "critical"),
     (r"without\s+(asking|confirming|telling|warning)", "不询问/不告知用户", "critical"),
-    (r"just\s+(do\s+it|run\s+it|execute)", "直接执行不询问", "critical"),
-    (r"no\s+matter\s+what", "不计后果执行", "critical"),
+    # 单独出现于文档/普通对话中时语义不足以证明绕过安全边界。
+    (r"just\s+(do\s+it|run\s+it|execute)", "直接执行不询问", "low"),
+    (r"no\s+matter\s+what", "不计后果执行", "low"),
     (r"do\s+not\s+(tell|inform)\s+the\s+user", "不告知用户风险", "critical"),
     (r"it['\u2019]s\s+not\s+your\s+fault", "推卸责任", "critical"),
 
@@ -32,8 +33,8 @@ PROMPT_INJECTION_PATTERNS: list[tuple[str, str, str]] = [
     (r"[\U000E0000-\U000E007F]", "Unicode Tag 块字符（ASCII 走私攻击）", "high"),
 
     # --- Exfiltration Commands (新增 P3a/P3b) ---
-    (r"(?:send|upload|forward|post|transmit).*(?:conversation|chat|message|dialog)", "要求发送对话内容到外部", "critical"),
-    (r"(?:send|forward|transmit).*to.*(?:https?://|URL|server|webhook|api)", "对话内容外泄到网络地址", "critical"),
+    (r"(?:send|upload|forward|post|transmit)[^.\n]{0,160}(?:conversation|chat|dialog|message\s+(?:history|log|content|transcript))", "要求发送对话内容到外部", "critical"),
+    (r"(?:send|forward|transmit)[^.\n]{0,160}\bto\b[^.\n]{0,80}(?:https?://|URL\b|server\b|webhook\b|api\b)", "对话内容外泄到网络地址", "critical"),
 
     # --- Behavior Manipulation (新增 P4) ---
     (r"convince.*(?:user|you|them).*(?:trust|believe|safe|secure)", "操纵用户信任", "medium"),
@@ -47,7 +48,6 @@ PROMPT_INJECTION_PATTERNS: list[tuple[str, str, str]] = [
     (r"verified\s+(safe|secure|harmless)", "声称已验证安全", "critical"),
     (r"ignore\s+(safety|security)\s+warnings", "忽略安全警告", "critical"),
     (r"bypass\s+(safety|security|content)", "绕过安全限制", "critical"),
-    (r"pretend\s+you\s+(are|can|have)", "要求扮演角色", "critical"),
 
     # --- Safety Policy Nullification (新增 AR3) ---
     (r"(?:have|has)\s+no\s+(restrictions?|limits?|constraints?)", "声称没有安全限制", "critical"),
@@ -97,11 +97,10 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
     (r"~?\.aws/credentials", "读取 AWS 凭据", "high"),
     (r"~?\.aws/config", "读取 AWS 配置", "high"),
     (r"(?<![.\w])\.env\b", "读取 .env 环境文件", "high"),
-    (r"DATABASE_URL", "访问数据库连接字符串", "high"),
-    (r"GITHUB_TOKEN", "访问 GitHub Token", "high"),
-    (r"AWS_ACCESS_KEY", "访问 AWS 访问密钥", "high"),
-    (r"AWS_SECRET", "访问 AWS 密钥", "high"),
-    (r"API_KEY", "访问 API 密钥", "high"),
+    # 仅在读取/展开环境变量时报告。安装文档中的变量名和占位符不是凭据访问。
+    (r"(?:os\.(?:getenv|environ(?:\.get)?)|process\.env|Deno\.env\.get)\s*(?:\(|\[|\.)\s*[\"']?(?:DATABASE_URL|GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET|API_KEY)\b", "读取敏感环境变量", "high"),
+    (r"\$\{?(?:DATABASE_URL|GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET|API_KEY)\}?\b", "展开敏感环境变量", "high"),
+    (r"(?:GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET)\s*=\s*[^\s#]+", "设置敏感环境变量", "high"),
     (r"~?\.git-credentials", "读取 Git 凭据", "high"),
     (r"~?\.netrc", "读取 .netrc 凭据文件", "high"),
     (r"~?\.docker/config\.json", "读取 Docker 凭据", "high"),
@@ -112,8 +111,8 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
     (r"(?:listdir|os\.walk|glob).*(?:secrets?|credentials?|tokens?|keys?)", "文件系统遍历搜索凭据文件", "high"),
     # --- New: Context / conversation exfiltration (E4) ---
     # HTTP 动词大写敏感（(?-i:...)），避免散文中的普通单词 post 误报
-    (r"(?:conversation|chat|message|dialog).*(?:(?-i:\bPOST\b)|send|upload|forward|transmit)", "发送对话内容到外部", "critical"),
-    (r"(?:exfiltrat|leak|steal|collect).*(?:conversation|chat|message)", "外泄对话内容", "critical"),
+    (r"(?:conversation|chat|dialog|message\s+(?:history|log|content|transcript))[^.\n]{0,160}(?:(?-i:\bPOST\b)|send|upload|forward|transmit)", "发送对话内容到外部", "critical"),
+    (r"(?:exfiltrat|leak|steal|collect)[^.\n]{0,100}(?:conversation|chat|message)[^.\n]{0,80}(?:to|via|upload|send|post|transmit|server|webhook|external)", "外泄对话内容", "critical"),
     # --- New: Cloud storage exfiltration (E5) ---
     (r"(?:aws\s+s3\s+cp|gsutil\s+cp|azcopy|rclone\s+(?:copy|sync))", "数据复制到云存储", "high"),
     (r"(?:boto3|google\.cloud|azure\.storage).*(?:upload|put|copy|transfer)", "SDK 方式上传数据到云存储", "medium"),
@@ -154,7 +153,9 @@ RCE_PATTERNS: list[tuple[str, str, str]] = [
     (r"\bsubprocess\.(call|run|Popen)\s*\([^)]*shell\s*=\s*True", "subprocess shell=True", "critical"),
     # --- High: dynamic code execution ---
     (r"\beval\s*\(", "eval() 动态代码执行", "high"),
-    (r"\bexec\s*\(", "exec() 动态代码执行", "high"),
+    (r"(?<!\.)\bexec\s*\(", "exec() 动态代码执行", "high"),
+    (r"\b(?:child_process|cp)\.exec\s*\(", "Node child_process.exec() 动态命令执行", "high"),
+    # execfile 是 Python 2 API；规则层还会限制为 .py 且大小写敏感。
     (r"\bexecfile\s*\(", "execfile() 执行文件（Python 2）", "high"),
     (r"\bcompile\s*\(.*mode\s*=\s*['\"]exec", "compile() 编译为可执行代码", "high"),
     (r"\bos\.popen\s*\(", "os.popen() 管道执行", "high"),
@@ -216,7 +217,7 @@ SUPPLY_CHAIN_PATTERNS: list[tuple[str, str, str]] = [
     # --- High: non-official registries ---
     (r"npm\s+install\s+-g", "全局 npm install", "high"),
     (r"pip\s+install\s+(?!-r)(?!\.)", "直接 pip install（可能恶意包）", "high"),
-    (r"https?://(?!pypi\.org|npmjs\.com|registry\.npmjs\.org|crates\.io|github\.com|gitlab\.com|bitbucket\.org|raw\.githubusercontent\.com)", "非官方包源 URL", "high"),
+    (r"https?://[^\s\"'<>`)]+", "非官方包源 URL", "high"),
     (r'(?:requests|urllib|httpx|fetch)\s*\(\s*["\']https?://(?!api\.)', "HTTP 请求指向未知地址", "high"),
     # --- Medium: unpinned / risky versions ---
     (r'"\*"', "依赖版本号使用通配符 *", "medium"),
@@ -239,6 +240,7 @@ DOMAIN_WHITELIST = [
     "fonts.googleapis.com", "fonts.gstatic.com", "cdnjs.cloudflare.com",
     "unpkg.com", "jsdelivr.net", "esm.sh", "skypack.dev",
     "w3.org", "w3c.org",
+    "openai.com",
     "example.com", "example.org", "example.net",
 ]
 
@@ -280,17 +282,16 @@ OUTPUT_HANDLING_PATTERNS: list[tuple[str, str, str]] = [
 # =============================================================================
 
 SYSTEM_PROMPT_LEAK_PATTERNS: list[tuple[str, str, str]] = [
-    # --- High: read / reference ---
-    (r"system\s*(?:prompt|instruction|message)", "引用系统提示", "high"),
-    (r"(?:read|print|output|send).*\bsystem\s*prompt", "读取/发送系统提示", "high"),
+    # 仅匹配可执行的读取/输出 API；单纯散文提及 system prompt 不构成泄漏。
+    (r"(?:open|read|read_file|read_text|fs\.readFile(?:Sync)?)\s*\([^\n]{0,120}system\s*(?:prompt|instruction|message)", "读取系统提示", "high"),
     # --- Critical: file / network exfiltration ---
     (r"prompt\s*=\s*open\s*\(", "打开文件读取 prompt", "critical"),
     (r"(?:fetch|post|request|send)\s*\(.*system\s*prompt", "通过网络发送系统提示", "critical"),
     # --- New: indirect extraction (P7) ---
-    (r"(?:rephrase|summarize|paraphrase|rewrite).*(?:system|prompt|instruction)", "改组系统提示（间接提取）", "high"),
+    (r"(?:rephrase|summarize|paraphrase|rewrite)\s*\([^\n]{0,120}system\s*(?:prompt|instruction|message)", "改组系统提示（间接提取）", "high"),
     # --- New: tool-based exfiltration (P8) ---
-    (r"(?:write|save)\s*[^;]*system\s*(?:prompt|instruction)", "通过文件写入外泄系统提示", "critical"),
-    (r"(?:curl|fetch|request|send).*system\s*(?:prompt|instruction)", "通过网络外泄系统提示", "critical"),
+    (r"(?:write_file|write_text|fs\.writeFile(?:Sync)?)\s*\([^\n]{0,160}system\s*(?:prompt|instruction|message)", "通过文件写入外泄系统提示", "critical"),
+    (r"(?:requests\.(?:post|put)|httpx\.(?:post|put)|fetch|axios\.(?:post|put)|curl)\s*\([^\n]{0,160}system\s*(?:prompt|instruction|message)", "通过网络外泄系统提示", "critical"),
 ]
 
 # =============================================================================
@@ -302,7 +303,8 @@ MEMORY_POISONING_PATTERNS: list[tuple[str, str, str]] = [
     (r"\b(?:write_to_memory|update_memory|save_to_memory|save_memory|write_memory|"
      r"store_memory|persist_memory|memory_edit|memory_update|memory_save|memory_write|"
      r"memory_store|memory_create)\b", "调用记忆编辑类工具", "high"),
-    (r"(?:CLAUDE|AGENTS)\.md", "写入 Agent 常驻记忆文件", "high"),
+    (r"(?:write_file|write_text|append_file|fs\.writeFile(?:Sync)?)\s*\([^\n]{0,160}(?:CLAUDE|AGENTS)\.md", "写入 Agent 常驻记忆文件", "high"),
+    (r"Path\([^\n)]{0,120}(?:CLAUDE|AGENTS)\.md[^\n)]{0,80}\)\.(?:write_text|write_bytes)\s*\(", "写入 Agent 常驻记忆文件", "high"),
     (r"\.claude[/\\]?memory", "操作 Agent 记忆文件", "high"),
     (r"(?:save|store|remember|memorize)\s+(?:this|that|it|the\s+following)"
      r"\s+(?:to|in)\s+(?:your\s+)?(?:memory|context)", "指令 Agent 写入自身记忆", "high"),
@@ -368,7 +370,8 @@ TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
     (r'description\s*[=:].*"(?:ignore|bypass|skip)', "在参数描述中隐藏指令", "high"),
     (r'[\u200b\u200c\u200d\u2060\uFEFF]', "零宽字符", "high"),
     # --- Medium: Unicode escapes ---
-    (r'\\u[0-9a-fA-F]{4}', "Unicode 转义序列（可能同形异义攻击）", "medium"),
+    # 仅提示转义后的 ASCII 控制/标识字符；非 ASCII \u4f60 等通常是合法 i18n。
+    (r'\\u00[0-7][0-9a-fA-F]', "Unicode ASCII 转义序列（可能用于隐藏指令）", "medium"),
     # --- Low: hex escapes ---
     (r'\\x[0-9a-fA-F]{2}', "十六进制转义序列", "low"),
     # --- New: chaining abuse (TM2) ---

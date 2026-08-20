@@ -211,8 +211,61 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
     result = llm_reviewer.run_llm_review(findings, {}, {})
     assert result["findings_reviewed"] == 2
     assert result["findings_skipped"] == 2
-    assert len(calls) == 2
+    # High/critical findings are reviewed in one bounded batch request.
+    assert len(calls) == 1
+    assert 'f-crit' in calls[0] and 'f-high' in calls[0]
     assert result["labels"]["f-crit"] == "llm:suspected-malicious"
     assert result["labels"]["f-high"] == "llm:suspected-malicious"
     assert "f-med" not in result["labels"]
     assert "f-info" not in result["labels"]
+
+
+def test_llm_review_batches_large_finding_sets(monkeypatch) -> None:
+    """LLM batch size is bounded so a large report cannot exhaust response tokens."""
+    from scanners.risk_scanner import llm_reviewer
+
+    calls: list[str] = []
+
+    def fake_call(prompt: str) -> dict:
+        calls.append(prompt)
+        return {"is_vulnerability": False, "intent": "benign", "confidence": 0.9}
+
+    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
+    findings = [
+        {"id": f"f-{i}", "severity": "high", "location": {"file": "a.py", "line": 1}}
+        for i in range(17)
+    ]
+    result = llm_reviewer.run_llm_review(findings, {}, {})
+    assert len(calls) == 3
+    assert result["findings_reviewed"] == 17
+    assert result["labels_summary"]["likely_benign"] == 17
+
+
+def test_scanner_strips_bom_and_removes_same_file_duplicates(tmp_path) -> None:
+    """BOM must not become two zero-width findings; first-pass dedup must delete copies."""
+    (tmp_path / "SKILL.md").write_bytes(
+        b"\xef\xbb\xbf---\nname: bom-demo\n---\nYou must verify all changes.\n"
+    )
+    scanner = RiskScanner(tmp_path)
+    report = scanner.scan()
+    assert not any(
+        finding["rule_id"] in ("SR-001", "SR-016")
+        for finding in report["findings"]
+    )
+
+    scanner.findings = [
+        {
+            "id": "one", "rule_id": "SR-X", "severity": "low", "category": "test",
+            "title": "x", "location": {"file": "a.py", "line": 1},
+            "evidence": "匹配: https://api.openai.com/v1/models",
+        },
+        {
+            "id": "two", "rule_id": "SR-X", "severity": "high", "category": "test",
+            "title": "x", "location": {"file": "a.py", "line": 2},
+            "evidence": "匹配: https://api.openai.com/v1/models",
+        },
+    ]
+    scanner._deduplicate_findings()
+    assert len(scanner.findings) == 1
+    assert scanner.findings[0]["severity"] == "high"
+    assert "duplicates" not in scanner.findings[0]

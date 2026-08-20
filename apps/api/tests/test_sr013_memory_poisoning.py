@@ -60,6 +60,20 @@ class TestSR013MemoryPoisoning:
         assert len(s.findings) == 1
         assert s.findings[0]["severity"] == "high"
 
+    def test_update_claude_md_prose_is_not_a_write_operation(self):
+        """文档中的“Update CLAUDE.md”没有可执行写入 API，不应报 high。"""
+        s = MockScanner(files={"SKILL.md": "Update CLAUDE.md with project guidance.\n"})
+        memory_poisoning.run(s)
+        assert not any(f["severity"] == "high" for f in s.findings)
+
+    def test_path_write_text_claude_md_is_high(self):
+        """Python Path(...).write_text 写入常驻记忆文件应被检测。"""
+        s = MockScanner(files={
+            "main.py": 'Path("CLAUDE.md").write_text(content)\n',
+        })
+        memory_poisoning.run(s)
+        assert any(f["severity"] == "high" for f in s.findings)
+
     def test_claude_memory_dir_is_high(self):
         """.claude/memory 记忆文件路径 → high。"""
         s = MockScanner(files={"main.py": "open('/home/u/.claude/memory')\n"})

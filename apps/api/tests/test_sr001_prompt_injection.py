@@ -106,6 +106,14 @@ class TestSR001PromptInjection:
         run(s)
         assert len(s.findings) == 0
 
+    def test_verify_and_common_imperatives_are_not_critical(self):
+        """正向校验和普通口语不能被当成反安全指令。"""
+        s = MockScanner(files={
+            "SKILL.md": "You must verify all changes. Just do it. No matter what, document the result.\n"
+        })
+        run(s)
+        assert not any(f["severity"] == "critical" for f in s.findings)
+
     def test_skipped_extensions(self):
         """CSS, HTML files should be skipped."""
         s = MockScanner(files={
