@@ -506,6 +506,57 @@
       "expand_code": "▸ View Code Context",
       "remediation": "Remediation"
     },
+    "permission": {
+      "filesystem": {
+        "read": "Filesystem · Read Paths",
+        "write": "Filesystem · Write Paths",
+        "delete": "Filesystem · Delete Access"
+      },
+      "shell": {
+        "allowed": "Shell · Allowed",
+        "commands": "Shell · Allowed Commands",
+        "description": "Shell · Description"
+      },
+      "network": {
+        "allowed": "Network · Allowed",
+        "domains": "Network · Allowed Domains",
+        "description": "Network · Description"
+      },
+      "environment": {
+        "read": "Environment · Read",
+        "write": "Environment · Write"
+      },
+      "credentials": {
+        "access": "Credentials · Access",
+        "description": "Credentials · Description"
+      }
+    },
+    "installation": {
+      "method": "Method",
+      "target_client": "Target Client",
+      "pre_install_message": "Pre-install Message",
+      "post_install_message": "Post-install Message",
+      "targets": "Installation Targets",
+      "steps": "Installation Steps",
+      "target_field": "Target {{index}} · {{field}}",
+      "step_field": "Step {{index}} · {{field}}",
+      "client": "Client",
+      "destination": "Destination",
+      "config_template": "Config Template",
+      "action": "Action",
+      "url": "Download URL",
+      "algorithm": "Verification Algorithm",
+      "checksum": "Checksum",
+      "archive": "Archive",
+      "source": "Source Path",
+      "package": "Package",
+      "version": "Version",
+      "registry": "Registry",
+      "index_url": "Index URL",
+      "image": "Image",
+      "tag": "Tag",
+      "text": "Instructions"
+    },
     "files": {
       "missing_params": "Missing parameters",
       "login_required": "Please log in",
@@ -582,6 +633,67 @@
     }
   },
   "trust_score": {
+    "auto_grade": "Auto Grade",
+    "manual_grade": "Manual Grade",
+    "no_manual_override": "No manual grade is set; using the automatic grade",
+    "top_risks": "Top Risks",
+    "explanations": "Explanations",
+    "no_data": "No trust score information is available",
+    "grade": {
+      "A": "A · Trusted",
+      "B": "B · Low Risk",
+      "C": "C · Caution",
+      "D": "D · Risky",
+      "E": "E · High Risk"
+    },
+    "recommendation": {
+      "safe": "Safe to install",
+      "review_recommended": "Review details before installing",
+      "caution": "Install with caution",
+      "not_recommended": "Installation not recommended",
+      "blocked": "Installation blocked"
+    },
+    "risk": {
+      "source_opaque": "Source provenance is opaque and cannot be verified",
+      "integrity_missing": "No content integrity hash or signature",
+      "permissions_dangerous": "A dangerous permission combination is declared",
+      "permissions_excessive": "Permissions are excessive for this package type",
+      "scan_dangerous": "The scan found critical or high-severity issues",
+      "scan_suspicious": "Scan results are suspicious or unavailable",
+      "behavior_deceptive": "Behavior inconsistency suggests deceptive or malicious intent",
+      "behavior_overreaching": "Declared permissions exceed the needs indicated by scan findings",
+      "review_rejected": "The package was rejected during manual review",
+      "author_tainted": "The author has serious violations in their history",
+      "author_inconsistent": "The author has an inconsistent publishing record",
+      "none": "No significant risks identified"
+    },
+    "explanation": {
+      "assessed": "{{dimension}}: assessed as {{level}}",
+      "behavior": "Behavior consistency check: {{level}}",
+      "veto": "Veto rule {{rule}} triggered; package forced to untrusted",
+      "upgrade": "Upgraded: approved review, safe scan, and consistent behavior",
+      "downgrade": "Downgraded: opaque source and newcomer author"
+    },
+    "assessment": {
+      "traceable": "traceable",
+      "opaque": "opaque",
+      "partial": "partial",
+      "none": "missing",
+      "acceptable": "acceptable",
+      "excessive": "excessive",
+      "dangerous": "dangerous",
+      "suspicious": "suspicious",
+      "pending": "pending",
+      "changes_requested": "changes requested",
+      "rejected": "rejected",
+      "newcomer": "newcomer",
+      "inconsistent": "inconsistent",
+      "tainted": "tainted",
+      "gap": "gap",
+      "overreaching": "overreaching",
+      "deceptive": "deceptive",
+      "malicious": "malicious"
+    },
     "dim": {
       "source_trust": "Source Trust",
       "author_reputation": "Author Reputation",
@@ -626,5 +738,11 @@
     "rejected": "Rejected",
     "draft": "Draft",
     "yanked": "Yanked"
+  },
+  "status_page": {
+    "trust_score": "Trust Score",
+    "risk_level": "Risk Level",
+    "grade_overridden": "A reviewer manually changed the grade from {{from}} to {{to}}",
+    "install_recommendation": "Installation Recommendation"
   }
 }

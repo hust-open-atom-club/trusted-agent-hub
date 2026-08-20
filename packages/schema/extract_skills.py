@@ -132,6 +132,8 @@ PERMISSION_HINTS: dict[str, list[str]] = {
                            "auth", "credential", "oauth"],
     "database_access": ["mysql", "postgresql", "sqlite", "mongodb",
                          "psycopg2", "sqlalchemy", "prisma", "database"],
+    "browser_access": ["playwright", "puppeteer", "selenium", "browser automation",
+                       "page.goto", "webdriver", "chromium"],
 }
 
 # 推断系统依赖
@@ -960,6 +962,26 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             "drivers": drivers or ["unknown"],
             "description": "需要访问数据库",
         }
+
+    # ── browser（可选） ──
+    if _scan_keywords(all_text, PERMISSION_HINTS["browser_access"]):
+        permissions["browser"] = {
+            "allowed": True,
+            "description": "需要控制浏览器或执行浏览器自动化",
+        }
+
+    # ── external_services（可选） ──
+    # 复用网络白名单，逐个服务展示，避免嵌套对象在审核页退化成
+    # ``[object Object]``，同时让权限契约与实际推断结果对齐。
+    if network_domains:
+        permissions["external_services"] = [
+            {
+                "name": domain.split(":", 1)[0],
+                "url": f"https://{domain}",
+                "description": "从包内容中推断的外部服务",
+            }
+            for domain in network_domains
+        ]
 
     return permissions
 

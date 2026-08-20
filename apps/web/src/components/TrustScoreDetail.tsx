@@ -13,20 +13,19 @@ const GRADE_COLORS: Record<string, { bg: string; fg: string; border: string }> =
   E: { bg: 'oklch(88% 0.05 20)',  fg: 'oklch(38% 0.10 20)',  border: 'oklch(68% 0.07 20)' },
 };
 
-const GRADE_LABELS: Record<string, string> = {
-  A: 'A · 可信',
-  B: 'B · 低风险',
-  C: 'C · 需注意',
-  D: 'D · 有风险',
-  E: 'E · 高风险',
-};
-
-const RISK_LEVEL_LABELS: Record<string, string> = {
-  trusted: '可信',
-  low_risk: '低风险',
-  medium_risk: '中风险',
-  high_risk: '高风险',
-  untrusted: '不可信',
+const TOP_RISK_KEYS: Record<string, string> = {
+  'Source provenance is opaque — origin cannot be verified': 'source_opaque',
+  'No content integrity hash or signature': 'integrity_missing',
+  'Dangerous permission combination declared': 'permissions_dangerous',
+  'Permissions are excessive for package type': 'permissions_excessive',
+  'Scan found critical/high-severity dangerous findings': 'scan_dangerous',
+  'Scan results are suspicious or unavailable': 'scan_suspicious',
+  'Behavior inconsistency indicates deception or malicious intent': 'behavior_deceptive',
+  'Declared permissions exceed what scan findings suggest is needed': 'behavior_overreaching',
+  'Package was rejected during manual review': 'review_rejected',
+  'Author has a tainted history with serious violations': 'author_tainted',
+  'Author has an inconsistent publishing record': 'author_inconsistent',
+  'No significant risks identified': 'none',
 };
 
 /** effective_grade → risk_level */
@@ -80,6 +79,33 @@ export default function TrustScoreDetail({
   const recommendation = gradeToRecommendation(grade);
 
   const gradeColor = grade ? GRADE_COLORS[grade] : null;
+  const gradeLabel = (value: string) => t(`trust_score.grade.${value}`, value);
+  const localizeTopRisk = (risk: string) => {
+    const key = TOP_RISK_KEYS[risk];
+    return key ? t(`trust_score.risk.${key}`) : risk;
+  };
+  const localizeExplanation = (message: string) => {
+    const assessed = message.match(/^(.+): assessed as '(.+)'$/);
+    if (assessed) {
+      return t('trust_score.explanation.assessed', {
+        dimension: t(`trust_score.dim.${assessed[1]}`, assessed[1]),
+        level: t(`trust_score.assessment.${assessed[2]}`, assessed[2]),
+      });
+    }
+    const behavior = message.match(/^Behavior consistency check: (.+)$/);
+    if (behavior) {
+      return t('trust_score.explanation.behavior', {
+        level: t(`trust_score.assessment.${behavior[1]}`, behavior[1]),
+      });
+    }
+    const veto = message.match(/^Veto triggered: (.+) — package forced to untrusted$/);
+    if (veto) return t('trust_score.explanation.veto', { rule: veto[1] });
+    const fixed: Record<string, string> = {
+      'Upgrade applied: approved review + safe scan + consistent behavior': 'upgrade',
+      'Downgrade applied: opaque source + newcomer author': 'downgrade',
+    };
+    return fixed[message] ? t(`trust_score.explanation.${fixed[message]}`) : message;
+  };
 
   return (
     <div style={{
@@ -111,7 +137,7 @@ export default function TrustScoreDetail({
             color: gradeColor.fg,
             border: `1px solid ${gradeColor.border}`,
           }}>
-            {GRADE_LABELS[grade] ?? grade}
+            {gradeLabel(grade)}
           </span>
         )}
 
@@ -122,7 +148,7 @@ export default function TrustScoreDetail({
             fontWeight: 600,
             color: 'var(--color-muted)',
           }}>
-            {RISK_LEVEL_LABELS[riskLevel] ?? riskLevel}
+            {t(`trust_score.level.${riskLevel}`, riskLevel)}
           </span>
         )}
 
@@ -133,16 +159,7 @@ export default function TrustScoreDetail({
             color: 'var(--color-ink-2)',
             fontStyle: 'italic',
           }}>
-            {(() => {
-              const recLabels: Record<string, string> = {
-                safe: '可安全安装',
-                review_recommended: '建议查看详情后安装',
-                caution: '请谨慎安装',
-                not_recommended: '不推荐安装',
-                blocked: '已阻止安装',
-              };
-              return recLabels[recommendation] ?? recommendation;
-            })()}
+            {t(`trust_score.recommendation.${recommendation}`, recommendation)}
           </span>
         )}
       </div>
@@ -159,17 +176,17 @@ export default function TrustScoreDetail({
           {autoGrade && (
             <div>
               <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
-                {t('trust_score.auto_grade', '自动评级')}:
+                {t('trust_score.auto_grade')}:
               </span>
-              {' '}{GRADE_LABELS[autoGrade] ?? autoGrade}
+              {' '}{gradeLabel(autoGrade)}
             </div>
           )}
           {manualGrade && (
             <div>
               <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
-                {t('trust_score.manual_grade', '人工评级')}:
+                {t('trust_score.manual_grade')}:
               </span>
-              {' '}{GRADE_LABELS[manualGrade] ?? manualGrade}
+              {' '}{gradeLabel(manualGrade)}
               {manualGradeReason && (
                 <span style={{ marginLeft: '0.5rem' }}>
                   — {manualGradeReason}
@@ -179,7 +196,7 @@ export default function TrustScoreDetail({
           )}
           {!manualGrade && autoGrade && (
             <div style={{ fontSize: '0.7rem', color: 'var(--color-muted)', marginTop: '0.15rem' }}>
-              {t('trust_score.no_manual_override', '未设置人工评级，使用自动评级结果')}
+              {t('trust_score.no_manual_override')}
             </div>
           )}
         </div>
@@ -198,7 +215,7 @@ export default function TrustScoreDetail({
             textTransform: 'uppercase',
             marginBottom: '0.4rem',
           }}>
-            {t('trust_score.top_risks', '主要风险')}
+            {t('trust_score.top_risks')}
           </div>
           <ul style={{
             margin: 0,
@@ -208,7 +225,7 @@ export default function TrustScoreDetail({
             lineHeight: 1.6,
           }}>
             {topRisks.map((risk, i) => (
-              <li key={i}>{risk}</li>
+              <li key={i}>{localizeTopRisk(risk)}</li>
             ))}
           </ul>
         </div>
@@ -224,7 +241,7 @@ export default function TrustScoreDetail({
             textTransform: 'uppercase',
             marginBottom: '0.4rem',
           }}>
-            {t('trust_score.explanations', '说明')}
+            {t('trust_score.explanations')}
           </div>
           <ul style={{
             margin: 0,
@@ -234,7 +251,7 @@ export default function TrustScoreDetail({
             lineHeight: 1.6,
           }}>
             {explanations.map((exp, i) => (
-              <li key={i}>{exp.message}</li>
+              <li key={i}>{localizeExplanation(exp.message)}</li>
             ))}
           </ul>
         </div>
@@ -248,7 +265,7 @@ export default function TrustScoreDetail({
           fontSize: '0.78rem',
           color: 'var(--color-muted)',
         }}>
-          {t('trust_score.no_data', '暂无可用的信任评分信息')}
+          {t('trust_score.no_data')}
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import zh from '../src/i18n/locales/zh/common.json';
 
 afterEach(() => {
   cleanup();
@@ -19,9 +20,29 @@ vi.mock('next/navigation', () => ({
 }));
 
 // i18n hook — components render with fallback strings in tests.
+function translate(key: string, fallbackOrOptions?: unknown): string {
+  const value = key.split('.').reduce<unknown>((current, part) => {
+    if (current && typeof current === 'object' && part in current) {
+      return (current as Record<string, unknown>)[part];
+    }
+    return undefined;
+  }, zh);
+
+  const template = typeof value === 'string'
+    ? value
+    : typeof fallbackOrOptions === 'string'
+      ? fallbackOrOptions
+      : key;
+  const options = typeof fallbackOrOptions === 'object' && fallbackOrOptions !== null
+    ? fallbackOrOptions as Record<string, unknown>
+    : {};
+
+  return template.replace(/{{(\w+)}}/g, (_, name: string) => String(options[name] ?? `{{${name}}}`));
+}
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback ?? key,
+    t: translate,
     i18n: {
       language: 'zh',
       changeLanguage: vi.fn(),

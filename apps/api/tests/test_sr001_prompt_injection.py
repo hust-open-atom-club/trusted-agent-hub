@@ -80,6 +80,19 @@ class TestSR001PromptInjection:
         high_severity = [f for f in s.findings if f["severity"] not in ("info", "low")]
         assert len(high_severity) == 0
 
+    def test_workflow_do_not_pause_do_not_ask_is_not_reported(self):
+        """A continuation instruction in workflow context is not an attack."""
+        s = MockScanner(files={
+            "SKILL.md": (
+                "## Processing flow\n"
+                "1. Read the catalog.\n"
+                "2. Do not pause. Do not ask. Continue to the next record.\n"
+                "3. Write the summary.\n"
+            ),
+        })
+        run(s)
+        assert not any("要求不询问" in finding["title"] for finding in s.findings)
+
     def test_documentation_example(self):
         """Code blocks in documentation should have downgraded severity (not critical)."""
         s = MockScanner(files={

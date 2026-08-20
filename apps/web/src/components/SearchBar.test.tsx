@@ -35,7 +35,7 @@ function renderSearchBar(overrides: Record<string, unknown> = {}) {
 describe('SearchBar', () => {
   it('reflects the query value and reports changes', () => {
     const props = renderSearchBar({ query: 'summarize' });
-    const input = screen.getByPlaceholderText('search.placeholder');
+    const input = screen.getByPlaceholderText('按名称、关键词或描述搜索...');
     expect(input).toHaveValue('summarize');
 
     fireEvent.change(input, { target: { value: 'json' } });
@@ -44,13 +44,13 @@ describe('SearchBar', () => {
 
   it('switches type filters', () => {
     const props = renderSearchBar();
-    fireEvent.click(screen.getByRole('button', { name: 'search.skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
     expect(props.onTypeChange).toHaveBeenCalledWith('skill');
   });
 
   it('marks the active type filter', () => {
     renderSearchBar({ activeType: 'mcp_server' });
-    expect(screen.getByRole('button', { name: 'search.mcp_server' })).toHaveClass(
+    expect(screen.getByRole('button', { name: 'MCP Server' })).toHaveClass(
       'active',
     );
   });

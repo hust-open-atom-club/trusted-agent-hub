@@ -136,6 +136,23 @@ def test_extract_allows_manifest_without_markdown() -> None:
         assert meta["type"] == "mcp_server"
 
 
+def test_extractor_infers_browser_and_external_service_permissions() -> None:
+    """Browser automation and concrete API origins should remain reviewable."""
+    with tempfile.TemporaryDirectory(prefix="tah-permissions-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\nname: browser-demo\ndescription: Browser demo\n---\n"
+            "Use Playwright to fetch https://api.example.com/v1/items.\n",
+            encoding="utf-8",
+        )
+        meta = extract_single_skill(root)
+
+        assert meta["permissions"]["browser"]["allowed"] is True
+        services = meta["permissions"]["external_services"]
+        assert services[0]["name"] == "api.example.com"
+        assert services[0]["url"] == "https://api.example.com"
+
+
 def test_discover_capabilities_finds_multiple_packages() -> None:
     """真实能力包目录应能发现多个 skill/mcp/plugin 能力。"""
     caps = discover_capabilities(EXAMPLES / "real-world")

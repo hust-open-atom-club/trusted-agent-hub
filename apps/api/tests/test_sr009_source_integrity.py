@@ -3,6 +3,7 @@
 import pytest
 
 from scanners.risk_scanner.rules import source_integrity
+from scanners.risk_scanner.scanner import RiskScanner
 from tests.scanner_mock import MockScanner
 
 
@@ -25,6 +26,23 @@ def _full_meta() -> dict:
 
 
 class TestSR009SourceIntegrity:
+
+    def test_scanner_injects_acquired_commit_and_content_hash(self, tmp_path):
+        """Acquisition facts make an ordinary GitHub package low, not medium."""
+        (tmp_path / "SKILL.md").write_text(
+            "---\nname: demo\nversion: 1.0.0\ndescription: demo\n"
+            "author: demo\nlicense: MIT\ntype: skill\n---\n# Demo\n",
+            encoding="utf-8",
+        )
+        scanner = RiskScanner(tmp_path, source_commit_hash="b" * 40)
+        report = scanner.scan()
+
+        finding = next(f for f in report["findings"] if f["rule_id"] == "SR-009")
+        assert finding["severity"] == "low"
+        assert "SHA256" not in finding["description"]
+        assert "commit hash" not in finding["description"]
+        assert scanner._package_metadata["integrity"]["sha256"]
+        assert scanner._package_metadata["source"]["commit_hash"] == "b" * 40
 
     def test_missing_metadata(self, tmp_path):
         """No metadata file at all → medium finding."""
