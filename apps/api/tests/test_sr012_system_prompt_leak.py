@@ -61,3 +61,12 @@ class TestSR012SystemPromptLeak:
         s = MockScanner(files={"main.py": "print('Hello')\n"})
         system_prompt_leak.run(s)
         assert s.findings == []
+
+    def test_prose_mentions_are_not_system_prompt_leakage(self):
+        """合法 prompt-writing 文案不应仅因提及 system prompt 被判泄漏。"""
+        s = MockScanner(files={
+            "SKILL.md": "Write a reusable system prompt for the user.\n"
+                        "The text is injected into system prompt at runtime.\n",
+        })
+        system_prompt_leak.run(s)
+        assert s.findings == []

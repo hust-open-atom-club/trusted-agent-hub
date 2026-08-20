@@ -68,10 +68,17 @@ def run(scanner: Any) -> None:
         if not content:
             continue
         lines = content.split("\n")
+        claimed_lines: set[int] = set()
 
         for pattern, desc, default_severity in PROMPT_INJECTION_PATTERNS:
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 line_no = content[: match.start()].count("\n") + 1
+                # "just do it, no matter what" is one anti-refusal instruction;
+                # do not inflate it into two independent critical findings.
+                if desc == "不计后果执行" and line_no in claimed_lines:
+                    continue
+                if desc == "直接执行不询问":
+                    claimed_lines.add(line_no)
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])

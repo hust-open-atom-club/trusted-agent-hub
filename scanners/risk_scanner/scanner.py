@@ -132,7 +132,7 @@ class RiskScanner:
                 try:
                     rel_path = str(fpath.relative_to(self.target_dir)).replace("\\", "/")
                     self.scanned_files.append(rel_path)
-                    content = fpath.read_text(encoding="utf-8", errors="ignore")
+                    content = fpath.read_text(encoding="utf-8-sig", errors="ignore")
                     if len(content) == 0:
                         continue
                     self._file_contents[rel_path] = content
@@ -143,7 +143,7 @@ class RiskScanner:
         manifest_path = self.target_dir / "manifest.json"
         if manifest_path.is_file():
             try:
-                with manifest_path.open(encoding="utf-8") as f:
+                with manifest_path.open(encoding="utf-8-sig") as f:
                     self._package_metadata = json.load(f)
                 return
             except (json.JSONDecodeError, OSError):
@@ -152,7 +152,7 @@ class RiskScanner:
         plugin_path = self.target_dir / "plugin.json"
         if plugin_path.is_file():
             try:
-                with plugin_path.open(encoding="utf-8") as f:
+                with plugin_path.open(encoding="utf-8-sig") as f:
                     self._package_metadata = json.load(f)
                 return
             except (json.JSONDecodeError, OSError):
@@ -161,7 +161,7 @@ class RiskScanner:
         skill_path = self.target_dir / "SKILL.md"
         if skill_path.is_file():
             try:
-                content = skill_path.read_text(encoding="utf-8")
+                content = skill_path.read_text(encoding="utf-8-sig")
                 fm = _parse_frontmatter(content)
                 if fm:
                     self._package_metadata = fm
@@ -173,7 +173,7 @@ class RiskScanner:
         pkg_json_path = self.target_dir / "package.json"
         if pkg_json_path.is_file():
             try:
-                with pkg_json_path.open(encoding="utf-8") as f:
+                with pkg_json_path.open(encoding="utf-8-sig") as f:
                     pkg_json = json.load(f)
                 if not self._package_metadata:
                     self._package_metadata = pkg_json
@@ -189,7 +189,7 @@ class RiskScanner:
             return self._file_contents[rel_path]
         fpath = self.target_dir / rel_path
         try:
-            content = fpath.read_text(encoding="utf-8", errors="ignore")
+            content = fpath.read_text(encoding="utf-8-sig", errors="ignore")
             self._file_contents[rel_path] = content
             return content
         except OSError:
@@ -287,22 +287,32 @@ class RiskScanner:
         _SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
         seen: dict[tuple, int] = {}
 
+        def matched_text(finding: dict[str, Any]) -> str:
+            """Return the scanner-produced match payload without parsing URL colons."""
+            evidence = str(finding.get("evidence", ""))
+            for prefix in ("匹配模式:", "匹配:"):
+                if evidence.startswith(prefix):
+                    return evidence[len(prefix):].strip()[:120]
+            return evidence.strip()[:120]
+
         # 第一轮: 文件内去重 — 同规则+同匹配内容+同文件 → 保留最高严重度
-        for i, f in enumerate(self.findings):
+        deduplicated: list[dict[str, Any]] = []
+        for f in self.findings:
             rule_id = f.get("rule_id", "")
             loc = f.get("location", {}) or {}
             fname = loc.get("file", "")
-            evidence = f.get("evidence", "")
-            matched_text = (evidence[evidence.rfind(":") + 1:] if ":" in evidence else evidence)[:80]
-            key = (rule_id, fname, matched_text)
+            key = (rule_id, fname, matched_text(f))
             if key in seen:
                 existing_idx = seen[key]
-                existing_sev = self.findings[existing_idx].get("severity", "info")
+                existing_sev = deduplicated[existing_idx].get("severity", "info")
                 current_sev = f.get("severity", "info")
                 if _SEVERITY_RANK.get(current_sev, 0) > _SEVERITY_RANK.get(existing_sev, 0):
-                    self.findings[existing_idx] = f
+                    deduplicated[existing_idx] = f
             else:
-                seen[key] = i
+                seen[key] = len(deduplicated)
+                deduplicated.append(f)
+
+        self.findings = deduplicated
 
         # 第二轮: 跨文件合并 — 同规则+同匹配内容出现在多个文件时只保留一条
         # （取最高严重度），其余文件位置记入 duplicates（清单最多 5 个，超出只计数）。
@@ -310,11 +320,10 @@ class RiskScanner:
         removed: set[int] = set()
         for i, f in enumerate(self.findings):
             rule_id = f.get("rule_id", "")
-            evidence = f.get("evidence", "")
-            matched_text = (evidence[evidence.rfind(":") + 1:] if ":" in evidence else evidence)[:80]
-            if not matched_text:
+            match_value = matched_text(f)
+            if not match_value:
                 continue
-            key = (rule_id, matched_text)
+            key = (rule_id, match_value)
             if key in cross_seen:
                 primary_idx = cross_seen[key]
                 primary = self.findings[primary_idx]

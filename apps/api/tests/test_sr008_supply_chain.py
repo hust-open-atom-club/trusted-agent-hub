@@ -34,6 +34,12 @@ class TestSR008SupplyChain:
         supply_chain.run(s)
         assert s.findings == []
 
+    def test_whitelisted_url_with_trailing_punctuation_is_skipped(self):
+        """句尾逗号/句号不应破坏白名单 hostname 解析。"""
+        s = MockScanner(files={"client.py": 'url = "https://api.openai.com/v1/models",\n'})
+        supply_chain.run(s)
+        assert s.findings == []
+
     def test_url_pattern_ignored_in_markdown(self):
         """URL-based patterns only run on code files, not .md links."""
         s = MockScanner(files={

@@ -15,11 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from scanners.risk_scanner.weights import (
-    LLM_LABEL_SEVERITY_ADJUST,
-    SEVERITY_ORDER,
-    SEVERITY_POINTS,
-)
+from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 # ---------------------------------------------------------------------------
 # Well-known package types and their typical permission profiles
@@ -63,23 +59,11 @@ _DANGEROUS_CATEGORIES = frozenset({
 })
 
 
-def _adjust_severity(severity: str, llm_label: str) -> str:
-    delta = LLM_LABEL_SEVERITY_ADJUST.get(llm_label, 0)
-    if delta == 0:
-        return severity
-    try:
-        idx = SEVERITY_ORDER.index(severity)
-    except ValueError:
-        return severity
-    new_idx = max(0, min(len(SEVERITY_ORDER) - 1, idx + delta))
-    return SEVERITY_ORDER[new_idx]
-
-
-def _compute_i2_score(findings: list[dict[str, Any]], adjusted_severities: dict[str, str]) -> int:
+def _compute_i2_score(findings: list[dict[str, Any]]) -> int:
+    """Score immutable static findings; LLM labels are a separate review signal."""
     total_penalty = 0
     for f in findings:
-        fid = f.get("id", "")
-        sev = adjusted_severities.get(fid, f.get("severity", "info"))
+        sev = f.get("severity", "info")
         total_penalty += SEVERITY_POINTS.get(sev, 0)
     return max(0, 100 - total_penalty)
 
@@ -295,27 +279,17 @@ def assess_prompt_safety(
 
     evidence: list[str] = []
 
-    adjusted_severities: dict[str, str] = {}
-    for f in findings:
-        fid = f.get("id", "")
-        raw_sev = f.get("severity", "")
-        llm_label = f.get("llm_label", "")
-        adj_sev = _adjust_severity(raw_sev, llm_label)
-        adjusted_severities[fid] = adj_sev
-
     dangerous_findings: list[str] = []
     for f in findings:
-        fid = f.get("id", "")
-        sev = adjusted_severities.get(fid, f.get("severity", ""))
+        sev = f.get("severity", "")
         category = f.get("category", "")
         if sev in ("critical", "high") and category in _DANGEROUS_CATEGORIES:
             llm_note = ""
             llm_label = f.get("llm_label", "")
-            if llm_label == "llm:likely-benign":
-                # LLM 判定良性：即使静态严重度是 critical/high，也不纳入危险集
-                continue
             if llm_label == "llm:suspected-malicious":
-                llm_note = " [LLM:suspected-malicious, upgraded]"
+                llm_note = " [LLM:suspected-malicious]"
+            elif llm_label == "llm:likely-benign":
+                llm_note = " [LLM:likely-benign, review candidate]"
             dangerous_findings.append(
                 f"[{sev}] {f.get('title', 'Unknown')} ({category}){llm_note}"
             )
@@ -329,19 +303,18 @@ def assess_prompt_safety(
         confirmed_malicious = any(
             f.get("llm_label") == "llm:suspected-malicious"
             for f in findings
-            if adjusted_severities.get(f.get("id", ""), f.get("severity", ""))
-            in ("critical", "high")
+            if f.get("severity", "") in ("critical", "high")
             and f.get("category", "") in _DANGEROUS_CATEGORIES
         )
-        # LLM 审查已运行但调用失败/未配置 → 无法排除恶意(fail-closed 信号)
+        # 已配置 LLM 但重试后调用失败 → 无法排除恶意(fail-closed 信号)。
+        # 未配置时 finding 没有 llm_label，由上层进入人工复核，不触发此信号。
         llm_unavailable = any(
             f.get("llm_label") == "llm:unavailable"
             for f in findings
-            if adjusted_severities.get(f.get("id", ""), f.get("severity", ""))
-            in ("critical", "high")
+            if f.get("severity", "") in ("critical", "high")
             and f.get("category", "") in _DANGEROUS_CATEGORIES
         )
-        score = _compute_i2_score(findings, adjusted_severities)
+        score = _compute_i2_score(findings)
         return {
             "level": level,
             "score": score,
@@ -360,7 +333,7 @@ def assess_prompt_safety(
             f"Found {critical_count} critical, {high_count} high finding(s) "
             f"(non-dangerous categories)"
         )
-        score = _compute_i2_score(findings, adjusted_severities)
+        score = _compute_i2_score(findings)
         return {
             "level": level,
             "score": score,
@@ -372,10 +345,10 @@ def assess_prompt_safety(
             "scan_available": True,
             "confirmed_malicious": False,
         }
-    elif medium_count > 2 or low_count > 5:
+    elif medium_count > 2 or low_count > 2:
         level = "suspicious"
         evidence.append(f"Multiple medium/low findings: {medium_count} medium, {low_count} low")
-        score = _compute_i2_score(findings, adjusted_severities)
+        score = _compute_i2_score(findings)
         return {
             "level": level,
             "score": score,
@@ -397,7 +370,7 @@ def assess_prompt_safety(
                 f"Only {total_findings} minor finding(s): "
                 f"{medium_count} medium, {low_count} low"
             )
-        score = _compute_i2_score(findings, adjusted_severities)
+        score = _compute_i2_score(findings)
         return {
             "level": level,
             "score": score,

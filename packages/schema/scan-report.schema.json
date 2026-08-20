@@ -245,6 +245,13 @@
       "properties": {
         "triggered": { "type": "boolean", "description": "是否触发了 LLM 审查" },
         "findings_reviewed": { "type": "integer", "description": "LLM 审查的 finding 数量" },
+        "findings_skipped": { "type": "integer", "minimum": 0 },
+        "findings_pending": { "type": "integer", "minimum": 0 },
+        "status": {
+          "type": "string",
+          "enum": ["not_triggered", "not_required", "not_configured", "completed", "call_failed"]
+        },
+        "attempts": { "type": "integer", "minimum": 0 },
         "labels_summary": {
           "type": "object",
           "properties": {

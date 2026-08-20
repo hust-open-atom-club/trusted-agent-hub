@@ -7,6 +7,7 @@ see behavioral_ast.py which runs alongside this rule.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from scanners.risk_scanner.patterns import RCE_PATTERNS
@@ -22,7 +23,10 @@ def run(scanner: Any) -> None:
         lines = content.split("\n")
 
         for pattern, desc, severity in RCE_PATTERNS:
-            for match in re.finditer(pattern, content, re.IGNORECASE):
+            if "execfile()" in desc and Path(fname).suffix.lower() != ".py":
+                continue
+            flags = 0 if "execfile()" in desc else re.IGNORECASE
+            for match in re.finditer(pattern, content, flags):
                 line_no = content[: match.start()].count("\n") + 1
                 start_line = max(0, line_no - 1)
                 end_line = min(len(lines) - 1, line_no)
