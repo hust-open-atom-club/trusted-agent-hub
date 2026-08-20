@@ -505,6 +505,57 @@
       "expand_code": "▸ 查看代码上下文",
       "remediation": "修复建议"
     },
+    "permission": {
+      "filesystem": {
+        "read": "文件系统 · 读取路径",
+        "write": "文件系统 · 写入路径",
+        "delete": "文件系统 · 删除权限"
+      },
+      "shell": {
+        "allowed": "Shell · 是否允许",
+        "commands": "Shell · 允许命令",
+        "description": "Shell · 说明"
+      },
+      "network": {
+        "allowed": "网络 · 是否允许",
+        "domains": "网络 · 允许域名",
+        "description": "网络 · 说明"
+      },
+      "environment": {
+        "read": "环境变量 · 读取",
+        "write": "环境变量 · 写入"
+      },
+      "credentials": {
+        "access": "凭据 · 访问范围",
+        "description": "凭据 · 说明"
+      }
+    },
+    "installation": {
+      "method": "安装方式",
+      "target_client": "目标客户端",
+      "pre_install_message": "安装前提示",
+      "post_install_message": "安装后提示",
+      "targets": "安装目标",
+      "steps": "安装步骤",
+      "target_field": "目标 {{index}} · {{field}}",
+      "step_field": "步骤 {{index}} · {{field}}",
+      "client": "客户端",
+      "destination": "目标路径",
+      "config_template": "配置模板",
+      "action": "操作",
+      "url": "下载地址",
+      "algorithm": "校验算法",
+      "checksum": "校验值",
+      "archive": "压缩包",
+      "source": "来源路径",
+      "package": "包名",
+      "version": "版本",
+      "registry": "Registry",
+      "index_url": "索引地址",
+      "image": "镜像",
+      "tag": "标签",
+      "text": "说明"
+    },
     "files": {
       "missing_params": "缺少参数",
       "login_required": "请先登录",
@@ -581,6 +632,67 @@
     }
   },
   "trust_score": {
+    "auto_grade": "自动评级",
+    "manual_grade": "人工评级",
+    "no_manual_override": "未设置人工评级，使用自动评级结果",
+    "top_risks": "主要风险",
+    "explanations": "说明",
+    "no_data": "暂无可用的信任评分信息",
+    "grade": {
+      "A": "A · 可信",
+      "B": "B · 低风险",
+      "C": "C · 需注意",
+      "D": "D · 有风险",
+      "E": "E · 高风险"
+    },
+    "recommendation": {
+      "safe": "可安全安装",
+      "review_recommended": "建议查看详情后安装",
+      "caution": "请谨慎安装",
+      "not_recommended": "不推荐安装",
+      "blocked": "已阻止安装"
+    },
+    "risk": {
+      "source_opaque": "来源不透明，无法验证出处",
+      "integrity_missing": "缺少内容完整性哈希或签名",
+      "permissions_dangerous": "声明了危险的权限组合",
+      "permissions_excessive": "权限超出该包类型的合理范围",
+      "scan_dangerous": "扫描发现严重或高危问题",
+      "scan_suspicious": "扫描结果可疑或不可用",
+      "behavior_deceptive": "行为不一致，可能存在欺骗或恶意意图",
+      "behavior_overreaching": "声明权限超出扫描结果所表明的实际需要",
+      "review_rejected": "该包在人工审核中被驳回",
+      "author_tainted": "作者历史中存在严重违规记录",
+      "author_inconsistent": "作者发布记录不稳定",
+      "none": "未发现显著风险"
+    },
+    "explanation": {
+      "assessed": "{{dimension}}：评估结果为“{{level}}”",
+      "behavior": "行为一致性检查：{{level}}",
+      "veto": "触发否决规则 {{rule}}，包被强制标记为不可信",
+      "upgrade": "已升级：人工审核通过、扫描安全且行为一致",
+      "downgrade": "已降级：来源不透明且作者为新发布者"
+    },
+    "assessment": {
+      "traceable": "可追溯",
+      "opaque": "不透明",
+      "partial": "部分完整",
+      "none": "缺失",
+      "acceptable": "可接受",
+      "excessive": "过度",
+      "dangerous": "危险",
+      "suspicious": "可疑",
+      "pending": "待审核",
+      "changes_requested": "要求修改",
+      "rejected": "已驳回",
+      "newcomer": "新发布者",
+      "inconsistent": "不稳定",
+      "tainted": "存在污点",
+      "gap": "存在差距",
+      "overreaching": "越权",
+      "deceptive": "欺骗性",
+      "malicious": "恶意"
+    },
     "dim": {
       "source_trust": "来源可信度",
       "author_reputation": "作者信誉",
@@ -625,5 +737,11 @@
     "rejected": "已驳回",
     "draft": "草稿",
     "yanked": "已下架"
+  },
+  "status_page": {
+    "trust_score": "信任评分",
+    "risk_level": "风险等级",
+    "grade_overridden": "审核员已将评级从 {{from}} 手动调整为 {{to}}",
+    "install_recommendation": "安装建议"
   }
 }

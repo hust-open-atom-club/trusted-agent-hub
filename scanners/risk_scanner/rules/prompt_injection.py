@@ -83,11 +83,15 @@ def run(scanner: Any) -> None:
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])
 
-                severity = default_severity
-
                 is_ambiguous = desc in _AMBIGUOUS_PATTERN_DESCS
                 if is_ambiguous and _is_skill_md(fname) and _has_flow_context(lines, line_no):
-                    severity = "info"
+                    # Workflow prose such as "Do not pause. Do not ask. Continue
+                    # to ..." describes control flow, not a security-boundary
+                    # bypass.  Reporting it as info still pollutes the finding
+                    # list and can never receive LLM review, so omit it.
+                    continue
+
+                severity = default_severity
 
                 if scanner._is_code_example(fname, line_no):
                     severity = _downgrade_severity(severity)

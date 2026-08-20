@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
@@ -64,6 +65,7 @@ function getGrade(grade: string | null): string {
 }
 
 function StatusContent() {
+  const { t } = useTranslation();
   const router = useRouter();
   const searchParams = useSearchParams();
   const versionId = searchParams.get('vid') || '';
@@ -444,20 +446,26 @@ function StatusContent() {
             {grade}
           </div>
           <div className="trust-score-detail">
-            <h3>信任评分</h3>
+            <h3>{t('status_page.trust_score')}</h3>
             {detail.trust_score.risk_summary?.level && (
               <p style={{ fontSize: '0.82rem', color: 'var(--color-ink-2)', marginBottom: '0.3rem' }}>
-                风险等级: {detail.trust_score.risk_summary.level.replace(/_/g, ' ')}
+                {t('status_page.risk_level')}: {t(
+                  `trust_score.level.${detail.trust_score.risk_summary.level}`,
+                  detail.trust_score.risk_summary.level,
+                )}
               </p>
             )}
             {detail.auto_grade && detail.manual_grade && detail.manual_grade !== detail.auto_grade && (
               <p style={{ fontSize: '0.78rem', color: 'var(--color-accent)', marginBottom: '0.3rem' }}>
-                审核员已将评级从 {detail.auto_grade} 手动调整为 {detail.manual_grade}
+                {t('status_page.grade_overridden', { from: detail.auto_grade, to: detail.manual_grade })}
               </p>
             )}
             {detail.trust_score.risk_summary?.install_recommendation && (
               <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-2)', marginBottom: '0.75rem' }}>
-                安装建议: {detail.trust_score.risk_summary.install_recommendation}
+                {t('status_page.install_recommendation')}: {t(
+                  `trust_score.recommendation.${detail.trust_score.risk_summary.install_recommendation}`,
+                  detail.trust_score.risk_summary.install_recommendation,
+                )}
               </p>
             )}
           </div>

@@ -404,7 +404,7 @@ def _run_scan_task(
         _scans[scan_id]["status"] = "scanning"
         print(f"[TAH-trust]     加载扫描器, scan_dir={scan_dir}")
         RiskScanner = _load_scanner()
-        scanner = RiskScanner(scan_dir)
+        scanner = RiskScanner(scan_dir, source_commit_hash=commit_hash)
         scan_report = scanner.scan()
 
         pkg_name = scan_report.get("package_name", "unknown")
@@ -463,6 +463,21 @@ def _run_scan_task(
 
         repo_url = parsed["base_url"] if parsed else source
         package_metadata = _build_package_metadata(scan_report, scan_dir, repo_url=repo_url, subdirectory=subdir)
+        # Preserve acquisition-time facts for scoring as well as SR-009.  The
+        # extractor reads package-authored metadata and must not overwrite them.
+        scanned_meta = scanner._package_metadata or {}
+        scanned_source = scanned_meta.get("source") or {}
+        scanned_integrity = scanned_meta.get("integrity") or {}
+        if isinstance(scanned_source, dict):
+            package_metadata["source"] = {
+                **(package_metadata.get("source") or {}),
+                **scanned_source,
+            }
+        if isinstance(scanned_integrity, dict):
+            package_metadata["integrity"] = {
+                **(package_metadata.get("integrity") or {}),
+                **scanned_integrity,
+            }
 
         platform_signals = signals or {}
         trust_score_result = calculate_trust_score(

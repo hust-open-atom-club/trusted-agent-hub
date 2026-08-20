@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import type {
   Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord,
   PackagePermissions, PackageAuthor, PackageDetail, FindingLocation,
+  Installation,
 } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -54,6 +55,29 @@ function shortUrl(url: string): string {
   } catch {
     return url.length > 50 ? url.slice(0, 50) + '…' : url;
   }
+}
+
+function flattenDisplayEntries(
+  value: unknown,
+  prefix = '',
+): Array<[string, string]> {
+  if (value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    if (value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
+      return [[prefix, value.map(String).join(', ') || '—']];
+    }
+    return value.flatMap((item, index) => flattenDisplayEntries(item, `${prefix}[${index + 1}]`));
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+      flattenDisplayEntries(child, prefix ? `${prefix}.${key}` : key),
+    );
+  }
+  return [[prefix, String(value)]];
+}
+
+function humanizeField(path: string): string {
+  return path.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function FindingCodeView({
@@ -150,6 +174,7 @@ export default function ReviewDetailPage() {
 
   const [reviewHistory, setReviewHistory] = useState<ReviewRecord[]>([]);
   const [showGradeModal, setShowGradeModal] = useState(false);
+  const installation = pkg?.installation as Installation | null | undefined;
 
   const severityLabels: Record<string, string> = {
     critical: t('review.severity.critical'),
@@ -654,17 +679,19 @@ export default function ReviewDetailPage() {
           <>
             <h3 className="review-meta-subtitle">{t('review.detail.permissions_title')}</h3>
             <div className="review-meta-grid">
-              {Object.entries(pkg.permissions).map(([key, value]) => (
+              {flattenDisplayEntries(pkg.permissions).map(([key, value]) => (
                 <div className="review-meta-field" key={key}>
-                  <span className="review-meta-label">{key}</span>
+                  <span className="review-meta-label">
+                    {t(`review.permission.${key}`, { defaultValue: humanizeField(key) })}
+                  </span>
                   <span
                     className={`review-meta-value permission-value ${
-                      typeof value === 'string' && ['required', 'any', 'read+write'].includes(value)
+                      ['required', 'any', 'read+write'].includes(value)
                         ? 'danger'
                         : ''
                     }`}
                   >
-                    {String(value)}
+                    {value}
                   </span>
                 </div>
               ))}
@@ -672,12 +699,63 @@ export default function ReviewDetailPage() {
           </>
         )}
 
-        {pkg?.installation && Object.keys(pkg.installation).length > 0 && (
+        {installation && Object.keys(installation).length > 0 && (
           <>
             <h3 className="review-meta-subtitle">{t('review.detail.installation_title')}</h3>
-            <pre className="review-code-block">
-              {JSON.stringify(pkg.installation, null, 2)}
-            </pre>
+            <div className="review-meta-grid">
+              {flattenDisplayEntries(
+                Object.fromEntries(
+                  Object.entries(installation).filter(([key]) => !['targets', 'steps'].includes(key)),
+                ),
+              ).map(([key, value]) => (
+                <div className="review-meta-field" key={key}>
+                  <span className="review-meta-label">
+                    {t(`review.installation.${key}`, { defaultValue: humanizeField(key) })}
+                  </span>
+                  <span className="review-meta-value">{value}</span>
+                </div>
+              ))}
+            </div>
+            {installation.targets && installation.targets.length > 0 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <h4 className="review-meta-label">{t('review.installation.targets')}</h4>
+                <div className="review-meta-grid">
+                  {installation.targets.flatMap((target, index) =>
+                    flattenDisplayEntries(target).map(([key, value]) => (
+                      <div className="review-meta-field" key={`target-${index}-${key}`}>
+                        <span className="review-meta-label">
+                          {t('review.installation.target_field', {
+                            index: index + 1,
+                            field: t(`review.installation.${key}`, { defaultValue: humanizeField(key) }),
+                          })}
+                        </span>
+                        <span className="review-meta-value">{value}</span>
+                      </div>
+                    )),
+                  )}
+                </div>
+              </div>
+            )}
+            {installation.steps && installation.steps.length > 0 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <h4 className="review-meta-label">{t('review.installation.steps')}</h4>
+                <div className="review-meta-grid">
+                  {installation.steps.flatMap((step, index) =>
+                    flattenDisplayEntries(step).map(([key, value]) => (
+                      <div className="review-meta-field" key={`step-${index}-${key}`}>
+                        <span className="review-meta-label">
+                          {t('review.installation.step_field', {
+                            index: index + 1,
+                            field: t(`review.installation.${key}`, { defaultValue: humanizeField(key) }),
+                          })}
+                        </span>
+                        <span className="review-meta-value">{value}</span>
+                      </div>
+                    )),
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
       </section>

@@ -88,8 +88,14 @@ SCANNER_VERSION = "0.4.0"
 class RiskScanner:
     """自动风险扫描器 — 静态分析 Agent 能力包目录。"""
 
-    def __init__(self, target_dir: str | Path) -> None:
+    def __init__(
+        self,
+        target_dir: str | Path,
+        *,
+        source_commit_hash: str = "",
+    ) -> None:
         self.target_dir = Path(target_dir).resolve()
+        self.source_commit_hash = source_commit_hash
         self.findings: list[dict[str, Any]] = []
         self.scanned_files: list[str] = []
         self._package_metadata: dict[str, Any] | None = None
@@ -103,6 +109,7 @@ class RiskScanner:
 
         self._collect_files()
         self._load_metadata()
+        self._inject_acquired_source_integrity()
 
         for rule_module in _RULE_MODULES:
             try:
@@ -183,6 +190,57 @@ class RiskScanner:
                             self._package_metadata[key] = pkg_json[key]
             except (json.JSONDecodeError, OSError):
                 pass
+
+    def _inject_acquired_source_integrity(self) -> None:
+        """Attach facts established by acquisition instead of trusting manifests.
+
+        A repository's own metadata cannot safely attest to the bytes currently
+        being scanned.  The scanner therefore computes the canonical content
+        tree digest itself and accepts the commit only from the acquisition
+        layer (``git rev-parse HEAD`` / GitHub zipball resolution).
+        """
+        if not self._package_metadata:
+            return
+
+        integrity = self._package_metadata.get("integrity")
+        if not isinstance(integrity, dict):
+            integrity = {}
+        integrity["sha256"] = self._content_tree_sha256()
+        self._package_metadata["integrity"] = integrity
+
+        if re.fullmatch(r"^[a-f0-9]{40}$", self.source_commit_hash):
+            source = self._package_metadata.get("source")
+            if not isinstance(source, dict):
+                source = {}
+            source["commit_hash"] = self.source_commit_hash
+            self._package_metadata["source"] = source
+
+    def _content_tree_sha256(self) -> str:
+        """Return the canonical package tree hash used by package manifests."""
+        digest = hashlib.sha256()
+        entries: list[tuple[str, Path]] = []
+        for base, dirs, files in os.walk(self.target_dir):
+            dirs[:] = sorted(d for d in dirs if d != ".git")
+            for name in sorted(files):
+                path = Path(base) / name
+                rel = path.relative_to(self.target_dir).as_posix()
+                # A manifest cannot include its own digest without recursion.
+                if rel == "manifest.json":
+                    continue
+                entries.append((rel, path))
+
+        for rel, path in sorted(entries):
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if b"\0" not in data:
+                data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            digest.update(rel.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(data)
+            digest.update(b"\0")
+        return digest.hexdigest()
 
     def _read_file_content(self, rel_path: str) -> str:
         if rel_path in self._file_contents:
