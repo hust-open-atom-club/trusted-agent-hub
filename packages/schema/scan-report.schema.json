@@ -296,6 +296,19 @@
       "additionalProperties": false,
       "description": "依赖检查结果"
     },
+    "dependency_scan": {
+      "type": "object",
+      "required": ["status", "dependencies_found", "dependencies_queried", "query_failures"],
+      "properties": {
+        "status": { "type": "string", "enum": ["complete", "partial"] },
+        "dependencies_found": { "type": "integer", "minimum": 0 },
+        "dependencies_queried": { "type": "integer", "minimum": 0 },
+        "query_failures": { "type": "integer", "minimum": 0 },
+        "query_limit": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false,
+      "description": "依赖解析和 OSV 查询覆盖率"
+    },
     "llm_review": {
       "type": "object",
       "properties": {

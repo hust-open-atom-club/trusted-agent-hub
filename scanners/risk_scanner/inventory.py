@@ -112,24 +112,29 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
                 violations.append("max_file_bytes")
         elif ext in NON_TEXT_EXTENSIONS:
             reason = "binary" if ext in {".exe", ".dll", ".so", ".bin", ".dylib"} else "known_non_text"
-        elif path.name in GENERAL_RULE_EXCLUDED_FILES:
-            reason = "general_rule_excluded"
         elif total_budget + size > policy.max_total_bytes:
             reason = "total_budget_exceeded"
             if "max_total_bytes" not in violations:
                 violations.append("max_total_bytes")
+        elif path.name in GENERAL_RULE_EXCLUDED_FILES:
+            reason = "general_rule_excluded"
 
+        special = reason == "general_rule_excluded"
         record = FileRecord(rel_path, path, size, ext, infer_file_type(rel_path), depth,
-                            is_symlink, "skipped" if reason else "eligible", reason)
+                            is_symlink, "special_pending" if special else ("skipped" if reason else "eligible"), reason)
         records.append(record)
         if reason:
             skipped[reason] = skipped.get(reason, 0) + 1
             if len(samples) < policy.max_skipped_samples:
                 samples.append(rel_path)
-        else:
+        elif not special:
             total_budget += size
             analyzed_bytes += size
             record.read_status = "pending"
+        else:
+            # Lock/manifests are parsed by dedicated analyzers, never generic regex rules.
+            total_budget += size
+            analyzed_bytes += size
 
     records.sort(key=lambda record: record.relative_path)
     return ScanInventory(records, discovered_bytes, analyzed_bytes, violations,
@@ -139,7 +144,7 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
 def load_text_files(inventory: ScanInventory, encoding: str = "utf-8-sig") -> dict[str, str]:
     contents: dict[str, str] = {}
     for record in sorted(inventory.files, key=lambda item: _read_priority(item.relative_path)):
-        if record.read_status != "pending":
+        if record.read_status not in {"pending", "special_pending"}:
             continue
         try:
             contents[record.relative_path] = record.absolute_path.read_text(encoding=encoding, errors="ignore")

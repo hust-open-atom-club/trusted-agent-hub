@@ -2150,6 +2150,18 @@
             ],
             "title": "Dependency Check"
           },
+          "dependency_scan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dependency Scan"
+          },
           "duration_ms": {
             "anyOf": [
               {

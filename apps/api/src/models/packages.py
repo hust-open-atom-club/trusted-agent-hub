@@ -219,6 +219,7 @@ class ScanReport(StrictContractModel):
     metadata_validation: dict[str, object] | None = None
     structure_check: dict[str, object] | None = None
     dependency_check: dict[str, object] | None = None
+    dependency_scan: dict[str, object] | None = None
     llm_review: LLMReview | None = None
     scanned_at: str | None = None
 

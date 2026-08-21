@@ -31,6 +31,9 @@ from scanners.risk_scanner.patterns import (
     SUPPLY_CHAIN_PATTERNS,
     TRIGGER_RISK_PATTERNS,
 )
+from scanners.risk_scanner.dependency_parsers import parse_dependencies
+from scanners.risk_scanner.dependency_parsers.models import DependencyRecord
+from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 
 _CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CVE_CACHE_TTL = 3600
@@ -170,6 +173,86 @@ def _check_typosquatting(scanner: Any, meta: dict[str, Any]) -> None:
             )
 
 
+def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") -> list[DependencyRecord]:
+    records: list[DependencyRecord] = []
+    deps = meta.get("dependencies", {})
+    if not isinstance(deps, dict):
+        return records
+    for ecosystem, values in deps.items():
+        if not isinstance(values, list):
+            continue
+        normalized_ecosystem = {"pypi": "PyPI", "python": "PyPI", "npm": "npm", "rust": "crates.io"}.get(str(ecosystem).lower(), str(ecosystem))
+        for value in values:
+            if isinstance(value, dict):
+                records.append(DependencyRecord(str(value.get("name", "")), value.get("version"), normalized_ecosystem,
+                                                True, source_file, value.get("registry"), value.get("integrity")))
+            elif value:
+                records.append(DependencyRecord(str(value), None, normalized_ecosystem, True, source_file))
+    return [record for record in records if record.name]
+
+
+def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> None:
+    if not records:
+        scanner.dependency_scan = {"status": "complete", "dependencies_found": 0,
+                                   "dependencies_queried": 0, "query_failures": 0}
+        return
+    manifest_file = records[0].source_file
+    for record in records:
+        version = record.version or ""
+        if not version or version.startswith(("^", "~", ">", "<", "*")):
+            scanner._add_finding(
+                rule_id="SR-008", severity="medium", category="supply_chain",
+                title=f"依赖版本未锁定: {record.name}",
+                description=f"依赖 {record.name} 未使用精确版本（当前: {record.version or '未声明'}）。",
+                location={"file": record.source_file},
+                evidence=f"Dependency version: {record.version or 'missing'}",
+                remediation="在清单和锁文件中使用可复现的精确依赖版本。",
+            )
+        if record.registry and not _is_whitelisted_url(record.registry):
+            scanner._add_finding(
+                rule_id="SR-008", severity="high", category="supply_chain",
+                title=f"非官方依赖源: {record.name}",
+                description=f"依赖 {record.name} 使用未列入白名单的 registry。",
+                location={"file": record.source_file}, evidence=f"Registry: {record.registry}",
+                remediation="仅使用受信任的官方 HTTPS registry。",
+            )
+    client = getattr(scanner, "osv_client", None)
+    compatibility_mode = client is None
+    client = client or OSVClient(max_queries=10)
+    queried = 0
+    failures = 0
+    limit_reached = False
+    for record in records:
+        if compatibility_mode:
+            vulnerabilities = _query_osv(record.name, record.version or "*", record.ecosystem)
+            result_error = None
+            queried += 1
+        else:
+            result = client.query(record)
+            vulnerabilities = result.vulnerability_ids
+            result_error = result.error
+            if result_error:
+                failures += 1
+                limit_reached = result_error == "query_limit_exceeded"
+            queried = client.queried
+        for cve_id in vulnerabilities:
+            scanner._add_finding(
+                rule_id="SR-008", severity="high", category="supply_chain",
+                title=f"供应链风险 — 已知 CVE: {cve_id} in {record.name}@{record.version or '*'}",
+                description=f"依赖 {record.name}@{record.version or '*'} 存在已知漏洞 {cve_id}。",
+                location={"file": record.source_file}, evidence=f"OSV.dev: {cve_id}",
+                remediation=f"升级 {record.name} 到修复版本，或替换为安全替代包。",
+            )
+    scanner.dependency_scan = {
+        "status": "partial" if failures or limit_reached else "complete",
+        "dependencies_found": len(records),
+        "dependencies_queried": queried,
+        "query_failures": failures,
+    }
+    if limit_reached:
+        scanner.dependency_scan["query_limit"] = getattr(client, "max_queries", 10)
+
+
 def run(scanner: Any) -> None:
     rule_id = "SR-008"
 
@@ -251,28 +334,16 @@ def run(scanner: Any) -> None:
                     remediation="将通配符替换为具体关键词。",
                 )
 
-        _check_typosquatting(scanner, meta)
-
-        deps = meta.get("dependencies", {})
-        if isinstance(deps, dict):
-            for ecosystem, dep_list in deps.items():
-                if not isinstance(dep_list, list):
-                    continue
-                osv_ecosystem = ecosystem.upper() if ecosystem in ("npm", "pypi") else "PyPI"
-                for dep in dep_list[:10]:
-                    pkg_name = dep.get("name", "") if isinstance(dep, dict) else str(dep)
-                    pkg_ver = dep.get("version", "*") if isinstance(dep, dict) else "*"
-                    if not pkg_name:
-                        continue
-                    cves = _query_osv(pkg_name, pkg_ver, osv_ecosystem)
-                    for cve_id in cves:
-                        scanner._add_finding(
-                            rule_id=rule_id,
-                            severity="high",
-                            category="supply_chain",
-                            title=f"供应链风险 — 已知 CVE: {cve_id} in {pkg_name}@{pkg_ver}",
-                            description=f"依赖 {pkg_name}@{pkg_ver} 存在已知漏洞 {cve_id}。",
-                            location={"file": "package.json"},
-                            evidence=f"OSV.dev: {cve_id}",
-                            remediation=f"升级 {pkg_name} 到修复版本，或替换为安全替代包。",
-                        )
+    # Lockfiles/manifests are parsed once into normalized records. Lockfiles are
+    # intentionally absent from scanner.scanned_files, so generic regex rules do
+    # not inspect their structured contents.
+    records = parse_dependencies(getattr(scanner, "_file_contents", {}))
+    if not records and meta:
+        records = _manifest_records(meta)
+    if records and meta:
+        normalized_meta = dict(meta)
+        normalized_meta["dependencies"] = {
+            "normalized": [{"name": record.name, "version": record.version} for record in records]
+        }
+        _check_typosquatting(scanner, normalized_meta)
+    _check_dependency_records(scanner, records)

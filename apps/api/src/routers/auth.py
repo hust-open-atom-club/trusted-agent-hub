@@ -16,6 +16,7 @@ from src.auth import (
     create_refresh_token,
     decode_token,
     hash_password,
+    needs_password_rehash,
     verify_password,
 )
 from src.database import create_session_factory, get_runtime_engine
@@ -140,6 +141,11 @@ def login(body: LoginRequest) -> TokenResponse:
         )
         if user is None or not verify_password(body.password, user.password_hash):
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
+
+        # Seamlessly upgrade legacy bcrypt hashes after a successful login.
+        if needs_password_rehash(user.password_hash):
+            user.password_hash = hash_password(body.password)
+            session.commit()
 
         if not user.is_active:
             raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")

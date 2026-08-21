@@ -55,6 +55,7 @@ from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
 from scanners.risk_scanner.reporting import determine_scan_status
+from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class RiskScanner:
         self.analyzed_files: list[str] = []
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
+        self.osv_client = OSVClient(max_queries=10)
         self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False
@@ -97,6 +99,8 @@ class RiskScanner:
         self.rule_execution = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors = []
         self.findings_limit_exceeded = False
+        self.dependency_scan = {"status": "complete", "dependencies_found": 0,
+                                "dependencies_queried": 0, "query_failures": 0}
         self._file_contents = {}
         start = datetime.now(timezone.utc)
 
@@ -104,7 +108,10 @@ class RiskScanner:
         self.discovered_files = [r.relative_path for r in self._inventory.files]
         self._file_contents = load_text_files(self._inventory)
         self.analyzed_files = [r.relative_path for r in self._inventory.files if r.read_status == "analyzed"]
-        self.scanned_files = self.analyzed_files
+        self.scanned_files = [r.relative_path for r in self._inventory.files
+                              if r.read_status == "analyzed" and r.skip_reason != "general_rule_excluded"]
+        self.dependency_scan: dict[str, Any] = {"status": "complete", "dependencies_found": 0,
+                                                "dependencies_queried": 0, "query_failures": 0}
         self._load_metadata()
         self._inject_acquired_source_integrity()
 
@@ -117,6 +124,8 @@ class RiskScanner:
              "message": r.error_message, "recoverable": True}
             for r in rule_results if r.status == "failed"
         ]
+        if self.dependency_scan.get("status") == "partial" and "dependency_scan_partial" not in self.inventory.limit_violations:
+            self.inventory.limit_violations.append("dependency_scan_partial")
 
         self._downgrade_documentation_findings()
         self._deduplicate_findings()
@@ -499,6 +508,10 @@ class RiskScanner:
                         dependency_check["total_dependencies"] += len(deps_list)
         cve_findings = [f for f in self.findings if "CVE" in f.get("title", "")]
         dependency_check["known_vulnerabilities"] = len(cve_findings)
+        dependency_check["total_dependencies"] = int(self.dependency_scan.get("dependencies_found", dependency_check["total_dependencies"]))
+        dependency_check["unlocked_versions"] = sum(
+            1 for finding in self.findings if finding.get("rule_id") == "SR-008" and "版本未锁定" in finding.get("title", "")
+        )
 
         complete = not self.inventory.limit_violations and not self.scanner_errors
         state = "complete" if complete else ("failed" if not self.target_dir.is_dir() else "partial")
@@ -541,6 +554,7 @@ class RiskScanner:
             "metadata_validation": metadata_validation,
             "structure_check": structure_check,
             "dependency_check": dependency_check,
+            "dependency_scan": self.dependency_scan,
         }
 
 
