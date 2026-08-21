@@ -34,6 +34,7 @@ import InstallCommandBlock from './InstallCommandBlock';
 import PackageFileBrowser from './PackageFileBrowser';
 import PackageIcon from './PackageIcon';
 import PackageIntegrityPanel from './PackageIntegrityPanel';
+import PackageReadingNav, { type ReadingNavItem } from './PackageReadingNav';
 import {
   getFeedbackSummary,
   getGradeClass,
@@ -69,6 +70,10 @@ function DetailSkeleton() {
         </div>
       </section>
       <div className="detail-shell">
+        <aside className="detail-reading-rail skeleton">
+          <div className="skeleton-bar detail-skeleton-meta" />
+          <div className="skeleton-block" />
+        </aside>
         <main className="detail-main">
           {Array.from({ length: 4 }).map((_, i) => (
             <section className="detail-section skeleton" key={i}>
@@ -454,6 +459,21 @@ export default function PackageDetailPage() {
     ? source.repository_url.replace(/^https?:\/\//, '')
     : pkg.homepage?.replace(/^https?:\/\//, '') ?? tt('detail.source_unavailable');
   const clientLabel = (client: string) => tt(`detail.client.${client}`, { defaultValue: getClientLabel(client) });
+  const sectionNavItems: ReadingNavItem[] = [
+    { id: 'overview', label: tt('detail.nav.overview') },
+    { id: 'trust', label: tt('detail.nav.trust') },
+    ...(versionDetail?.scan_report?.findings?.length
+      ? [{ id: 'scan-findings', label: tt('detail.scan_findings') }]
+      : []),
+    { id: 'files', label: tt('detail.nav.files') },
+    { id: 'integrity', label: tt('detail.nav.integrity') },
+    { id: 'permissions', label: tt('detail.nav.permissions') },
+    { id: 'dependencies', label: tt('detail.dependencies') },
+    { id: 'entry-points', label: tt('detail.entry_points') },
+    { id: 'installation', label: tt('detail.nav.installation') },
+    { id: 'feedback', label: tt('detail.nav.feedback') },
+    { id: 'versions', label: tt('detail.nav.versions') },
+  ];
 
   return (
     <motion.div className="detail-page" variants={pageStagger} initial="hidden" animate="visible">
@@ -516,6 +536,10 @@ export default function PackageDetailPage() {
       </motion.section>
 
       <motion.div className="detail-shell" variants={pageStagger}>
+        <motion.aside className="detail-reading-rail" variants={softPanel}>
+          <PackageReadingNav items={sectionNavItems} title={tt('detail.rail.sections')} />
+        </motion.aside>
+
         <motion.main className="detail-main" variants={pageStagger}>
           <DetailSection id="overview" title={tt('detail.nav.overview')} kicker={tt('detail.section.overview_kicker')}>
             <SourceSummary source={source} homepage={pkg.homepage} t={tt} />
@@ -694,22 +718,6 @@ export default function PackageDetailPage() {
         </motion.main>
 
         <motion.aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')} variants={listStagger}>
-          <motion.nav className="rail-card rail-section-card" aria-label="Package detail sections" variants={softPanel}>
-            <div className="rail-card-heading rail-section-heading">
-              <strong>{tt('detail.rail.sections')}</strong>
-            </div>
-            <div className="rail-section-links">
-              <a href="#overview">{tt('detail.nav.overview')}</a>
-              <a href="#trust">{tt('detail.nav.trust')}</a>
-              <a href="#files">{tt('detail.nav.files')}</a>
-              <a href="#integrity">{tt('detail.nav.integrity')}</a>
-              <a href="#permissions">{tt('detail.nav.permissions')}</a>
-              <a href="#installation">{tt('detail.nav.installation')}</a>
-              <a href="#versions">{tt('detail.nav.versions')}</a>
-              <a href="#feedback">{tt('detail.nav.feedback')}</a>
-            </div>
-          </motion.nav>
-
           <motion.div className="rail-card rail-install-card" variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.install')}</span>
