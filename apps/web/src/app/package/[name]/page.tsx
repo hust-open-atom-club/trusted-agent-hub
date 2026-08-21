@@ -695,9 +695,8 @@ export default function PackageDetailPage() {
 
         <motion.aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')} variants={listStagger}>
           <motion.nav className="rail-card rail-section-card" aria-label="Package detail sections" variants={softPanel}>
-            <div className="rail-card-heading">
-              <span>{tt('detail.rail.sections')}</span>
-              <strong>{tt('detail.nav.overview')}</strong>
+            <div className="rail-card-heading rail-section-heading">
+              <strong>{tt('detail.rail.sections')}</strong>
             </div>
             <div className="rail-section-links">
               <a href="#overview">{tt('detail.nav.overview')}</a>
