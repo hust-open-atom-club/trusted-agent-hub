@@ -12,6 +12,8 @@ from __future__ import annotations
 import ast
 from typing import Any
 
+from scanners.risk_scanner.analyzers.python_ast import analyze_python
+
 
 _DANGEROUS_CALLS: set[str] = {
     "os.system", "os.popen",
@@ -40,6 +42,16 @@ def _resolve_name(node: ast.expr) -> str | None:
 
 def run(scanner: Any) -> None:
     rule_id = "SR-005"
+
+    # Production scans consume the shared analyzer facts.  The fallback keeps
+    # this rule usable with the lightweight MockScanner used by unit tests and
+    # downstream integrations.
+    analysis = getattr(getattr(scanner, "analysis", None), "python_ast", None)
+    if analysis is not None:
+        for fname, result in sorted(analysis.items()):
+            _report_analysis(scanner, fname, result)
+        return
+
     findings_map: dict[tuple, bool] = {}
 
     for fname in scanner.scanned_files:
@@ -55,6 +67,43 @@ def run(scanner: Any) -> None:
 
         analyser = _ASTAnalyser(rule_id, scanner, fname, content, findings_map)
         analyser.visit(tree)
+
+
+def _report_analysis(scanner: Any, fname: str, result: Any) -> None:
+    """Turn analyzer facts into findings without reparsing source."""
+    content = scanner._read_file_content(fname)
+    lines = content.split("\n") if content else []
+    seen: set[tuple[str, int, str]] = set()
+    for event in result.calls:
+        key = (event.kind, event.line, event.calling)
+        if key in seen:
+            continue
+        seen.add(key)
+        snippet = "\n".join(lines[max(0, event.line - 1):event.line])[:200]
+        if event.kind == "dynamic_import":
+            title = f"动态导入: {event.calling}()"
+            description = f"在 {fname} 中发现 importlib.import_module() 动态加载模块"
+            evidence = f"Dynamic import: {event.calling}"
+        elif event.kind == "reflective":
+            title = f"反射调用: {event.calling}() 访问危险模块 {event.resolved or ''}".rstrip()
+            description = f"在 {fname} 中发现反射调用 {event.calling}() 可能用于动态访问危险模块"
+            evidence = f"Reflective call: {event.calling}"
+        else:
+            resolved = event.resolved or event.calling
+            title = f"AST 代码执行检测: {event.calling} 通过别名引用到危险函数 {resolved}"
+            description = f"在 {fname} 中发现通过别名/变量间接调用危险函数：{event.calling} -> {resolved}"
+            evidence = f"Resolved call: {event.calling}"
+        scanner._add_finding(
+            rule_id="SR-005",
+            severity="high",
+            category="remote_code_execution",
+            title=title,
+            description=description,
+            location={"file": fname, "line": event.line, "snippet": snippet},
+            evidence=evidence,
+            remediation="避免使用 import 别名隐藏危险调用。显式使用危险函数并使用参数校验和命令白名单。",
+            cwe_id="CWE-94",
+        )
 
 
 class _ASTAnalyser(ast.NodeVisitor):

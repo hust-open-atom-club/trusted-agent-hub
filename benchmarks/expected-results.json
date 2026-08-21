@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "id": "benign-clean",
+      "path": "benign/clean",
+      "expected_rules": []
+    },
+    {
+      "id": "malicious-dangerous-shell",
+      "path": "malicious/dangerous-shell",
+      "expected_rules": ["SR-002", "SR-005", "SR-008", "SR-010"]
+    }
+  ]
+}

@@ -74,8 +74,12 @@ def determine_scan_status(
         "risks_found" if effective_total > 0 else "no_risks_found"
     )
     reasons = list(limit_violations)
-    if scanner_errors:
+    if any(error.get("phase") == "rule_execution" for error in scanner_errors):
         reasons.append("rule_execution_errors")
+    if any(error.get("phase") == "structured_analysis" for error in scanner_errors):
+        reasons.append("structured_analysis_errors")
+    if scanner_errors and not any(error.get("phase") in {"rule_execution", "structured_analysis"} for error in scanner_errors):
+        reasons.append("scanner_errors")
     return {
         "state": state,
         "conclusion": conclusion,

@@ -1,0 +1,20 @@
+{
+  "name": "benchmark-dangerous-shell",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "A package used to exercise shell and code execution rules.",
+  "author": "TrustedAgentHub",
+  "license": "MIT",
+  "permissions": {
+    "network": { "allowed": true, "domains": ["example.invalid"] },
+    "shell": { "allowed": true }
+  },
+  "integrity": {
+    "sha256": "placeholder",
+    "signature": "benchmark-signature",
+    "sbom_url": "https://example.invalid/benchmark-sbom.json"
+  },
+  "source": {
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

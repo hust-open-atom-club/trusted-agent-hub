@@ -1,0 +1,20 @@
+{
+  "name": "benchmark-clean",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "A small benign benchmark package.",
+  "author": "TrustedAgentHub",
+  "license": "MIT",
+  "permissions": {
+    "network": { "allowed": false },
+    "shell": { "allowed": false }
+  },
+  "integrity": {
+    "sha256": "placeholder",
+    "signature": "benchmark-signature",
+    "sbom_url": "https://example.invalid/benchmark-sbom.json"
+  },
+  "source": {
+    "commit_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

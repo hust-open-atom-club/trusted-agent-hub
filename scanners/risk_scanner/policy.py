@@ -1,5 +1,7 @@
 """Explicit, immutable resource limits for risk scanning."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, asdict
 
 

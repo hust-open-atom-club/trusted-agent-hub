@@ -326,6 +326,37 @@
       "additionalProperties": false,
       "description": "依赖解析和 OSV 查询覆盖率"
     },
+    "structural_analysis": {
+      "type": "object",
+      "required": [
+        "python_files",
+        "javascript_files",
+        "shell_files",
+        "structured_documents",
+        "parse_errors",
+        "capability_graph"
+      ],
+      "properties": {
+        "python_files": { "type": "integer", "minimum": 0 },
+        "javascript_files": { "type": "integer", "minimum": 0 },
+        "shell_files": { "type": "integer", "minimum": 0 },
+        "structured_documents": { "type": "integer", "minimum": 0 },
+        "parse_errors": { "type": "integer", "minimum": 0 },
+        "capability_graph": {
+          "type": "object",
+          "required": ["declared", "observed", "undeclared_observed", "edge_count"],
+          "properties": {
+            "declared": { "type": "array", "items": { "type": "string" } },
+            "observed": { "type": "array", "items": { "type": "string" } },
+            "undeclared_observed": { "type": "array", "items": { "type": "string" } },
+            "edge_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "结构化解析与能力图摘要，不包含源码内容"
+    },
     "llm_review": {
       "type": "object",
       "properties": {

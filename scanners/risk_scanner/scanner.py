@@ -51,6 +51,8 @@ from scanners.risk_scanner.common import (
     REQUIRED_FILES_BY_TYPE,
     SUSPICIOUS_EXTENSIONS,
 )
+from scanners.risk_scanner.analyzers import analyze_snapshot
+from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
@@ -62,7 +64,7 @@ from scanners.risk_scanner.weights import SEVERITY_POINTS
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.4.0"
+SCANNER_VERSION = "0.5.0"
 
 
 class RiskScanner:
@@ -90,6 +92,7 @@ class RiskScanner:
         self.findings_limit_exceeded = False
         self._package_metadata: dict[str, Any] | None = None
         self._file_contents: dict[str, str] = {}
+        self.analysis = None
 
     def scan(self) -> dict[str, Any]:
         self.findings = []
@@ -103,6 +106,7 @@ class RiskScanner:
         self.dependency_scan = {"status": "complete", "dependencies_found": 0,
                                 "dependencies_queried": 0, "query_failures": 0}
         self._file_contents = {}
+        self.analysis = None
         start = datetime.now(timezone.utc)
 
         self._inventory = build_inventory(self.target_dir, self.policy)
@@ -114,6 +118,13 @@ class RiskScanner:
         self.dependency_scan: dict[str, Any] = {"status": "complete", "dependencies_found": 0,
                                                 "dependencies_queried": 0, "query_failures": 0}
         self._load_metadata()
+        self.analysis = analyze_snapshot(
+            self._file_contents,
+            self.analyzed_files,
+            self._package_metadata,
+            target_dir=self.target_dir,
+            inventory=self.inventory,
+        )
         self._inject_acquired_source_integrity()
 
         rule_results = self.rule_runner.run_all(self)
@@ -125,6 +136,8 @@ class RiskScanner:
              "message": r.error_message, "recoverable": True}
             for r in rule_results if r.status == "failed"
         ]
+        self._record_source_integrity_changes()
+        self._record_structured_analysis_errors()
         if self.dependency_scan.get("status") == "partial" and "dependency_scan_partial" not in self.inventory.limit_violations:
             self.inventory.limit_violations.append("dependency_scan_partial")
 
@@ -238,6 +251,36 @@ class RiskScanner:
 
     def _read_file_content(self, rel_path: str) -> str:
         return self._file_contents.get(rel_path, "")
+
+    def _record_source_integrity_changes(self) -> None:
+        """Record files that changed or escaped the root during analysis."""
+        source_snapshot = getattr(self.analysis, "source_integrity", None)
+        issues = verify_source_state(self.target_dir, source_snapshot)
+        for issue in issues:
+            kind = issue["kind"]
+            if kind not in self.inventory.limit_violations:
+                self.inventory.limit_violations.append(kind)
+            severity = "high" if kind == "symlink_outside_root" else "medium"
+            self._add_finding(
+                rule_id="SR-009",
+                severity=severity,
+                category="source_integrity",
+                title=f"源码完整性异常: {kind}",
+                description=f"扫描过程中检测到文件 {issue['file']} 存在 {kind}。",
+                location={"file": issue["file"]},
+                evidence="source state changed after inventory capture",
+                remediation="固定扫描输入，在扫描期间禁止修改文件，并拒绝仓库外 symlink。",
+            )
+
+    def _record_structured_analysis_errors(self) -> None:
+        """Expose parser failures as coverage signals, not security findings."""
+        for error in getattr(self.analysis, "parse_errors", []) if self.analysis is not None else []:
+            self.scanner_errors.append({
+                "phase": "structured_analysis",
+                "error_type": "ParseError",
+                "message": str(error.get("error", "structured analysis failed"))[:200],
+                "recoverable": True,
+            })
 
     def _is_code_example(self, file_path: str, line_no: int) -> bool:
         content = self._read_file_content(file_path)
@@ -560,6 +603,7 @@ class RiskScanner:
             "structure_check": structure_check,
             "dependency_check": dependency_check,
             "dependency_scan": self.dependency_scan,
+            "structural_analysis": self.analysis.as_report() if self.analysis is not None else {},
         })
 
 
