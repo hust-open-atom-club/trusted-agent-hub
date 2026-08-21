@@ -40,7 +40,16 @@ def parse_structured_document(path: str, content: str) -> StructuredDocument:
             import yaml  # type: ignore[import-not-found]
         except ImportError:
             return StructuredDocument(path, format_name, "unavailable", None, "yaml parser unavailable")
-        return StructuredDocument(path, format_name, "pyyaml", yaml.safe_load(content))
+        try:
+            return StructuredDocument(path, format_name, "pyyaml", yaml.safe_load(content))
+        except yaml.YAMLError as exc:
+            return StructuredDocument(
+                path,
+                format_name,
+                "pyyaml",
+                None,
+                f"invalid {format_name}: {type(exc).__name__}",
+            )
     except (ValueError, TypeError) as exc:
         return StructuredDocument(path, format_name, format_name, None, f"invalid {format_name}")
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from src.models.packages import ScanReport
 from scanners.risk_scanner.scanner import RiskScanner
 
 def _find_scan_report_schema() -> Path:
@@ -76,6 +77,7 @@ def test_clean_package_output_schema_valid(tmp_path):
     )
     assert summary["pass_rate"] == max(0.0, round(100.0 - penalty, 1))
     jsonschema.validate(report, SCHEMA)
+    ScanReport.model_validate(report)
 
 
 def test_risky_package_emits_effective_total_and_pass_rate(tmp_path):

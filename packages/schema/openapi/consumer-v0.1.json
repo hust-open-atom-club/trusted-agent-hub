@@ -31,6 +31,39 @@
         "title": "Author",
         "type": "object"
       },
+      "CapabilityGraphSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "declared": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Declared",
+            "type": "array"
+          },
+          "edge_count": {
+            "default": 0,
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "observed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed",
+            "type": "array"
+          },
+          "undeclared_observed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Undeclared Observed",
+            "type": "array"
+          }
+        },
+        "title": "CapabilityGraphSummary",
+        "type": "object"
+      },
       "CopyInstallationStep": {
         "additionalProperties": false,
         "properties": {
@@ -1024,6 +1057,11 @@
       "LLMReview": {
         "additionalProperties": false,
         "properties": {
+          "attempts": {
+            "default": 0,
+            "title": "Attempts",
+            "type": "integer"
+          },
           "error": {
             "anyOf": [
               {
@@ -1046,10 +1084,34 @@
             ],
             "title": "Fallback"
           },
+          "findings_pending": {
+            "default": 0,
+            "title": "Findings Pending",
+            "type": "integer"
+          },
           "findings_reviewed": {
             "default": 0,
             "title": "Findings Reviewed",
             "type": "integer"
+          },
+          "findings_skipped": {
+            "default": 0,
+            "title": "Findings Skipped",
+            "type": "integer"
+          },
+          "labels": {
+            "additionalProperties": {
+              "enum": [
+                "llm:suspected-malicious",
+                "llm:suspected-negligent",
+                "llm:likely-benign",
+                "llm:uncertain",
+                "llm:unavailable"
+              ],
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
           },
           "labels_summary": {
             "anyOf": [
@@ -1060,6 +1122,24 @@
                 "type": "null"
               }
             ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_triggered",
+                  "not_required",
+                  "not_configured",
+                  "completed",
+                  "call_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
           },
           "triggered": {
             "default": false,
@@ -2080,6 +2160,91 @@
         "title": "RiskSummary",
         "type": "object"
       },
+      "RuleExecution": {
+        "additionalProperties": false,
+        "properties": {
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/RuleExecutionResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "skipped": {
+            "default": 0,
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "succeeded": {
+            "default": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "RuleExecution",
+        "type": "object"
+      },
+      "RuleExecutionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "default": 0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "error_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Type"
+          },
+          "findings_added": {
+            "default": 0,
+            "title": "Findings Added",
+            "type": "integer"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "status"
+        ],
+        "title": "RuleExecutionResult",
+        "type": "object"
+      },
       "ScanFinding": {
         "additionalProperties": false,
         "properties": {
@@ -2101,6 +2266,17 @@
           "description": {
             "title": "Description",
             "type": "string"
+          },
+          "downgraded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downgraded"
           },
           "evidence": {
             "anyOf": [
@@ -2198,8 +2374,225 @@
         "title": "ScanFinding",
         "type": "object"
       },
+      "ScanLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanLimitsConfigured"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exceeded": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exceeded",
+            "type": "array"
+          },
+          "observed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanLimitsObserved"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanLimitsSkipped"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ScanLimits",
+        "type": "object"
+      },
+      "ScanLimitsConfigured": {
+        "additionalProperties": false,
+        "properties": {
+          "max_depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Depth"
+          },
+          "max_file_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max File Bytes"
+          },
+          "max_files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Files"
+          },
+          "max_findings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Findings"
+          },
+          "max_skipped_samples": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Skipped Samples"
+          },
+          "max_total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Bytes"
+          }
+        },
+        "title": "ScanLimitsConfigured",
+        "type": "object"
+      },
+      "ScanLimitsObserved": {
+        "additionalProperties": false,
+        "properties": {
+          "analyzed_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyzed Bytes"
+          },
+          "analyzed_files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyzed Files"
+          },
+          "discovered_at_least": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovered At Least"
+          },
+          "discovered_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovered Bytes"
+          },
+          "discovered_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovered Count"
+          },
+          "discovered_files": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovered Files"
+          }
+        },
+        "title": "ScanLimitsObserved",
+        "type": "object"
+      },
+      "ScanLimitsSkipped": {
+        "additionalProperties": false,
+        "properties": {
+          "by_reason": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "By Reason",
+            "type": "object"
+          },
+          "count": {
+            "default": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "samples": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "title": "ScanLimitsSkipped",
+        "type": "object"
+      },
       "ScanReport": {
         "additionalProperties": false,
+        "description": "Consumer-facing projection of the scanner report.\n\nScanner-internal source contents and implementation details are not part\nof this model; completeness, limits, rule execution and structural\nanalysis are explicitly declared so extra=forbid catches contract drift.",
         "properties": {
           "dependency_check": {
             "anyOf": [
@@ -2283,9 +2676,39 @@
             ],
             "title": "Package Name"
           },
+          "rule_execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuleExecution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scan_id": {
             "title": "Scan Id",
             "type": "string"
+          },
+          "scan_limits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanLimits"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scan_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "scanned_at": {
             "anyOf": [
@@ -2298,9 +2721,70 @@
             ],
             "title": "Scanned At"
           },
+          "scanner_errors": {
+            "items": {
+              "$ref": "#/components/schemas/ScannerError"
+            },
+            "title": "Scanner Errors",
+            "type": "array"
+          },
           "scanner_version": {
             "title": "Scanner Version",
             "type": "string"
+          },
+          "source_snapshot_created_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Created At"
+          },
+          "source_snapshot_expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Expires At"
+          },
+          "source_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Id"
+          },
+          "source_snapshot_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Snapshot Sha256"
+          },
+          "structural_analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StructuralAnalysis"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "structure_check": {
             "anyOf": [
@@ -2317,14 +2801,12 @@
           "summary": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ScanSummary"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Summary"
+            ]
           },
           "version": {
             "anyOf": [
@@ -2343,6 +2825,145 @@
           "scanner_version"
         ],
         "title": "ScanReport",
+        "type": "object"
+      },
+      "ScanStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "conclusion": {
+            "enum": [
+              "risks_found",
+              "no_risks_found",
+              "inconclusive"
+            ],
+            "title": "Conclusion",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "complete",
+              "partial",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "conclusion",
+          "complete"
+        ],
+        "title": "ScanStatus",
+        "type": "object"
+      },
+      "ScanSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "critical": {
+            "default": 0,
+            "title": "Critical",
+            "type": "integer"
+          },
+          "effective_total": {
+            "default": 0,
+            "title": "Effective Total",
+            "type": "integer"
+          },
+          "high": {
+            "default": 0,
+            "title": "High",
+            "type": "integer"
+          },
+          "info": {
+            "default": 0,
+            "title": "Info",
+            "type": "integer"
+          },
+          "low": {
+            "default": 0,
+            "title": "Low",
+            "type": "integer"
+          },
+          "medium": {
+            "default": 0,
+            "title": "Medium",
+            "type": "integer"
+          },
+          "occurrences_total": {
+            "default": 0,
+            "title": "Occurrences Total",
+            "type": "integer"
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pass Rate"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "ScanSummary",
+        "type": "object"
+      },
+      "ScannerError": {
+        "additionalProperties": false,
+        "properties": {
+          "error_type": {
+            "title": "Error Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "recoverable": {
+            "title": "Recoverable",
+            "type": "boolean"
+          },
+          "rule_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Id"
+          }
+        },
+        "required": [
+          "phase",
+          "error_type",
+          "message",
+          "recoverable"
+        ],
+        "title": "ScannerError",
         "type": "object"
       },
       "ShellPermissions": {
@@ -2498,6 +3119,41 @@
           "ref"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "StructuralAnalysis": {
+        "additionalProperties": false,
+        "properties": {
+          "capability_graph": {
+            "$ref": "#/components/schemas/CapabilityGraphSummary"
+          },
+          "javascript_files": {
+            "default": 0,
+            "title": "Javascript Files",
+            "type": "integer"
+          },
+          "parse_errors": {
+            "default": 0,
+            "title": "Parse Errors",
+            "type": "integer"
+          },
+          "python_files": {
+            "default": 0,
+            "title": "Python Files",
+            "type": "integer"
+          },
+          "shell_files": {
+            "default": 0,
+            "title": "Shell Files",
+            "type": "integer"
+          },
+          "structured_documents": {
+            "default": 0,
+            "title": "Structured Documents",
+            "type": "integer"
+          }
+        },
+        "title": "StructuralAnalysis",
         "type": "object"
       },
       "TrustHistoryPoint": {

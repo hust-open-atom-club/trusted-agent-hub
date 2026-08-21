@@ -72,7 +72,18 @@
       "required": ["configured", "observed", "exceeded", "skipped"],
       "properties": {
         "configured": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "observed": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "observed": {
+          "type": "object",
+          "properties": {
+            "discovered_files": { "type": "integer", "minimum": 0 },
+            "discovered_count": { "type": "integer", "minimum": 0 },
+            "discovered_at_least": { "type": "boolean" },
+            "analyzed_files": { "type": "integer", "minimum": 0 },
+            "discovered_bytes": { "type": "integer", "minimum": 0 },
+            "analyzed_bytes": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
         "exceeded": { "type": "array", "items": { "type": "string" } },
         "skipped": {
           "type": "object",

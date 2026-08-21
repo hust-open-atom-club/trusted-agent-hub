@@ -37,7 +37,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -93,6 +92,7 @@ class RiskScanner:
         self._package_metadata: dict[str, Any] | None = None
         self._file_contents: dict[str, str] = {}
         self.analysis = None
+        self._content_tree_hash: str | None = None
 
     def scan(self) -> dict[str, Any]:
         self.findings = []
@@ -107,11 +107,12 @@ class RiskScanner:
                                 "dependencies_queried": 0, "query_failures": 0}
         self._file_contents = {}
         self.analysis = None
+        self._content_tree_hash = None
         start = datetime.now(timezone.utc)
 
         self._inventory = build_inventory(self.target_dir, self.policy)
         self.discovered_files = [r.relative_path for r in self._inventory.files]
-        self._file_contents = load_text_files(self._inventory)
+        self._file_contents = load_text_files(self._inventory, policy=self.policy)
         self.analyzed_files = [r.relative_path for r in self._inventory.files if r.read_status == "analyzed"]
         self.scanned_files = [r.relative_path for r in self._inventory.files
                               if r.read_status == "analyzed" and r.skip_reason != "general_rule_excluded"]
@@ -200,17 +201,21 @@ class RiskScanner:
         """Attach facts established by acquisition instead of trusting manifests.
 
         A repository's own metadata cannot safely attest to the bytes currently
-        being scanned.  The scanner therefore computes the canonical content
-        tree digest itself and accepts the commit only from the acquisition
+        being scanned. The scanner therefore computes a bounded content hash
+        from the inventory and accepts the commit only from the acquisition
         layer (``git rev-parse HEAD`` / GitHub zipball resolution).
         """
+        # Calculate this once from the already bounded inventory.  The API may
+        # request the hash again while persisting the source snapshot, but that
+        # call is served from this cache and never walks or rereads the tree.
+        content_hash = self._content_tree_sha256()
         if not self._package_metadata:
             return
 
         integrity = self._package_metadata.get("integrity")
         if not isinstance(integrity, dict):
             integrity = {}
-        integrity["sha256"] = self._content_tree_sha256()
+        integrity["sha256"] = content_hash
         self._package_metadata["integrity"] = integrity
 
         if re.fullmatch(r"^[a-f0-9]{40}$", self.source_commit_hash):
@@ -221,33 +226,40 @@ class RiskScanner:
             self._package_metadata["source"] = source
 
     def _content_tree_sha256(self) -> str:
-        """Return the canonical package tree hash used by package manifests."""
-        digest = hashlib.sha256()
-        entries: list[tuple[str, Path]] = []
-        for base, dirs, files in os.walk(self.target_dir):
-            dirs[:] = sorted(d for d in dirs if d != ".git")
-            for name in sorted(files):
-                path = Path(base) / name
-                rel = path.relative_to(self.target_dir).as_posix()
-                # A manifest cannot include its own digest without recursion.
-                if rel == "manifest.json":
-                    continue
-                entries.append((rel, path))
+        """Return the bounded content hash for the current scan snapshot.
 
-        for rel, path in sorted(entries):
-            try:
-                if path.is_symlink():
-                    continue
-                data = path.read_bytes()
-            except OSError:
+        This is deliberately a *restricted scan hash*, not an unrestricted
+        source-tree digest.  It hashes only content loaded through the
+        inventory's per-file and aggregate byte budgets, so it cannot turn a
+        skipped or growing file into an unbounded read during the hash phase.
+        """
+        if self._content_tree_hash is not None:
+            return self._content_tree_hash
+
+        inventory = self.inventory
+        digest = hashlib.sha256()
+        hash_limited = inventory.discovered_at_least
+        for record in sorted(inventory.files, key=lambda item: item.relative_path):
+            rel = record.relative_path
+            # A manifest cannot include its own digest without recursion.
+            if rel == "manifest.json":
                 continue
+            if record.read_status != "analyzed" or rel not in self._file_contents:
+                hash_limited = True
+                continue
+            if record.content_truncated or record.changed_during_scan:
+                hash_limited = True
+            data = self._file_contents[rel].encode("utf-8")
             if b"\0" not in data:
                 data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             digest.update(rel.encode("utf-8"))
             digest.update(b"\0")
             digest.update(data)
             digest.update(b"\0")
-        return digest.hexdigest()
+        if hash_limited and "content_hash_limited" not in inventory.limit_violations:
+            inventory.limit_violations.append("content_hash_limited")
+        self._content_tree_hash = digest.hexdigest()
+        return self._content_tree_hash
 
     def _read_file_content(self, rel_path: str) -> str:
         return self._file_contents.get(rel_path, "")
@@ -577,14 +589,23 @@ class RiskScanner:
             "scanner_version": SCANNER_VERSION,
             "duration_ms": duration_ms,
             "scan_status": scan_status,
-            "scan_limits": {"configured": self.policy.as_dict(),
-                            "observed": {"discovered_files": self.inventory.discovered_files,
-                                         "analyzed_files": len(self.analyzed_files),
-                                         "discovered_bytes": self.inventory.discovered_bytes,
-                                         "analyzed_bytes": self.inventory.analyzed_bytes},
-                            "exceeded": self.inventory.limit_violations,
-                            "skipped": {"count": sum(skipped.values()), "by_reason": skipped,
-                                         "samples": self.inventory.skipped_samples or []}},
+            "scan_limits": {
+                "configured": self.policy.as_dict(),
+                "observed": {
+                    "discovered_files": self.inventory.discovered_files,
+                    "discovered_count": self.inventory.discovered_count,
+                    "discovered_at_least": self.inventory.discovered_at_least,
+                    "analyzed_files": len(self.analyzed_files),
+                    "discovered_bytes": self.inventory.discovered_bytes,
+                    "analyzed_bytes": self.inventory.analyzed_bytes,
+                },
+                "exceeded": self.inventory.limit_violations,
+                "skipped": {
+                    "count": sum(skipped.values()),
+                    "by_reason": skipped,
+                    "samples": self.inventory.skipped_samples or [],
+                },
+            },
             "rule_execution": self.rule_execution,
             "scanner_errors": self.scanner_errors,
             "findings": report_findings,

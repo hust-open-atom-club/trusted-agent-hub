@@ -54,6 +54,14 @@ def test_structured_manifest_reads_fields_without_regex() -> None:
     assert get_field(document.data, "missing.field") is None
 
 
+def test_malformed_yaml_is_a_recoverable_structured_parse_error() -> None:
+    document = parse_structured_document("broken.yaml", "items: [")
+
+    assert document.data is None
+    assert document.error is not None
+    assert "invalid yaml" in document.error
+
+
 def test_source_integrity_detects_mutation_and_new_file(tmp_path: Path) -> None:
     target = tmp_path / "main.py"
     target.write_text("print(1)\n", encoding="utf-8")
