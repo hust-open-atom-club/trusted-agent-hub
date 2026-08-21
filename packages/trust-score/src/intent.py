@@ -266,6 +266,7 @@ def assess_prompt_safety(
             "medium_count": 0,
             "low_count": 0,
             "scan_available": False,
+            "scan_complete": False,
             "confirmed_malicious": False,
         }
 
@@ -276,6 +277,16 @@ def assess_prompt_safety(
     high_count: int = summary.get("high", 0)
     medium_count: int = summary.get("medium", 0)
     low_count: int = summary.get("low", 0)
+
+    scan_status = scan_report.get("scan_status", {}) or {}
+    scan_state = str(scan_status.get("state", "complete"))
+    scan_complete = scan_state == "complete" and bool(scan_status.get("complete", scan_state == "complete"))
+    scan_reasons = scan_status.get("reasons", []) or []
+    completeness_evidence = (
+        [f"Scan incomplete ({scan_state}); automatic safe/trusted conclusion is not allowed"
+         + (f": {', '.join(map(str, scan_reasons))}" if scan_reasons else "")]
+        if not scan_complete else []
+    )
 
     evidence: list[str] = []
 
@@ -326,6 +337,21 @@ def assess_prompt_safety(
             "scan_available": True,
             "confirmed_malicious": confirmed_malicious,
             "llm_unavailable": llm_unavailable,
+            "scan_complete": scan_complete,
+        }
+    elif not scan_complete:
+        evidence.extend(completeness_evidence)
+        return {
+            "level": "suspicious",
+            "score": min(60, _compute_i2_score(findings)),
+            "evidence": evidence,
+            "critical_count": critical_count,
+            "high_count": high_count,
+            "medium_count": medium_count,
+            "low_count": low_count,
+            "scan_available": True,
+            "scan_complete": False,
+            "confirmed_malicious": False,
         }
     elif critical_count > 0 or high_count > 0:
         level = "suspicious"
@@ -344,6 +370,7 @@ def assess_prompt_safety(
             "low_count": low_count,
             "scan_available": True,
             "confirmed_malicious": False,
+            "scan_complete": scan_complete,
         }
     elif medium_count > 2 or low_count > 2:
         level = "suspicious"
@@ -359,6 +386,7 @@ def assess_prompt_safety(
             "low_count": low_count,
             "scan_available": True,
             "confirmed_malicious": False,
+            "scan_complete": scan_complete,
         }
     else:
         level = "safe"
@@ -381,6 +409,7 @@ def assess_prompt_safety(
             "low_count": low_count,
             "scan_available": True,
             "confirmed_malicious": False,
+            "scan_complete": scan_complete,
         }
 
 

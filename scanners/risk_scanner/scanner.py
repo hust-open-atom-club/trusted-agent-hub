@@ -35,7 +35,6 @@ Risk Scanner — 自动风险扫描器 v0.4.0
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import logging
 import os
@@ -54,33 +53,12 @@ from scanners.risk_scanner.common import (
 )
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
+from scanners.risk_scanner.reporting import determine_scan_status
 from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 logger = logging.getLogger(__name__)
 
-
-_RULE_MODULES: list[str] = [
-    "scanners.risk_scanner.rules.prompt_injection",
-    "scanners.risk_scanner.rules.dangerous_shell",
-    "scanners.risk_scanner.rules.credential_access",
-    "scanners.risk_scanner.rules.hardcoded_secrets",
-    "scanners.risk_scanner.rules.rce",
-    "scanners.risk_scanner.rules.behavioral_ast",
-    "scanners.risk_scanner.rules.excessive_permissions",
-    "scanners.risk_scanner.rules.network",
-    "scanners.risk_scanner.rules.supply_chain",
-    "scanners.risk_scanner.rules.source_integrity",
-    "scanners.risk_scanner.rules.metadata_quality",
-    "scanners.risk_scanner.rules.output_handling",
-    "scanners.risk_scanner.rules.system_prompt_leak",
-    "scanners.risk_scanner.rules.memory_poisoning",
-    "scanners.risk_scanner.rules.ssrf",
-    "scanners.risk_scanner.rules.agent_snooping",
-    "scanners.risk_scanner.rules.tool_misuse",
-    "scanners.risk_scanner.rules.mcp_security",
-    "scanners.risk_scanner.rules.plugin_security",
-    "scanners.risk_scanner.rules.subagent_security",
-]
 
 SCANNER_VERSION = "0.4.0"
 
@@ -103,8 +81,10 @@ class RiskScanner:
         self.discovered_files: list[str] = []
         self.analyzed_files: list[str] = []
         self._inventory: ScanInventory | None = None
-        self.rule_execution: dict[str, Any] = {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
+        self.rule_runner = RuleRunner()
+        self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
+        self.findings_limit_exceeded = False
         self._package_metadata: dict[str, Any] | None = None
         self._file_contents: dict[str, str] = {}
 
@@ -114,8 +94,9 @@ class RiskScanner:
         self.discovered_files = []
         self.analyzed_files = []
         self._inventory = None
-        self.rule_execution = {"total": len(_RULE_MODULES), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
+        self.rule_execution = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors = []
+        self.findings_limit_exceeded = False
         self._file_contents = {}
         start = datetime.now(timezone.utc)
 
@@ -127,20 +108,15 @@ class RiskScanner:
         self._load_metadata()
         self._inject_acquired_source_integrity()
 
-        for rule_module in _RULE_MODULES:
-            try:
-                mod = importlib.import_module(rule_module)
-                mod.run(self)
-                self.rule_execution["succeeded"] += 1
-                self.rule_execution["results"].append({"rule_id": rule_module.rsplit(".", 1)[-1], "status": "succeeded"})
-            except Exception as e:
-                rule_id = rule_module.rsplit(".", 1)[-1]
-                self.rule_execution["failed"] += 1
-                self.rule_execution["results"].append({"rule_id": rule_id, "status": "failed"})
-                self.scanner_errors.append({"phase": "rule_execution", "rule_id": rule_id,
-                                            "error_type": type(e).__name__,
-                                            "message": str(e)[:200], "recoverable": True})
-                logger.exception("Rule module %s failed", rule_module)
+        rule_results = self.rule_runner.run_all(self)
+        self.rule_execution["succeeded"] = sum(r.status == "succeeded" for r in rule_results)
+        self.rule_execution["failed"] = sum(r.status == "failed" for r in rule_results)
+        self.rule_execution["results"] = [r.as_dict() for r in rule_results]
+        self.scanner_errors = [
+            {"phase": "rule_execution", "rule_id": r.rule_id, "error_type": r.error_type,
+             "message": r.error_message, "recoverable": True}
+            for r in rule_results if r.status == "failed"
+        ]
 
         self._downgrade_documentation_findings()
         self._deduplicate_findings()
@@ -324,8 +300,9 @@ class RiskScanner:
         cwe_id: str | None = None,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
-            if self._inventory is not None and "max_findings" not in self._inventory.limit_violations:
-                self._inventory.limit_violations.append("max_findings")
+            self.findings_limit_exceeded = True
+            if self._inventory is not None and "findings_limit_exceeded" not in self._inventory.limit_violations:
+                self._inventory.limit_violations.append("findings_limit_exceeded")
             return
         finding: dict[str, Any] = {
             "id": f"finding-{uuid.uuid4().hex[:8]}",
@@ -523,9 +500,14 @@ class RiskScanner:
         cve_findings = [f for f in self.findings if "CVE" in f.get("title", "")]
         dependency_check["known_vulnerabilities"] = len(cve_findings)
 
-        complete = not self.inventory.limit_violations and self.inventory.discovered_files == len(self.inventory.files) and not self.scanner_errors
+        complete = not self.inventory.limit_violations and not self.scanner_errors
         state = "complete" if complete else ("failed" if not self.target_dir.is_dir() else "partial")
-        conclusion = "risks_found" if complete and self.findings else ("no_risks_found" if complete else "inconclusive")
+        scan_status = determine_scan_status(
+            target_valid=self.target_dir.is_dir(),
+            limit_violations=self.inventory.limit_violations,
+            scanner_errors=self.scanner_errors,
+            effective_total=effective_total,
+        )
         skipped = self.inventory.skipped_by_reason or {}
         return {
             "scan_id": f"scan-{uuid.uuid4().hex[:12]}",
@@ -534,8 +516,7 @@ class RiskScanner:
             "scanned_at": start_time.isoformat(),
             "scanner_version": SCANNER_VERSION,
             "duration_ms": duration_ms,
-            "scan_status": {"state": state, "conclusion": conclusion, "complete": complete,
-                            "reasons": list(self.inventory.limit_violations) + (["rule_execution_errors"] if self.scanner_errors else [])},
+            "scan_status": scan_status,
             "scan_limits": {"configured": self.policy.as_dict(),
                             "observed": {"discovered_files": self.inventory.discovered_files,
                                          "analyzed_files": len(self.analyzed_files),
