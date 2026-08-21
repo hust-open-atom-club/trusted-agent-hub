@@ -1,13 +1,127 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Package } from '@/types';
 import { fetchPackages, type SortField, type SortOrder } from '@/data/packages';
 import SearchBar from '@/components/SearchBar';
 import PackageCard from '@/components/PackageCard';
+import PackageIconImage from '@/components/PackageIconImage';
 
 const PAGE_SIZE = 18;
+
+interface MarketplaceHeroProps {
+  totalPackages: number | string;
+  publishedCount: number | string;
+  topRatedCount: number | string;
+}
+
+function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: MarketplaceHeroProps) {
+  const { t } = useTranslation();
+
+  return (
+    <section className="hero market-hero">
+      <div className="hero-bg" />
+      <div className="hero-content market-hero-content">
+        <div className="market-hero-copy">
+          <span className="hero-chip">{t('home.chip')}</span>
+          <h1 className="hero-title">
+            {t('home.title')}<br />
+            <span className="hero-title-accent">{t('home.title_accent')}</span>
+          </h1>
+          <p className="hero-desc">{t('home.desc')}</p>
+          <div className="hero-stats">
+            <div className="hero-stat">
+              <span className="hero-stat-num">{totalPackages}</span>
+              <span className="hero-stat-label">{t('home.stat_packages')}</span>
+            </div>
+            <div className="hero-stat-divider" />
+            <div className="hero-stat">
+              <span className="hero-stat-num">{publishedCount}</span>
+              <span className="hero-stat-label">{t('home.stat_published')}</span>
+            </div>
+            <div className="hero-stat-divider" />
+            <div className="hero-stat">
+              <span className="hero-stat-num">{topRatedCount}</span>
+              <span className="hero-stat-label">{t('home.stat_top_rated')}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="market-trust-panel" aria-label={t('home.trust_panel_label')}>
+          <div className="market-trust-panel__header">
+            <span>{t('home.trust_panel_eyebrow')}</span>
+            <strong>{t('home.trust_panel_title')}</strong>
+          </div>
+          <div className="market-trust-panel__grid">
+            <div>
+              <span>{t('home.signal_scan')}</span>
+              <strong>{t('home.signal_scan_value')}</strong>
+            </div>
+            <div>
+              <span>{t('home.signal_permissions')}</span>
+              <strong>{t('home.signal_permissions_value')}</strong>
+            </div>
+            <div>
+              <span>{t('home.signal_integrity')}</span>
+              <strong>{t('home.signal_integrity_value')}</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function formatShelfRisk(riskLevel: string | null): string {
+  const labels: Record<string, string> = {
+    trusted: '可信',
+    low_risk: '低风险',
+    medium_risk: '中风险',
+    high_risk: '高风险',
+    untrusted: '不可信',
+  };
+
+  return riskLevel ? labels[riskLevel] ?? riskLevel.replace(/_/g, ' ') : '未知风险';
+}
+
+interface MarketplaceShelfProps {
+  title: string;
+  kicker: string;
+  items: Package[];
+}
+
+function MarketplaceShelf({ title, kicker, items }: MarketplaceShelfProps) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="market-shelf">
+      <div className="market-shelf__heading">
+        <span>{kicker}</span>
+        <h2>{title}</h2>
+      </div>
+      <div className="market-shelf__list">
+        {items.map((pkg) => (
+          <a className="market-shelf-item" href={`/package/${encodeURIComponent(pkg.name)}`} key={`${title}-${pkg.id}`}>
+            <PackageIconImage
+              type={pkg.type}
+              iconUrl={pkg.icon_url}
+              alt={`${pkg.name} icon`}
+              className="market-shelf-item__icon"
+            />
+            <span className="market-shelf-item__copy">
+              <strong>{pkg.name}</strong>
+              <span>{pkg.grade ?? '--'} · {formatShelfRisk(pkg.risk_level)}</span>
+            </span>
+            <span className="market-shelf-item__meta">{pkg.install_count}</span>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export default function HomeClient() {
   const { t } = useTranslation();
@@ -182,38 +296,30 @@ export default function HomeClient() {
   /* ── 统计（来自 API 实际返回的 total） ── */
   const publishedCount = totalPackages;
   const topRatedCount = packages.filter(p => p.grade === 'A' || p.grade === 'B').length;
+  const lowRiskPackages = useMemo(
+    () => packages
+      .filter((pkg) => pkg.grade === 'A' || pkg.grade === 'B' || pkg.risk_level === 'low_risk')
+      .slice(0, 4),
+    [packages],
+  );
+  const popularPackages = useMemo(
+    () => [...packages]
+      .sort((a, b) => b.install_count - a.install_count)
+      .slice(0, 4),
+    [packages],
+  );
+  const recentPackages = useMemo(
+    () => [...packages]
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .slice(0, 4),
+    [packages],
+  );
 
   /* ── 加载骨架屏 ── */
   if (loading && packages.length === 0) {
     return (
       <>
-        <section className="hero">
-          <div className="hero-bg" />
-          <div className="hero-content">
-            <span className="hero-chip">{t('home.chip')}</span>
-            <h1 className="hero-title">
-              {t('home.title')}<br />
-              <span className="hero-title-accent">{t('home.title_accent')}</span>
-            </h1>
-            <p className="hero-desc">{t('home.desc')}</p>
-            <div className="hero-stats">
-              <div className="hero-stat">
-                <span className="hero-stat-num">--</span>
-                <span className="hero-stat-label">{t('home.stat_packages')}</span>
-              </div>
-              <div className="hero-stat-divider" />
-              <div className="hero-stat">
-                <span className="hero-stat-num">--</span>
-                <span className="hero-stat-label">{t('home.stat_published')}</span>
-              </div>
-              <div className="hero-stat-divider" />
-              <div className="hero-stat">
-                <span className="hero-stat-num">--</span>
-                <span className="hero-stat-label">{t('home.stat_top_rated')}</span>
-              </div>
-            </div>
-          </div>
-        </section>
+        <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
 
         <div className="page-container">
           <SearchBar
@@ -259,17 +365,7 @@ export default function HomeClient() {
   if (error && packages.length === 0) {
     return (
       <>
-        <section className="hero">
-          <div className="hero-bg" />
-          <div className="hero-content">
-            <span className="hero-chip">{t('home.chip')}</span>
-            <h1 className="hero-title">
-              {t('home.title')}<br />
-              <span className="hero-title-accent">{t('home.title_accent')}</span>
-            </h1>
-            <p className="hero-desc">{t('home.desc')}</p>
-          </div>
-        </section>
+        <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
 
         <div className="page-container">
           <div className="empty-state">
@@ -287,33 +383,11 @@ export default function HomeClient() {
 
   return (
     <>
-      <section className="hero">
-        <div className="hero-bg" />
-        <div className="hero-content">
-          <span className="hero-chip">{t('home.chip')}</span>
-          <h1 className="hero-title">
-            {t('home.title')}<br />
-            <span className="hero-title-accent">{t('home.title_accent')}</span>
-          </h1>
-          <p className="hero-desc">{t('home.desc')}</p>
-          <div className="hero-stats">
-            <div className="hero-stat">
-              <span className="hero-stat-num">{totalPackages}</span>
-              <span className="hero-stat-label">{t('home.stat_packages')}</span>
-            </div>
-            <div className="hero-stat-divider" />
-            <div className="hero-stat">
-              <span className="hero-stat-num">{publishedCount}</span>
-              <span className="hero-stat-label">{t('home.stat_published')}</span>
-            </div>
-            <div className="hero-stat-divider" />
-            <div className="hero-stat">
-              <span className="hero-stat-num">{topRatedCount}</span>
-              <span className="hero-stat-label">{t('home.stat_top_rated')}</span>
-            </div>
-          </div>
-        </div>
-      </section>
+      <MarketplaceHero
+        totalPackages={totalPackages}
+        publishedCount={publishedCount}
+        topRatedCount={topRatedCount}
+      />
 
       <div className="page-container">
           <SearchBar
@@ -340,6 +414,26 @@ export default function HomeClient() {
             onUpdatedDaysChange={handleUpdatedDaysChange}
           />
 
+        {packages.length > 0 && (
+          <div className="market-shelves" aria-label={t('home.market_sections')}>
+            <MarketplaceShelf
+              title={t('home.section_low_risk')}
+              kicker={t('home.section_low_risk_kicker')}
+              items={lowRiskPackages}
+            />
+            <MarketplaceShelf
+              title={t('home.section_popular')}
+              kicker={t('home.section_popular_kicker')}
+              items={popularPackages}
+            />
+            <MarketplaceShelf
+              title={t('home.section_recent')}
+              kicker={t('home.section_recent_kicker')}
+              items={recentPackages}
+            />
+          </div>
+        )}
+
         {/* 加载指示条（已有数据时的刷新） */}
         {loading && (
           <div className="loading-bar" />
@@ -353,11 +447,17 @@ export default function HomeClient() {
           </div>
         )}
 
-        <p className="results-meta">
-          {totalPackages === 1
-            ? t('home.results_count', { count: totalPackages })
-            : `${totalPackages} packages found`}
-        </p>
+        <div className="market-results-header">
+          <div>
+            <span>{t('home.results_kicker')}</span>
+            <h2>{t('home.results_title')}</h2>
+          </div>
+          <p className="results-meta">
+            {totalPackages === 1
+              ? t('home.results_count', { count: totalPackages })
+              : t('home.results_count_plural', { count: totalPackages })}
+          </p>
+        </div>
 
         {packages.length === 0 ? (
           <div className="empty-state">

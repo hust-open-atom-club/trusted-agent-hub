@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TAH Package Icon Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #fbfaf7;
+        --ink: #20242c;
+        --muted: #68707f;
+        --rule: #e4ded4;
+        --accent: #f6c86f;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
+          var(--paper);
+        color: var(--ink);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        width: min(980px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 40px 0 56px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: end;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+
+      p {
+        margin: 0;
+        max-width: 620px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 14px;
+      }
+
+      .card {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+        min-height: 112px;
+        padding: 14px;
+        border: 1px solid var(--rule);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: 0 12px 30px rgba(51, 43, 32, 0.06);
+      }
+
+      .card img {
+        display: block;
+        width: 72px;
+        height: 72px;
+      }
+
+      .card strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 15px;
+      }
+
+      .card span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .hero-sample {
+        display: grid;
+        grid-template-columns: 96px minmax(0, 1fr);
+        gap: 18px;
+        align-items: center;
+        margin-top: 22px;
+        padding: 18px;
+        border: 1px solid var(--rule);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .hero-sample img {
+        width: 96px;
+        height: 96px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>TAH Package Icon Preview</h1>
+          <p>Market-style fallback icons for package detail pages. They are SVG images, not letter placeholders.</p>
+        </div>
+      </header>
+      <section class="grid" aria-label="Icon set">
+        <div class="card"><img src="./plugin.svg" alt="Plugin" /><div><strong>Plugin</strong><span>Puzzle-piece app icon for installable extensions.</span></div></div>
+        <div class="card"><img src="./skill.svg" alt="Skill" /><div><strong>Skill</strong><span>Bookmark and spark icon for reusable capabilities.</span></div></div>
+        <div class="card"><img src="./mcp-server.svg" alt="MCP Server" /><div><strong>MCP Server</strong><span>Connected server nodes for protocol services.</span></div></div>
+        <div class="card"><img src="./command.svg" alt="Command" /><div><strong>Command</strong><span>Terminal panel for command packages.</span></div></div>
+        <div class="card"><img src="./prompt.svg" alt="Prompt" /><div><strong>Prompt</strong><span>Message card for prompt templates.</span></div></div>
+        <div class="card"><img src="./subagent.svg" alt="Subagent" /><div><strong>Subagent</strong><span>Assistant node icon for delegated agents.</span></div></div>
+      </section>
+      <section class="hero-sample" aria-label="Detail hero sample">
+        <img src="./plugin.svg" alt="Plugin sample" />
+        <div>
+          <strong>Detail page scale sample</strong>
+          <p>This is the approximate size and density the icon would have in the package detail hero.</p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

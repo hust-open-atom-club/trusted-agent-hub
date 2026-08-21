@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SortField, SortOrder } from '@/data/packages';
 
@@ -43,6 +44,24 @@ const SORT_OPTIONS: { field: SortField; order: SortOrder; key: string }[] = [
   { field: 'grade', order: 'asc', key: 'trust' },
 ];
 
+function SearchGlyph() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function ArrowGlyph() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12 5 19 12 12 19" />
+    </svg>
+  );
+}
+
 export default function SearchBar({
   query,
   activeType,
@@ -68,142 +87,253 @@ export default function SearchBar({
 }: SearchBarProps) {
   const { t } = useTranslation();
   const activeSortKey = `${sortBy}:${sortOrder}`;
+  const [isFocused, setIsFocused] = useState(false);
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const hasAdvancedFilters = Boolean(client || category || tag || minGrade || minScore || maxScore || updatedDays || sortBy !== 'updated_at' || sortOrder !== 'desc');
+  const showAdvanced = isAdvancedOpen || hasAdvancedFilters;
+  const normalizedQuery = query.trim();
+
+  const suggestionActions = [
+    {
+      label: '低风险推荐',
+      description: '优先查看 A/B 等级包',
+      end: 'Trust',
+      onClick: () => onMinGradeChange('B'),
+    },
+    {
+      label: '最多安装',
+      description: '按安装量排序',
+      end: 'Sort',
+      onClick: () => onSortChange('install_count', 'desc'),
+    },
+    {
+      label: '最近更新',
+      description: '查看活跃维护包',
+      end: 'Fresh',
+      onClick: () => onSortChange('updated_at', 'desc'),
+    },
+  ];
 
   return (
     <div className="search-section">
-      <div className="search-bar">
-        <span className="search-icon">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        </span>
-        <input
-          type="text"
-          className="search-input"
-          placeholder={t('search.placeholder')}
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-        />
+      <div className={`search-command ${isFocused ? 'is-focused' : ''}`}>
+        <div className="search-bar">
+          <span className="search-icon search-icon-stack" aria-hidden="true">
+            <span className={`search-icon-layer ${normalizedQuery ? 'is-hidden' : 'is-visible'}`}>
+              <SearchGlyph />
+            </span>
+            <span className={`search-icon-layer ${normalizedQuery ? 'is-visible' : 'is-hidden'}`}>
+              <ArrowGlyph />
+            </span>
+          </span>
+          <input
+            type="text"
+            className="search-input"
+            placeholder={t('search.placeholder')}
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && normalizedQuery) {
+                onQueryChange(normalizedQuery);
+              }
+              if (e.key === 'Escape') {
+                setIsFocused(false);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={() => window.setTimeout(() => setIsFocused(false), 140)}
+          />
+        </div>
+
+        {isFocused && (
+          <div className="search-suggestions" role="listbox" aria-label="快捷筛选">
+            <div className="search-suggestions__header">
+              <span>快捷筛选</span>
+              <span>Enter to search</span>
+            </div>
+            <div className="search-suggestions__list">
+              {normalizedQuery && (
+                <button
+                  type="button"
+                  className="search-suggestion-item search-suggestion-item--query"
+                  aria-label={`搜索 ${normalizedQuery}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onQueryChange(normalizedQuery)}
+                >
+                  <span className="search-suggestion-icon"><SearchGlyph /></span>
+                  <span className="search-suggestion-copy">
+                    <strong>搜索 {normalizedQuery}</strong>
+                    <span>按名称、描述和关键词查找</span>
+                  </span>
+                  <span className="search-suggestion-end">Query</span>
+                </button>
+              )}
+              {suggestionActions.map((action, index) => (
+                <button
+                  type="button"
+                  className="search-suggestion-item"
+                  key={action.label}
+                  aria-label={action.label}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={action.onClick}
+                  style={{ animationDelay: `${index * 42}ms` }}
+                >
+                  <span className="search-suggestion-icon"><ArrowGlyph /></span>
+                  <span className="search-suggestion-copy">
+                    <strong>{action.label}</strong>
+                    <span>{action.description}</span>
+                  </span>
+                  <span className="search-suggestion-end">{action.end}</span>
+                </button>
+              ))}
+            </div>
+            <div className="search-suggestions__footer">
+              <span>聚焦搜索时快速切换市场视图</span>
+              <span>ESC 关闭</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="search-controls-row">
-        <div className="type-filters">
-          {FILTER_KEYS.map((key) => (
-            <button
-              key={key}
-              className={`type-filter-btn ${activeType === key ? 'active' : ''}`}
-              onClick={() => onTypeChange(key)}
-            >
-              {t(`search.${key}`)}
-            </button>
-          ))}
+        <div className="search-toolbar">
+          <div className="type-filters">
+            {FILTER_KEYS.map((key) => (
+              <button
+                key={key}
+                className={`type-filter-btn ${activeType === key ? 'active' : ''}`}
+                onClick={() => onTypeChange(key)}
+              >
+                {t(`search.${key}`)}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className={`advanced-filter-toggle ${showAdvanced ? 'active' : ''}`}
+            aria-expanded={showAdvanced}
+            onClick={() => setIsAdvancedOpen((open) => !open)}
+          >
+            <span>高级筛选</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M7 12h10" />
+              <path d="M10 18h4" />
+            </svg>
+          </button>
         </div>
 
-        <div className="search-filters-panel">
-          <div className="filter-group">
-            <span className="filter-label">客户端</span>
-            <select
-              className="sort-select"
-              value={client}
-              onChange={(e) => onClientChange(e.target.value)}
-              aria-label="Filter by client"
-            >
-              <option value="">全部客户端</option>
-              {CLIENT_OPTIONS.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
+        {showAdvanced && (
+          <div className="search-filters-panel is-open">
+            <div className="filter-group">
+              <span className="filter-label">客户端</span>
+              <select
+                className="sort-select"
+                value={client}
+                onChange={(e) => onClientChange(e.target.value)}
+                aria-label="Filter by client"
+              >
+                <option value="">全部客户端</option>
+                {CLIENT_OPTIONS.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
 
-          <div className="filter-group">
-            <span className="filter-label">信任等级</span>
-            <select
-              className="sort-select"
-              value={minGrade}
-              onChange={(e) => onMinGradeChange(e.target.value)}
-              aria-label="Filter by minimum trust grade"
-            >
-              <option value="">不限等级</option>
-              {GRADE_OPTIONS.map((g) => (
-                <option key={g} value={g}>{g} 及以上</option>
-              ))}
-            </select>
-          </div>
+            <div className="filter-group">
+              <span className="filter-label">信任等级</span>
+              <select
+                className="sort-select"
+                value={minGrade}
+                onChange={(e) => onMinGradeChange(e.target.value)}
+                aria-label="Filter by minimum trust grade"
+              >
+                <option value="">不限等级</option>
+                {GRADE_OPTIONS.map((g) => (
+                  <option key={g} value={g}>{g} 及以上</option>
+                ))}
+              </select>
+            </div>
 
-          <div className="filter-group">
-            <span className="filter-label">评分范围</span>
-            <div className="score-range">
+            <div className="filter-group">
+              <span className="filter-label">评分范围</span>
+              <div className="score-range">
+                <input
+                  type="number"
+                  className="filter-input"
+                  min={0}
+                  max={100}
+                  placeholder="最低"
+                  value={minScore}
+                  onChange={(e) => onMinScoreChange(e.target.value)}
+                  aria-label="Minimum trust score"
+                  style={{ width: '5.5rem' }}
+                />
+                <span className="score-sep">-</span>
+                <input
+                  type="number"
+                  className="filter-input"
+                  min={0}
+                  max={100}
+                  placeholder="最高"
+                  value={maxScore}
+                  onChange={(e) => onMaxScoreChange(e.target.value)}
+                  aria-label="Maximum trust score"
+                  style={{ width: '5.5rem' }}
+                />
+              </div>
+            </div>
+
+            <div className="filter-group">
+              <span className="filter-label">更新时间</span>
+              <select
+                className="sort-select"
+                value={updatedDays}
+                onChange={(e) => onUpdatedDaysChange(e.target.value)}
+                aria-label="Filter by last updated"
+              >
+                <option value="">不限时间</option>
+                {UPDATED_OPTIONS.map((d) => (
+                  <option key={d} value={d}>{d} 天内更新</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="filter-group">
+              <span className="filter-label">标签</span>
               <input
-                type="number"
+                type="text"
                 className="filter-input"
-                min={0}
-                max={100}
-                placeholder="最低"
-                value={minScore}
-                onChange={(e) => onMinScoreChange(e.target.value)}
-                aria-label="Minimum trust score"
-                style={{ width: '5.5rem' }}
-              />
-              <span className="score-sep">–</span>
-              <input
-                type="number"
-                className="filter-input"
-                min={0}
-                max={100}
-                placeholder="最高"
-                value={maxScore}
-                onChange={(e) => onMaxScoreChange(e.target.value)}
-                aria-label="Maximum trust score"
-                style={{ width: '5.5rem' }}
+                placeholder="标签关键词"
+                value={tag}
+                onChange={(e) => onTagChange(e.target.value)}
+                aria-label="Filter by tag"
+                style={{ width: '8rem' }}
               />
             </div>
-          </div>
 
-          <div className="filter-group">
-            <span className="filter-label">更新时间</span>
-            <select
-              className="sort-select"
-              value={updatedDays}
-              onChange={(e) => onUpdatedDaysChange(e.target.value)}
-              aria-label="Filter by last updated"
-            >
-              <option value="">不限时间</option>
-              {UPDATED_OPTIONS.map((d) => (
-                <option key={d} value={d}>{d} 天内更新</option>
-              ))}
-            </select>
+            <div className="filter-group">
+              <span className="filter-label">排序</span>
+              <select
+                className="sort-select"
+                value={activeSortKey}
+                onChange={(e) => {
+                  const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
+                  onSortChange(field, order);
+                }}
+                aria-label="Sort packages"
+              >
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
+                    {t(`sort.${opt.key}`)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-
-          <div className="filter-group">
-            <span className="filter-label">标签</span>
-            <input
-              type="text"
-              className="filter-input"
-              placeholder="标签关键词"
-              value={tag}
-              onChange={(e) => onTagChange(e.target.value)}
-              aria-label="Filter by tag"
-              style={{ width: '8rem' }}
-            />
-          </div>
-
-          <div className="filter-group">
-            <span className="filter-label">排序</span>
-            <select
-              className="sort-select"
-              value={activeSortKey}
-              onChange={(e) => {
-                const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
-                onSortChange(field, order);
-              }}
-              aria-label="Sort packages"
-            >
-              {SORT_OPTIONS.map((opt) => (
-                <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
-                  {t(`sort.${opt.key}`)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
