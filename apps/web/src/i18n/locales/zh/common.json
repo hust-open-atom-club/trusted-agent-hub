@@ -503,7 +503,9 @@
       "view_full_file": "查看完整文件",
       "collapse_code": "▾ 收起代码",
       "expand_code": "▸ 查看代码上下文",
-      "remediation": "修复建议"
+      "remediation": "修复建议",
+      "occurrences": "{{count}} 处出现",
+      "occurrences_truncated": "其余位置未展开"
     },
     "permission": {
       "filesystem": {

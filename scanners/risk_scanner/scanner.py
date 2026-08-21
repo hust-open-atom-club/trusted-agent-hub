@@ -54,7 +54,7 @@ from scanners.risk_scanner.common import (
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
-from scanners.risk_scanner.reporting import determine_scan_status
+from scanners.risk_scanner.reporting import aggregate_findings, determine_scan_status
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.redaction import redact_report
 from scanners.risk_scanner.weights import SEVERITY_POINTS
@@ -129,7 +129,6 @@ class RiskScanner:
             self.inventory.limit_violations.append("dependency_scan_partial")
 
         self._downgrade_documentation_findings()
-        self._deduplicate_findings()
 
         end = datetime.now(timezone.utc)
         duration_ms = int((end - start).total_seconds() * 1000)
@@ -432,15 +431,19 @@ class RiskScanner:
         self._merge_duplicate_into(new_p, old_p)
 
     def _build_report(self, start_time: datetime, duration_ms: int) -> dict[str, Any]:
+        report_findings = aggregate_findings(self.findings)
         severity_counts: dict[str, int] = {
             "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
         }
-        for f in self.findings:
+        for f in report_findings:
             sev = f.get("severity", "info")
             if sev in severity_counts:
                 severity_counts[sev] += 1
 
-        total = len(self.findings)
+        total = len(report_findings)
+        occurrences_total = sum(
+            int((f.get("occurrences") or {}).get("count", 1)) for f in report_findings
+        )
         effective_total = sum(
             severity_counts[s] for s in ("critical", "high", "medium", "low")
         )
@@ -507,7 +510,7 @@ class RiskScanner:
                 for deps_list in deps.values():
                     if isinstance(deps_list, list):
                         dependency_check["total_dependencies"] += len(deps_list)
-        cve_findings = [f for f in self.findings if "CVE" in f.get("title", "")]
+        cve_findings = [f for f in report_findings if "CVE" in f.get("title", "")]
         dependency_check["known_vulnerabilities"] = len(cve_findings)
         dependency_check["total_dependencies"] = int(self.dependency_scan.get("dependencies_found", dependency_check["total_dependencies"]))
         dependency_check["unlocked_versions"] = sum(
@@ -541,9 +544,10 @@ class RiskScanner:
                                          "samples": self.inventory.skipped_samples or []}},
             "rule_execution": self.rule_execution,
             "scanner_errors": self.scanner_errors,
-            "findings": self.findings,
+            "findings": report_findings,
             "summary": {
                 "total": total,
+                "occurrences_total": occurrences_total,
                 "effective_total": effective_total,
                 "critical": severity_counts["critical"],
                 "high": severity_counts["high"],

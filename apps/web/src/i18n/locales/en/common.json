@@ -504,7 +504,9 @@
       "view_full_file": "View Full File",
       "collapse_code": "▾ Collapse",
       "expand_code": "▸ View Code Context",
-      "remediation": "Remediation"
+      "remediation": "Remediation",
+      "occurrences": "{{count}} occurrences",
+      "occurrences_truncated": "Additional occurrences are not shown"
     },
     "permission": {
       "filesystem": {

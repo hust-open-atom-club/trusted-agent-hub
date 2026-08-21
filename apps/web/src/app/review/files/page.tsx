@@ -41,12 +41,9 @@ export default function FileViewerPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => {
-        const content = data.scan_file_contents?.[filePath];
-        if (content) {
-          setFileContent(content);
-        } else {
-          setError(t('review.files.content_unavailable'));
-        }
+        // Full source is intentionally not part of scan reports. Reviewers see
+        // only redacted finding snippets and occurrence locations.
+        setError(t('review.files.content_unavailable'));
       })
       .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));

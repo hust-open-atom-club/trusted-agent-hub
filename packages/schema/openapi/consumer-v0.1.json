@@ -545,6 +545,59 @@
         "title": "FilesystemPermissions",
         "type": "object"
       },
+      "FindingOccurrence": {
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "FindingOccurrence",
+        "type": "object"
+      },
+      "FindingOccurrences": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FindingOccurrence"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "FindingOccurrences",
+        "type": "object"
+      },
       "Grade": {
         "enum": [
           "A",
@@ -2093,6 +2146,16 @@
               }
             ],
             "title": "Location"
+          },
+          "occurrences": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FindingOccurrences"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "remediation": {
             "anyOf": [

@@ -54,6 +54,17 @@ export interface FindingLocation {
   snippet?: string;
 }
 
+export interface FindingOccurrence {
+  file: string;
+  line?: number;
+}
+
+export interface FindingOccurrences {
+  count: number;
+  items: FindingOccurrence[];
+  truncated: boolean;
+}
+
 export interface Finding {
   id?: string;
   rule_id: string;
@@ -68,6 +79,7 @@ export interface Finding {
   suggestion?: string;
   remediation?: string;
   cwe_id?: string;
+  occurrences?: FindingOccurrences;
 }
 
 export interface ScanSummary {
@@ -79,6 +91,7 @@ export interface ScanSummary {
   info?: number;
   pass_rate?: number;
   findings?: Finding[];
+  occurrences_total?: number;
 }
 
 /* ── 信任评分 ── */
@@ -230,7 +243,6 @@ export interface VersionDetail {
   description?: string;
   scan_summary?: ScanSummary | null;
   findings?: Finding[];
-  scan_file_contents?: Record<string, string>;
   trust_score?: TrustScore | null;
   scan_report?: ScanReport | null;
   auto_grade?: string | null;
@@ -260,6 +272,8 @@ export interface ScanReport {
   dependency_check?: Record<string, unknown> | null;
   llm_review?: Record<string, unknown> | null;
   scanned_at?: string | null;
+  source_snapshot_id?: string;
+  occurrences_total?: number;
 }
 
 export interface ReviewRecord {

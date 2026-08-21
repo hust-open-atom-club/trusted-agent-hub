@@ -841,6 +841,22 @@ export default function ReviewDetailPage() {
                               <div className="finding-evidence-line">{finding.evidence}</div>
                             )}
 
+                            {finding.occurrences && finding.occurrences.count > 1 && (
+                              <div className="finding-occurrences" style={{ margin: '0.5rem 0', fontSize: '0.78rem', color: 'var(--color-ink-2)' }}>
+                                <strong>{t('review.finding.occurrences', { count: finding.occurrences.count })}</strong>
+                                <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                                  {finding.occurrences.items.map((occurrence, index) => (
+                                    <li key={`${occurrence.file}:${occurrence.line || 0}:${index}`}>
+                                      {occurrence.file}{occurrence.line ? `:${occurrence.line}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                                {finding.occurrences.truncated && (
+                                  <span>{t('review.finding.occurrences_truncated')}</span>
+                                )}
+                              </div>
+                            )}
+
                             <div className="finding-actions">
                               {finding.location?.snippet && (
                                 <button
@@ -868,7 +884,6 @@ export default function ReviewDetailPage() {
                             {showCodeFor[finding.id!] && (
                               <FindingCodeView
                                 finding={finding}
-                                fileContents={version?.scan_file_contents}
                                 versionId={versionId}
                               />
                             )}

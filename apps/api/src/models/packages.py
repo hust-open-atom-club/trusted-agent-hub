@@ -178,6 +178,17 @@ class TrustScore(StrictContractModel):
         return data
 
 
+class FindingOccurrence(StrictContractModel):
+    file: str
+    line: int | None = Field(default=None, ge=1)
+
+
+class FindingOccurrences(StrictContractModel):
+    count: int = Field(ge=1)
+    items: list[FindingOccurrence] = Field(default_factory=list)
+    truncated: bool = False
+
+
 class ScanFinding(StrictContractModel):
     id: str
     rule_id: str | None = None
@@ -190,6 +201,7 @@ class ScanFinding(StrictContractModel):
     llm_label: LLM_LABEL | None = None
     remediation: str | None = None
     cwe_id: str | None = None
+    occurrences: FindingOccurrences | None = None
 
 
 class LLMReviewLabelsSummary(StrictContractModel):

@@ -206,30 +206,26 @@
             "type": "string",
             "description": "关联的 CWE 编号"
           },
-          "duplicates": {
+          "occurrences": {
             "type": "object",
-            "description": "跨文件重复合并：相同规则+相同匹配内容出现在多个文件时，仅保留一条（最高严重度），其余文件汇总于此",
-            "required": ["count", "files"],
+            "description": "同一规则和匹配内容在多个位置出现时的报告层聚合",
+            "required": ["count", "items", "truncated"],
             "properties": {
-              "count": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "存在相同问题的其他文件总数"
-              },
-              "files": {
+              "count": { "type": "integer", "minimum": 1 },
+              "items": {
                 "type": "array",
-                "maxItems": 5,
-                "description": "相同问题的文件清单（最多 5 个，超出仅计数）",
+                "maxItems": 100,
                 "items": {
                   "type": "object",
                   "required": ["file"],
                   "properties": {
-                    "file": { "type": "string", "description": "文件路径" },
-                    "line": { "type": "integer", "minimum": 1, "description": "起始行号" }
+                    "file": { "type": "string" },
+                    "line": { "type": "integer", "minimum": 1 }
                   },
                   "additionalProperties": false
                 }
-              }
+              },
+              "truncated": { "type": "boolean" }
             },
             "additionalProperties": false
           }
@@ -245,7 +241,12 @@
         "effective_total": {
           "type": "integer",
           "minimum": 0,
-          "description": "去重后有效发现数（critical+high+medium+low，不含 info）"
+          "description": "报告层聚合后的 finding 数（critical+high+medium+low，不含 info）"
+        },
+        "occurrences_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "聚合前原始 finding occurrence 总数"
         },
         "critical": { "type": "integer", "minimum": 0 },
         "high": { "type": "integer", "minimum": 0 },
