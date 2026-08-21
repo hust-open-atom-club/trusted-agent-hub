@@ -771,12 +771,11 @@ h3 {
 }
 
 .search-suggestions {
-  position: absolute;
-  top: calc(100% + 0.5rem);
-  left: 0;
-  right: 0;
+  position: relative;
   z-index: 30;
   overflow: hidden;
+  width: 100%;
+  margin-top: 0.5rem;
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-md);
   background: oklch(from var(--color-paper) l c h / 0.98);
