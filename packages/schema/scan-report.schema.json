@@ -35,6 +35,22 @@
       "type": "string",
       "description": "扫描器版本"
     },
+    "source_snapshot_id": {
+      "type": "string",
+      "description": "独立源码快照标识，不包含源码内容"
+    },
+    "source_snapshot_sha256": {
+      "type": "string",
+      "description": "源码快照摘要"
+    },
+    "source_snapshot_created_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_snapshot_expires_at": {
+      "type": "integer",
+      "minimum": 0
+    },
     "duration_ms": {
       "type": "integer",
       "minimum": 0,

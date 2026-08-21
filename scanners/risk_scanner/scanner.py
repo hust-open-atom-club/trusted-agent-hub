@@ -56,6 +56,7 @@ from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
 from scanners.risk_scanner.reporting import determine_scan_status
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.redaction import redact_report
 from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 logger = logging.getLogger(__name__)
@@ -522,7 +523,7 @@ class RiskScanner:
             effective_total=effective_total,
         )
         skipped = self.inventory.skipped_by_reason or {}
-        return {
+        return redact_report({
             "scan_id": f"scan-{uuid.uuid4().hex[:12]}",
             "package_name": pkg_name,
             "version": pkg_version,
@@ -555,7 +556,7 @@ class RiskScanner:
             "structure_check": structure_check,
             "dependency_check": dependency_check,
             "dependency_scan": self.dependency_scan,
-        }
+        })
 
 
 def _parse_frontmatter(content: str) -> dict[str, Any] | None:

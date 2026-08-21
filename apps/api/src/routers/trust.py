@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
 from src.services.artifacts import force_rmtree
+from src.services.source_snapshots import SourceSnapshotStore
 
 router = APIRouter(tags=["trust-scan"])
 
@@ -43,12 +44,16 @@ _API_SRC_DIR = Path(__file__).resolve().parent.parent  # apps/api/src/
 _PROJECT_ROOT = _API_SRC_DIR.parent.parent.parent  # repo root
 _SCANNER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "scanner.py"
 _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+from scanners.risk_scanner.redaction import build_finding_contexts, redact_report
 
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
 # ---------------------------------------------------------------------------
 # key: scan_id, value: {status, package_name, created_at, finished_at, report_path, error, expires_at}
 _scans: Dict[str, Dict[str, Any]] = {}
+_SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 _SCAN_TTL_SECONDS = 3600  # 临时扫描结果保留 1 小时
 
@@ -425,12 +430,12 @@ def _run_scan_task(
                 if spec_lr and spec_lr.loader:
                     mod_lr = importlib.util.module_from_spec(spec_lr)
                     spec_lr.loader.exec_module(mod_lr)
-                    file_cache = {}
-                    for f in scanner.scanned_files:
-                        file_cache[f] = scanner._read_file_content(f)
+                    finding_contexts = build_finding_contexts(
+                        findings, scanner._file_contents,
+                    )
                     llm_result = mod_lr.run_llm_review(
                         findings=findings,
-                        file_cache=file_cache,
+                        finding_contexts=finding_contexts,
                         manifest=scanner._package_metadata,
                     )
                     for f_item in findings:
@@ -455,6 +460,16 @@ def _run_scan_task(
                 }
         else:
             scan_report["llm_review"] = {"triggered": False}
+
+        snapshot_metadata = _SOURCE_SNAPSHOT_STORE.save(
+            scanner._file_contents,
+            source_hash=scanner._content_tree_sha256(),
+        )
+        scan_report["source_snapshot_id"] = snapshot_metadata["snapshot_id"]
+        scan_report["source_snapshot_sha256"] = snapshot_metadata["sha256"]
+        scan_report["source_snapshot_created_at"] = snapshot_metadata["created_at"]
+        scan_report["source_snapshot_expires_at"] = snapshot_metadata["expires_at"]
+        scan_report = redact_report(scan_report)
 
         # Step 3: 运行评分引擎
         _scans[scan_id]["status"] = "scoring"
@@ -509,7 +524,8 @@ def _run_scan_task(
             "scan_report": scan_report,
             "trust_score": trust_score_result,
             "package_metadata": package_metadata,
-            "file_contents": scanner._file_contents,
+            "source_snapshot_id": snapshot_metadata["snapshot_id"],
+            "source_snapshot_sha256": snapshot_metadata["sha256"],
             # 保留本地代码目录供提交时打包安装产物（不重新拉取）。
             # 由 handle_scan_complete 消费后清理，或随扫描记录过期清理。
             "local_source_dir": tmp_dir,
@@ -877,7 +893,12 @@ def get_scan_report(
             # 剔除内部字段（本地代码目录路径），不对外暴露
             report = dict(full_report)
             report.pop("local_source_dir", None)
-            return report
+            report.pop("file_contents", None)
+            report.pop("source_snapshot_sha256", None)
+            if isinstance(report.get("scan_report"), dict):
+                report["scan_report"] = dict(report["scan_report"])
+                report["scan_report"].pop("file_contents", None)
+            return redact_report(report)
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

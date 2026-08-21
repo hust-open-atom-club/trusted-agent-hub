@@ -727,7 +727,7 @@ class TestIntegrationAuditFlow:
         assert scan is not None, "scan_reports row missing"
         scan_json = scan["scan_json"]
         assert scan_json["scan_id"] == full_report["scan_id"]
-        assert scan_json["file_contents"] == full_report["file_contents"]
+        assert "file_contents" not in scan_json
 
         logs = _db_query_audit_logs(ver["id"])
         complete = [log for log in logs if log["action"] == "scan_complete"]

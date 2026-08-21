@@ -104,22 +104,6 @@ def _build_metadata_text(manifest: dict[str, Any]) -> str:
     return "\n".join(parts) if parts else "No metadata available"
 
 
-def _get_code_context(file_cache: dict[str, str], location: dict[str, Any]) -> str:
-    file_name = location.get("file", "")
-    line = location.get("line", 1)
-    content = file_cache.get(file_name, "")
-    if not content:
-        return "(file content not available)"
-    lines = content.split("\n")
-    start = max(0, line - 6)
-    end = min(len(lines), line + 5)
-    context_lines = lines[start:end]
-    return "\n".join(
-        f"  {i + 1}: {context_lines[i - start]}"
-        for i in range(start, end)
-    )
-
-
 def _call_llm(prompt: str) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY")
     base_url = os.environ.get("OPENAI_BASE_URL")
@@ -204,7 +188,7 @@ def _extract_json(text: str) -> str | None:
 
 def run_llm_review(
     findings: list[dict[str, Any]],
-    file_cache: dict[str, str] | None,
+    finding_contexts: dict[str, str] | None,
     manifest: dict[str, Any] | None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
@@ -228,7 +212,7 @@ def run_llm_review(
     if not findings:
         return result
 
-    file_cache = file_cache or {}
+    finding_contexts = finding_contexts or {}
     manifest = manifest or {}
     metadata_text = _build_metadata_text(manifest)
 
@@ -247,7 +231,7 @@ def run_llm_review(
             "category": finding.get("category", "unknown"),
             "description": finding.get("description", finding.get("title", "")),
             "evidence": finding.get("evidence", ""),
-            "code_context": _get_code_context(file_cache, finding.get("location", {}))[:2000],
+            "code_context": finding_contexts.get(fid, "(finding context not available)")[:4096],
         })
 
     if not reviewable:
