@@ -76,6 +76,18 @@ def test_source_integrity_detects_mutation_and_new_file(tmp_path: Path) -> None:
     assert "source_added_during_scan" in kinds
 
 
+def test_source_integrity_recheck_uses_bounded_inventory(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("print(2)\n", encoding="utf-8")
+    policy = ScanPolicy(max_files=1)
+    inventory = build_inventory(tmp_path, policy)
+    snapshot = capture_source_state(tmp_path, inventory)
+
+    issues = verify_source_state(tmp_path, snapshot)
+
+    assert any(issue["kind"] == "source_state_check_limited" for issue in issues)
+
+
 def test_parser_failure_is_a_partial_scan_signal(tmp_path: Path) -> None:
     (tmp_path / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")

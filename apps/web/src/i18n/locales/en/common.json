@@ -462,6 +462,12 @@
       "review_conclusion": "Review Conclusion",
       "start_review_btn": "Start Review",
       "grade_overridden_banner": "Grade has been manually overridden: {{from}} (auto) → {{to}} (manual)",
+      "scan_incomplete_title": "Scan result is incomplete",
+      "scan_incomplete_description": "Some files, directories, or rules were not scanned. Do not treat this as a complete package-wide conclusion; review the listed limits manually.",
+      "scan_incomplete_reasons": "Reasons",
+      "scan_rule_execution": "Rule execution",
+      "scan_rules_succeeded": "succeeded",
+      "scan_rules_failed": "failed",
       "reason": "Reason",
       "modified_by": "By {{name}}",
       "trust_score_title": "Trust Score",
@@ -563,6 +569,8 @@
       "missing_params": "Missing parameters",
       "login_required": "Please log in",
       "content_unavailable": "File content unavailable (may be from an older scan report, please re-scan)",
+      "context_redacted": "Authorized redacted context only",
+      "context_truncated": "Context truncated",
       "back_to_detail": "← Back to Review Detail",
       "line_count": "{{count}} lines"
     }

@@ -87,6 +87,8 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
         if relative_path is not None and len(samples) < policy.max_skipped_samples:
             samples.append(relative_path)
 
+    max_files = max(policy.max_files, 0)
+
     for root, dirs, files in os.walk(target_dir, topdown=True, followlinks=False):
         root_path = Path(root)
         dirs[:] = sorted(d for d in dirs if d != ".git")
@@ -114,7 +116,11 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
             for name in files
         ]
         for rel, name in sorted(relative_names, key=lambda item: _read_priority(item[0])):
-            if len(records) >= max(policy.max_files, 0):
+            # The limit is exclusive: reaching max_files is valid.  Only a
+            # further candidate proves that the tree contains more files than
+            # the configured bound.  Keep the extra candidate out of the
+            # inventory so memory and downstream work remain bounded.
+            if len(records) >= max_files and (max_files == 0 or records):
                 discovered_at_least = True
                 add_violation("max_files")
                 records.sort(key=lambda record: record.relative_path)
@@ -192,24 +198,6 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
                 # Lock/manifests are parsed by dedicated analyzers, never generic regex rules.
                 total_budget += size
                 analyzed_bytes += size
-
-            if len(records) >= max(policy.max_files, 0):
-                discovered_at_least = True
-                add_violation("max_files")
-                records.sort(key=lambda record: record.relative_path)
-                return ScanInventory(
-                    records,
-                    discovered_bytes,
-                    analyzed_bytes,
-                    violations,
-                    discovered_files,
-                    skipped,
-                    samples,
-                    discovered_files,
-                    discovered_at_least,
-                    policy.max_skipped_samples,
-                    policy,
-                )
 
     records.sort(key=lambda record: record.relative_path)
     return ScanInventory(records, discovered_bytes, analyzed_bytes, violations,

@@ -656,6 +656,10 @@ class ProducerService:
                 version["scan_summary"] = scan_json.get("summary", {})
                 version["findings"] = scan_json.get("findings", [])
                 version["source_snapshot_id"] = scan_json.get("source_snapshot_id")
+                # Expose coverage/provenance fields to the review UI without
+                # exposing source contents.  These fields are part of the
+                # persisted consumer-facing scan contract.
+                version["scan_report"] = dict(scan_json)
         # 确保 trust_score 存在
         if not version.get("trust_score"):
             version["trust_score"] = {"risk_summary": None}
@@ -669,6 +673,36 @@ class ProducerService:
         version["auto_grade"] = auto_grade
         version["effective_grade"] = version.get("manual_grade") or auto_grade
         return version
+
+    def get_file_context(
+        self,
+        version_id: str,
+        relative_path: str,
+        *,
+        line: int | None = None,
+    ) -> dict[str, object]:
+        """Load an authorized, redacted and bounded source context."""
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+        scan = self.repository.get_scan_report(version_id)
+        scan_json = scan.get("scan_json", {}) if scan else {}
+        snapshot_id = scan_json.get("source_snapshot_id") if isinstance(scan_json, dict) else None
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ProducerServiceError("该版本没有可用的源码快照")
+
+        # The HTTP route performs the version/package ownership check.  The
+        # snapshot's owner_id remains audit metadata, but the attached
+        # version is the authorization boundary so reviewer/admin access and
+        # reused initial scans continue to work.
+        context = _SOURCE_SNAPSHOT_STORE.load_context(
+            snapshot_id,
+            relative_path,
+            line=line,
+        )
+        if context is None:
+            raise ProducerServiceError("文件不存在、快照已过期或无权访问")
+        return context
 
     def list_my_versions(
         self, submitter_id: str, limit: int = 50, offset: int = 0

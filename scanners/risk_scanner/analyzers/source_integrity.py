@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from scanners.risk_scanner.inventory import build_inventory
+from scanners.risk_scanner.policy import ScanPolicy
 
 
 @dataclass
@@ -19,10 +21,26 @@ class SourceState:
 @dataclass
 class SourceIntegritySnapshot:
     states: dict[str, SourceState] = field(default_factory=dict)
+    policy: ScanPolicy | None = None
+    coverage_limited: bool = False
+
+
+def _coverage_limited(inventory: Any) -> bool:
+    """Whether an inventory cannot represent the complete path set."""
+    violations = set(getattr(inventory, "limit_violations", []) or [])
+    return bool(
+        getattr(inventory, "discovered_at_least", False)
+        or "max_files" in violations
+        or "max_depth" in violations
+        or "invalid_root" in violations
+    )
 
 
 def capture_source_state(target_dir: Path, inventory: Any) -> SourceIntegritySnapshot:
-    snapshot = SourceIntegritySnapshot()
+    snapshot = SourceIntegritySnapshot(
+        policy=getattr(inventory, "policy", None) or ScanPolicy(),
+        coverage_limited=_coverage_limited(inventory),
+    )
     for record in inventory.files:
         try:
             stat = record.absolute_path.lstat()
@@ -60,11 +78,16 @@ def verify_source_state(target_dir: Path, snapshot: SourceIntegritySnapshot | No
         if int(stat.st_size) != before.size or int(stat.st_mtime_ns) != before.mtime_ns:
             issues.append({"kind": "source_changed_during_scan", "file": relative_path})
 
-    current: set[str] = set()
-    for base, dirs, files in os.walk(target_dir, topdown=True, followlinks=False):
-        dirs[:] = [name for name in dirs if name != ".git" and not (Path(base) / name).is_symlink()]
-        for name in files:
-            current.add((Path(base) / name).relative_to(target_dir).as_posix())
+    # Reuse the exact same bounded inventory policy for the second pass.  An
+    # unrestricted os.walk here would make max_files/max_depth advisory only.
+    current_inventory = build_inventory(target_dir, snapshot.policy or ScanPolicy())
+    current = {record.relative_path for record in current_inventory.files}
     for relative_path in sorted(current - set(snapshot.states)):
         issues.append({"kind": "source_added_during_scan", "file": relative_path})
+
+    if snapshot.coverage_limited or _coverage_limited(current_inventory):
+        issues.append({
+            "kind": "source_state_check_limited",
+            "file": "<scan tree>",
+        })
     return issues

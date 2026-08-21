@@ -34,9 +34,11 @@ services:
     volumes:
       - ./examples:/examples:ro
       - artifacts:/artifacts
+      - source_snapshots:/source-snapshots
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/trusted_agent_hub
       ARTIFACTS_ROOT: /artifacts
+      SOURCE_SNAPSHOT_DIR: /source-snapshots
       CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
     ports:
       - "8000:8000"
@@ -58,3 +60,4 @@ services:
 volumes:
   pgdata:
   artifacts:
+  source_snapshots:

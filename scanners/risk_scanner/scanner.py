@@ -273,12 +273,18 @@ class RiskScanner:
             if kind not in self.inventory.limit_violations:
                 self.inventory.limit_violations.append(kind)
             severity = "high" if kind == "symlink_outside_root" else "medium"
+            if kind == "source_state_check_limited":
+                description = (
+                    "源码完整性二次校验受扫描资源上限限制，无法确认整个目录树在扫描期间未新增文件。"
+                )
+            else:
+                description = f"扫描过程中检测到文件 {issue['file']} 存在 {kind}。"
             self._add_finding(
                 rule_id="SR-009",
                 severity=severity,
                 category="source_integrity",
                 title=f"源码完整性异常: {kind}",
-                description=f"扫描过程中检测到文件 {issue['file']} 存在 {kind}。",
+                description=description,
                 location={"file": issue["file"]},
                 evidence="source state changed after inventory capture",
                 remediation="固定扫描输入，在扫描期间禁止修改文件，并拒绝仓库外 symlink。",

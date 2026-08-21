@@ -464,6 +464,11 @@ def _run_scan_task(
         snapshot_metadata = _SOURCE_SNAPSHOT_STORE.save(
             scanner._file_contents,
             source_hash=scanner._content_tree_sha256(),
+            owner_id=str(
+                _scans.get(scan_id, {}).get("source_owner_id")
+                or _scans.get(scan_id, {}).get("user_id")
+                or ""
+            ) or None,
         )
         scan_report["source_snapshot_id"] = snapshot_metadata["snapshot_id"]
         scan_report["source_snapshot_sha256"] = snapshot_metadata["sha256"]
@@ -804,6 +809,7 @@ async def submit_scan(
         "error": None,
         "expires_at": _time.time() + _SCAN_TTL_SECONDS,
         "user_id": _user.id,
+        "source_owner_id": _user.id,
     }
 
     # 启动后台扫描

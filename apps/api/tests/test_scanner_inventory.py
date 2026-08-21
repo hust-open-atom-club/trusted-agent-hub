@@ -51,8 +51,23 @@ def test_inventory_order_and_manifest_priority(tmp_path):
     assert scanner._package_metadata["name"] == "manifest"
 
 
+def test_max_files_equal_to_limit_is_complete(tmp_path):
+    for index in range(3):
+        _write(tmp_path, f"file-{index}.py", "value = 1\n")
+
+    inventory = build_inventory(tmp_path, ScanPolicy(max_files=3))
+
+    assert len(inventory.files) == 3
+    assert inventory.discovered_count == 3
+    assert inventory.discovered_at_least is False
+    assert "max_files" not in inventory.limit_violations
+
+    report = RiskScanner(tmp_path, policy=ScanPolicy(max_files=3)).scan()
+    assert report["scan_status"]["state"] == "complete"
+
+
 def test_max_files_stops_discovery_and_reports_lower_bound(tmp_path):
-    for index in range(8):
+    for index in range(4):
         _write(tmp_path, f"file-{index}.py", "value = 1\n")
 
     inventory = build_inventory(tmp_path, ScanPolicy(max_files=3))

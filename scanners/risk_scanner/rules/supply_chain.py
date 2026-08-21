@@ -37,6 +37,12 @@ from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 
 _CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CVE_CACHE_TTL = 3600
+_LOCKFILE_NAMES = frozenset({
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+})
 
 _URL_BASED_DESCS = frozenset({
     "非官方包源 URL",
@@ -81,6 +87,20 @@ def _is_inside_html_comment(lines: list[str], line_no: int) -> bool:
     line = lines[idx] if idx < len(lines) else ""
     stripped = line.strip()
     return "<!--" in stripped and "-->" in stripped
+
+
+def _is_lockfile(path: str) -> bool:
+    return Path(path).name.lower() in _LOCKFILE_NAMES
+
+
+def _is_unlocked_version(version: str | None) -> bool:
+    value = (version or "").strip()
+    return (
+        not value
+        or value.startswith(("^", "~", ">", "<", "*"))
+        or "x" in value.lower()
+        or value.lower() in {"latest", "stable", "next"}
+    )
 
 
 def _levenshtein(s1: str, s2: str) -> int:
@@ -197,9 +217,18 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                                    "dependencies_queried": 0, "query_failures": 0}
         return
     manifest_file = records[0].source_file
+    locked_keys = {
+        (record.ecosystem.lower(), record.name.lower())
+        for record in records
+        if _is_lockfile(record.source_file) and record.version and not _is_unlocked_version(record.version)
+    }
     for record in records:
         version = record.version or ""
-        if not version or version.startswith(("^", "~", ">", "<", "*")):
+        reconciled_with_lockfile = (
+            not _is_lockfile(record.source_file)
+            and (record.ecosystem.lower(), record.name.lower()) in locked_keys
+        )
+        if _is_unlocked_version(record.version) and not reconciled_with_lockfile:
             scanner._add_finding(
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title=f"依赖版本未锁定: {record.name}",

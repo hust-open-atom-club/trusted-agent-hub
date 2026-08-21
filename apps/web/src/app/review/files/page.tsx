@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
-import type { Finding, VersionDetail } from '@/types';
+import type { FileContext } from '@/types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -21,6 +21,9 @@ export default function FileViewerPage() {
   const highlightLine = Number(searchParams.get('line') || 0);
 
   const [fileContent, setFileContent] = useState<string | null>(null);
+  const [contextStartLine, setContextStartLine] = useState(1);
+  const [totalLines, setTotalLines] = useState(0);
+  const [contextTruncated, setContextTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,13 +40,18 @@ export default function FileViewerPage() {
       return;
     }
 
-    apiFetch<VersionDetail>(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
+    const query = new URLSearchParams({
+      path: filePath,
+      line: String(Math.max(1, highlightLine || 1)),
+    });
+    apiFetch<FileContext>(`${API_BASE}/api/v0/producer/versions/${versionId}/file-context?${query.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => {
-        // Full source is intentionally not part of scan reports. Reviewers see
-        // only redacted finding snippets and occurrence locations.
-        setError(t('review.files.content_unavailable'));
+        setFileContent(data.content);
+        setContextStartLine(data.start_line);
+        setTotalLines(data.total_lines);
+        setContextTruncated(data.truncated);
       })
       .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
@@ -58,7 +66,7 @@ export default function FileViewerPage() {
   }, [highlightLine, fileContent]);
 
   const lines = fileContent ? fileContent.split('\n') : [];
-  const lineNumWidth = String(lines.length).length;
+  const lineNumWidth = String(totalLines || lines.length).length;
 
   if (loading || authLoading) {
     return (
@@ -78,7 +86,9 @@ export default function FileViewerPage() {
           {t('review.files.back_to_detail')}
         </button>
         <span className="file-viewer-file-name">{filePath}</span>
-        <span className="file-viewer-info">{t('review.files.line_count', { count: lines.length })}</span>
+        <span className="file-viewer-info">{t('review.files.line_count', { count: totalLines || lines.length })}</span>
+        <span className="file-viewer-info">{t('review.files.context_redacted')}</span>
+        {contextTruncated && <span className="file-viewer-info">{t('review.files.context_truncated')}</span>}
       </nav>
 
       {error && (
@@ -93,7 +103,7 @@ export default function FileViewerPage() {
         <div className="file-viewer-code">
           <pre><code>
             {lines.map((line, i) => {
-              const lineNum = i + 1;
+              const lineNum = contextStartLine + i;
               const isTarget = lineNum === highlightLine;
               return (
                 <div

@@ -461,6 +461,12 @@
       "review_conclusion": "审核结论",
       "start_review_btn": "开始审核",
       "grade_overridden_banner": "该包的评级已被手动修正：{{from}} (auto) → {{to}} (manual)",
+      "scan_incomplete_title": "扫描结果不完整",
+      "scan_incomplete_description": "部分文件、目录或规则未被扫描。以下结果不能视为对整个包的完整结论，请结合限制原因进行人工审核。",
+      "scan_incomplete_reasons": "限制原因",
+      "scan_rule_execution": "规则执行",
+      "scan_rules_succeeded": "条成功",
+      "scan_rules_failed": "失败",
       "reason": "理由",
       "modified_by": "由 {{name}} 修改",
       "trust_score_title": "信任评分",
@@ -562,6 +568,8 @@
       "missing_params": "缺少参数",
       "login_required": "请先登录",
       "content_unavailable": "该文件内容不可用（可能是旧版扫描报告，请重新扫描）",
+      "context_redacted": "仅显示授权的脱敏代码片段",
+      "context_truncated": "代码片段已截断",
       "back_to_detail": "← 返回审核详情",
       "line_count": "{{count}} 行"
     }
