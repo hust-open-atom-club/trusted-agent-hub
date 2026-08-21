@@ -49,11 +49,11 @@ from scanners.risk_scanner.common import (
     CODE_EXAMPLE_INDICATORS,
     CODE_FILE_EXTENSIONS,
     DANGEROUS_EXTENSIONS,
-    KNOWN_SAFE_FILES,
     REQUIRED_FILES_BY_TYPE,
-    SKIP_READ_EXTENSIONS,
     SUSPICIOUS_EXTENSIONS,
 )
+from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
+from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 logger = logging.getLogger(__name__)
@@ -93,21 +93,37 @@ class RiskScanner:
         target_dir: str | Path,
         *,
         source_commit_hash: str = "",
+        policy: ScanPolicy | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
         self.source_commit_hash = source_commit_hash
+        self.policy = policy or ScanPolicy()
         self.findings: list[dict[str, Any]] = []
         self.scanned_files: list[str] = []
+        self.discovered_files: list[str] = []
+        self.analyzed_files: list[str] = []
+        self._inventory: ScanInventory | None = None
+        self.rule_execution: dict[str, Any] = {"total": 0, "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
+        self.scanner_errors: list[dict[str, Any]] = []
         self._package_metadata: dict[str, Any] | None = None
         self._file_contents: dict[str, str] = {}
 
     def scan(self) -> dict[str, Any]:
         self.findings = []
         self.scanned_files = []
+        self.discovered_files = []
+        self.analyzed_files = []
+        self._inventory = None
+        self.rule_execution = {"total": len(_RULE_MODULES), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
+        self.scanner_errors = []
         self._file_contents = {}
         start = datetime.now(timezone.utc)
 
-        self._collect_files()
+        self._inventory = build_inventory(self.target_dir, self.policy)
+        self.discovered_files = [r.relative_path for r in self._inventory.files]
+        self._file_contents = load_text_files(self._inventory)
+        self.analyzed_files = [r.relative_path for r in self._inventory.files if r.read_status == "analyzed"]
+        self.scanned_files = self.analyzed_files
         self._load_metadata()
         self._inject_acquired_source_integrity()
 
@@ -115,8 +131,16 @@ class RiskScanner:
             try:
                 mod = importlib.import_module(rule_module)
                 mod.run(self)
-            except (ModuleNotFoundError, AttributeError) as e:
-                logger.warning("Rule module %s failed to load: %s", rule_module, e)
+                self.rule_execution["succeeded"] += 1
+                self.rule_execution["results"].append({"rule_id": rule_module.rsplit(".", 1)[-1], "status": "succeeded"})
+            except Exception as e:
+                rule_id = rule_module.rsplit(".", 1)[-1]
+                self.rule_execution["failed"] += 1
+                self.rule_execution["results"].append({"rule_id": rule_id, "status": "failed"})
+                self.scanner_errors.append({"phase": "rule_execution", "rule_id": rule_id,
+                                            "error_type": type(e).__name__,
+                                            "message": str(e)[:200], "recoverable": True})
+                logger.exception("Rule module %s failed", rule_module)
 
         self._downgrade_documentation_findings()
         self._deduplicate_findings()
@@ -126,69 +150,52 @@ class RiskScanner:
 
         return self._build_report(start, duration_ms)
 
-    def _collect_files(self) -> None:
-        for root, dirs, files in os.walk(self.target_dir):
-            dirs[:] = [d for d in dirs if d != ".git"]
-            for fname in files:
-                fpath = Path(root) / fname
-                ext = fpath.suffix.lower()
-                if ext in SKIP_READ_EXTENSIONS:
-                    continue
-                if fname in KNOWN_SAFE_FILES:
-                    continue
-                try:
-                    rel_path = str(fpath.relative_to(self.target_dir)).replace("\\", "/")
-                    self.scanned_files.append(rel_path)
-                    content = fpath.read_text(encoding="utf-8-sig", errors="ignore")
-                    if len(content) == 0:
-                        continue
-                    self._file_contents[rel_path] = content
-                except (OSError, UnicodeDecodeError):
-                    continue
+    @property
+    def inventory(self) -> ScanInventory:
+        if self._inventory is None:
+            self._inventory = build_inventory(self.target_dir, self.policy)
+        return self._inventory
 
     def _load_metadata(self) -> None:
-        manifest_path = self.target_dir / "manifest.json"
-        if manifest_path.is_file():
+        manifest_path = "manifest.json"
+        if manifest_path in self._file_contents:
             try:
-                with manifest_path.open(encoding="utf-8-sig") as f:
-                    self._package_metadata = json.load(f)
+                self._package_metadata = json.loads(self._file_contents[manifest_path])
                 return
-            except (json.JSONDecodeError, OSError):
+            except json.JSONDecodeError:
                 pass
 
-        plugin_path = self.target_dir / "plugin.json"
-        if plugin_path.is_file():
+        plugin_path = "plugin.json"
+        if plugin_path in self._file_contents:
             try:
-                with plugin_path.open(encoding="utf-8-sig") as f:
-                    self._package_metadata = json.load(f)
+                self._package_metadata = json.loads(self._file_contents[plugin_path])
                 return
-            except (json.JSONDecodeError, OSError):
+            except json.JSONDecodeError:
                 pass
 
-        skill_path = self.target_dir / "SKILL.md"
-        if skill_path.is_file():
+        skill_path = "SKILL.md"
+        if skill_path in self._file_contents:
             try:
-                content = skill_path.read_text(encoding="utf-8-sig")
+                content = self._file_contents[skill_path]
                 fm = _parse_frontmatter(content)
                 if fm:
                     self._package_metadata = fm
-            except (OSError, UnicodeDecodeError):
+            except UnicodeDecodeError:
                 pass
 
         # 回退：package.json 补充 SKILL.md frontmatter 未声明的字段
         # （version/license/author 等常见于 npm 风格仓库的 package.json）
-        pkg_json_path = self.target_dir / "package.json"
-        if pkg_json_path.is_file():
+        pkg_json_path = "package.json"
+        if pkg_json_path in self._file_contents:
             try:
-                with pkg_json_path.open(encoding="utf-8-sig") as f:
-                    pkg_json = json.load(f)
+                pkg_json = json.loads(self._file_contents[pkg_json_path])
                 if not self._package_metadata:
                     self._package_metadata = pkg_json
                 else:
                     for key in ("name", "version", "description", "license", "author"):
                         if not self._package_metadata.get(key) and pkg_json.get(key):
                             self._package_metadata[key] = pkg_json[key]
-            except (json.JSONDecodeError, OSError):
+            except json.JSONDecodeError:
                 pass
 
     def _inject_acquired_source_integrity(self) -> None:
@@ -231,6 +238,8 @@ class RiskScanner:
 
         for rel, path in sorted(entries):
             try:
+                if path.is_symlink():
+                    continue
                 data = path.read_bytes()
             except OSError:
                 continue
@@ -243,15 +252,7 @@ class RiskScanner:
         return digest.hexdigest()
 
     def _read_file_content(self, rel_path: str) -> str:
-        if rel_path in self._file_contents:
-            return self._file_contents[rel_path]
-        fpath = self.target_dir / rel_path
-        try:
-            content = fpath.read_text(encoding="utf-8-sig", errors="ignore")
-            self._file_contents[rel_path] = content
-            return content
-        except OSError:
-            return ""
+        return self._file_contents.get(rel_path, "")
 
     def _is_code_example(self, file_path: str, line_no: int) -> bool:
         content = self._read_file_content(file_path)
@@ -322,6 +323,10 @@ class RiskScanner:
         remediation: str = "",
         cwe_id: str | None = None,
     ) -> None:
+        if len(self.findings) >= self.policy.max_findings:
+            if self._inventory is not None and "max_findings" not in self._inventory.limit_violations:
+                self._inventory.limit_violations.append("max_findings")
+            return
         finding: dict[str, Any] = {
             "id": f"finding-{uuid.uuid4().hex[:8]}",
             "rule_id": rule_id,
@@ -497,7 +502,7 @@ class RiskScanner:
                 if not (self.target_dir / req_file).is_file():
                     structure_check["valid"] = False
                     structure_check["missing_files"].append(req_file)
-        for fname in self.scanned_files:
+        for fname in self.discovered_files:
             ext = Path(fname).suffix.lower()
             if ext in DANGEROUS_EXTENSIONS:
                 structure_check["valid"] = False
@@ -518,6 +523,10 @@ class RiskScanner:
         cve_findings = [f for f in self.findings if "CVE" in f.get("title", "")]
         dependency_check["known_vulnerabilities"] = len(cve_findings)
 
+        complete = not self.inventory.limit_violations and self.inventory.discovered_files == len(self.inventory.files) and not self.scanner_errors
+        state = "complete" if complete else ("failed" if not self.target_dir.is_dir() else "partial")
+        conclusion = "risks_found" if complete and self.findings else ("no_risks_found" if complete else "inconclusive")
+        skipped = self.inventory.skipped_by_reason or {}
         return {
             "scan_id": f"scan-{uuid.uuid4().hex[:12]}",
             "package_name": pkg_name,
@@ -525,6 +534,18 @@ class RiskScanner:
             "scanned_at": start_time.isoformat(),
             "scanner_version": SCANNER_VERSION,
             "duration_ms": duration_ms,
+            "scan_status": {"state": state, "conclusion": conclusion, "complete": complete,
+                            "reasons": list(self.inventory.limit_violations) + (["rule_execution_errors"] if self.scanner_errors else [])},
+            "scan_limits": {"configured": self.policy.as_dict(),
+                            "observed": {"discovered_files": self.inventory.discovered_files,
+                                         "analyzed_files": len(self.analyzed_files),
+                                         "discovered_bytes": self.inventory.discovered_bytes,
+                                         "analyzed_bytes": self.inventory.analyzed_bytes},
+                            "exceeded": self.inventory.limit_violations,
+                            "skipped": {"count": sum(skipped.values()), "by_reason": skipped,
+                                         "samples": self.inventory.skipped_samples or []}},
+            "rule_execution": self.rule_execution,
+            "scanner_errors": self.scanner_errors,
             "findings": self.findings,
             "summary": {
                 "total": total,

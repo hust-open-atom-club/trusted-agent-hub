@@ -40,6 +40,62 @@
       "minimum": 0,
       "description": "扫描耗时（毫秒）"
     },
+    "scan_status": {
+      "type": "object",
+      "required": ["state", "conclusion", "complete", "reasons"],
+      "properties": {
+        "state": { "type": "string", "enum": ["complete", "partial", "failed"] },
+        "conclusion": { "type": "string", "enum": ["risks_found", "no_risks_found", "inconclusive"] },
+        "complete": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "scan_limits": {
+      "type": "object",
+      "required": ["configured", "observed", "exceeded", "skipped"],
+      "properties": {
+        "configured": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "observed": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "exceeded": { "type": "array", "items": { "type": "string" } },
+        "skipped": {
+          "type": "object",
+          "required": ["count", "by_reason", "samples"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "by_reason": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "samples": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "rule_execution": {
+      "type": "object",
+      "required": ["total", "succeeded", "failed", "skipped", "results"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "succeeded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "results": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+      },
+      "additionalProperties": false
+    },
+    "scanner_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase", "error_type", "message", "recoverable"],
+        "properties": {
+          "phase": { "type": "string" }, "rule_id": { "type": "string" },
+          "error_type": { "type": "string" }, "message": { "type": "string" },
+          "recoverable": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
     "findings": {
       "type": "array",
       "items": {
