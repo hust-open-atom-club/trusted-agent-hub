@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SortField, SortOrder } from '@/data/packages';
+import { AnimatePresence, listItem, listStagger, motion, softPanel } from '@/components/Motion';
 
 interface SearchBarProps {
   query: string;
@@ -146,54 +147,69 @@ export default function SearchBar({
           />
         </div>
 
-        {isFocused && (
-          <div className="search-suggestions" role="listbox" aria-label="快捷筛选">
-            <div className="search-suggestions__header">
-              <span>快捷筛选</span>
-              <span>Enter to search</span>
-            </div>
-            <div className="search-suggestions__list">
-              {normalizedQuery && (
-                <button
-                  type="button"
-                  className="search-suggestion-item search-suggestion-item--query"
-                  aria-label={`搜索 ${normalizedQuery}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onQueryChange(normalizedQuery)}
-                >
-                  <span className="search-suggestion-icon"><SearchGlyph /></span>
-                  <span className="search-suggestion-copy">
-                    <strong>搜索 {normalizedQuery}</strong>
-                    <span>按名称、描述和关键词查找</span>
-                  </span>
-                  <span className="search-suggestion-end">Query</span>
-                </button>
-              )}
-              {suggestionActions.map((action, index) => (
-                <button
-                  type="button"
-                  className="search-suggestion-item"
-                  key={action.label}
-                  aria-label={action.label}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={action.onClick}
-                  style={{ animationDelay: `${index * 42}ms` }}
-                >
-                  <span className="search-suggestion-icon"><ArrowGlyph /></span>
-                  <span className="search-suggestion-copy">
-                    <strong>{action.label}</strong>
-                    <span>{action.description}</span>
-                  </span>
-                  <span className="search-suggestion-end">{action.end}</span>
-                </button>
-              ))}
-            </div>
-            <div className="search-suggestions__footer">
-              <span>聚焦搜索时快速切换市场视图</span>
-              <span>ESC 关闭</span>
-            </div>
-          </div>
-        )}
+        <AnimatePresence>
+          {isFocused && (
+            <motion.div
+              className="search-suggestions"
+              role="listbox"
+              aria-label="快捷筛选"
+              variants={softPanel}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+            >
+              <div className="search-suggestions__header">
+                <span>快捷筛选</span>
+                <span>Enter to search</span>
+              </div>
+              <motion.div className="search-suggestions__list" variants={listStagger} initial="hidden" animate="visible">
+                {normalizedQuery && (
+                  <motion.button
+                    type="button"
+                    className="search-suggestion-item search-suggestion-item--query"
+                    aria-label={`搜索 ${normalizedQuery}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onQueryChange(normalizedQuery)}
+                    variants={listItem}
+                    whileHover={{ x: 2 }}
+                    whileTap={{ scale: 0.99 }}
+                  >
+                    <span className="search-suggestion-icon"><SearchGlyph /></span>
+                    <span className="search-suggestion-copy">
+                      <strong>搜索 {normalizedQuery}</strong>
+                      <span>按名称、描述和关键词查找</span>
+                    </span>
+                    <span className="search-suggestion-end">Query</span>
+                  </motion.button>
+                )}
+                {suggestionActions.map((action) => (
+                  <motion.button
+                    type="button"
+                    className="search-suggestion-item"
+                    key={action.label}
+                    aria-label={action.label}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={action.onClick}
+                    variants={listItem}
+                    whileHover={{ x: 2 }}
+                    whileTap={{ scale: 0.99 }}
+                  >
+                    <span className="search-suggestion-icon"><ArrowGlyph /></span>
+                    <span className="search-suggestion-copy">
+                      <strong>{action.label}</strong>
+                      <span>{action.description}</span>
+                    </span>
+                    <span className="search-suggestion-end">{action.end}</span>
+                  </motion.button>
+                ))}
+              </motion.div>
+              <div className="search-suggestions__footer">
+                <span>聚焦搜索时快速切换市场视图</span>
+                <span>ESC 关闭</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className="search-controls-row">
@@ -225,8 +241,15 @@ export default function SearchBar({
           </button>
         </div>
 
-        {showAdvanced && (
-          <div className="search-filters-panel is-open">
+        <AnimatePresence initial={false}>
+          {showAdvanced && (
+            <motion.div
+              className="search-filters-panel is-open"
+              initial={{ opacity: 0, height: 0, y: -6 }}
+              animate={{ opacity: 1, height: 'auto', y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -6 }}
+              transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            >
             <div className="filter-group">
               <span className="filter-label">客户端</span>
               <select
@@ -332,8 +355,9 @@ export default function SearchBar({
                 ))}
               </select>
             </div>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import { fetchPackages, type SortField, type SortOrder } from '@/data/packages';
 import SearchBar from '@/components/SearchBar';
 import PackageCard from '@/components/PackageCard';
 import PackageIconImage from '@/components/PackageIconImage';
+import { AnimatePresence, fadeUp, listItem, listStagger, motion, pageStagger, softPanel } from '@/components/Motion';
 
 const PAGE_SIZE = 18;
 
@@ -20,10 +21,15 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
   const { t } = useTranslation();
 
   return (
-    <section className="hero market-hero">
+    <motion.section
+      className="hero market-hero"
+      variants={pageStagger}
+      initial="hidden"
+      animate="visible"
+    >
       <div className="hero-bg" />
       <div className="hero-content market-hero-content">
-        <div className="market-hero-copy">
+        <motion.div className="market-hero-copy" variants={fadeUp}>
           <span className="hero-chip">{t('home.chip')}</span>
           <h1 className="hero-title">
             {t('home.title')}<br />
@@ -46,9 +52,9 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
               <span className="hero-stat-label">{t('home.stat_top_rated')}</span>
             </div>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="market-trust-panel" aria-label={t('home.trust_panel_label')}>
+        <motion.div className="market-trust-panel" aria-label={t('home.trust_panel_label')} variants={softPanel}>
           <div className="market-trust-panel__header">
             <span>{t('home.trust_panel_eyebrow')}</span>
             <strong>{t('home.trust_panel_title')}</strong>
@@ -67,9 +73,9 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
               <strong>{t('home.signal_integrity_value')}</strong>
             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -97,14 +103,27 @@ function MarketplaceShelf({ title, kicker, items }: MarketplaceShelfProps) {
   }
 
   return (
-    <section className="market-shelf">
+    <motion.section
+      className="market-shelf"
+      variants={fadeUp}
+      whileInView="visible"
+      initial="hidden"
+      viewport={{ once: true, amount: 0.2 }}
+    >
       <div className="market-shelf__heading">
         <span>{kicker}</span>
         <h2>{title}</h2>
       </div>
-      <div className="market-shelf__list">
+      <motion.div className="market-shelf__list" variants={listStagger}>
         {items.map((pkg) => (
-          <a className="market-shelf-item" href={`/package/${encodeURIComponent(pkg.name)}`} key={`${title}-${pkg.id}`}>
+          <motion.a
+            className="market-shelf-item"
+            href={`/package/${encodeURIComponent(pkg.name)}`}
+            key={`${title}-${pkg.id}`}
+            variants={listItem}
+            whileHover={{ x: 3 }}
+            whileTap={{ scale: 0.99 }}
+          >
             <PackageIconImage
               type={pkg.type}
               iconUrl={pkg.icon_url}
@@ -116,10 +135,10 @@ function MarketplaceShelf({ title, kicker, items }: MarketplaceShelfProps) {
               <span>{pkg.grade ?? '--'} · {formatShelfRisk(pkg.risk_level)}</span>
             </span>
             <span className="market-shelf-item__meta">{pkg.install_count}</span>
-          </a>
+          </motion.a>
         ))}
-      </div>
-    </section>
+      </motion.div>
+    </motion.section>
   );
 }
 
@@ -321,8 +340,9 @@ export default function HomeClient() {
       <>
         <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
 
-        <div className="page-container">
-          <SearchBar
+        <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
+          <motion.div variants={fadeUp}>
+            <SearchBar
             query={query}
             activeType={activeType}
             sortBy={sortBy}
@@ -344,19 +364,20 @@ export default function HomeClient() {
             onMinScoreChange={handleMinScoreChange}
             onMaxScoreChange={handleMaxScoreChange}
             onUpdatedDaysChange={handleUpdatedDaysChange}
-          />
+            />
+          </motion.div>
 
-          <div className="package-grid-skeleton">
+          <motion.div className="package-grid-skeleton" variants={listStagger}>
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="package-card skeleton">
+              <motion.div key={i} className="package-card skeleton" variants={listItem}>
                 <div className="skeleton-bar" style={{ width: '60%', height: '1.1rem', marginBottom: '0.5rem' }} />
                 <div className="skeleton-bar" style={{ width: '90%', marginBottom: '0.25rem' }} />
                 <div className="skeleton-bar" style={{ width: '70%', marginBottom: '0.75rem' }} />
                 <div className="skeleton-bar" style={{ width: '40%', height: '0.75rem' }} />
-              </div>
+              </motion.div>
             ))}
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       </>
     );
   }
@@ -368,14 +389,14 @@ export default function HomeClient() {
         <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
 
         <div className="page-container">
-          <div className="empty-state">
+          <motion.div className="empty-state" variants={softPanel} initial="hidden" animate="visible">
             <div className="empty-state-icon">&#x26A0;</div>
             <h3>Failed to load packages</h3>
             <p>{error}</p>
             <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={loadFirstPage}>
               Retry
             </button>
-          </div>
+          </motion.div>
         </div>
       </>
     );
@@ -389,7 +410,8 @@ export default function HomeClient() {
         topRatedCount={topRatedCount}
       />
 
-      <div className="page-container">
+      <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
+        <motion.div variants={fadeUp}>
           <SearchBar
             query={query}
             activeType={activeType}
@@ -413,9 +435,10 @@ export default function HomeClient() {
             onMaxScoreChange={handleMaxScoreChange}
             onUpdatedDaysChange={handleUpdatedDaysChange}
           />
+        </motion.div>
 
         {packages.length > 0 && (
-          <div className="market-shelves" aria-label={t('home.market_sections')}>
+          <motion.div className="market-shelves" aria-label={t('home.market_sections')} variants={listStagger}>
             <MarketplaceShelf
               title={t('home.section_low_risk')}
               kicker={t('home.section_low_risk_kicker')}
@@ -431,23 +454,27 @@ export default function HomeClient() {
               kicker={t('home.section_recent_kicker')}
               items={recentPackages}
             />
-          </div>
+          </motion.div>
         )}
 
         {/* 加载指示条（已有数据时的刷新） */}
-        {loading && (
-          <div className="loading-bar" />
-        )}
+        <AnimatePresence>
+          {loading && (
+            <motion.div className="loading-bar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+          )}
+        </AnimatePresence>
 
         {/* 错误提示（已有缓存数据时） */}
-        {error && packages.length > 0 && (
-          <div className="error-banner">
-            <span>{error}</span>
-            <button className="btn btn-sm btn-secondary" onClick={loadFirstPage}>Retry</button>
-          </div>
-        )}
+        <AnimatePresence>
+          {error && packages.length > 0 && (
+            <motion.div className="error-banner" variants={softPanel} initial="hidden" animate="visible" exit="exit">
+              <span>{error}</span>
+              <button className="btn btn-sm btn-secondary" onClick={loadFirstPage}>Retry</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        <div className="market-results-header">
+        <motion.div className="market-results-header" variants={fadeUp}>
           <div>
             <span>{t('home.results_kicker')}</span>
             <h2>{t('home.results_title')}</h2>
@@ -457,21 +484,25 @@ export default function HomeClient() {
               ? t('home.results_count', { count: totalPackages })
               : t('home.results_count_plural', { count: totalPackages })}
           </p>
-        </div>
+        </motion.div>
 
         {packages.length === 0 ? (
-          <div className="empty-state">
+          <motion.div className="empty-state" variants={softPanel} initial="hidden" animate="visible">
             <svg className="empty-state-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <h3>{t('home.no_results')}</h3>
             <p>{t('home.no_results_hint')}</p>
-          </div>
+          </motion.div>
         ) : (
           <>
-            <div className="package-grid">
-              {packages.map((pkg) => (
-                <PackageCard key={pkg.id} pkg={pkg} />
-              ))}
-            </div>
+            <motion.div className="package-grid" variants={listStagger}>
+              <AnimatePresence mode="popLayout">
+                {packages.map((pkg) => (
+                  <motion.div key={pkg.id} layout variants={listItem} initial="hidden" animate="visible" exit="exit">
+                    <PackageCard pkg={pkg} />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </motion.div>
 
             {hasMore ? (
               <>
@@ -490,7 +521,7 @@ export default function HomeClient() {
             ) : null}
           </>
         )}
-      </div>
+      </motion.div>
     </>
   );
 }

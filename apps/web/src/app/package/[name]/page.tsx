@@ -28,6 +28,7 @@ import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
 import FeedbackSection from '@/components/FeedbackSection';
+import { fadeUp, listItem, listStagger, motion, pageStagger, softPanel } from '@/components/Motion';
 import { useAuth } from '@/lib/auth';
 import InstallCommandBlock from './InstallCommandBlock';
 import PackageFileBrowser from './PackageFileBrowser';
@@ -108,13 +109,20 @@ function DetailSection({
   children: ReactNode;
 }) {
   return (
-    <section className="detail-section" id={id}>
+    <motion.section
+      className="detail-section"
+      id={id}
+      variants={fadeUp}
+      initial="hidden"
+      whileInView="visible"
+      viewport={{ once: true, amount: 0.18 }}
+    >
       <div className="detail-section-heading">
         <h2>{title}</h2>
         {kicker && <span>{kicker}</span>}
       </div>
       {children}
-    </section>
+    </motion.section>
   );
 }
 
@@ -448,12 +456,12 @@ export default function PackageDetailPage() {
   const clientLabel = (client: string) => tt(`detail.client.${client}`, { defaultValue: getClientLabel(client) });
 
   return (
-    <div className="detail-page">
+    <motion.div className="detail-page" variants={pageStagger} initial="hidden" animate="visible">
       <button className="link-btn detail-back" onClick={() => router.push('/')}>
         &larr; {tt('detail.back')}
       </button>
 
-      <section className="detail-hero">
+      <motion.section className="detail-hero" variants={softPanel}>
         <PackageIcon type={pkg.type} iconUrl={pkg.icon_url} label={pkg.name} />
         <div className="detail-hero-copy">
           <div className="detail-title-row">
@@ -505,9 +513,9 @@ export default function PackageDetailPage() {
             </div>
           </div>
         </div>
-      </section>
+      </motion.section>
 
-      <nav className="detail-section-nav" aria-label="Package detail sections">
+      <motion.nav className="detail-section-nav" aria-label="Package detail sections" variants={fadeUp}>
         <a href="#overview">{tt('detail.nav.overview')}</a>
         <a href="#trust">{tt('detail.nav.trust')}</a>
         <a href="#files">{tt('detail.nav.files')}</a>
@@ -516,10 +524,10 @@ export default function PackageDetailPage() {
         <a href="#installation">{tt('detail.nav.installation')}</a>
         <a href="#versions">{tt('detail.nav.versions')}</a>
         <a href="#feedback">{tt('detail.nav.feedback')}</a>
-      </nav>
+      </motion.nav>
 
-      <div className="detail-shell">
-        <main className="detail-main">
+      <motion.div className="detail-shell" variants={pageStagger}>
+        <motion.main className="detail-main" variants={pageStagger}>
           <DetailSection id="overview" title={tt('detail.nav.overview')} kicker={tt('detail.section.overview_kicker')}>
             <SourceSummary source={source} homepage={pkg.homepage} t={tt} />
             {compat.length > 0 && (
@@ -670,14 +678,14 @@ export default function PackageDetailPage() {
           </div>
 
           <DetailSection id="versions" title={tt('detail.versions')} kicker={tt('detail.section.versions_kicker')}>
-            <ul className="version-list">
+            <motion.ul className="version-list" variants={listStagger} initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.2 }}>
               {(versions.length > 0 ? versions : [{
                 id: pkg.id,
                 version: pkg.latest_version,
                 status: 'latest',
                 submitted_at: pkg.created_at,
               }]).map((v) => (
-                <li key={v.id}>
+                <motion.li key={v.id} variants={listItem}>
                   <strong>v{v.version}</strong>
                   {v.version === pkg.latest_version && <span>{tt('detail.latest')}</span>}
                   <em>{tt(`status_badge.${v.status}`, { defaultValue: v.status.replace(/_/g, ' ') })}</em>
@@ -690,14 +698,14 @@ export default function PackageDetailPage() {
                       })}
                     </time>
                   )}
-                </li>
+                </motion.li>
               ))}
-            </ul>
+            </motion.ul>
           </DetailSection>
-        </main>
+        </motion.main>
 
-        <aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')}>
-          <div className="rail-card rail-install-card">
+        <motion.aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')} variants={listStagger}>
+          <motion.div className="rail-card rail-install-card" variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.install')}</span>
               <strong>{clientLabel(effectiveClient)}</strong>
@@ -723,9 +731,9 @@ export default function PackageDetailPage() {
               <span>{tt('detail.install.target_path')}</span>
               <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name)}</code>
             </div>
-          </div>
+          </motion.div>
 
-          <div className={`rail-card rail-trust-card ${gradeClass}`}>
+          <motion.div className={`rail-card rail-trust-card ${gradeClass}`} variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.trust_summary')}</span>
               <ScoreBadge grade={pkg.grade} />
@@ -739,9 +747,9 @@ export default function PackageDetailPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </motion.div>
 
-          <div className="rail-card rail-source-card">
+          <motion.div className="rail-card rail-source-card" variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.source')}</span>
               {source?.verified_owner ? <strong className="detail-safe-text">{tt('detail.verified_source')}</strong> : <strong>{tt('detail.rail.review')}</strong>}
@@ -749,9 +757,9 @@ export default function PackageDetailPage() {
             <p>{sourceLabel}</p>
             {source?.repository_url && <ExternalLink href={source.repository_url}>{tt('detail.source.open_repository')}</ExternalLink>}
             {pkg.homepage && <ExternalLink href={pkg.homepage}>{tt('detail.source.open_homepage')}</ExternalLink>}
-          </div>
-        </aside>
-      </div>
-    </div>
+          </motion.div>
+        </motion.aside>
+      </motion.div>
+    </motion.div>
   );
 }
