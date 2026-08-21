@@ -681,12 +681,19 @@ h3 {
    ============================================================ */
 
 .search-section {
+  position: relative;
+  z-index: 60;
   padding: 1.15rem 0 1rem;
+}
+
+.search-motion-layer {
+  position: relative;
+  z-index: 100;
 }
 
 .search-command {
   position: relative;
-  z-index: 20;
+  z-index: 80;
   max-width: 680px;
   margin: 0 auto;
 }
@@ -771,11 +778,12 @@ h3 {
 }
 
 .search-suggestions {
-  position: relative;
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
   z-index: 30;
   overflow: hidden;
-  width: 100%;
-  margin-top: 0.5rem;
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-md);
   background: oklch(from var(--color-paper) l c h / 0.98);

@@ -341,7 +341,7 @@ export default function HomeClient() {
         <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
 
         <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
-          <motion.div variants={fadeUp}>
+          <motion.div className="search-motion-layer" variants={fadeUp}>
             <SearchBar
             query={query}
             activeType={activeType}
@@ -411,7 +411,7 @@ export default function HomeClient() {
       />
 
       <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
-        <motion.div variants={fadeUp}>
+        <motion.div className="search-motion-layer" variants={fadeUp}>
           <SearchBar
             query={query}
             activeType={activeType}
