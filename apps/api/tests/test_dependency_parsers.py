@@ -1,3 +1,5 @@
+import pytest
+
 from scanners.risk_scanner.dependency_parsers import parse_dependencies
 
 
@@ -46,3 +48,19 @@ def test_osv_query_limit_comes_from_scan_policy(tmp_path):
 
     assert scanner.osv_client.max_queries == 3
     assert scanner.policy.as_dict()["max_osv_queries"] == 3
+
+
+@pytest.mark.parametrize("query_limit", [0, -1])
+def test_scan_policy_rejects_invalid_osv_query_limits(query_limit):
+    from scanners.risk_scanner.policy import ScanPolicy
+
+    with pytest.raises(ValueError, match="max_osv_queries must be at least 1"):
+        ScanPolicy(max_osv_queries=query_limit)
+
+
+def test_scan_policy_accepts_one_osv_query():
+    from scanners.risk_scanner.policy import ScanPolicy
+
+    policy = ScanPolicy(max_osv_queries=1)
+
+    assert policy.max_osv_queries == 1

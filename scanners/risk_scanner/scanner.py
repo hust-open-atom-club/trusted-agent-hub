@@ -85,7 +85,7 @@ class RiskScanner:
         self.analyzed_files: list[str] = []
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
-        self.osv_client = OSVClient(max_queries=max(self.policy.max_osv_queries, 0))
+        self.osv_client = OSVClient(max_queries=self.policy.max_osv_queries)
         self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False

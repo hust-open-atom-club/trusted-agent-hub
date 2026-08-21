@@ -15,5 +15,9 @@ class ScanPolicy:
     max_osv_queries: int = 10
     max_skipped_samples: int = 20
 
+    def __post_init__(self) -> None:
+        if self.max_osv_queries < 1:
+            raise ValueError("max_osv_queries must be at least 1")
+
     def as_dict(self) -> dict[str, int]:
         return asdict(self)
