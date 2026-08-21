@@ -56,6 +56,23 @@ def _with_rates(metric: dict[str, int]) -> dict[str, float | int]:
     }
 
 
+def _benchmark_check_failures(result: dict[str, Any]) -> list[str]:
+    """Return regressions that should make a CI benchmark check fail."""
+    failures: list[str] = []
+    overall = result.get("overall") or {}
+    if int(overall.get("fp", 0)):
+        failures.append(f"unexpected rule findings (fp={overall['fp']})")
+    if int(overall.get("fn", 0)):
+        failures.append(f"missing expected rule findings (fn={overall['fn']})")
+
+    coverage = result.get("coverage") or {}
+    if float(coverage.get("incomplete_scan_ratio", 0)):
+        failures.append("benchmark contains incomplete scans")
+    if float(coverage.get("rule_exception_ratio", 0)):
+        failures.append("benchmark contains rule execution failures")
+    return failures
+
+
 def run_benchmark(config_path: Path) -> dict[str, Any]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     metrics: dict[str, dict[str, int]] = {}
@@ -117,12 +134,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("expected-results.json"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="return non-zero when expected labels, scan completeness, or rule execution regresses",
+    )
     args = parser.parse_args()
     result = run_benchmark(args.config.resolve())
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(encoded + "\n", encoding="utf-8")
     print(encoded)
+    if args.check:
+        failures = _benchmark_check_failures(result)
+        if failures:
+            print("Benchmark check failed:", file=sys.stderr)
+            for failure in failures:
+                print(f"- {failure}", file=sys.stderr)
+            return 1
     return 0
 
 

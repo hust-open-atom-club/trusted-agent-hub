@@ -77,11 +77,19 @@ class SourceSnapshotStore:
     def save(self, files: dict[str, str], *, snapshot_id: str | None = None,
              source_hash: str | None = None, ttl_seconds: int | None = None,
              owner_id: str | None = None) -> dict[str, Any]:
+        """Persist a snapshot and return metadata for the stored contents.
+
+        ``source_hash`` is retained for callers from the previous API, but it
+        is intentionally ignored. The scanner's content-tree hash can describe
+        a bounded scan and is not the hash of this stored snapshot.
+        """
         snapshot_id = snapshot_id or f"snapshot-{uuid.uuid4().hex}"
         if not self._safe_snapshot_id(snapshot_id):
             raise ValueError("invalid snapshot id")
-        canonical = "".join(f"{path}\0{files[path]}\0" for path in sorted(files))
-        digest = source_hash or hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        snapshot_content = json.dumps(
+            files, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        digest = hashlib.sha256(snapshot_content).hexdigest()
         now = int(time.time())
         metadata = {"snapshot_id": snapshot_id, "sha256": digest, "created_at": now,
                     "expires_at": now + max(ttl_seconds if ttl_seconds is not None else self.ttl_seconds, 1)}

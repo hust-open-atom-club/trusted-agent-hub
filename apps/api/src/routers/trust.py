@@ -463,7 +463,6 @@ def _run_scan_task(
 
         snapshot_metadata = _SOURCE_SNAPSHOT_STORE.save(
             scanner._file_contents,
-            source_hash=scanner._content_tree_sha256(),
             owner_id=str(
                 _scans.get(scan_id, {}).get("source_owner_id")
                 or _scans.get(scan_id, {}).get("user_id")

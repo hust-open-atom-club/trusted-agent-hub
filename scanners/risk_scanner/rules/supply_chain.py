@@ -247,7 +247,7 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
             )
     client = getattr(scanner, "osv_client", None)
     compatibility_mode = client is None
-    client = client or OSVClient(max_queries=10)
+    client = client or OSVClient()
     queried = 0
     failures = 0
     limit_reached = False
@@ -279,7 +279,7 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
         "query_failures": failures,
     }
     if limit_reached:
-        scanner.dependency_scan["query_limit"] = getattr(client, "max_queries", 10)
+        scanner.dependency_scan["query_limit"] = getattr(client, "max_queries", None)
 
 
 def run(scanner: Any) -> None:

@@ -2465,6 +2465,17 @@
             ],
             "title": "Max Findings"
           },
+          "max_osv_queries": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Osv Queries"
+          },
           "max_skipped_samples": {
             "anyOf": [
               {

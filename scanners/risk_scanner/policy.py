@@ -12,6 +12,7 @@ class ScanPolicy:
     max_files: int = 5000
     max_depth: int = 32
     max_findings: int = 10000
+    max_osv_queries: int = 10
     max_skipped_samples: int = 20
 
     def as_dict(self) -> dict[str, int]:

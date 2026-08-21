@@ -36,3 +36,13 @@ def test_dependency_scan_reports_osv_query_failures(tmp_path):
     assert report["dependency_scan"]["dependencies_found"] == 1
     assert report["dependency_scan"]["query_failures"] == 1
     assert report["scan_status"]["state"] == "partial"
+
+
+def test_osv_query_limit_comes_from_scan_policy(tmp_path):
+    from scanners.risk_scanner.policy import ScanPolicy
+    from scanners.risk_scanner.scanner import RiskScanner
+
+    scanner = RiskScanner(tmp_path, policy=ScanPolicy(max_osv_queries=3))
+
+    assert scanner.osv_client.max_queries == 3
+    assert scanner.policy.as_dict()["max_osv_queries"] == 3

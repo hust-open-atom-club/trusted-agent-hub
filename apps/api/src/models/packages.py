@@ -245,6 +245,7 @@ class ScanLimitsConfigured(StrictContractModel):
     max_files: int | None = None
     max_depth: int | None = None
     max_findings: int | None = None
+    max_osv_queries: int | None = None
     max_skipped_samples: int | None = None
 
 

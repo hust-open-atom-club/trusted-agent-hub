@@ -1,3 +1,5 @@
+import hashlib
+import json
 from pathlib import Path
 
 from scanners.risk_scanner.redaction import build_finding_contexts, redact_report
@@ -20,10 +22,16 @@ def test_redaction_removes_secrets_from_report_and_context():
 
 def test_source_snapshot_store_is_independent_and_expiring(tmp_path: Path):
     store = SourceSnapshotStore(tmp_path, ttl_seconds=60)
-    metadata = store.save({"main.py": "print('hello')\npassword=supersecret\n"}, owner_id="user-1")
+    files = {"main.py": "print('hello')\npassword=supersecret\n"}
+    metadata = store.save(files, source_hash="a" * 64, owner_id="user-1")
     assert metadata["snapshot_id"].startswith("snapshot-")
+    expected_hash = hashlib.sha256(
+        json.dumps(files, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert metadata["sha256"] == expected_hash
+    assert metadata["sha256"] != "a" * 64
     assert store.load_for_diff(metadata["snapshot_id"]) == {
-        "main.py": "print('hello')\npassword=supersecret\n"
+        "main.py": "print('hello')\npassword=supersecret\n",
     }
     assert (tmp_path / f"{metadata['snapshot_id']}.json").exists()
 

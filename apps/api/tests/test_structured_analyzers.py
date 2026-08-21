@@ -88,6 +88,20 @@ def test_source_integrity_recheck_uses_bounded_inventory(tmp_path: Path) -> None
     assert any(issue["kind"] == "source_state_check_limited" for issue in issues)
 
 
+def test_limited_source_state_check_is_not_a_risk_finding(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("print(1)\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("print(2)\n", encoding="utf-8")
+
+    report = RiskScanner(tmp_path, policy=ScanPolicy(max_files=1)).scan()
+
+    assert "source_state_check_limited" in report["scan_limits"]["exceeded"]
+    assert "source_state_check_limited" in report["scan_status"]["reasons"]
+    assert not any(
+        finding["title"] == "源码完整性异常: source_state_check_limited"
+        for finding in report["findings"]
+    )
+
+
 def test_parser_failure_is_a_partial_scan_signal(tmp_path: Path) -> None:
     (tmp_path / "SKILL.md").write_text("# skill\n", encoding="utf-8")
     (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")

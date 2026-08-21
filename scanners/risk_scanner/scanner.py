@@ -85,7 +85,7 @@ class RiskScanner:
         self.analyzed_files: list[str] = []
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
-        self.osv_client = OSVClient(max_queries=10)
+        self.osv_client = OSVClient(max_queries=max(self.policy.max_osv_queries, 0))
         self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False
@@ -272,13 +272,13 @@ class RiskScanner:
             kind = issue["kind"]
             if kind not in self.inventory.limit_violations:
                 self.inventory.limit_violations.append(kind)
-            severity = "high" if kind == "symlink_outside_root" else "medium"
             if kind == "source_state_check_limited":
-                description = (
-                    "源码完整性二次校验受扫描资源上限限制，无法确认整个目录树在扫描期间未新增文件。"
-                )
-            else:
-                description = f"扫描过程中检测到文件 {issue['file']} 存在 {kind}。"
+                # This only says that the re-check could not cover the whole
+                # tree. It is a scan-coverage signal, not evidence of a source
+                # integrity violation.
+                continue
+            severity = "high" if kind == "symlink_outside_root" else "medium"
+            description = f"扫描过程中检测到文件 {issue['file']} 存在 {kind}。"
             self._add_finding(
                 rule_id="SR-009",
                 severity=severity,
