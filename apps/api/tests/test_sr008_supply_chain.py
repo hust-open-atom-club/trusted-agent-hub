@@ -55,6 +55,18 @@ class TestSR008SupplyChain:
         assert len(s.findings) == 1
         assert s.findings[0]["severity"] == "high"
 
+    def test_npm_range_is_reconciled_with_package_lock(self):
+        """A manifest range is reproducible when the lockfile pins it."""
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package.json": '{"dependencies":{"demo-lib":"^1.2.3"}}',
+            "package-lock.json": '{"packages":{"":{"lockfileVersion":3},"node_modules/demo-lib":{"version":"1.2.7"}}}',
+        }
+
+        supply_chain.run(s)
+
+        assert not any("版本未锁定" in finding["title"] for finding in s.findings)
+
     def test_typosquatting_dependency(self, tmp_path):
         """Dependency 'requets' is 1 edit from known 'requests' → high finding."""
         s = MockScanner(

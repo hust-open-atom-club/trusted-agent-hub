@@ -54,6 +54,17 @@ export interface FindingLocation {
   snippet?: string;
 }
 
+export interface FindingOccurrence {
+  file: string;
+  line?: number;
+}
+
+export interface FindingOccurrences {
+  count: number;
+  items: FindingOccurrence[];
+  truncated: boolean;
+}
+
 export interface Finding {
   id?: string;
   rule_id: string;
@@ -68,6 +79,7 @@ export interface Finding {
   suggestion?: string;
   remediation?: string;
   cwe_id?: string;
+  occurrences?: FindingOccurrences;
 }
 
 export interface ScanSummary {
@@ -79,6 +91,7 @@ export interface ScanSummary {
   info?: number;
   pass_rate?: number;
   findings?: Finding[];
+  occurrences_total?: number;
 }
 
 /* ── 信任评分 ── */
@@ -230,7 +243,6 @@ export interface VersionDetail {
   description?: string;
   scan_summary?: ScanSummary | null;
   findings?: Finding[];
-  scan_file_contents?: Record<string, string>;
   trust_score?: TrustScore | null;
   scan_report?: ScanReport | null;
   auto_grade?: string | null;
@@ -255,11 +267,87 @@ export interface ScanReport {
   duration_ms?: number | null;
   summary?: Record<string, unknown> | null;
   findings?: Finding[] | null;
+  scan_status?: ScanStatus | null;
+  scan_limits?: ScanLimits | null;
+  rule_execution?: RuleExecution | null;
+  scanner_errors?: ScannerError[] | null;
   metadata_validation?: Record<string, unknown> | null;
   structure_check?: Record<string, unknown> | null;
   dependency_check?: Record<string, unknown> | null;
+  dependency_scan?: Record<string, unknown> | null;
+  structural_analysis?: StructuralAnalysis | null;
   llm_review?: Record<string, unknown> | null;
   scanned_at?: string | null;
+  source_snapshot_id?: string | null;
+  occurrences_total?: number;
+}
+
+export interface ScanStatus {
+  state: 'complete' | 'partial' | 'failed' | string;
+  conclusion: 'risks_found' | 'no_risks_found' | 'inconclusive' | string;
+  complete: boolean;
+  reasons?: string[];
+}
+
+export interface ScanLimits {
+  configured?: Record<string, number | null> | null;
+  observed?: {
+    discovered_files?: number | null;
+    discovered_count?: number | null;
+    discovered_at_least?: boolean | null;
+    analyzed_files?: number | null;
+    discovered_bytes?: number | null;
+    analyzed_bytes?: number | null;
+  } | null;
+  exceeded?: string[];
+  skipped?: {
+    count?: number;
+    by_reason?: Record<string, number>;
+    samples?: string[];
+  } | null;
+}
+
+export interface RuleExecution {
+  total?: number;
+  succeeded?: number;
+  failed?: number;
+  skipped?: number;
+  results?: Array<{
+    rule_id: string;
+    status: string;
+    duration_ms?: number;
+    findings_added?: number;
+    error_type?: string | null;
+    error_message?: string | null;
+  }>;
+}
+
+export interface ScannerError {
+  phase: string;
+  rule_id?: string | null;
+  error_type: string;
+  message: string;
+  recoverable: boolean;
+}
+
+export interface StructuralAnalysis {
+  python_files?: number;
+  javascript_files?: number;
+  shell_files?: number;
+  structured_documents?: number;
+  parse_errors?: number;
+  capability_graph?: Record<string, unknown> | null;
+}
+
+export interface FileContext {
+  file: string;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  content: string;
+  truncated: boolean;
+  redacted: boolean;
+  expires_at?: number | null;
 }
 
 export interface ReviewRecord {

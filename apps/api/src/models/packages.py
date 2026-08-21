@@ -178,6 +178,17 @@ class TrustScore(StrictContractModel):
         return data
 
 
+class FindingOccurrence(StrictContractModel):
+    file: str
+    line: int | None = Field(default=None, ge=1)
+
+
+class FindingOccurrences(StrictContractModel):
+    count: int = Field(ge=1)
+    items: list[FindingOccurrence] = Field(default_factory=list)
+    truncated: bool = False
+
+
 class ScanFinding(StrictContractModel):
     id: str
     rule_id: str | None = None
@@ -188,8 +199,10 @@ class ScanFinding(StrictContractModel):
     location: dict[str, object] | None = None
     evidence: str | None = None
     llm_label: LLM_LABEL | None = None
+    downgraded: str | None = None
     remediation: str | None = None
     cwe_id: str | None = None
+    occurrences: FindingOccurrences | None = None
 
 
 class LLMReviewLabelsSummary(StrictContractModel):
@@ -203,22 +216,142 @@ class LLMReviewLabelsSummary(StrictContractModel):
 class LLMReview(StrictContractModel):
     triggered: bool = False
     findings_reviewed: int = 0
+    findings_skipped: int = 0
+    findings_pending: int = 0
+    status: Literal[
+        "not_triggered",
+        "not_required",
+        "not_configured",
+        "completed",
+        "call_failed",
+    ] | None = None
+    attempts: int = 0
+    labels: dict[str, LLM_LABEL] = Field(default_factory=dict)
     labels_summary: LLMReviewLabelsSummary | None = None
     error: str | None = None
     fallback: str | None = None
 
 
+class ScanStatus(StrictContractModel):
+    state: Literal["complete", "partial", "failed"]
+    conclusion: Literal["risks_found", "no_risks_found", "inconclusive"]
+    complete: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ScanLimitsConfigured(StrictContractModel):
+    max_file_bytes: int | None = None
+    max_total_bytes: int | None = None
+    max_files: int | None = None
+    max_depth: int | None = None
+    max_findings: int | None = None
+    max_osv_queries: int | None = None
+    max_skipped_samples: int | None = None
+
+
+class ScanLimitsObserved(StrictContractModel):
+    discovered_files: int | None = None
+    discovered_count: int | None = None
+    discovered_at_least: bool | None = None
+    analyzed_files: int | None = None
+    discovered_bytes: int | None = None
+    analyzed_bytes: int | None = None
+
+
+class ScanLimitsSkipped(StrictContractModel):
+    count: int = 0
+    by_reason: dict[str, int] = Field(default_factory=dict)
+    samples: list[str] = Field(default_factory=list)
+
+
+class ScanLimits(StrictContractModel):
+    configured: ScanLimitsConfigured | None = None
+    observed: ScanLimitsObserved | None = None
+    exceeded: list[str] = Field(default_factory=list)
+    skipped: ScanLimitsSkipped | None = None
+
+
+class RuleExecutionResult(StrictContractModel):
+    rule_id: str
+    status: str
+    duration_ms: int = 0
+    findings_added: int = 0
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class RuleExecution(StrictContractModel):
+    total: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    skipped: int = 0
+    results: list[RuleExecutionResult] = Field(default_factory=list)
+
+
+class ScannerError(StrictContractModel):
+    phase: str
+    rule_id: str | None = None
+    error_type: str
+    message: str
+    recoverable: bool
+
+
+class ScanSummary(StrictContractModel):
+    total: int = 0
+    effective_total: int = 0
+    occurrences_total: int = 0
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    info: int = 0
+    pass_rate: float | None = None
+
+
+class CapabilityGraphSummary(StrictContractModel):
+    declared: list[str] = Field(default_factory=list)
+    observed: list[str] = Field(default_factory=list)
+    undeclared_observed: list[str] = Field(default_factory=list)
+    edge_count: int = 0
+
+
+class StructuralAnalysis(StrictContractModel):
+    python_files: int = 0
+    javascript_files: int = 0
+    shell_files: int = 0
+    structured_documents: int = 0
+    parse_errors: int = 0
+    capability_graph: CapabilityGraphSummary = Field(default_factory=CapabilityGraphSummary)
+
+
 class ScanReport(StrictContractModel):
+    """Consumer-facing projection of the scanner report.
+
+    Scanner-internal source contents and implementation details are not part
+    of this model; completeness, limits, rule execution and structural
+    analysis are explicitly declared so extra=forbid catches contract drift.
+    """
+
     scan_id: str
     package_name: str | None = None
     version: str | None = None
     scanner_version: str
     duration_ms: int | None = None
-    summary: dict[str, object] | None = None
+    scan_status: ScanStatus | None = None
+    scan_limits: ScanLimits | None = None
+    rule_execution: RuleExecution | None = None
+    scanner_errors: list[ScannerError] = Field(default_factory=list)
+    source_snapshot_id: str | None = None
+    source_snapshot_sha256: str | None = None
+    source_snapshot_created_at: int | None = None
+    source_snapshot_expires_at: int | None = None
+    summary: ScanSummary | None = None
     findings: list[ScanFinding] | None = None
     metadata_validation: dict[str, object] | None = None
     structure_check: dict[str, object] | None = None
     dependency_check: dict[str, object] | None = None
+    dependency_scan: dict[str, object] | None = None
+    structural_analysis: StructuralAnalysis | None = None
     llm_review: LLMReview | None = None
     scanned_at: str | None = None
 

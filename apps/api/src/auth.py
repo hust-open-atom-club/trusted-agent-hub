@@ -2,19 +2,20 @@
 
 依赖：
 - JWT: python-jose[cryptography]（HS256 对称签名）
-- 密码哈希: passlib[bcrypt]（自动加盐，抗 GPU 暴力破解）
+- 密码哈希: pwdlib[argon2]（Argon2id，自动加盐，抗 GPU 暴力破解）
 - 角色层级: admin > reviewer > submitter > user
 """
 
 from __future__ import annotations
 
 import os
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import Depends, HTTPException
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+from pwdlib import PasswordHash
 from schema.constants import UserRole
 from src.dependencies import (
     BearerTokenInvalid,
@@ -22,19 +23,26 @@ from src.dependencies import (
     get_current_user,
 )
 
-# ── 密码哈希（bcrypt）─────────────────────────────────────
+# ── 密码哈希（Argon2id）───────────────────────────────────
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_password_hash = PasswordHash.recommended()
 
 
 def hash_password(password: str) -> str:
-    """使用 bcrypt 生成密码哈希。"""
-    return _pwd_context.hash(password)
+    """使用 Argon2id 生成密码哈希。"""
+    return _password_hash.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """验证密码是否匹配哈希。"""
-    return _pwd_context.verify(password, password_hash)
+    """验证 Argon2id 哈希，并兼容迁移期的旧 bcrypt 哈希。"""
+    if password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("ascii"))
+    return _password_hash.verify(password, password_hash)
+
+
+def needs_password_rehash(password_hash: str) -> bool:
+    """Return whether a successful login should upgrade a legacy hash."""
+    return password_hash.startswith(("$2a$", "$2b$", "$2y$"))
 
 
 # ── JWT ───────────────────────────────────────────────────

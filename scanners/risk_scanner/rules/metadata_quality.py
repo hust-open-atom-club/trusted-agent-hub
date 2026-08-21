@@ -99,8 +99,15 @@ def run(scanner: Any) -> None:
 def _check_structure(scanner: Any) -> None:
     rule_id = "SR-010"
 
-    for fname in scanner.scanned_files:
-        ext = Path(fname).suffix.lower()
+    # Unit-test adapters and older integrations may only expose scanned_files;
+    # the production scanner always supplies the complete inventory.
+    records = getattr(getattr(scanner, "inventory", None), "files", None)
+    if records is None:
+        records = [type("Record", (), {"relative_path": fname, "extension": Path(fname).suffix.lower()})
+                   for fname in scanner.scanned_files]
+    for record in records:
+        fname = record.relative_path
+        ext = record.extension
         if ext in DANGEROUS_EXTENSIONS:
             scanner._add_finding(
                 rule_id=rule_id,
@@ -124,6 +131,6 @@ def _check_structure(scanner: Any) -> None:
                     category="metadata_quality",
                     title=f"缺少必要文件: {req_file}",
                     description=f"类型 '{pkg_type}' 的包缺少必要文件 '{req_file}'。",
-                    location={"file": str(scanner.target_dir)},
+                    location={"file": "."},
                     remediation=f"添加 {req_file} 文件。",
                 )

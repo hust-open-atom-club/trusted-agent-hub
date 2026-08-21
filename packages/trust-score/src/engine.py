@@ -336,6 +336,7 @@ def _build_dimensions(
     c1: dict[str, Any],
     c2_disc: dict[str, Any],
     fb_data: dict[str, Any] | None = None,
+    scan_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the nine-dimension output object per trust-score.schema.json.
 
@@ -419,6 +420,14 @@ def _build_dimensions(
             "medium_findings": i2_disc.get("medium_count", 0),
             "low_findings": i2_disc.get("low_count", 0),
             "scan_pass_rate": _compute_pass_rate(i2_disc),
+            "scan_state": (scan_report or {}).get("scan_status", {}).get("state", "failed"),
+            "scan_conclusion": (scan_report or {}).get("scan_status", {}).get("conclusion", "inconclusive"),
+            "scan_complete": bool(i2_disc.get("scan_complete", False)),
+            "failed_rules": [
+                r.get("rule_id") for r in ((scan_report or {}).get("rule_execution", {}).get("results", []) or [])
+                if r.get("status") == "failed"
+            ],
+            "skipped_files": (scan_report or {}).get("scan_limits", {}).get("skipped", {}).get("count", 0),
         },
     }
 
@@ -649,6 +658,11 @@ def rate(
             baseline, p1, i2, i3, c1, c2
         )
 
+    # An incomplete scan cannot produce an automatic trusted result.
+    if not i2.get("scan_complete", True) and final_level in ("trusted", "low_risk"):
+        final_level = "medium_risk"
+        applied_downgrade = True
+
     # --- Step 9: Derive 0-100 score (weighted by declared dimension weights) ---
     dimensions = _build_dimensions(
         package_metadata,
@@ -659,6 +673,7 @@ def rate(
         c1,
         c2_disc,
         fb_data=feedback,
+        scan_report=scan_report,
     )
 
     dimension_scores: dict[str, int] = {

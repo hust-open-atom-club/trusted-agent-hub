@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone
 
 from src.repositories.producer_sqlalchemy import ProducerRepository
+from src.services.source_snapshots import SourceSnapshotStore
 from src.models.producer import (
     CreatePackageRequest,
     CreateVersionRequest,
@@ -31,6 +32,7 @@ _SEMVER_RE = re.compile(
 )
 
 logger = logging.getLogger(__name__)
+_SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 
 def _author_has_real_name(author: object) -> bool:
@@ -337,9 +339,8 @@ class ProducerService:
                     force_rmtree(local_source_dir)
 
         # 保存扫描报告
-        file_contents = full_report.get("file_contents", {})
-        scan_data: dict[str, object] = scan_report if isinstance(scan_report, dict) else {}
-        scan_data["file_contents"] = file_contents if isinstance(file_contents, dict) else {}
+        scan_data: dict[str, object] = dict(scan_report) if isinstance(scan_report, dict) else {}
+        scan_data.pop("file_contents", None)
         # 顶层 scan_id 统一为任务级 scan_id，与 SCAN_START / SCAN_COMPLETE
         # 审计日志的 detail.scan_id 一致，支持审计 → 报告全链路溯源
         task_scan_id = full_report.get("scan_id")
@@ -654,7 +655,11 @@ class ProducerService:
             if isinstance(scan_json, dict):
                 version["scan_summary"] = scan_json.get("summary", {})
                 version["findings"] = scan_json.get("findings", [])
-                version["scan_file_contents"] = scan_json.get("file_contents", {})
+                version["source_snapshot_id"] = scan_json.get("source_snapshot_id")
+                # Expose coverage/provenance fields to the review UI without
+                # exposing source contents.  These fields are part of the
+                # persisted consumer-facing scan contract.
+                version["scan_report"] = dict(scan_json)
         # 确保 trust_score 存在
         if not version.get("trust_score"):
             version["trust_score"] = {"risk_summary": None}
@@ -668,6 +673,36 @@ class ProducerService:
         version["auto_grade"] = auto_grade
         version["effective_grade"] = version.get("manual_grade") or auto_grade
         return version
+
+    def get_file_context(
+        self,
+        version_id: str,
+        relative_path: str,
+        *,
+        line: int | None = None,
+    ) -> dict[str, object]:
+        """Load an authorized, redacted and bounded source context."""
+        version = self.repository.get_version(version_id)
+        if version is None:
+            raise ProducerServiceError(f"版本 {version_id} 不存在")
+        scan = self.repository.get_scan_report(version_id)
+        scan_json = scan.get("scan_json", {}) if scan else {}
+        snapshot_id = scan_json.get("source_snapshot_id") if isinstance(scan_json, dict) else None
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ProducerServiceError("该版本没有可用的源码快照")
+
+        # The HTTP route performs the version/package ownership check.  The
+        # snapshot's owner_id remains audit metadata, but the attached
+        # version is the authorization boundary so reviewer/admin access and
+        # reused initial scans continue to work.
+        context = _SOURCE_SNAPSHOT_STORE.load_context(
+            snapshot_id,
+            relative_path,
+            line=line,
+        )
+        if context is None:
+            raise ProducerServiceError("文件不存在、快照已过期或无权访问")
+        return context
 
     def list_my_versions(
         self, submitter_id: str, limit: int = 50, offset: int = 0
@@ -1164,15 +1199,17 @@ def validate_transition(current: str, target: str) -> None:
 
 
 def _get_file_contents(repo: ProducerRepository, version_id: str) -> dict[str, str]:
-    """从 scan_reports 中提取版本的源代码全文（file_contents）。"""
+    """从独立 SourceSnapshotStore 加载版本源代码，绝不从 scan_json 读取。"""
     scan = repo.get_scan_report(version_id)
     if not scan:
         return {}
     scan_json = scan.get("scan_json", {})
     if not isinstance(scan_json, dict):
         return {}
-    fc = scan_json.get("file_contents", {})
-    return fc if isinstance(fc, dict) else {}
+    snapshot_id = scan_json.get("source_snapshot_id")
+    if not isinstance(snapshot_id, str) or not snapshot_id:
+        return {}
+    return _SOURCE_SNAPSHOT_STORE.load_for_diff(snapshot_id)
 
 
 def _compute_code_diff(

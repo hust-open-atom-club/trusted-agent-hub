@@ -35,10 +35,93 @@
       "type": "string",
       "description": "扫描器版本"
     },
+    "source_snapshot_id": {
+      "type": "string",
+      "description": "独立源码快照标识，不包含源码内容"
+    },
+    "source_snapshot_sha256": {
+      "type": "string",
+      "description": "源码快照摘要"
+    },
+    "source_snapshot_created_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_snapshot_expires_at": {
+      "type": "integer",
+      "minimum": 0
+    },
     "duration_ms": {
       "type": "integer",
       "minimum": 0,
       "description": "扫描耗时（毫秒）"
+    },
+    "scan_status": {
+      "type": "object",
+      "required": ["state", "conclusion", "complete", "reasons"],
+      "properties": {
+        "state": { "type": "string", "enum": ["complete", "partial", "failed"] },
+        "conclusion": { "type": "string", "enum": ["risks_found", "no_risks_found", "inconclusive"] },
+        "complete": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "scan_limits": {
+      "type": "object",
+      "required": ["configured", "observed", "exceeded", "skipped"],
+      "properties": {
+        "configured": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "observed": {
+          "type": "object",
+          "properties": {
+            "discovered_files": { "type": "integer", "minimum": 0 },
+            "discovered_count": { "type": "integer", "minimum": 0 },
+            "discovered_at_least": { "type": "boolean" },
+            "analyzed_files": { "type": "integer", "minimum": 0 },
+            "discovered_bytes": { "type": "integer", "minimum": 0 },
+            "analyzed_bytes": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "exceeded": { "type": "array", "items": { "type": "string" } },
+        "skipped": {
+          "type": "object",
+          "required": ["count", "by_reason", "samples"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "by_reason": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "samples": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "rule_execution": {
+      "type": "object",
+      "required": ["total", "succeeded", "failed", "skipped", "results"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "succeeded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 },
+        "results": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+      },
+      "additionalProperties": false
+    },
+    "scanner_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["phase", "error_type", "message", "recoverable"],
+        "properties": {
+          "phase": { "type": "string" }, "rule_id": { "type": "string" },
+          "error_type": { "type": "string" }, "message": { "type": "string" },
+          "recoverable": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
     },
     "findings": {
       "type": "array",
@@ -134,30 +217,26 @@
             "type": "string",
             "description": "关联的 CWE 编号"
           },
-          "duplicates": {
+          "occurrences": {
             "type": "object",
-            "description": "跨文件重复合并：相同规则+相同匹配内容出现在多个文件时，仅保留一条（最高严重度），其余文件汇总于此",
-            "required": ["count", "files"],
+            "description": "同一规则和匹配内容在多个位置出现时的报告层聚合",
+            "required": ["count", "items", "truncated"],
             "properties": {
-              "count": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "存在相同问题的其他文件总数"
-              },
-              "files": {
+              "count": { "type": "integer", "minimum": 1 },
+              "items": {
                 "type": "array",
-                "maxItems": 5,
-                "description": "相同问题的文件清单（最多 5 个，超出仅计数）",
+                "maxItems": 100,
                 "items": {
                   "type": "object",
                   "required": ["file"],
                   "properties": {
-                    "file": { "type": "string", "description": "文件路径" },
-                    "line": { "type": "integer", "minimum": 1, "description": "起始行号" }
+                    "file": { "type": "string" },
+                    "line": { "type": "integer", "minimum": 1 }
                   },
                   "additionalProperties": false
                 }
-              }
+              },
+              "truncated": { "type": "boolean" }
             },
             "additionalProperties": false
           }
@@ -173,7 +252,12 @@
         "effective_total": {
           "type": "integer",
           "minimum": 0,
-          "description": "去重后有效发现数（critical+high+medium+low，不含 info）"
+          "description": "报告层聚合后的 finding 数（critical+high+medium+low，不含 info）"
+        },
+        "occurrences_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "聚合前原始 finding occurrence 总数"
         },
         "critical": { "type": "integer", "minimum": 0 },
         "high": { "type": "integer", "minimum": 0 },
@@ -239,6 +323,50 @@
       },
       "additionalProperties": false,
       "description": "依赖检查结果"
+    },
+    "dependency_scan": {
+      "type": "object",
+      "required": ["status", "dependencies_found", "dependencies_queried", "query_failures"],
+      "properties": {
+        "status": { "type": "string", "enum": ["complete", "partial"] },
+        "dependencies_found": { "type": "integer", "minimum": 0 },
+        "dependencies_queried": { "type": "integer", "minimum": 0 },
+        "query_failures": { "type": "integer", "minimum": 0 },
+        "query_limit": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false,
+      "description": "依赖解析和 OSV 查询覆盖率"
+    },
+    "structural_analysis": {
+      "type": "object",
+      "required": [
+        "python_files",
+        "javascript_files",
+        "shell_files",
+        "structured_documents",
+        "parse_errors",
+        "capability_graph"
+      ],
+      "properties": {
+        "python_files": { "type": "integer", "minimum": 0 },
+        "javascript_files": { "type": "integer", "minimum": 0 },
+        "shell_files": { "type": "integer", "minimum": 0 },
+        "structured_documents": { "type": "integer", "minimum": 0 },
+        "parse_errors": { "type": "integer", "minimum": 0 },
+        "capability_graph": {
+          "type": "object",
+          "required": ["declared", "observed", "undeclared_observed", "edge_count"],
+          "properties": {
+            "declared": { "type": "array", "items": { "type": "string" } },
+            "observed": { "type": "array", "items": { "type": "string" } },
+            "undeclared_observed": { "type": "array", "items": { "type": "string" } },
+            "edge_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "结构化解析与能力图摘要，不包含源码内容"
     },
     "llm_review": {
       "type": "object",

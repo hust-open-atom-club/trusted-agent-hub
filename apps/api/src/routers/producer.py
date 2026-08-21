@@ -140,10 +140,12 @@ def submit_version(
     if version is None:
         raise HTTPException(status_code=404, detail=f"版本 {version_id} 不存在")
     pkg_id = version.get("package_id")
+    source_owner_id = _user.id
     if pkg_id:
         pkg = repo.get_package(str(pkg_id))
         if pkg:
             verify_resource_access(_user, pkg.get("submitter_id", ""))
+            source_owner_id = str(pkg.get("submitter_id") or _user.id)
 
     service = ProducerService(repo)
     try:
@@ -210,6 +212,7 @@ def submit_version(
         "error": None,
         "expires_at": _time.time() + _SCAN_TTL_SECONDS,
         "user_id": _user.id,
+        "source_owner_id": source_owner_id,
     }
 
     # 扫描任务真正启动时补写 SCAN_START 审计，与 scan_complete 的 detail.scan_id
@@ -278,6 +281,32 @@ def get_package(
 
 
 # ── GET /versions/{version_id}/diff ────────────────────────
+
+@router.get(
+    "/versions/{version_id}/file-context",
+    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+)
+def get_version_file_context(
+    version_id: str,
+    path: str = Query(..., min_length=1, max_length=512, description="仓库内相对路径"),
+    line: int = Query(default=1, ge=1, le=1_000_000, description="目标行号"),
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> dict[str, object]:
+    """返回审核用的脱敏、截断代码上下文，不返回完整源码。"""
+    repo = _get_producer_repository()
+    version = repo.get_version(version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail=f"版本 {version_id} 不存在")
+    package = repo.get_package(str(version.get("package_id") or ""))
+    if package is None:
+        raise HTTPException(status_code=404, detail="版本所属包不存在")
+    verify_resource_access(_user, package.get("submitter_id", ""))
+
+    service = ProducerService(repo)
+    try:
+        return service.get_file_context(version_id, path, line=line)
+    except ProducerServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 @router.get(
     "/versions/{version_id}/diff",

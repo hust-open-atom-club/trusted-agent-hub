@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-SKIP_READ_EXTENSIONS = frozenset({
+NON_TEXT_EXTENSIONS = frozenset({
     ".exe", ".dll", ".so", ".dylib", ".bin",
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",
     ".ttf", ".otf", ".woff", ".woff2",
@@ -29,11 +29,15 @@ CODE_FILE_EXTENSIONS = frozenset({
     ".c", ".cpp", ".h", ".hpp",
 })
 
-KNOWN_SAFE_FILES = frozenset({
+GENERAL_RULE_EXCLUDED_FILES = frozenset({
     ".gitignore", ".gitattributes", ".dockerignore",
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "poetry.lock", "Pipfile.lock", "Gemfile.lock",
 })
+
+# Compatibility aliases for downstream integrations during migration.
+SKIP_READ_EXTENSIONS = NON_TEXT_EXTENSIONS
+KNOWN_SAFE_FILES = GENERAL_RULE_EXCLUDED_FILES
 
 REQUIRED_FILES_BY_TYPE: dict[str, list[str]] = {
     "skill": ["SKILL.md"],

@@ -9,7 +9,7 @@ import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 import { toast } from 'sonner';
 import type {
-  Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord,
+  Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord, FileContext,
   PackagePermissions, PackageAuthor, PackageDetail, FindingLocation,
   Installation,
 } from '@/types';
@@ -84,20 +84,40 @@ function FindingCodeView({
   finding,
   fileContents,
   versionId,
+  token,
 }: {
   finding: Finding;
   fileContents?: Record<string, string>;
   versionId: string;
+  token: string | null;
 }) {
   const { t } = useTranslation();
   const targetRef = useRef<HTMLDivElement>(null);
-  const fileContent = fileContents?.[finding.location?.file || ''];
+  const filePath = finding.location?.file || '';
+  const [remoteContext, setRemoteContext] = useState<FileContext | null>(null);
+
+  useEffect(() => {
+    if (remoteContext || fileContents?.[filePath] || !token || !filePath) return;
+    let cancelled = false;
+    const query = new URLSearchParams({
+      path: filePath,
+      line: String(Math.max(1, finding.location?.line || 1)),
+    });
+    apiFetch<FileContext>(`${API_BASE}/api/v0/producer/versions/${versionId}/file-context?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((data) => { if (!cancelled) setRemoteContext(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [fileContents, filePath, finding.location?.line, remoteContext, token, versionId]);
+
+  const fileContent = fileContents?.[filePath] ?? remoteContext?.content;
 
   useEffect(() => {
     if (targetRef.current) {
       targetRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
-  }, []);
+  }, [remoteContext]);
 
   if (!fileContent) {
     return finding.location?.snippet ? (
@@ -109,16 +129,15 @@ function FindingCodeView({
 
   const lines = fileContent.split('\n');
   const targetLine = finding.location?.line || 1;
-  const displayStart = Math.max(1, targetLine - CODE_CONTEXT_RANGE);
-  const displayEnd = Math.min(lines.length, targetLine + CODE_CONTEXT_RANGE);
-  const displayLines = lines.slice(displayStart - 1, displayEnd);
-  const lineNumWidth = String(displayEnd).length;
-  const filePath = finding.location?.file || '';
+  const displayStart = remoteContext?.start_line ?? Math.max(1, targetLine - CODE_CONTEXT_RANGE);
+  const displayEnd = remoteContext?.end_line ?? Math.min(lines.length, targetLine + CODE_CONTEXT_RANGE);
+  const displayLines = remoteContext ? lines : lines.slice(displayStart - 1, displayEnd);
+  const lineNumWidth = String(remoteContext?.total_lines ?? displayEnd).length;
 
   return (
     <div className="finding-snippet finding-snippet-expanded">
       <div className="finding-snippet-info">
-        <span>{t('review.finding.lines_range', { start: displayStart, end: displayEnd, total: lines.length })}</span>
+        <span>{t('review.finding.lines_range', { start: displayStart, end: displayEnd, total: remoteContext?.total_lines ?? lines.length })}</span>
         <a
           className="finding-full-file-toggle"
           href={`/review/files?versionId=${encodeURIComponent(versionId)}&path=${encodeURIComponent(filePath)}&line=${targetLine}`}
@@ -355,6 +374,13 @@ export default function ReviewDetailPage() {
 
   const isPending = version?.status === 'pending_review';
   const grade = version?.effective_grade ?? version?.trust_score?.risk_summary?.grade;
+  const scanReport = version?.scan_report;
+  const scanStatus = scanReport?.scan_status;
+  const scanIncomplete = Boolean(scanStatus && (scanStatus.state !== 'complete' || scanStatus.complete === false));
+  const scanReasons = [
+    ...(scanStatus?.reasons || []),
+    ...(scanReport?.scan_limits?.exceeded || []),
+  ].filter((reason, index, all) => all.indexOf(reason) === index);
 
   const reviewResultLabel = version?.review_conclusion
     ? (version.review_conclusion === 'approved'
@@ -509,6 +535,38 @@ export default function ReviewDetailPage() {
             </span>
           )}
         </div>
+      )}
+
+      {scanIncomplete && (
+        <section
+          role="alert"
+          style={{
+            marginBottom: '1rem', padding: '0.9rem 1.1rem',
+            background: 'oklch(95% 0.04 85)',
+            borderLeft: '4px solid var(--color-warning)',
+            borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+            color: 'var(--color-ink)',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+            {t('review.detail.scan_incomplete_title')}
+          </div>
+          <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
+            {t('review.detail.scan_incomplete_description')}
+          </div>
+          {scanReasons.length > 0 && (
+            <div style={{ marginTop: '0.45rem', fontSize: '0.78rem' }}>
+              {t('review.detail.scan_incomplete_reasons')}: {scanReasons.join(', ')}
+            </div>
+          )}
+          {scanReport?.rule_execution && (
+            <div style={{ marginTop: '0.35rem', fontSize: '0.76rem', color: 'var(--color-muted)' }}>
+              {t('review.detail.scan_rule_execution')}: {scanReport.rule_execution.succeeded ?? 0}/
+              {scanReport.rule_execution.total ?? 0} {t('review.detail.scan_rules_succeeded')}
+              {(scanReport.rule_execution.failed ?? 0) > 0 && ` · ${t('review.detail.scan_rules_failed')}: ${scanReport.rule_execution.failed}`}
+            </div>
+          )}
+        </section>
       )}
 
       {version?.trust_score && (
@@ -841,6 +899,22 @@ export default function ReviewDetailPage() {
                               <div className="finding-evidence-line">{finding.evidence}</div>
                             )}
 
+                            {finding.occurrences && finding.occurrences.count > 1 && (
+                              <div className="finding-occurrences" style={{ margin: '0.5rem 0', fontSize: '0.78rem', color: 'var(--color-ink-2)' }}>
+                                <strong>{t('review.finding.occurrences', { count: finding.occurrences.count })}</strong>
+                                <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                                  {finding.occurrences.items.map((occurrence, index) => (
+                                    <li key={`${occurrence.file}:${occurrence.line || 0}:${index}`}>
+                                      {occurrence.file}{occurrence.line ? `:${occurrence.line}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                                {finding.occurrences.truncated && (
+                                  <span>{t('review.finding.occurrences_truncated')}</span>
+                                )}
+                              </div>
+                            )}
+
                             <div className="finding-actions">
                               {finding.location?.snippet && (
                                 <button
@@ -868,8 +942,8 @@ export default function ReviewDetailPage() {
                             {showCodeFor[finding.id!] && (
                               <FindingCodeView
                                 finding={finding}
-                                fileContents={version?.scan_file_contents}
                                 versionId={versionId}
+                                token={token}
                               />
                             )}
                           </div>
