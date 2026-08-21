@@ -342,6 +342,7 @@
       "install": "安装",
       "trust_summary": "信任摘要",
       "source": "来源",
+      "sections": "页面章节",
       "review": "需查看"
     },
     "trust_advice": {

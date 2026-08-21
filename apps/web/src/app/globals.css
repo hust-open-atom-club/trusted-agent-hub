@@ -1712,35 +1712,6 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.detail-section-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.45rem;
-  margin-bottom: 1rem;
-  overflow-x: auto;
-  background: var(--color-paper-2);
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-md);
-}
-
-.detail-section-nav a {
-  flex: 0 0 auto;
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0.35rem 0.85rem;
-  border-radius: var(--radius-pill);
-  color: var(--color-ink-2);
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-
-.detail-section-nav a:hover {
-  background: var(--color-paper-2);
-  color: var(--color-ink);
-}
-
 .detail-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
@@ -1759,6 +1730,45 @@ h3 {
   flex-direction: column;
   gap: 0.9rem;
   min-width: 0;
+}
+
+.rail-section-card {
+  gap: 0.75rem;
+}
+
+.rail-section-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.rail-section-links a {
+  min-width: 0;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper);
+  color: var(--color-ink-2);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  transition:
+    background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out),
+    color 150ms var(--ease-out),
+    transform 150ms var(--ease-out);
+}
+
+.rail-section-links a:hover {
+  border-color: var(--color-accent);
+  background: oklch(86% 0.18 95 / 0.16);
+  color: var(--color-accent-deep);
+  transform: translateY(-1px);
 }
 
 /* ============================================================
@@ -4999,7 +5009,12 @@ h3 {
     overflow-wrap: anywhere;
   }
 
-  .detail-section-nav a {
+  .rail-section-links {
+    grid-template-columns: 1fr;
+  }
+
+  .rail-section-links a {
+    justify-content: flex-start;
     padding-inline: 0.7rem;
   }
 }

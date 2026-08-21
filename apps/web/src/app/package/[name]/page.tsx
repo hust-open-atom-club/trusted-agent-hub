@@ -515,17 +515,6 @@ export default function PackageDetailPage() {
         </div>
       </motion.section>
 
-      <motion.nav className="detail-section-nav" aria-label="Package detail sections" variants={fadeUp}>
-        <a href="#overview">{tt('detail.nav.overview')}</a>
-        <a href="#trust">{tt('detail.nav.trust')}</a>
-        <a href="#files">{tt('detail.nav.files')}</a>
-        <a href="#integrity">{tt('detail.nav.integrity')}</a>
-        <a href="#permissions">{tt('detail.nav.permissions')}</a>
-        <a href="#installation">{tt('detail.nav.installation')}</a>
-        <a href="#versions">{tt('detail.nav.versions')}</a>
-        <a href="#feedback">{tt('detail.nav.feedback')}</a>
-      </motion.nav>
-
       <motion.div className="detail-shell" variants={pageStagger}>
         <motion.main className="detail-main" variants={pageStagger}>
           <DetailSection id="overview" title={tt('detail.nav.overview')} kicker={tt('detail.section.overview_kicker')}>
@@ -705,6 +694,23 @@ export default function PackageDetailPage() {
         </motion.main>
 
         <motion.aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')} variants={listStagger}>
+          <motion.nav className="rail-card rail-section-card" aria-label="Package detail sections" variants={softPanel}>
+            <div className="rail-card-heading">
+              <span>{tt('detail.rail.sections')}</span>
+              <strong>{tt('detail.nav.overview')}</strong>
+            </div>
+            <div className="rail-section-links">
+              <a href="#overview">{tt('detail.nav.overview')}</a>
+              <a href="#trust">{tt('detail.nav.trust')}</a>
+              <a href="#files">{tt('detail.nav.files')}</a>
+              <a href="#integrity">{tt('detail.nav.integrity')}</a>
+              <a href="#permissions">{tt('detail.nav.permissions')}</a>
+              <a href="#installation">{tt('detail.nav.installation')}</a>
+              <a href="#versions">{tt('detail.nav.versions')}</a>
+              <a href="#feedback">{tt('detail.nav.feedback')}</a>
+            </div>
+          </motion.nav>
+
           <motion.div className="rail-card rail-install-card" variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.install')}</span>

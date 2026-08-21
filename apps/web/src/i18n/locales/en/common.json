@@ -342,6 +342,7 @@
       "install": "Install",
       "trust_summary": "Trust Summary",
       "source": "Source",
+      "sections": "Sections",
       "review": "Review"
     },
     "trust_advice": {
