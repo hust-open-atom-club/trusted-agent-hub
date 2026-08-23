@@ -10,6 +10,9 @@ import PackageIconImage from '@/components/PackageIconImage';
 import { AnimatePresence, fadeUp, listItem, listStagger, motion, pageStagger, softPanel } from '@/components/Motion';
 
 const PAGE_SIZE = 18;
+const DISCOVERY_PAGE_SIZE = 60;
+
+type MarketView = 'all' | 'low_risk' | 'popular' | 'recent';
 
 interface MarketplaceHeroProps {
   totalPackages: number | string;
@@ -79,47 +82,49 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
   );
 }
 
-function formatShelfRisk(riskLevel: string | null): string {
-  const labels: Record<string, string> = {
-    trusted: '可信',
-    low_risk: '低风险',
-    medium_risk: '中风险',
-    high_risk: '高风险',
-    untrusted: '不可信',
-  };
-
-  return riskLevel ? labels[riskLevel] ?? riskLevel.replace(/_/g, ' ') : '未知风险';
-}
-
 interface MarketplaceShelfProps {
   title: string;
   kicker: string;
   items: Package[];
+  isActive: boolean;
+  onActivate: () => void;
 }
 
-function MarketplaceShelf({ title, kicker, items }: MarketplaceShelfProps) {
+function MarketplaceShelf({ title, kicker, items, isActive, onActivate }: MarketplaceShelfProps) {
+  const { t } = useTranslation();
+
   if (items.length === 0) {
     return null;
   }
 
   return (
     <motion.section
-      className="market-shelf"
+      className={`market-shelf ${isActive ? 'is-active' : ''}`}
       variants={fadeUp}
       whileInView="visible"
       initial="hidden"
       viewport={{ once: true, amount: 0.2 }}
     >
       <div className="market-shelf__heading">
-        <span>{kicker}</span>
-        <h2>{title}</h2>
+        <div>
+          <span>{kicker}</span>
+          <h2>{title}</h2>
+        </div>
+        <button
+          type="button"
+          className="market-shelf__action"
+          aria-pressed={isActive}
+          onClick={onActivate}
+        >
+          {isActive ? t('home.section_active') : t('home.section_view')}
+        </button>
       </div>
-      <motion.div className="market-shelf__list" variants={listStagger}>
+      <motion.div className="market-shelf__list" variants={listStagger} initial="hidden" animate="visible">
         {items.map((pkg) => (
           <motion.a
             className="market-shelf-item"
             href={`/package/${encodeURIComponent(pkg.name)}`}
-            key={`${title}-${pkg.id}`}
+            key={pkg.id}
             variants={listItem}
             whileHover={{ x: 3 }}
             whileTap={{ scale: 0.99 }}
@@ -132,13 +137,66 @@ function MarketplaceShelf({ title, kicker, items }: MarketplaceShelfProps) {
             />
             <span className="market-shelf-item__copy">
               <strong>{pkg.name}</strong>
-              <span>{pkg.grade ?? '--'} · {formatShelfRisk(pkg.risk_level)}</span>
+              <span>
+                {pkg.grade ?? '--'} · {pkg.risk_level
+                  ? t(`trust_score.level.${pkg.risk_level}`, { defaultValue: pkg.risk_level.replace(/_/g, ' ') })
+                  : t('detail.unknown')}
+              </span>
             </span>
             <span className="market-shelf-item__meta">{pkg.install_count}</span>
           </motion.a>
         ))}
       </motion.div>
     </motion.section>
+  );
+}
+
+interface MarketplaceShelvesProps {
+  lowRiskPackages: Package[];
+  popularPackages: Package[];
+  recentPackages: Package[];
+  activeMarketView: MarketView;
+  onMarketViewChange: (view: MarketView, shouldScroll?: boolean) => void;
+}
+
+function MarketplaceShelves({
+  lowRiskPackages,
+  popularPackages,
+  recentPackages,
+  activeMarketView,
+  onMarketViewChange,
+}: MarketplaceShelvesProps) {
+  const { t } = useTranslation();
+  const hasShelfItems = lowRiskPackages.length > 0 || popularPackages.length > 0 || recentPackages.length > 0;
+
+  if (!hasShelfItems) {
+    return null;
+  }
+
+  return (
+    <motion.div className="market-shelves" aria-label={t('home.market_sections')} variants={listStagger}>
+      <MarketplaceShelf
+        title={t('home.section_low_risk')}
+        kicker={t('home.section_low_risk_kicker')}
+        items={lowRiskPackages}
+        isActive={activeMarketView === 'low_risk'}
+        onActivate={() => onMarketViewChange('low_risk', true)}
+      />
+      <MarketplaceShelf
+        title={t('home.section_popular')}
+        kicker={t('home.section_popular_kicker')}
+        items={popularPackages}
+        isActive={activeMarketView === 'popular'}
+        onActivate={() => onMarketViewChange('popular', true)}
+      />
+      <MarketplaceShelf
+        title={t('home.section_recent')}
+        kicker={t('home.section_recent_kicker')}
+        items={recentPackages}
+        isActive={activeMarketView === 'recent'}
+        onActivate={() => onMarketViewChange('recent', true)}
+      />
+    </motion.div>
   );
 }
 
@@ -157,9 +215,12 @@ export default function HomeClient() {
   const [updatedDays, setUpdatedDays] = useState('');
   const [sortBy, setSortBy] = useState<SortField>('updated_at');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+  const [activeMarketView, setActiveMarketView] = useState<MarketView>('all');
 
   /* ── 数据状态 ── */
   const [items, setItems] = useState<Package[]>([]);
+  const [discoveryItems, setDiscoveryItems] = useState<Package[]>([]);
+  const [marketplaceTotal, setMarketplaceTotal] = useState(0);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
@@ -170,6 +231,22 @@ export default function HomeClient() {
   /* 追踪请求序号以避免竞态 */
   const requestIdRef = useRef(0);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  const loadDiscovery = useCallback(async () => {
+    try {
+      const result = await fetchPackages({
+        sort_by: 'updated_at',
+        order: 'desc',
+        page: 1,
+        page_size: DISCOVERY_PAGE_SIZE,
+      });
+      setDiscoveryItems(result.items);
+      setMarketplaceTotal(result.total);
+    } catch {
+      setDiscoveryItems([]);
+      setMarketplaceTotal(0);
+    }
+  }, []);
 
   const buildQuery = useCallback(
     (targetPage: number) => {
@@ -250,6 +327,10 @@ export default function HomeClient() {
     loadFirstPage();
   }, [loadFirstPage]);
 
+  useEffect(() => {
+    loadDiscovery();
+  }, [loadDiscovery]);
+
   /* 滚动哨兵：进入视口时加载下一页 */
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -307,63 +388,127 @@ export default function HomeClient() {
     setPage(1);
   }, []);
 
+  const scrollToMarketplaceResults = useCallback(() => {
+    window.setTimeout(() => {
+      document.getElementById('marketplace-results')?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'start',
+      });
+    }, 80);
+  }, []);
+
+  const handleMarketViewChange = useCallback((view: MarketView, shouldScroll = false) => {
+    setActiveMarketView(view);
+    setQuery('');
+    setActiveType('all');
+    setCategory('');
+    setClient('');
+    setTag('');
+    setMinScore('');
+    setMaxScore('');
+    setUpdatedDays('');
+
+    if (view === 'low_risk') {
+      setMinGrade('B');
+      setSortBy('grade');
+      setSortOrder('asc');
+    } else if (view === 'popular') {
+      setMinGrade('');
+      setSortBy('install_count');
+      setSortOrder('desc');
+    } else {
+      setMinGrade('');
+      setSortBy('updated_at');
+      setSortOrder('desc');
+    }
+
+    setPage(1);
+    if (shouldScroll) {
+      scrollToMarketplaceResults();
+    }
+  }, [scrollToMarketplaceResults]);
+
   /* ── 派生数据 ── */
   const packages = items;
+  const discoveryPackages = discoveryItems.length > 0 ? discoveryItems : packages;
   const totalPackages = total;
   const hasMore = page < totalPages;
 
   /* ── 统计（来自 API 实际返回的 total） ── */
-  const publishedCount = totalPackages;
-  const topRatedCount = packages.filter(p => p.grade === 'A' || p.grade === 'B').length;
+  const heroPackageCount = marketplaceTotal || totalPackages;
+  const publishedCount = heroPackageCount;
+  const topRatedCount = discoveryPackages.filter(p => p.grade === 'A' || p.grade === 'B').length;
   const lowRiskPackages = useMemo(
-    () => packages
+    () => discoveryPackages
       .filter((pkg) => pkg.grade === 'A' || pkg.grade === 'B' || pkg.risk_level === 'low_risk')
       .slice(0, 4),
-    [packages],
+    [discoveryPackages],
   );
   const popularPackages = useMemo(
-    () => [...packages]
+    () => [...discoveryPackages]
       .sort((a, b) => b.install_count - a.install_count)
       .slice(0, 4),
-    [packages],
+    [discoveryPackages],
   );
   const recentPackages = useMemo(
-    () => [...packages]
+    () => [...discoveryPackages]
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
       .slice(0, 4),
-    [packages],
+    [discoveryPackages],
   );
 
   /* ── 加载骨架屏 ── */
   if (loading && packages.length === 0) {
     return (
       <>
-        <MarketplaceHero totalPackages="--" publishedCount="--" topRatedCount="--" />
+        <MarketplaceHero
+          totalPackages={marketplaceTotal || '--'}
+          publishedCount={marketplaceTotal || '--'}
+          topRatedCount={topRatedCount || '--'}
+        />
 
         <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
+          <MarketplaceShelves
+            lowRiskPackages={lowRiskPackages}
+            popularPackages={popularPackages}
+            recentPackages={recentPackages}
+            activeMarketView={activeMarketView}
+            onMarketViewChange={handleMarketViewChange}
+          />
+
+          <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
+            <div>
+              <span>{t('home.results_kicker')}</span>
+              <h2>{t('home.results_title')}</h2>
+            </div>
+            <p className="results-meta">{t('home.loading')}</p>
+          </motion.div>
+
           <motion.div className="search-motion-layer" variants={fadeUp}>
             <SearchBar
-            query={query}
-            activeType={activeType}
-            sortBy={sortBy}
-            sortOrder={sortOrder}
-            category={category}
-            client={client}
-            tag={tag}
-            minGrade={minGrade}
-            minScore={minScore}
-            maxScore={maxScore}
-            updatedDays={updatedDays}
-            onQueryChange={handleQueryChange}
-            onTypeChange={handleTypeChange}
-            onCategoryChange={handleCategoryChange}
-            onSortChange={handleSortChange}
-            onClientChange={handleClientChange}
-            onTagChange={handleTagChange}
-            onMinGradeChange={handleMinGradeChange}
-            onMinScoreChange={handleMinScoreChange}
-            onMaxScoreChange={handleMaxScoreChange}
-            onUpdatedDaysChange={handleUpdatedDaysChange}
+              query={query}
+              activeType={activeType}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              category={category}
+              client={client}
+              tag={tag}
+              minGrade={minGrade}
+              minScore={minScore}
+              maxScore={maxScore}
+              updatedDays={updatedDays}
+              activeMarketView={activeMarketView}
+              onQueryChange={handleQueryChange}
+              onTypeChange={handleTypeChange}
+              onCategoryChange={handleCategoryChange}
+              onSortChange={handleSortChange}
+              onClientChange={handleClientChange}
+              onTagChange={handleTagChange}
+              onMinGradeChange={handleMinGradeChange}
+              onMinScoreChange={handleMinScoreChange}
+              onMaxScoreChange={handleMaxScoreChange}
+              onUpdatedDaysChange={handleUpdatedDaysChange}
+              onMarketViewChange={handleMarketViewChange}
             />
           </motion.div>
 
@@ -405,12 +550,32 @@ export default function HomeClient() {
   return (
     <>
       <MarketplaceHero
-        totalPackages={totalPackages}
+        totalPackages={heroPackageCount}
         publishedCount={publishedCount}
         topRatedCount={topRatedCount}
       />
 
       <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
+        <MarketplaceShelves
+          lowRiskPackages={lowRiskPackages}
+          popularPackages={popularPackages}
+          recentPackages={recentPackages}
+          activeMarketView={activeMarketView}
+          onMarketViewChange={handleMarketViewChange}
+        />
+
+        <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
+          <div>
+            <span>{t('home.results_kicker')}</span>
+            <h2>{t('home.results_title')}</h2>
+          </div>
+          <p className="results-meta">
+            {totalPackages === 1
+              ? t('home.results_count', { count: totalPackages })
+              : t('home.results_count_plural', { count: totalPackages })}
+          </p>
+        </motion.div>
+
         <motion.div className="search-motion-layer" variants={fadeUp}>
           <SearchBar
             query={query}
@@ -424,6 +589,7 @@ export default function HomeClient() {
             minScore={minScore}
             maxScore={maxScore}
             updatedDays={updatedDays}
+            activeMarketView={activeMarketView}
             onQueryChange={handleQueryChange}
             onTypeChange={handleTypeChange}
             onCategoryChange={handleCategoryChange}
@@ -434,28 +600,9 @@ export default function HomeClient() {
             onMinScoreChange={handleMinScoreChange}
             onMaxScoreChange={handleMaxScoreChange}
             onUpdatedDaysChange={handleUpdatedDaysChange}
+            onMarketViewChange={handleMarketViewChange}
           />
         </motion.div>
-
-        {packages.length > 0 && (
-          <motion.div className="market-shelves" aria-label={t('home.market_sections')} variants={listStagger}>
-            <MarketplaceShelf
-              title={t('home.section_low_risk')}
-              kicker={t('home.section_low_risk_kicker')}
-              items={lowRiskPackages}
-            />
-            <MarketplaceShelf
-              title={t('home.section_popular')}
-              kicker={t('home.section_popular_kicker')}
-              items={popularPackages}
-            />
-            <MarketplaceShelf
-              title={t('home.section_recent')}
-              kicker={t('home.section_recent_kicker')}
-              items={recentPackages}
-            />
-          </motion.div>
-        )}
 
         {/* 加载指示条（已有数据时的刷新） */}
         <AnimatePresence>
@@ -473,18 +620,6 @@ export default function HomeClient() {
             </motion.div>
           )}
         </AnimatePresence>
-
-        <motion.div className="market-results-header" variants={fadeUp}>
-          <div>
-            <span>{t('home.results_kicker')}</span>
-            <h2>{t('home.results_title')}</h2>
-          </div>
-          <p className="results-meta">
-            {totalPackages === 1
-              ? t('home.results_count', { count: totalPackages })
-              : t('home.results_count_plural', { count: totalPackages })}
-          </p>
-        </motion.div>
 
         {packages.length === 0 ? (
           <motion.div className="empty-state" variants={softPanel} initial="hidden" animate="visible">

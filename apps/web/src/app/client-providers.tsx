@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth';
 import { initI18n } from '@/i18n/i18n';
 import { Toaster } from 'sonner';
@@ -33,7 +33,12 @@ function RevealProvider({ children }: { children: ReactNode }) {
 }
 
 export function ClientProviders({ children, serverLang }: { children: React.ReactNode; serverLang?: string }) {
-  initI18n(serverLang || 'zh');
+  const i18nInitializedRef = useRef(false);
+
+  if (!i18nInitializedRef.current) {
+    initI18n(serverLang || 'zh');
+    i18nInitializedRef.current = true;
+  }
 
   return (
     <AuthProvider>
