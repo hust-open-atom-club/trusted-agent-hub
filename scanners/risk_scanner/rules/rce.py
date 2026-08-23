@@ -35,7 +35,13 @@ def run(scanner: Any) -> None:
                 finding_severity = severity
                 context = ""
                 if "child_process.exec()" in desc:
-                    event = _javascript_call_at(scanner, fname, line_no, match.start())
+                    event = _javascript_call_at(
+                        scanner,
+                        fname,
+                        line_no,
+                        match.start(),
+                        match.end(),
+                    )
                     if event is not None:
                         if event.dynamic:
                             finding_severity = "high"
@@ -64,18 +70,27 @@ def _javascript_call_at(
     scanner: Any,
     filename: str,
     line: int,
-    offset: int = 0,
+    start_offset: int = 0,
+    end_offset: int | None = None,
 ) -> Any | None:
     """Return the structured JS call fact for a source location, if present."""
     analysis = getattr(getattr(scanner, "analysis", None), "javascript_ast", {}) or {}
     file_analysis = analysis.get(filename)
     if file_analysis is None:
         return None
-    line_start = scanner._read_file_content(filename).rfind("\n", 0, offset) + 1
-    column = offset - line_start
+    content = scanner._read_file_content(filename)
+    line_start = content.rfind("\n", 0, start_offset) + 1
+    start_column = start_offset - line_start
+    end_column = (
+        end_offset if end_offset is not None else start_offset + 1
+    ) - line_start
     candidates = [
         event
         for event in file_analysis.calls
-        if event.line == line and event.column <= column
+        if (
+            event.line == line
+            and event.shell_capable
+            and start_column <= event.column < end_column
+        )
     ]
-    return max(candidates, key=lambda event: event.column, default=None)
+    return min(candidates, key=lambda event: event.column, default=None)

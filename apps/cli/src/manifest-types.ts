@@ -239,6 +239,19 @@ function isAllowedUrl(value: string): boolean {
   }
 }
 
+function isSafeSourceSubdirectory(value: string): boolean {
+  if (value === '.') return true;
+  if (
+    value.trim().length === 0
+    || value.includes('\x00')
+    || value.includes('\\')
+  ) return false;
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false;
+  return value.split('/').every(
+    segment => segment.length > 0 && segment !== '.' && segment !== '..',
+  );
+}
+
 export function validateManifest(raw: unknown): InstallManifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new ManifestValidationError('Manifest must be an object', ['(root)']);
@@ -270,6 +283,13 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(validSourceTypes.includes(src!.type as string), 'source.type', 'invalid source type');
   check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL');
   check(typeof src!.ref === 'string' && src!.ref.length > 0, 'source.ref', 'must be a non-empty string');
+  if (src!.subdirectory !== undefined && src!.subdirectory !== null) {
+    check(
+      typeof src!.subdirectory === 'string' && isSafeSourceSubdirectory(src!.subdirectory),
+      'source.subdirectory',
+      'must be a safe relative POSIX path',
+    );
+  }
 
   // --- installation ---
   const inst = m.installation as Record<string, unknown> | undefined;

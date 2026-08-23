@@ -119,7 +119,8 @@
         "subdirectory": {
           "type": "string",
           "minLength": 1,
-          "description": "monorepo 中子目录路径"
+          "pattern": "^(?:\\.|(?!\\s*$)(?!.*\\u0000)(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/$)(?!\\.{1,2}(?:/|$))(?!.*/\\.{1,2}(?:/|$)).+)$",
+          "description": "monorepo 中的相对 POSIX 子目录路径；除单独的 . 外，不允许绝对路径、反斜杠、空段或 . / .. 段"
         },
         "release_asset_url": {
           "type": "string",

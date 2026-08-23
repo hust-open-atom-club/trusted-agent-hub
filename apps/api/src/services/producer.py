@@ -6,6 +6,7 @@ import difflib
 import logging
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.services.source_snapshots import SourceSnapshotStore
@@ -1046,13 +1047,13 @@ class ProducerService:
     def cleanup_orphan_artifacts(self) -> int:
         """惰性清理 /artifacts 中的孤儿产物。
 
-        保留集：非 rejected/error 状态版本的 zip（发布、审核中、下架等均保留）；
+        保留集：非 rejected/error 状态版本引用的 zip（兼容 v2 和旧文件名）；
         删除：rejected/error 版本、已删除版本遗留的 zip。返回删除数量。
         """
         from src.services.artifacts import ARTIFACTS_ROOT
 
         keep: set[str] = set()
-        for v in self.repository.list_versions_by_status():
+        for v in self.repository.list_artifact_versions():
             status = v.get("status", "")
             if status in ("rejected", "error"):
                 continue
@@ -1062,6 +1063,13 @@ class ProducerService:
             version = v.get("version") or ""
             if name and version and len(commit) >= 8:
                 keep.add(f"{name}-{version}-{commit[:8]}-v2.zip")
+                keep.add(f"{name}-{version}-{commit[:8]}.zip")
+            if isinstance(source, dict):
+                download_url = source.get("download_url")
+                if isinstance(download_url, str):
+                    referenced_name = urlparse(download_url).path.rsplit("/", 1)[-1]
+                    if referenced_name.endswith(".zip"):
+                        keep.add(referenced_name)
 
         deleted = 0
         if ARTIFACTS_ROOT.is_dir():

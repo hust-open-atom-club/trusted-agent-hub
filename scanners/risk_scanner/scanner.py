@@ -111,6 +111,7 @@ class RiskScanner:
         self.analysis = None
         self._content_tree_hash = None
         self._metadata_parse_errors = []
+        self._package_metadata = None
         start = datetime.now(timezone.utc)
 
         self._inventory = build_inventory(self.target_dir, self.policy)
@@ -159,21 +160,36 @@ class RiskScanner:
         return self._inventory
 
     def _load_metadata(self) -> None:
+        def load_json_object(path: str) -> dict[str, Any] | None:
+            try:
+                value = json.loads(self._file_contents[path])
+            except json.JSONDecodeError as exc:
+                self._metadata_parse_errors.append({
+                    "file": path,
+                    "message": f"invalid JSON: {exc.msg}",
+                })
+                return None
+            if not isinstance(value, dict):
+                self._metadata_parse_errors.append({
+                    "file": path,
+                    "message": "JSON root must be an object",
+                })
+                return None
+            return value
+
         manifest_path = "manifest.json"
         if manifest_path in self._file_contents:
-            try:
-                self._package_metadata = json.loads(self._file_contents[manifest_path])
+            metadata = load_json_object(manifest_path)
+            if metadata is not None:
+                self._package_metadata = metadata
                 return
-            except json.JSONDecodeError:
-                pass
 
         plugin_path = "plugin.json"
         if plugin_path in self._file_contents:
-            try:
-                self._package_metadata = json.loads(self._file_contents[plugin_path])
+            metadata = load_json_object(plugin_path)
+            if metadata is not None:
+                self._package_metadata = metadata
                 return
-            except json.JSONDecodeError:
-                pass
 
         skill_path = "SKILL.md"
         if skill_path in self._file_contents:
@@ -194,16 +210,14 @@ class RiskScanner:
         # （version/license/author 等常见于 npm 风格仓库的 package.json）
         pkg_json_path = "package.json"
         if pkg_json_path in self._file_contents:
-            try:
-                pkg_json = json.loads(self._file_contents[pkg_json_path])
+            pkg_json = load_json_object(pkg_json_path)
+            if pkg_json is not None:
                 if not self._package_metadata:
                     self._package_metadata = pkg_json
                 else:
                     for key in ("name", "version", "description", "license", "author"):
                         if not self._package_metadata.get(key) and pkg_json.get(key):
                             self._package_metadata[key] = pkg_json[key]
-            except json.JSONDecodeError:
-                pass
 
     def _inject_acquired_source_integrity(self) -> None:
         """Attach facts established by acquisition instead of trusting manifests.

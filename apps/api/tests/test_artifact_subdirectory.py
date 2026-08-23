@@ -15,6 +15,7 @@ def test_build_artifact_uses_explicit_nested_subdirectory(tmp_path: Path, monkey
     (repo / "manifest.json").write_text("{}\n", encoding="utf-8")
     (repo / "README.md").write_text("whole repository\n", encoding="utf-8")
     (repo / "LICENSE").write_text("MIT\n", encoding="utf-8")
+    (repo / "skills" / "NOTICE").write_text("Shared notice\n", encoding="utf-8")
     (skill / "SKILL.md").write_text("# demo\n", encoding="utf-8")
 
     monkeypatch.setattr(artifacts, "ARTIFACTS_ROOT", tmp_path / "artifacts")
@@ -29,7 +30,11 @@ def test_build_artifact_uses_explicit_nested_subdirectory(tmp_path: Path, monkey
 
     archive = artifacts.ARTIFACTS_ROOT / Path(str(result["download_url"])).name
     with ZipFile(archive) as handle:
-        assert handle.namelist() == ["SKILL.md", "LICENSE"]
+        assert handle.namelist() == [
+            "demo/SKILL.md",
+            "demo/NOTICE",
+            "demo/LICENSE",
+        ]
 
 
 def test_build_artifact_rejects_missing_or_escaping_subdirectory(tmp_path: Path, monkeypatch) -> None:

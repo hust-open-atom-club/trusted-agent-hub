@@ -51,7 +51,12 @@ log = logging.getLogger("extract_skills")
 
 # 代码文件扩展名 & 项目配置文件名 → 判定为"工具类 Skill"
 CODE_EXTENSIONS: set[str] = {
-    ".py", ".ts", ".js", ".mjs", ".sh", ".go", ".rs", ".java", ".c", ".cpp",
+    ".py", ".pyw",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
+    ".go", ".rs", ".java", ".kt", ".swift", ".scala",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".mm",
+    ".rb", ".php", ".pl", ".lua",
 }
 PERMISSION_INFERENCE_MAX_CODE_FILES = 128
 PERMISSION_INFERENCE_MAX_FILE_BYTES = 512 * 1024
@@ -126,8 +131,11 @@ SYSTEM_DEPENDENCY_HINTS: dict[str, str] = {
     ".sh": "bash",
     ".py": "python",
     ".js": "node",
+    ".jsx": "node",
     ".mjs": "node",
+    ".cjs": "node",
     ".ts": "node",
+    ".tsx": "node",
     "Dockerfile": "docker",
     "Makefile": "make",
 }
@@ -166,6 +174,30 @@ def extract_frontmatter(filepath: Path) -> dict[str, Any]:
     """从 Markdown 文件中提取 YAML frontmatter。"""
     result = parse_frontmatter_file(filepath)
     return result.data
+
+
+def _read_json_object(filepath: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(filepath.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("无法解析 JSON 对象 %s: %s", filepath, exc)
+        return {}
+    if not isinstance(value, dict):
+        log.warning("JSON 根节点必须是对象: %s", filepath)
+        return {}
+    return value
+
+
+def _require_safe_source_subdirectory(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("source subdirectory must be a non-blank string")
+    if "\x00" in value or "\\" in value:
+        raise ValueError("source subdirectory must use safe POSIX path syntax")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("source subdirectory must be relative")
+    if value != "." and any(part in {"", ".", ".."} for part in value.split("/")):
+        raise ValueError("source subdirectory must not contain empty or traversal segments")
+    return value
 
 
 def first_paragraph(text: str, max_len: int = 200) -> str:
@@ -262,12 +294,7 @@ def scan_directory(skill_dir: Path) -> ScanResult:
             result.has_manifest = True
             if manifest_path.name == "plugin.json":
                 result.has_plugin_manifest = True
-            try:
-                result.manifest_data = json.loads(
-                    manifest_path.read_text(encoding="utf-8")
-                )
-            except (json.JSONDecodeError, OSError):
-                result.manifest_data = {}
+            result.manifest_data = _read_json_object(manifest_path)
             break
 
     log.info("  [%s] 类型=%s, 文件数=%d, SKILL.md=%s",
@@ -334,22 +361,17 @@ def discover_capabilities(
         elif plugin_manifest.is_file() or plugin_json.is_file():
             ptype = "plugin"
         elif manifest_json.is_file():
-            try:
-                manifest = json.loads(
-                    manifest_json.read_text(encoding="utf-8")
-                )
-                mtype = manifest.get("type")
-                if mtype in VALID_PACKAGE_TYPES:
-                    ptype = str(mtype)
-                else:
-                    deps = manifest.get("dependencies") or {}
-                    if (
-                        isinstance(deps, dict) and deps.get("mcp_servers")
-                    ) or manifest.get("transport") or manifest.get("tools"):
-                        ptype = "mcp_server"
-                name = manifest.get("name")
-            except (json.JSONDecodeError, OSError):
-                pass
+            manifest = _read_json_object(manifest_json)
+            mtype = manifest.get("type")
+            if mtype in VALID_PACKAGE_TYPES:
+                ptype = str(mtype)
+            else:
+                deps = manifest.get("dependencies") or {}
+                if (
+                    isinstance(deps, dict) and deps.get("mcp_servers")
+                ) or manifest.get("transport") or manifest.get("tools"):
+                    ptype = "mcp_server"
+            name = manifest.get("name")
 
         if ptype is None:
             continue
@@ -826,12 +848,6 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             item["file"] = file
         result.permission_evidence.append(item)
 
-    code_extensions = CODE_EXTENSIONS | {
-        ".pyw", ".cjs", ".jsx", ".go", ".rs", ".java", ".kt", ".swift",
-        ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".mm", ".scala",
-        ".rb", ".php", ".pl", ".lua", ".bat", ".cmd", ".ps1",
-    }
-
     def read_bounded_text(path: Path, max_bytes: int) -> tuple[str, int] | None:
         try:
             with path.open("rb") as handle:
@@ -850,7 +866,7 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     code_candidates = sorted(
         filename
         for filename in result.all_files
-        if Path(filename).suffix.lower() in code_extensions
+        if Path(filename).suffix.lower() in CODE_EXTENSIONS
     )
     total_permission_bytes = 0
     for filename in code_candidates[:PERMISSION_INFERENCE_MAX_CODE_FILES]:
@@ -1499,6 +1515,9 @@ def build_metadata_json(
         repo_url: 外部传入的 GitHub 仓库 URL（git clone 场景有值）
         git_root: Git 仓库根目录（用于提取 commit_hash/ref）
     """
+    if subdirectory is not None:
+        subdirectory = _require_safe_source_subdirectory(subdirectory)
+
     name_kebab = to_kebab_case(
         result.frontmatter.get("name") or result.directory_name)
 
@@ -1579,20 +1598,17 @@ def build_metadata_json(
     installation = build_installation(result)
     manifest_path = result.directory_path / "manifest.json"
     if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest_deps = manifest.get("dependencies")
-            if isinstance(manifest_deps, dict):
-                merged = dict(dependencies or {})
-                for dep_key, dep_value in manifest_deps.items():
-                    if dep_value is not None:
-                        merged[dep_key] = dep_value
-                dependencies = merged or None
-            manifest_install = manifest.get("installation")
-            if isinstance(manifest_install, dict) and manifest_install.get("method"):
-                installation = {**installation, **manifest_install}
-        except (json.JSONDecodeError, OSError):
-            pass
+        manifest = _read_json_object(manifest_path)
+        manifest_deps = manifest.get("dependencies")
+        if isinstance(manifest_deps, dict):
+            merged = dict(dependencies or {})
+            for dep_key, dep_value in manifest_deps.items():
+                if dep_value is not None:
+                    merged[dep_key] = dep_value
+            dependencies = merged or None
+        manifest_install = manifest.get("installation")
+        if isinstance(manifest_install, dict) and manifest_install.get("method"):
+            installation = {**installation, **manifest_install}
 
     # 构建 JSON
     data: dict[str, Any] = {
@@ -1627,7 +1643,7 @@ def build_metadata_json(
         data["dependencies"] = dependencies
     if entry_points:
         data["entry_points"] = entry_points
-    if subdirectory:
+    if subdirectory is not None:
         data["source"]["subdirectory"] = subdirectory
 
     return data

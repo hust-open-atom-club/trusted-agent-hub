@@ -47,6 +47,22 @@ def _tokens(content: str) -> list[tuple[str, int, int, int]]:
     return result
 
 
+def _closing_paren_start(
+    tokens: list[tuple[str, int, int, int]],
+    open_paren_index: int,
+    content_length: int,
+) -> int:
+    depth = 0
+    for token, _line, start, _end in tokens[open_paren_index:]:
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+            if depth == 0:
+                return start
+    return content_length
+
+
 def analyze_javascript(path: str, content: str) -> JavaScriptAstAnalysis:
     result = JavaScriptAstAnalysis(path=path)
     try:
@@ -63,9 +79,11 @@ def analyze_javascript(path: str, content: str) -> JavaScriptAstAnalysis:
                 kind = _CHAIN_CALLS.get(calling, kind)
             if kind:
                 open_paren_end = tokens[index + 1][3]
-                close_paren = content.find(")", open_paren_end)
-                if close_paren < 0:
-                    close_paren = len(content)
+                close_paren = _closing_paren_start(
+                    tokens,
+                    index + 1,
+                    len(content),
+                )
                 argument = content[open_paren_end:close_paren]
                 argument_text = argument.strip()
                 shell_capable = token == "exec" or calling.endswith(".exec")

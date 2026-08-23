@@ -8,22 +8,31 @@ from typing import Annotated, Generic, Literal, TypeVar
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
-def _require_safe_source_subdirectory(value: str) -> str:
+SOURCE_SUBDIRECTORY_PATTERN = (
+    r"^(?:\.|(?!\s*$)(?!.*\u0000)(?!/)(?![A-Za-z]:)(?!.*\\)(?!.*//)"
+    r"(?!.*/$)(?!\.{1,2}(?:/|$))(?!.*/\.{1,2}(?:/|$)).+)$"
+)
+
+
+def require_safe_source_subdirectory(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("source subdirectory must not be blank")
     if "\x00" in value or "\\" in value:
         raise ValueError("source subdirectory must use safe POSIX path syntax")
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         raise ValueError("source subdirectory must be relative")
     if value != "." and any(part in {"", ".", ".."} for part in value.split("/")):
         raise ValueError("source subdirectory must not contain empty or traversal segments")
-    if not value.strip():
-        raise ValueError("source subdirectory must not be blank")
     return value
 
 
 SafeSourceSubdirectory = Annotated[
     str,
-    Field(min_length=1),
-    AfterValidator(_require_safe_source_subdirectory),
+    Field(
+        min_length=1,
+        json_schema_extra={"pattern": SOURCE_SUBDIRECTORY_PATTERN},
+    ),
+    AfterValidator(require_safe_source_subdirectory),
 ]
 
 

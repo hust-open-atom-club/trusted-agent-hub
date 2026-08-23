@@ -80,6 +80,17 @@ def test_javascript_process_analysis_marks_concatenated_command_dynamic() -> Non
     assert event.dynamic is True
 
 
+def test_javascript_process_analysis_balances_nested_parentheses() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec(buildCommand('prefix)', userInput));\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.dynamic is True
+    assert event.input_source == "user_input"
+
+
 def test_javascript_process_analysis_matches_same_line_call_by_column() -> None:
     javascript = analyze_javascript(
         "server.cjs",

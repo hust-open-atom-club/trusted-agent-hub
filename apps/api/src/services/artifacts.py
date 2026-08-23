@@ -13,6 +13,8 @@ import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
+from src.models.common import require_safe_source_subdirectory
+
 
 # Persisted artifacts directory (mounted as a Docker volume)
 ARTIFACTS_ROOT = Path(os.environ.get("ARTIFACTS_ROOT", "/artifacts"))
@@ -80,6 +82,10 @@ def _resolve_source_dir(repo_dir: Path, source_subdirectory: str | None) -> Path
     if not source_subdirectory:
         return _find_skill_dir(repo_dir)
 
+    try:
+        source_subdirectory = require_safe_source_subdirectory(source_subdirectory)
+    except ValueError as exc:
+        raise ArtifactError(f"invalid source_subdirectory: {exc}") from exc
     root = repo_dir.resolve()
     candidate = (repo_dir / source_subdirectory).resolve()
     if candidate != root and root not in candidate.parents:
@@ -111,7 +117,6 @@ def _find_external_legal_files(
     found: list[Path] = []
     seen_names: set[str] = set()
     while current == root or root in current.parents:
-        found_at_level = False
         for child in sorted(current.iterdir(), key=lambda path: path.name.lower()):
             if (
                 not child.is_symlink()
@@ -121,9 +126,6 @@ def _find_external_legal_files(
             ):
                 found.append(child)
                 seen_names.add(child.name.lower())
-                found_at_level = True
-        if found_at_level:
-            break
         if current == root:
             break
         current = current.parent
@@ -181,6 +183,7 @@ def build_artifact(
             _create_zip(
                 skill_dir,
                 zip_path,
+                package_name=package_name,
                 repository_root=source_dir,
                 external_legal_files=_find_external_legal_files(skill_dir, source_dir),
             )
@@ -224,6 +227,7 @@ def build_artifact(
         _create_zip(
             skill_dir,
             zip_path,
+            package_name=package_name,
             repository_root=repo_dir,
             external_legal_files=_find_external_legal_files(skill_dir, repo_dir),
         )
@@ -242,14 +246,16 @@ def _create_zip(
     source_dir: Path,
     dest_path: Path,
     *,
+    package_name: str,
     repository_root: Path | None = None,
     external_legal_files: list[Path] | None = None,
 ) -> None:
-    """Create a ZIP containing skill files directly (no wrapper directory)."""
+    """Create a ZIP whose top-level directory matches the install manifest."""
     source_dir = source_dir.resolve()
     root = (repository_root or source_dir).resolve()
     if root != source_dir and root not in source_dir.parents:
         raise ArtifactError("source directory is outside repository root")
+    archive_prefix = f"{package_name}/"
 
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in sorted(source_dir.rglob("*")):
@@ -258,7 +264,8 @@ def _create_zip(
                 parts = file_path.relative_to(source_dir).parts
                 if any(p.startswith(".git") for p in parts):
                     continue
-                arcname = str(file_path.relative_to(source_dir))
+                relative_name = file_path.relative_to(source_dir).as_posix()
+                arcname = f"{archive_prefix}{relative_name}"
                 zf.write(file_path, arcname)
 
         existing_names = {
@@ -272,9 +279,9 @@ def _create_zip(
             resolved_legal_file = legal_file.resolve()
             if resolved_legal_file != root and root not in resolved_legal_file.parents:
                 continue
-            arcname = legal_file.name
-            if arcname.lower() in existing_names:
+            if legal_file.name.lower() in existing_names:
                 continue
+            arcname = f"{archive_prefix}{legal_file.name}"
             zf.write(resolved_legal_file, arcname)
 
 

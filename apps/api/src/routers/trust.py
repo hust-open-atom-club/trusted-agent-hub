@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
+from src.models.common import require_safe_source_subdirectory
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
 
@@ -352,22 +353,22 @@ def _run_scan_task(
                     root_data = json.loads(
                         root_manifest.read_text(encoding="utf-8")
                     )
+                    if not isinstance(root_data, dict):
+                        raise ValueError("manifest root must be an object")
                     source_data = root_data.get("source") or {}
                     if not isinstance(source_data, dict):
                         raise ValueError("manifest source must be an object")
                     declared = source_data.get("subdirectory")
                     if declared is not None:
-                        if not isinstance(declared, str) or not declared.strip():
-                            raise ValueError(
-                                "manifest source subdirectory must be a non-empty string"
-                            )
-                        subdir = declared
+                        subdir = require_safe_source_subdirectory(declared)
                         print(
                             f"[TAH-trust]     manifest 声明子目录: {subdir}"
                         )
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, OSError, ValueError) as exc:
+                    logging.warning("Ignoring invalid root manifest source: %s", exc)
                     pass
         if subdir:
+            subdir = require_safe_source_subdirectory(subdir)
             repo_path = Path(repo_root).resolve()
             candidate = (repo_path / subdir).resolve()
             if candidate != repo_path and repo_path not in candidate.parents:
@@ -620,7 +621,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
     if manifest.is_file():
         try:
             with open(manifest, encoding="utf-8") as fh:
-                return json.load(fh)
+                value = json.load(fh)
+            if isinstance(value, dict):
+                return value
+            logging.warning("manifest.json root is not an object for %s", target)
         except (json.JSONDecodeError, OSError) as e:
             logging.warning("manifest.json fallback failed for %s: %s", target, e)
 
@@ -629,7 +633,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
     if plugin.is_file():
         try:
             with open(plugin, encoding="utf-8") as fh:
-                return json.load(fh)
+                value = json.load(fh)
+            if isinstance(value, dict):
+                return value
+            logging.warning("plugin.json root is not an object for %s", target)
         except (json.JSONDecodeError, OSError) as e:
             logging.warning("plugin.json fallback failed for %s: %s", target, e)
 
