@@ -118,6 +118,7 @@
         },
         "subdirectory": {
           "type": "string",
+          "minLength": 1,
           "description": "monorepo 中子目录路径"
         },
         "release_asset_url": {

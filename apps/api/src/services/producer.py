@@ -280,6 +280,14 @@ class ProducerService:
             source_subdirectory = full_report.get("source_subdirectory") or (
                 source.get("subdirectory", "") if isinstance(source, dict) else ""
             )
+            if source_subdirectory:
+                persisted_source = dict(source) if isinstance(source, dict) else {}
+                persisted_source["subdirectory"] = str(source_subdirectory)
+                self.repository.update_version_data(
+                    version_id,
+                    {"source": persisted_source},
+                )
+                version["source"] = persisted_source
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")
@@ -1053,7 +1061,7 @@ class ProducerService:
             name = v.get("package_name") or ""
             version = v.get("version") or ""
             if name and version and len(commit) >= 8:
-                keep.add(f"{name}-{version}-{commit[:8]}.zip")
+                keep.add(f"{name}-{version}-{commit[:8]}-v2.zip")
 
         deleted = 0
         if ARTIFACTS_ROOT.is_dir():

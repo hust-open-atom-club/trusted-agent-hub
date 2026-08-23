@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, model_serializer
 
-from .common import Owner, PackageType, Page, StrictContractModel
+from .common import Owner, PackageType, Page, SafeSourceSubdirectory, StrictContractModel
 
 # Valid LLM review labels as defined by scan-report.schema.json
 LLM_LABEL = Literal[
@@ -35,7 +35,7 @@ class Source(StrictContractModel):
     stars: int | None = None
     last_commit_at: str | None = None
     download_url: str | None = None
-    subdirectory: str | None = None
+    subdirectory: SafeSourceSubdirectory | None = None
 
 
 class Integrity(StrictContractModel):

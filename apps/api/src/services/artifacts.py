@@ -66,7 +66,7 @@ def _find_skill_dir(repo_dir: Path) -> Path:
 
     # Check immediate subdirectories
     for child in sorted(repo_dir.iterdir()):
-        if child.is_dir() and not child.name.startswith("."):
+        if child.is_dir() and not child.is_symlink() and not child.name.startswith("."):
             for marker in markers:
                 if (child / marker).exists():
                     return child
@@ -94,29 +94,37 @@ def _resolve_source_dir(repo_dir: Path, source_subdirectory: str | None) -> Path
 
 
 _LEGAL_FILE_PREFIXES = ("license", "licence", "copying", "notice")
+_ARTIFACT_FORMAT_VERSION = "v2"
 
 
-def _find_external_legal_files(source_dir: Path) -> list[Path]:
+def _find_external_legal_files(
+    source_dir: Path,
+    repository_root: Path | None = None,
+) -> list[Path]:
     """Find applicable legal files outside a selected source directory."""
     source_dir = source_dir.resolve()
-    current = source_dir
+    root = (repository_root or source_dir).resolve()
+    if root != source_dir and root not in source_dir.parents:
+        raise ArtifactError("source directory is outside repository root")
+
+    current = source_dir.parent
     found: list[Path] = []
     seen_names: set[str] = set()
-    for _ in range(10):
+    while current == root or root in current.parents:
         found_at_level = False
-        if current != source_dir:
-            for child in sorted(current.iterdir(), key=lambda path: path.name.lower()):
-                if (
-                    child.is_file()
-                    and child.name.lower().startswith(_LEGAL_FILE_PREFIXES)
-                    and child.name.lower() not in seen_names
-                ):
-                    found.append(child)
-                    seen_names.add(child.name.lower())
-                    found_at_level = True
+        for child in sorted(current.iterdir(), key=lambda path: path.name.lower()):
+            if (
+                not child.is_symlink()
+                and child.is_file()
+                and child.name.lower().startswith(_LEGAL_FILE_PREFIXES)
+                and child.name.lower() not in seen_names
+            ):
+                found.append(child)
+                seen_names.add(child.name.lower())
+                found_at_level = True
         if found_at_level:
             break
-        if (current / ".git").exists() or current.parent == current:
+        if current == root:
             break
         current = current.parent
     return found
@@ -150,7 +158,7 @@ def build_artifact(
     # Ensure artifacts directory exists
     ARTIFACTS_ROOT.mkdir(parents=True, exist_ok=True)
 
-    zip_name = f"{package_name}-{version}-{commit_hash[:8]}.zip"
+    zip_name = f"{package_name}-{version}-{commit_hash[:8]}-{_ARTIFACT_FORMAT_VERSION}.zip"
     zip_path = ARTIFACTS_ROOT / zip_name
 
     # An explicitly recorded subdirectory is part of the artifact's source
@@ -167,13 +175,14 @@ def build_artifact(
 
     # ── 本地目录优先：复用初始扫描已获取的代码，不再重新拉取 ──
     if local_source_dir:
-        source_dir = Path(local_source_dir)
+        source_dir = Path(local_source_dir).resolve()
         if source_dir.is_dir():
             skill_dir = _resolve_source_dir(source_dir, source_subdirectory)
             _create_zip(
                 skill_dir,
                 zip_path,
-                external_legal_files=_find_external_legal_files(skill_dir),
+                repository_root=source_dir,
+                external_legal_files=_find_external_legal_files(skill_dir, source_dir),
             )
             sha256 = _sha256_file(zip_path)
             size = zip_path.stat().st_size
@@ -215,7 +224,8 @@ def build_artifact(
         _create_zip(
             skill_dir,
             zip_path,
-            external_legal_files=_find_external_legal_files(skill_dir),
+            repository_root=repo_dir,
+            external_legal_files=_find_external_legal_files(skill_dir, repo_dir),
         )
 
     sha256 = _sha256_file(zip_path)
@@ -232,12 +242,18 @@ def _create_zip(
     source_dir: Path,
     dest_path: Path,
     *,
+    repository_root: Path | None = None,
     external_legal_files: list[Path] | None = None,
 ) -> None:
     """Create a ZIP containing skill files directly (no wrapper directory)."""
+    source_dir = source_dir.resolve()
+    root = (repository_root or source_dir).resolve()
+    if root != source_dir and root not in source_dir.parents:
+        raise ArtifactError("source directory is outside repository root")
+
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in sorted(source_dir.rglob("*")):
-            if file_path.is_file():
+            if file_path.is_file() and not file_path.is_symlink():
                 # Skip .git and other VCS dirs
                 parts = file_path.relative_to(source_dir).parts
                 if any(p.startswith(".git") for p in parts):
@@ -248,13 +264,18 @@ def _create_zip(
         existing_names = {
             str(file_path.relative_to(source_dir)).replace("\\", "/").lower()
             for file_path in source_dir.rglob("*")
-            if file_path.is_file()
+            if file_path.is_file() and not file_path.is_symlink()
         }
         for legal_file in external_legal_files or []:
+            if legal_file.is_symlink() or not legal_file.is_file():
+                continue
+            resolved_legal_file = legal_file.resolve()
+            if resolved_legal_file != root and root not in resolved_legal_file.parents:
+                continue
             arcname = legal_file.name
             if arcname.lower() in existing_names:
                 continue
-            zf.write(legal_file, arcname)
+            zf.write(resolved_legal_file, arcname)
 
 
 def _sha256_file(path: Path) -> str:

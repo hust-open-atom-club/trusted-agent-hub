@@ -2,9 +2,29 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Generic, Literal, TypeVar
+import re
+from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def _require_safe_source_subdirectory(value: str) -> str:
+    if "\x00" in value or "\\" in value:
+        raise ValueError("source subdirectory must use safe POSIX path syntax")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("source subdirectory must be relative")
+    if value != "." and any(part in {"", ".", ".."} for part in value.split("/")):
+        raise ValueError("source subdirectory must not contain empty or traversal segments")
+    if not value.strip():
+        raise ValueError("source subdirectory must not be blank")
+    return value
+
+
+SafeSourceSubdirectory = Annotated[
+    str,
+    Field(min_length=1),
+    AfterValidator(_require_safe_source_subdirectory),
+]
 
 
 class PackageType(StrEnum):
