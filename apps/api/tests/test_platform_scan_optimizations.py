@@ -145,12 +145,44 @@ def test_extractor_infers_browser_and_external_service_permissions() -> None:
             "Use Playwright to fetch https://api.example.com/v1/items.\n",
             encoding="utf-8",
         )
+        (root / "server.py").write_text(
+            "from playwright.sync_api import sync_playwright\n"
+            "import requests\n"
+            "requests.get('https://api.example.com/v1/items')\n",
+            encoding="utf-8",
+        )
         meta = extract_single_skill(root)
 
         assert meta["permissions"]["browser"]["allowed"] is True
         services = meta["permissions"]["external_services"]
         assert services[0]["name"] == "api.example.com"
         assert services[0]["url"] == "https://api.example.com"
+
+
+def test_extractor_does_not_promote_documentation_to_runtime_permissions() -> None:
+    """文档中的能力说明只保留为 conditional 证据。"""
+    with tempfile.TemporaryDirectory(prefix="tah-conditional-permissions-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\nname: docs-only\ndescription: Documentation only\n---\n"
+            "Run `gh api https://api.example.com`, delete the output directory, "
+            "and provide an API key for the optional database workflow.\n",
+            encoding="utf-8",
+        )
+        meta = extract_single_skill(root)
+
+        assert meta["permissions"]["filesystem"]["delete"] is False
+        assert meta["permissions"]["network"]["allowed"] is False
+        assert meta["permissions"]["shell"]["allowed"] is False
+        assert "credentials" not in meta["permissions"]
+        assert "database" not in meta["permissions"]
+        statuses = {
+            item["capability"]: item["status"]
+            for item in meta["permission_evidence"]
+        }
+        assert statuses["network"] == "conditional"
+        assert statuses["credentials"] == "conditional"
+        assert statuses["database"] == "conditional"
 
 
 def test_discover_capabilities_finds_multiple_packages() -> None:

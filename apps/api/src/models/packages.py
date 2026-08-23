@@ -35,6 +35,7 @@ class Source(StrictContractModel):
     stars: int | None = None
     last_commit_at: str | None = None
     download_url: str | None = None
+    subdirectory: str | None = None
 
 
 class Integrity(StrictContractModel):
@@ -100,6 +101,7 @@ class InstallationStep(StrictContractModel):
 
 class Installation(StrictContractModel):
     method: str
+    package: str | None = None
     targets: list[InstallTarget] | None = None
     steps: list[InstallationStep] = Field(default_factory=list)
     target_client: str | None = None
@@ -156,6 +158,7 @@ class RiskSummary(StrictContractModel):
     grade: Grade | None = None
     top_risks: list[str] = Field(default_factory=list)
     install_recommendation: str
+    requires_confirmation: bool = False
     auto_grade: Grade | None = None
     manual_grade: Grade | None = None
     effective_grade: Grade | None = None
@@ -202,7 +205,17 @@ class ScanFinding(StrictContractModel):
     downgraded: str | None = None
     remediation: str | None = None
     cwe_id: str | None = None
+    requires_confirmation: bool | None = None
     occurrences: FindingOccurrences | None = None
+
+
+class PermissionEvidence(StrictContractModel):
+    capability: str
+    status: Literal["observed", "declared", "conditional", "mentioned", "inferred"]
+    confidence: float = Field(ge=0, le=1)
+    source: Literal["code", "manifest", "frontmatter", "docs"]
+    file: str | None = None
+    evidence: str = Field(max_length=240)
 
 
 class LLMReviewLabelsSummary(StrictContractModel):
@@ -347,6 +360,7 @@ class ScanReport(StrictContractModel):
     source_snapshot_expires_at: int | None = None
     summary: ScanSummary | None = None
     findings: list[ScanFinding] | None = None
+    permission_evidence: list[PermissionEvidence] = Field(default_factory=list)
     metadata_validation: dict[str, object] | None = None
     structure_check: dict[str, object] | None = None
     dependency_check: dict[str, object] | None = None

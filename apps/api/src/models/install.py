@@ -87,6 +87,7 @@ class ManifestSource(StrictContractModel):
     repository_url: HttpsUrl
     download_url: HttpsUrl | None = None
     ref: str = Field(min_length=1)
+    subdirectory: str | None = Field(default=None, min_length=1)
     commit_hash: str | None = Field(
         default=None,
         pattern=r"^[a-f0-9]{40}$",

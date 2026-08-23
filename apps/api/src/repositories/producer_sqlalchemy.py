@@ -406,7 +406,7 @@ class ProducerRepository:
                     level=level,
                     install_recommendation=recommendation,
                     top_risks=[],
-                    model_version="0.2.0",
+                    model_version="0.3.0",
                 ))
             session.commit()
 

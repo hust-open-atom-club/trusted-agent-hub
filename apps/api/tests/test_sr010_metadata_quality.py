@@ -112,6 +112,46 @@ class TestSR010MetadataQuality:
             for t in titles
         ), f"version/license 应由 package.json 兜底: {titles}"
 
+    def test_package_name_mismatch_is_scoped_to_skill_root(self, tmp_path):
+        """父仓库的 package name 不应与嵌套 skill name 强行比较。"""
+        (tmp_path / "package.json").write_text(
+            '{"name": "superpowers"}', encoding="utf-8"
+        )
+        skill_dir = tmp_path / "skills" / "brainstorming"
+        skill_dir.mkdir(parents=True)
+        meta = _full_meta()
+        meta["name"] = "brainstorming"
+        s = MockScanner(
+            files={"SKILL.md": "# brainstorming"},
+            _package_metadata=meta,
+            target_dir=skill_dir,
+        )
+
+        metadata_quality.run(s)
+
+        assert not any("技能名与分发包名不一致" in f["title"] for f in s.findings)
+
+    def test_package_name_mismatch_is_info_only(self, tmp_path):
+        """技能名与真实分发包名不同是可解释元数据差异，不是安全风险。"""
+        meta = _full_meta()
+        meta["name"] = "pwnhustcollege"
+        s = MockScanner(
+            files={
+                "SKILL.md": "# pwnhustcollege",
+                "package.json": '{"name":"pwnhustcollege-skill"}',
+            },
+            _package_metadata=meta,
+            target_dir=tmp_path,
+        )
+
+        metadata_quality.run(s)
+
+        mismatch = [
+            f for f in s.findings if "技能名与分发包名不一致" in f["title"]
+        ]
+        assert len(mismatch) == 1
+        assert mismatch[0]["severity"] == "info"
+
     def test_short_description_info(self, tmp_path):
         """Description shorter than 10 chars → info finding."""
         meta = _full_meta()
@@ -135,6 +175,16 @@ class TestSR010MetadataQuality:
         metadata_quality.run(s)
         titles = [f["title"] for f in s.findings]
         assert any("可疑文件" in t for t in titles)
+
+    def test_shell_source_is_not_binary_artifact(self, tmp_path):
+        """.sh source is analyzed by shell rules, not metadata structure."""
+        s = MockScanner(
+            files={"SKILL.md": "# hi", "scripts/run.sh": "echo hi\n"},
+            _package_metadata=_full_meta(),
+            target_dir=tmp_path,
+        )
+        metadata_quality.run(s)
+        assert not any("可疑文件" in f["title"] for f in s.findings)
 
     def test_missing_required_file_for_type(self, tmp_path):
         """skill type without SKILL.md on disk → medium finding."""

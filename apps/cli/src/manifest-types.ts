@@ -14,6 +14,7 @@ export interface ManifestSource {
   repository_url: string;
   download_url: string | null;
   ref: string;
+  subdirectory?: string | null;
   commit_hash: string | null; // 40-char hex
 }
 
@@ -146,6 +147,7 @@ export interface ManifestRiskSummary {
   grade: 'A' | 'B' | 'C' | 'D' | 'E';
   top_risks?: string[];
   install_recommendation: string;
+  requires_confirmation?: boolean;
   auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
@@ -346,6 +348,9 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(typeof risk!.install_recommendation === 'string', 'risk_summary.install_recommendation', 'must be a string');
   // Blocked recommendation → reject manifest entirely
   check(risk!.install_recommendation !== 'blocked', 'risk_summary.install_recommendation', 'install is blocked by server');
+  if ('requires_confirmation' in risk!) {
+    check(typeof risk!.requires_confirmation === 'boolean', 'risk_summary.requires_confirmation', 'must be a boolean');
+  }
 
   return m as unknown as InstallManifest;
 }

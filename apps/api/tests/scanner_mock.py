@@ -37,8 +37,9 @@ class MockScanner:
         evidence: str = "",
         remediation: str = "",
         cwe_id: str | None = None,
+        requires_confirmation: bool = False,
     ) -> None:
-        self.findings.append({
+        finding = {
             "rule_id": rule_id,
             "severity": severity,
             "category": category,
@@ -48,4 +49,7 @@ class MockScanner:
             "evidence": evidence,
             "remediation": remediation,
             "cwe_id": cwe_id,
-        })
+        }
+        if requires_confirmation:
+            finding["requires_confirmation"] = True
+        self.findings.append(finding)

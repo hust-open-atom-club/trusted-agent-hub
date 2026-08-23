@@ -52,7 +52,7 @@ def test_b1_code_review_skill_all_green_approved() -> None:
         f"Expected trusted, got {result['risk_summary']['level']}"
     assert 85 <= result["score"] <= 100
     assert result["package_name"] == "code-review-skill"
-    assert result["model_version"] == "0.2.0"
+    assert result["model_version"] == "0.3.0"
     # Verify schema-compatible structure
     _assert_valid_output(result, fx["expected_level"])
 

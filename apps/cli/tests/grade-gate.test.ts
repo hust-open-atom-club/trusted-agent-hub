@@ -183,6 +183,16 @@ function test_gradeAB_allowed() {
   console.log('  ✓ Grade A/B always allowed');
 }
 
+function test_explicitConfirmation_appliesToLowGrades() {
+  const input: GradeInput = { grade: 'B', requiresConfirmation: true };
+
+  assert.strictEqual(checkInstall(input, {}).allowed, false);
+  assert.strictEqual(checkInstall(input, { yes: true }).allowed, true);
+  assert.strictEqual(checkInstall({ grade: 'A', requiresConfirmation: true }, {}).allowed, false);
+
+  console.log('  ✓ Finding-level confirmation is enforced');
+}
+
 // ---------------------------------------------------------------------------
 // checkInstall tests — null/unknown grade
 // ---------------------------------------------------------------------------
@@ -215,6 +225,7 @@ test_gradeE_alwaysBlocked();
 test_gradeD_doubleConfirm();
 test_gradeC_requiresYes();
 test_gradeAB_allowed();
+test_explicitConfirmation_appliesToLowGrades();
 test_unknownGrade_blocked();
 
 console.log('\n  ✓ All tests passed!\n');

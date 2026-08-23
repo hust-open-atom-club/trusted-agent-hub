@@ -920,6 +920,17 @@
             "title": "Method",
             "type": "string"
           },
+          "package": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package"
+          },
           "post_install_message": {
             "anyOf": [
               {
@@ -1348,6 +1359,18 @@
             "minLength": 1,
             "title": "Repository Url",
             "type": "string"
+          },
+          "subdirectory": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdirectory"
           },
           "type": {
             "enum": [
@@ -1954,6 +1977,67 @@
         "title": "PackageType",
         "type": "string"
       },
+      "PermissionEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "evidence": {
+            "maxLength": 240,
+            "title": "Evidence",
+            "type": "string"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "source": {
+            "enum": [
+              "code",
+              "manifest",
+              "frontmatter",
+              "docs"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "observed",
+              "declared",
+              "conditional",
+              "mentioned",
+              "inferred"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "status",
+          "confidence",
+          "source",
+          "evidence"
+        ],
+        "title": "PermissionEvidence",
+        "type": "object"
+      },
       "Permissions": {
         "additionalProperties": false,
         "properties": {
@@ -2144,6 +2228,11 @@
                 "type": "null"
               }
             ]
+          },
+          "requires_confirmation": {
+            "default": false,
+            "title": "Requires Confirmation",
+            "type": "boolean"
           },
           "top_risks": {
             "items": {
@@ -2343,6 +2432,17 @@
               }
             ],
             "title": "Remediation"
+          },
+          "requires_confirmation": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Confirmation"
           },
           "rule_id": {
             "anyOf": [
@@ -2686,6 +2786,13 @@
               }
             ],
             "title": "Package Name"
+          },
+          "permission_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionEvidence"
+            },
+            "title": "Permission Evidence",
+            "type": "array"
           },
           "rule_execution": {
             "anyOf": [
@@ -3113,6 +3220,17 @@
               }
             ],
             "title": "Stars"
+          },
+          "subdirectory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdirectory"
           },
           "type": {
             "title": "Type",

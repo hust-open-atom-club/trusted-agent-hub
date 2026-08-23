@@ -62,6 +62,7 @@ RULE_SPECS: tuple[RuleSpec, ...] = tuple(
         ("SR-017", "mcp_security"),
         ("SR-018", "plugin_security"),
         ("SR-019", "subagent_security"),
+        ("SR-020", "installation_security"),
     )
 )
 

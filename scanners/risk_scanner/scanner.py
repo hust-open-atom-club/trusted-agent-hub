@@ -1,7 +1,7 @@
 """
-Risk Scanner — 自动风险扫描器 v0.4.0
+Risk Scanner — 自动风险扫描器 v0.6.0
 
-遍历目标目录，运行 19 条静态分析规则，检测 Agent 能力包中的安全风险。
+遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
 
 规则列表:
@@ -25,6 +25,7 @@ Risk Scanner — 自动风险扫描器 v0.4.0
   SR-017:  MCP 安全 (隐藏工具检测 + 非加密传输检测 + 工具描述投毒/语义漂移)
   SR-018:  Plugin 安全 (内联MCP命令 + Hook注入 + 组件路径遍历)
   SR-019:  Subagent 安全 (自主模式 + 危险工具 + 全局作用域 + 路径遍历)
+  SR-020:  安装器安全 (生命周期脚本 + 破坏性安装操作)
 
 用法:
     from scanners.risk_scanner.scanner import RiskScanner
@@ -46,9 +47,8 @@ from typing import Any
 from scanners.risk_scanner.common import (
     CODE_EXAMPLE_INDICATORS,
     CODE_FILE_EXTENSIONS,
-    DANGEROUS_EXTENSIONS,
+    BINARY_EXTENSIONS,
     REQUIRED_FILES_BY_TYPE,
-    SUSPICIOUS_EXTENSIONS,
 )
 from scanners.risk_scanner.analyzers import analyze_snapshot
 from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
@@ -59,11 +59,12 @@ from scanners.risk_scanner.reporting import aggregate_findings, determine_scan_s
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.redaction import redact_report
 from scanners.risk_scanner.weights import SEVERITY_POINTS
+from packages.schema.frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.5.0"
+SCANNER_VERSION = "0.6.0"
 
 
 class RiskScanner:
@@ -93,6 +94,7 @@ class RiskScanner:
         self._file_contents: dict[str, str] = {}
         self.analysis = None
         self._content_tree_hash: str | None = None
+        self._metadata_parse_errors: list[dict[str, str]] = []
 
     def scan(self) -> dict[str, Any]:
         self.findings = []
@@ -108,6 +110,7 @@ class RiskScanner:
         self._file_contents = {}
         self.analysis = None
         self._content_tree_hash = None
+        self._metadata_parse_errors = []
         start = datetime.now(timezone.utc)
 
         self._inventory = build_inventory(self.target_dir, self.policy)
@@ -176,9 +179,14 @@ class RiskScanner:
         if skill_path in self._file_contents:
             try:
                 content = self._file_contents[skill_path]
-                fm = _parse_frontmatter(content)
-                if fm:
-                    self._package_metadata = fm
+                result = parse_frontmatter(content)
+                if result.error:
+                    self._metadata_parse_errors.append({
+                        "file": skill_path,
+                        "message": result.error,
+                    })
+                elif result.data:
+                    self._package_metadata = result.data
             except UnicodeDecodeError:
                 pass
 
@@ -368,6 +376,7 @@ class RiskScanner:
         evidence: str = "",
         remediation: str = "",
         cwe_id: str | None = None,
+        requires_confirmation: bool = False,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -390,6 +399,8 @@ class RiskScanner:
             finding["remediation"] = remediation
         if cwe_id:
             finding["cwe_id"] = cwe_id
+        if requires_confirmation:
+            finding["requires_confirmation"] = True
 
         self.findings.append(finding)
 
@@ -526,6 +537,16 @@ class RiskScanner:
             pkg_version = self._package_metadata.get("version", "0.0.0")
 
         metadata_validation: dict[str, Any] = {"valid": True, "errors": []}
+        if self._metadata_parse_errors:
+            metadata_validation["valid"] = False
+            metadata_validation["parse_errors"] = list(self._metadata_parse_errors)
+            metadata_validation["errors"].extend(
+                {
+                    "field": item["file"],
+                    "message": item["message"],
+                }
+                for item in self._metadata_parse_errors
+            )
         if self._package_metadata:
             for field in ["name", "version", "description", "author", "license"]:
                 if not self._package_metadata.get(field):
@@ -555,7 +576,7 @@ class RiskScanner:
                     structure_check["missing_files"].append(req_file)
         for fname in self.discovered_files:
             ext = Path(fname).suffix.lower()
-            if ext in DANGEROUS_EXTENSIONS:
+            if ext in BINARY_EXTENSIONS:
                 structure_check["valid"] = False
                 structure_check["extra_files"].append(fname)
 
@@ -632,57 +653,6 @@ class RiskScanner:
             "dependency_scan": self.dependency_scan,
             "structural_analysis": self.analysis.as_report() if self.analysis is not None else {},
         })
-
-
-def _parse_frontmatter(content: str) -> dict[str, Any] | None:
-    if not content.startswith("---"):
-        return None
-
-    end_idx = content.find("---", 3)
-    if end_idx == -1:
-        return None
-
-    fm_text = content[3:end_idx].strip()
-    result: dict[str, Any] = {}
-    current_key: str | None = None
-    current_list: list[str] = []
-
-    for line in fm_text.split("\n"):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        if stripped.startswith("- ") and current_key:
-            current_list.append(stripped[2:].strip())
-            continue
-
-        if current_key and current_list:
-            result[current_key] = current_list
-            current_list = []
-            current_key = None
-
-        if ":" in stripped:
-            key, _, value = stripped.partition(":")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            current_key = key
-            if value.lower() == "true":
-                result[key] = True
-            elif value.lower() == "false":
-                result[key] = False
-            else:
-                try:
-                    result[key] = int(value)
-                except ValueError:
-                    try:
-                        result[key] = float(value)
-                    except ValueError:
-                        result[key] = value
-
-    if current_key and current_list:
-        result[current_key] = current_list
-
-    return result if result else None
 
 
 if __name__ == "__main__":

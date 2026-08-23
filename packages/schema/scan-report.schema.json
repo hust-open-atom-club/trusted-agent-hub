@@ -14,6 +14,29 @@
     "summary"
   ],
   "properties": {
+    "permission_evidence": {
+      "type": "array",
+      "description": "Capability provenance used to distinguish executable behavior from documentation-only mentions.",
+      "items": {
+        "type": "object",
+        "required": ["capability", "status", "confidence", "source", "evidence"],
+        "properties": {
+          "capability": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["observed", "declared", "conditional", "mentioned", "inferred"]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "source": {
+            "type": "string",
+            "enum": ["code", "manifest", "frontmatter", "docs"]
+          },
+          "file": { "type": "string" },
+          "evidence": { "type": "string", "maxLength": 240 }
+        },
+        "additionalProperties": false
+      }
+    },
     "scan_id": {
       "type": "string",
       "description": "扫描任务唯一标识"
@@ -213,6 +236,10 @@
             "type": "string",
             "description": "修复建议"
           },
+          "requires_confirmation": {
+            "type": "boolean",
+            "description": "执行前必须展示风险并取得用户确认"
+          },
           "cwe_id": {
             "type": "string",
             "description": "关联的 CWE 编号"
@@ -283,6 +310,18 @@
             "type": "object",
             "properties": {
               "field": { "type": "string" },
+              "message": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "parse_errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "message"],
+            "properties": {
+              "file": { "type": "string" },
               "message": { "type": "string" }
             },
             "additionalProperties": false

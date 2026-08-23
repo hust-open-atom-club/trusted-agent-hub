@@ -209,6 +209,11 @@ class InstallManifestService:
                 else []
             ),
             install_recommendation=recommendation,
+            requires_confirmation=(
+                original_risk_summary.requires_confirmation
+                if original_risk_summary is not None
+                else False
+            ),
             auto_grade=auto_grade,
             manual_grade=record.manual_grade,
             effective_grade=effective_grade,
@@ -224,6 +229,7 @@ class InstallManifestService:
                 repository_url=source.repository_url,
                 download_url=source.download_url,
                 ref=source.ref,
+                subdirectory=source.subdirectory,
                 commit_hash=source.commit_hash,
             ),
             integrity=(

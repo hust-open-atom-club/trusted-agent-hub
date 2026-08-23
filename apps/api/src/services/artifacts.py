@@ -75,6 +75,53 @@ def _find_skill_dir(repo_dir: Path) -> Path:
     return repo_dir
 
 
+def _resolve_source_dir(repo_dir: Path, source_subdirectory: str | None) -> Path:
+    """Resolve an explicit source subdirectory without falling back broadly."""
+    if not source_subdirectory:
+        return _find_skill_dir(repo_dir)
+
+    root = repo_dir.resolve()
+    candidate = (repo_dir / source_subdirectory).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ArtifactError(
+            f"source_subdirectory escapes repository root: {source_subdirectory!r}"
+        )
+    if not candidate.is_dir():
+        raise ArtifactError(
+            f"source_subdirectory does not exist: {source_subdirectory!r}"
+        )
+    return candidate
+
+
+_LEGAL_FILE_PREFIXES = ("license", "licence", "copying", "notice")
+
+
+def _find_external_legal_files(source_dir: Path) -> list[Path]:
+    """Find applicable legal files outside a selected source directory."""
+    source_dir = source_dir.resolve()
+    current = source_dir
+    found: list[Path] = []
+    seen_names: set[str] = set()
+    for _ in range(10):
+        found_at_level = False
+        if current != source_dir:
+            for child in sorted(current.iterdir(), key=lambda path: path.name.lower()):
+                if (
+                    child.is_file()
+                    and child.name.lower().startswith(_LEGAL_FILE_PREFIXES)
+                    and child.name.lower() not in seen_names
+                ):
+                    found.append(child)
+                    seen_names.add(child.name.lower())
+                    found_at_level = True
+        if found_at_level:
+            break
+        if (current / ".git").exists() or current.parent == current:
+            break
+        current = current.parent
+    return found
+
+
 def build_artifact(
     *,
     repo_url: str,
@@ -82,6 +129,7 @@ def build_artifact(
     package_name: str,
     version: str,
     local_source_dir: str | None = None,
+    source_subdirectory: str | None = None,
 ) -> dict[str, object]:
     """Clone repo, zip the skill directory, compute SHA-256.
 
@@ -105,8 +153,10 @@ def build_artifact(
     zip_name = f"{package_name}-{version}-{commit_hash[:8]}.zip"
     zip_path = ARTIFACTS_ROOT / zip_name
 
-    # If artifact already exists, reuse it
-    if zip_path.exists():
+    # An explicitly recorded subdirectory is part of the artifact's source
+    # identity.  Do not reuse a legacy cache entry created before that field
+    # existed: it may contain the entire repository instead of the skill.
+    if zip_path.exists() and not source_subdirectory:
         sha256 = _sha256_file(zip_path)
         size = zip_path.stat().st_size
         return {
@@ -119,8 +169,12 @@ def build_artifact(
     if local_source_dir:
         source_dir = Path(local_source_dir)
         if source_dir.is_dir():
-            skill_dir = _find_skill_dir(source_dir)
-            _create_zip(skill_dir, zip_path, package_name)
+            skill_dir = _resolve_source_dir(source_dir, source_subdirectory)
+            _create_zip(
+                skill_dir,
+                zip_path,
+                external_legal_files=_find_external_legal_files(skill_dir),
+            )
             sha256 = _sha256_file(zip_path)
             size = zip_path.stat().st_size
             return {
@@ -155,10 +209,14 @@ def build_artifact(
         )
 
         # Find skill directory
-        skill_dir = _find_skill_dir(repo_dir)
+        skill_dir = _resolve_source_dir(repo_dir, source_subdirectory)
 
         # Create ZIP
-        _create_zip(skill_dir, zip_path, package_name)
+        _create_zip(
+            skill_dir,
+            zip_path,
+            external_legal_files=_find_external_legal_files(skill_dir),
+        )
 
     sha256 = _sha256_file(zip_path)
     size = zip_path.stat().st_size
@@ -170,7 +228,12 @@ def build_artifact(
     }
 
 
-def _create_zip(source_dir: Path, dest_path: Path, package_name: str) -> None:
+def _create_zip(
+    source_dir: Path,
+    dest_path: Path,
+    *,
+    external_legal_files: list[Path] | None = None,
+) -> None:
     """Create a ZIP containing skill files directly (no wrapper directory)."""
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in sorted(source_dir.rglob("*")):
@@ -181,6 +244,17 @@ def _create_zip(source_dir: Path, dest_path: Path, package_name: str) -> None:
                     continue
                 arcname = str(file_path.relative_to(source_dir))
                 zf.write(file_path, arcname)
+
+        existing_names = {
+            str(file_path.relative_to(source_dir)).replace("\\", "/").lower()
+            for file_path in source_dir.rglob("*")
+            if file_path.is_file()
+        }
+        for legal_file in external_legal_files or []:
+            arcname = legal_file.name
+            if arcname.lower() in existing_names:
+                continue
+            zf.write(legal_file, arcname)
 
 
 def _sha256_file(path: Path) -> str:

@@ -32,17 +32,50 @@ def run(scanner: Any) -> None:
                 end_line = min(len(lines) - 1, line_no)
                 snippet = "\n".join(lines[start_line : end_line + 1])
 
+                finding_severity = severity
+                context = ""
+                if "child_process.exec()" in desc:
+                    event = _javascript_call_at(scanner, fname, line_no, match.start())
+                    if event is not None:
+                        if event.dynamic:
+                            finding_severity = "high"
+                            context = f"；输入来源={event.input_source}"
+                        elif not event.dynamic:
+                            finding_severity = "medium"
+                            context = "；命令参数为固定值，仍需确认是否必要"
+
                 if scanner._is_code_example(fname, line_no):
-                    severity = "medium" if severity in ("high", "critical") else "low"
+                    finding_severity = "medium" if finding_severity in ("high", "critical") else "low"
 
                 scanner._add_finding(
                     rule_id=rule_id,
-                    severity=severity,
+                    severity=finding_severity,
                     category="remote_code_execution",
                     title=f"远程代码执行风险: {desc}",
-                    description=f"在 {fname} 中发现代码执行模式：{desc}",
+                    description=f"在 {fname} 中发现代码执行模式：{desc}{context}",
                     location={"file": fname, "line": line_no, "snippet": snippet[:200]},
-                    evidence=f"匹配模式: {match.group()[:120]}",
+                    evidence=f"匹配模式: {match.group()[:120]}{context}",
                     remediation="避免使用 eval/exec。如果必须使用 subprocess，使用命令白名单和参数校验。",
                     cwe_id="CWE-94",
                 )
+
+
+def _javascript_call_at(
+    scanner: Any,
+    filename: str,
+    line: int,
+    offset: int = 0,
+) -> Any | None:
+    """Return the structured JS call fact for a source location, if present."""
+    analysis = getattr(getattr(scanner, "analysis", None), "javascript_ast", {}) or {}
+    file_analysis = analysis.get(filename)
+    if file_analysis is None:
+        return None
+    line_start = scanner._read_file_content(filename).rfind("\n", 0, offset) + 1
+    column = offset - line_start
+    candidates = [
+        event
+        for event in file_analysis.calls
+        if event.line == line and event.column <= column
+    ]
+    return max(candidates, key=lambda event: event.column, default=None)

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any
 
-from scanners.risk_scanner.common import DANGEROUS_EXTENSIONS, REQUIRED_FILES_BY_TYPE
+from scanners.risk_scanner.common import BINARY_EXTENSIONS, REQUIRED_FILES_BY_TYPE
 
 # 标准许可证文件名（大小写不敏感），与 extract_skills.extract_license 对齐
 _LICENSE_FILE_NAMES: frozenset[str] = frozenset({
@@ -64,6 +65,35 @@ def run(scanner: Any) -> None:
                 remediation=f"在元数据中补充 {', '.join(missing)} 字段。",
             )
 
+        file_contents = getattr(scanner, "_file_contents", None)
+        if isinstance(file_contents, dict) and "package.json" in file_contents:
+            package_json = file_contents.get("package.json", "")
+        else:
+            # Unit-test adapters and older integrations may expose only the
+            # read helper; do not silently skip package identity validation.
+            package_json = scanner._read_file_content("package.json")
+        if package_json:
+            try:
+                package_data = json.loads(package_json)
+            except (json.JSONDecodeError, TypeError):
+                package_data = {}
+            package_name = package_data.get("name") if isinstance(package_data, dict) else None
+            skill_name = meta.get("name")
+            if package_name and skill_name and package_name != skill_name:
+                scanner._add_finding(
+                    rule_id=rule_id,
+                    severity="info",
+                    category="metadata_quality",
+                    title="技能名与分发包名不一致",
+                    description=(
+                        f"技能名称为 '{skill_name}'，package.json 分发包名为 '{package_name}'；"
+                        "安装记录应使用分发包名。"
+                    ),
+                    location={"file": "package.json"},
+                    evidence=f"skill={skill_name}; distribution={package_name}",
+                    remediation="分别保存 skill name 和 distribution package name，不要互相覆盖。",
+                )
+
         description = meta.get("description", "")
         if description and len(description) < 10:
             manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
@@ -108,16 +138,16 @@ def _check_structure(scanner: Any) -> None:
     for record in records:
         fname = record.relative_path
         ext = record.extension
-        if ext in DANGEROUS_EXTENSIONS:
+        if ext in BINARY_EXTENSIONS:
             scanner._add_finding(
                 rule_id=rule_id,
                 severity="medium",
                 category="metadata_quality",
                 title=f"可疑文件: {fname}",
-                description=f"发现二进制/可执行文件 '{fname}'（扩展名 {ext}），Skill 包不应包含编译产物。",
+                description=f"发现二进制/编译产物 '{fname}'（扩展名 {ext}），Skill 包不应默认携带此类文件。",
                 location={"file": fname},
                 evidence=f"Suspicious file extension: {ext}",
-                remediation="移除二进制文件，仅保留源代码和配置文件。",
+                remediation="确认二进制文件是必要且可信的；不需要时移除，仅保留源代码和配置文件。",
             )
 
     if scanner._package_metadata:

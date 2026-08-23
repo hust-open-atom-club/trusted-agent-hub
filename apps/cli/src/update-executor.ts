@@ -419,7 +419,10 @@ export class UpdateExecutor {
       );
     }
 
-    const gateResult = checkInstall({ grade }, {
+    const gateResult = checkInstall({
+      grade,
+      requiresConfirmation: manifest.risk_summary.requires_confirmation,
+    }, {
       yes: options.yes,
       force: options.force,
       acceptHighRisk: options.acceptHighRisk,

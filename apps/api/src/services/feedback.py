@@ -114,7 +114,7 @@ class FeedbackService:
         recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
         top_risks: list[str] = []
         explanation: str | None = None
-        model_version = "0.2.0"
+        model_version = "0.3.0"
         if version.trust_score is not None:
             rs = version.trust_score.risk_summary
             if rs is not None:

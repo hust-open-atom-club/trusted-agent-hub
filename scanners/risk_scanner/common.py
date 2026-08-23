@@ -15,12 +15,18 @@ NON_TEXT_EXTENSIONS = frozenset({
     ".docx", ".xlsx", ".pptx", ".pdf", ".ico", ".zip", ".tar", ".gz", ".bz2",
 })
 
-SUSPICIOUS_EXTENSIONS = frozenset({".sh", ".bat", ".ps1"})
+SCRIPT_EXTENSIONS = frozenset({".sh", ".bash", ".zsh", ".bat", ".ps1"})
 
-DANGEROUS_EXTENSIONS = frozenset({
+# Only compiled/native artifacts belong in the structural "suspicious file"
+# rule.  Shell and PowerShell files are source code and must be analyzed by
+# the content-aware rules instead of being penalized by extension alone.
+BINARY_EXTENSIONS = frozenset({
     ".exe", ".dll", ".so", ".dylib", ".bin",
-    ".sh", ".bat", ".ps1",
 })
+
+# Compatibility alias for downstream callers during the terminology cleanup.
+DANGEROUS_EXTENSIONS = BINARY_EXTENSIONS
+SUSPICIOUS_EXTENSIONS = SCRIPT_EXTENSIONS
 
 CODE_FILE_EXTENSIONS = frozenset({
     ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",

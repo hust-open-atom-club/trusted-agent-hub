@@ -66,8 +66,9 @@ def test_install_manifest_defaults_to_latest_published_version(
             "https://github.com/alice-dev/code-review-skill/archive/"
             "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0.zip"
         ),
-        "ref": "v1.0.0",
-        "commit_hash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+            "ref": "v1.0.0",
+            "subdirectory": None,
+            "commit_hash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
     }
     assert manifest["integrity"] == {
         "sha256": (

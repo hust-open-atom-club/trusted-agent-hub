@@ -27,6 +27,10 @@ class JavaScriptCallEvent:
     line: int
     calling: str
     kind: str
+    dynamic: bool = False
+    input_source: str = "unknown"
+    shell_capable: bool = False
+    column: int = 0
 
 
 @dataclass

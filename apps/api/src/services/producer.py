@@ -277,6 +277,9 @@ class ProducerService:
             commit_hash = full_report.get("commit_hash") or (
                 source.get("commit_hash", "") if isinstance(source, dict) else ""
             )
+            source_subdirectory = full_report.get("source_subdirectory") or (
+                source.get("subdirectory", "") if isinstance(source, dict) else ""
+            )
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")
@@ -288,12 +291,17 @@ class ProducerService:
             if install_method == "copy_directory":
                 if repo_url and package_name and pkg_version:
                     try:
+                        artifact_kwargs = {
+                            "repo_url": repo_url,
+                            "commit_hash": str(commit_hash),
+                            "package_name": package_name,
+                            "version": str(pkg_version),
+                            "local_source_dir": local_source_dir,
+                        }
+                        if source_subdirectory:
+                            artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
                         artifact = build_artifact(
-                            repo_url=repo_url,
-                            commit_hash=str(commit_hash),
-                            package_name=package_name,
-                            version=str(pkg_version),
-                            local_source_dir=local_source_dir,
+                            **artifact_kwargs,
                         )
                         self._apply_artifact_to_version(
                             version_id,
@@ -301,6 +309,7 @@ class ProducerService:
                             package_name,
                             pkg_version,
                             str(commit_hash),
+                            str(source_subdirectory) if source_subdirectory else None,
                         )
                     except ArtifactError as exc:
                         self.repository.update_version_status(
@@ -399,6 +408,7 @@ class ProducerService:
         package_name: str,
         pkg_version: str,
         commit_hash: str,
+        source_subdirectory: str | None = None,
     ) -> None:
         """把安装产物信息写回 version data（source/integrity/installation）。"""
         version = self.repository.get_version(version_id)
@@ -410,6 +420,8 @@ class ProducerService:
         source["download_url"] = artifact.get("download_url", "")
         if commit_hash and len(commit_hash) == 40:
             source["commit_hash"] = commit_hash
+        if source_subdirectory:
+            source["subdirectory"] = source_subdirectory
         data["source"] = source
 
         integrity = dict(data.get("integrity") or {})
@@ -491,9 +503,10 @@ class ProducerService:
             or str((data.get("compatibility") or ["claude-code"])[0])
         )
         if method == "npm_install":
+            npm_package = str(installation.get("package") or package_name)
             step: dict[str, object] = {
                 "action": "npm_install",
-                "package": package_name,
+                "package": npm_package,
                 "version": pkg_version,
                 "registry": "https://registry.npmjs.org",
             }
@@ -990,6 +1003,7 @@ class ProducerService:
         source = version.get("source", {})
         repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
         commit_hash = source.get("commit_hash", "") if isinstance(source, dict) else ""
+        source_subdirectory = source.get("subdirectory", "") if isinstance(source, dict) else ""
         if not repo_url or not commit_hash or len(commit_hash) != 40:
             return False
         package = self.repository.get_package(version.get("package_id", ""))
@@ -998,16 +1012,26 @@ class ProducerService:
         if not package_name or not pkg_version:
             return False
         try:
+            artifact_kwargs = {
+                "repo_url": repo_url,
+                "commit_hash": str(commit_hash),
+                "package_name": str(package_name),
+                "version": str(pkg_version),
+            }
+            if source_subdirectory:
+                artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
             artifact = build_artifact(
-                repo_url=repo_url,
-                commit_hash=str(commit_hash),
-                package_name=str(package_name),
-                version=str(pkg_version),
+                **artifact_kwargs,
             )
         except ArtifactError:
             return False
         self._apply_artifact_to_version(
-            version_id, artifact, str(package_name), str(pkg_version), commit_hash
+            version_id,
+            artifact,
+            str(package_name),
+            str(pkg_version),
+            commit_hash,
+            str(source_subdirectory) if source_subdirectory else None,
         )
         return True
 
