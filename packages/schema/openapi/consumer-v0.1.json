@@ -3640,6 +3640,20 @@
             ],
             "title": "Published At"
           },
+          "scan_file_contents": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan File Contents"
+          },
           "scan_report": {
             "anyOf": [
               {

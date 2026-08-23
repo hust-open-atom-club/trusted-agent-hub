@@ -16,6 +16,7 @@ function renderSearchBar(overrides: Record<string, unknown> = {}) {
     minScore: '',
     maxScore: '',
     updatedDays: '',
+    activeMarketView: 'all' as const,
     onQueryChange: vi.fn(),
     onTypeChange: vi.fn(),
     onCategoryChange: vi.fn(),
@@ -26,10 +27,15 @@ function renderSearchBar(overrides: Record<string, unknown> = {}) {
     onMinScoreChange: vi.fn(),
     onMaxScoreChange: vi.fn(),
     onUpdatedDaysChange: vi.fn(),
+    onMarketViewChange: vi.fn(),
     ...overrides,
   };
   render(<SearchBar {...props} />);
   return props;
+}
+
+function openFilters() {
+  fireEvent.click(screen.getByRole('button', { name: /筛选选项/ }));
 }
 
 describe('SearchBar', () => {
@@ -44,12 +50,14 @@ describe('SearchBar', () => {
 
   it('switches type filters', () => {
     const props = renderSearchBar();
+    openFilters();
     fireEvent.click(screen.getByRole('button', { name: 'Skill' }));
     expect(props.onTypeChange).toHaveBeenCalledWith('skill');
   });
 
   it('marks the active type filter', () => {
     renderSearchBar({ activeType: 'mcp_server' });
+    openFilters();
     expect(screen.getByRole('button', { name: 'MCP Server' })).toHaveClass(
       'active',
     );
@@ -57,23 +65,24 @@ describe('SearchBar', () => {
 
   it('reports client, grade, updated-days and tag filters', () => {
     const props = renderSearchBar();
+    openFilters();
 
-    fireEvent.change(screen.getByLabelText('Filter by client'), {
+    fireEvent.change(screen.getByLabelText('客户端'), {
       target: { value: 'cursor' },
     });
     expect(props.onClientChange).toHaveBeenCalledWith('cursor');
 
-    fireEvent.change(screen.getByLabelText('Filter by minimum trust grade'), {
+    fireEvent.change(screen.getByLabelText('信任等级'), {
       target: { value: 'C' },
     });
     expect(props.onMinGradeChange).toHaveBeenCalledWith('C');
 
-    fireEvent.change(screen.getByLabelText('Filter by last updated'), {
+    fireEvent.change(screen.getByLabelText('更新时间'), {
       target: { value: '30' },
     });
     expect(props.onUpdatedDaysChange).toHaveBeenCalledWith('30');
 
-    fireEvent.change(screen.getByLabelText('Filter by tag'), {
+    fireEvent.change(screen.getByLabelText('标签'), {
       target: { value: 'summary' },
     });
     expect(props.onTagChange).toHaveBeenCalledWith('summary');
@@ -81,13 +90,14 @@ describe('SearchBar', () => {
 
   it('reports score range inputs', () => {
     const props = renderSearchBar();
+    openFilters();
 
-    fireEvent.change(screen.getByLabelText('Minimum trust score'), {
+    fireEvent.change(screen.getByLabelText('最低'), {
       target: { value: '60' },
     });
     expect(props.onMinScoreChange).toHaveBeenCalledWith('60');
 
-    fireEvent.change(screen.getByLabelText('Maximum trust score'), {
+    fireEvent.change(screen.getByLabelText('最高'), {
       target: { value: '90' },
     });
     expect(props.onMaxScoreChange).toHaveBeenCalledWith('90');
@@ -95,7 +105,8 @@ describe('SearchBar', () => {
 
   it('reports sort field and order from the select', () => {
     const props = renderSearchBar();
-    fireEvent.change(screen.getByLabelText('Sort packages'), {
+    openFilters();
+    fireEvent.change(screen.getByLabelText('排序'), {
       target: { value: 'grade:asc' },
     });
     expect(props.onSortChange).toHaveBeenCalledWith('grade', 'asc');

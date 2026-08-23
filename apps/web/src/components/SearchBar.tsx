@@ -79,7 +79,7 @@ export default function SearchBar({
   minScore,
   maxScore,
   updatedDays,
-  activeMarketView,
+  activeMarketView = 'all',
   onQueryChange,
   onTypeChange,
   onCategoryChange,
