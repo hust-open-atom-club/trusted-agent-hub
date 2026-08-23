@@ -1,5 +1,8 @@
 """SR-005: Remote Code Execution rule unit tests (regex + AST layers)."""
 
+from types import SimpleNamespace
+
+from scanners.risk_scanner.analyzers.javascript_ast import analyze_javascript
 from scanners.risk_scanner.rules.rce import run as run_rce
 from scanners.risk_scanner.rules.behavioral_ast import run as run_ast
 from tests.scanner_mock import MockScanner
@@ -42,6 +45,18 @@ class TestSR005RCE:
         })
         run_rce(s)
         assert len(s.findings) >= 1
+
+    def test_child_process_exec_uses_matching_structured_call(self):
+        content = "cp.exec('fixed'); cp.exec(userInput);\n"
+        s = MockScanner(files={"script.js": content})
+        s.analysis = SimpleNamespace(
+            javascript_ast={"script.js": analyze_javascript("script.js", content)}
+        )
+
+        run_rce(s)
+
+        assert [finding["severity"] for finding in s.findings] == ["medium", "high"]
+        assert "输入来源=user_input" in s.findings[1]["description"]
 
     def test_getattr_reflection(self):
         """Dynamic attribute access to dangerous modules (AST layer)."""

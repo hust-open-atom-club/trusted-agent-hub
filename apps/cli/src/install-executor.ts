@@ -282,7 +282,10 @@ export class InstallExecutor {
       riskLevel: manifest.risk_summary.level,
     }) || 'unknown';
 
-    const gateResult = checkInstall({ grade }, gradeFlags);
+    const gateResult = checkInstall({
+      grade,
+      requiresConfirmation: manifest.risk_summary.requires_confirmation,
+    }, gradeFlags);
     if (!gateResult.allowed) {
       throw new InstallBlockedError(
         gateResult.reason || `Installation blocked by safety policy (Grade ${grade})`,

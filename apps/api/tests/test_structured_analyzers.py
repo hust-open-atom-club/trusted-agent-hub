@@ -45,6 +45,76 @@ def test_javascript_and_shell_analysis_extract_commands() -> None:
     assert shell.commands[0].pipeline is True
 
 
+def test_javascript_process_analysis_marks_environment_driven_shell() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec(process.env.BRAINSTORM_OPEN_CMD + ' ' + url);\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.kind == "process"
+    assert event.dynamic is True
+    assert event.input_source == "environment"
+    assert event.shell_capable is True
+
+
+def test_javascript_process_analysis_marks_variable_command_dynamic() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec(command);\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.dynamic is True
+    assert event.input_source == "variable"
+    assert event.shell_capable is True
+
+
+def test_javascript_process_analysis_marks_concatenated_command_dynamic() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec('prefix ' + userInput);\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.dynamic is True
+
+
+def test_javascript_process_analysis_balances_nested_parentheses() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec(buildCommand('prefix)', userInput));\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.dynamic is True
+    assert event.input_source == "user_input"
+
+
+def test_javascript_process_analysis_matches_same_line_call_by_column() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "cp.exec('fixed'); cp.exec(userInput);\n",
+    )
+
+    assert len(javascript.calls) == 2
+    assert javascript.calls[0].dynamic is False
+    assert javascript.calls[1].dynamic is True
+
+
+def test_javascript_process_analysis_keeps_snapshot_line_context() -> None:
+    javascript = analyze_javascript(
+        "server.cjs",
+        "const cp = require('child_process');\r\r\n"
+        "cp.exec(process.env.OPEN_CMD + ' ' + url);\r\r\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.line == 2
+    assert event.dynamic is True
+    assert event.input_source == "environment"
+
+
 def test_structured_manifest_reads_fields_without_regex() -> None:
     document = parse_structured_document(
         "manifest.json",

@@ -348,6 +348,10 @@ def _build_dimensions(
     source = package_metadata.get("source", {}) or {}
     integrity = package_metadata.get("integrity", {}) or {}
     permissions = package_metadata.get("permissions", {}) or {}
+    raw_permission_evidence = package_metadata.get("permission_evidence", [])
+    permission_evidence = (
+        raw_permission_evidence if isinstance(raw_permission_evidence, list) else []
+    )
     name = package_metadata.get("name", "")
     version = package_metadata.get("version", "")
     description = package_metadata.get("description", "")
@@ -404,9 +408,11 @@ def _build_dimensions(
         "score": i1_disc.get("score", 50),
         "weight": 0.15,
         "details": {
-            "total_permissions": _count_permission_categories(permissions),
+            "total_permissions": _count_permission_categories(permissions, permission_evidence),
             "high_risk_permissions": i1_disc.get("danger_count", 0),
             "unnecessary_permissions": [],
+            "permission_evidence_count": i1_disc.get("permission_evidence_count", 0),
+            "ignored_low_confidence_count": i1_disc.get("ignored_low_confidence_count", 0),
         },
     }
 
@@ -535,13 +541,37 @@ def _build_dimensions(
     }
 
 
-def _count_permission_categories(permissions: dict[str, Any]) -> int:
-    """Count how many permission categories have meaningful content."""
+def _count_permission_categories(
+    permissions: dict[str, Any],
+    permission_evidence: list[dict[str, Any]] | None = None,
+) -> int:
+    """Count meaningful high-confidence permission categories."""
     count = 0
+    evidence = permission_evidence or []
+
+    def supported(key: str) -> bool:
+        if not evidence:
+            return True
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            capability = str(item.get("capability", ""))
+            try:
+                confidence = float(item.get("confidence", 0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            if (
+                (capability == key or capability.startswith(key + "."))
+                and item.get("status") in {"observed", "declared"}
+                and confidence >= 0.75
+            ):
+                return True
+        return False
+
     for key in ("filesystem", "shell", "network", "environment",
                 "credentials", "database", "browser", "external_services"):
         val = permissions.get(key)
-        if val:
+        if val and supported(key):
             if isinstance(val, dict) and any(v for v in val.values() if v):
                 count += 1
             elif isinstance(val, list) and val:
@@ -706,6 +736,15 @@ def rate(
 
     # --- Install recommendation ---
     recommendation = get_recommendation(final_level)
+    scan_findings = (
+        scan_report.get("findings", [])
+        if isinstance(scan_report, dict)
+        else []
+    )
+    requires_confirmation = any(
+        isinstance(finding, dict) and finding.get("requires_confirmation") is True
+        for finding in scan_findings
+    )
 
     grade = LEVEL_TO_GRADE.get(final_level, "C")
     return {
@@ -713,7 +752,7 @@ def rate(
         "package_name": package_metadata.get("name", "unknown"),
         "version": package_metadata.get("version", "0.0.0"),
         "calculated_at": datetime.now(timezone.utc).isoformat(),
-        "model_version": "0.2.0",
+        "model_version": "0.3.0",
         "dimensions": dimensions,
         "explanations": explanations,
         "risk_summary": {
@@ -721,5 +760,6 @@ def rate(
             "grade": grade,
             "top_risks": top_risks,
             "install_recommendation": recommendation,
+            "requires_confirmation": requires_confirmation,
         },
     }

@@ -49,7 +49,7 @@ export interface VersionDetail {
   author?: { name: string; email?: string; url?: string };
   source?: {
     type: string; repository_url: string; owner?: string; repo?: string;
-    ref_type?: string; ref: string; commit_hash: string; verified_owner?: boolean;
+    ref_type?: string; ref: string; subdirectory?: string | null; commit_hash: string; verified_owner?: boolean;
   };
   compatibility?: string[];
   permissions?: Record<string, unknown>;
@@ -66,6 +66,7 @@ export interface VersionDetail {
       grade?: 'A' | 'B' | 'C' | 'D' | 'E';
       top_risks?: string[];
       install_recommendation?: string;
+      requires_confirmation?: boolean;
       auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
       manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
       effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;

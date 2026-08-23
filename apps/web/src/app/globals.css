@@ -5608,6 +5608,13 @@ h3 {
   text-decoration: underline;
 }
 
+.source-subdirectory {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+}
+
 .review-detail-bar-grade-label {
   margin-top: 0.35rem;
   font-size: 0.85rem;
@@ -6386,6 +6393,11 @@ h3 {
 .finding-meta-pill.remediation {
   border: 1px solid oklch(65% 0.06 130);
   color: oklch(40% 0.08 130);
+}
+
+.finding-meta-pill.confirmation {
+  border: 1px solid oklch(68% 0.12 75);
+  color: oklch(45% 0.12 75);
 }
 
 .finding-details {

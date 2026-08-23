@@ -271,6 +271,7 @@ function SubmitForm() {
         if (ms.ref_type) sourceObj.ref_type = ms.ref_type;
         if (ms.owner && ms.owner !== 'unknown') sourceObj.owner = ms.owner;
         if (ms.repo && ms.repo !== 'unknown') sourceObj.repo = ms.repo;
+        if (ms.subdirectory) sourceObj.subdirectory = ms.subdirectory;
       }
       sourceObj.repository_url = sUrl;
 

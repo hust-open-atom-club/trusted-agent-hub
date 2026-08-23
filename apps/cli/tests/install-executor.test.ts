@@ -347,6 +347,24 @@ function test_isSafeInstallPath() {
 function test_manifestValidation() {
   assert.doesNotThrow(() => validateManifest(makeManifest()));
 
+  const nestedSource = makeManifest();
+  nestedSource.source.subdirectory = 'skills/demo';
+  assert.doesNotThrow(() => validateManifest(nestedSource));
+
+  const repositoryRoot = makeManifest();
+  repositoryRoot.source.subdirectory = '.';
+  assert.doesNotThrow(() => validateManifest(repositoryRoot));
+
+  for (const subdirectory of ['../escape', 'skills//demo', 'C:/demo', 'skills\\demo', ' ']) {
+    const invalidSource = makeManifest();
+    invalidSource.source.subdirectory = subdirectory;
+    assert.throws(
+      () => validateManifest(invalidSource),
+      (err: unknown) => err instanceof ManifestValidationError
+        && err.invalidFields.includes('source.subdirectory'),
+    );
+  }
+
   const missingGrade = makeManifest();
   delete (missingGrade.risk_summary as any).grade;
   assert.throws(

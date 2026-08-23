@@ -19,6 +19,8 @@ export interface GradeInput {
   riskLevel?: string | null;
   /** Version-level risk_summary.level (fallback) */
   versionLevel?: string | null;
+  /** Backend finding-level safety flag requiring explicit confirmation. */
+  requiresConfirmation?: boolean;
 }
 
 export type GateResult =
@@ -143,6 +145,14 @@ export function checkInstall(
       };
     }
     return { allowed: true, grade: 'C', policy };
+  }
+
+  if (input.requiresConfirmation && !flags.yes && !flags.force) {
+    return {
+      allowed: false,
+      grade,
+      reason: 'This package contains a finding that requires explicit confirmation. Use --yes to confirm installation.',
+    };
   }
 
   // Grade A/B: allowed

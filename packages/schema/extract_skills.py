@@ -32,16 +32,15 @@ import logging
 import os
 import re
 import subprocess
-import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-# ── PyYAML 用于解析 SKILL.md frontmatter ──────────────────────────
+# ── 共享 YAML frontmatter 解析器 ─────────────────────────────────
 try:
-    import yaml
-except ImportError:
-    sys.exit("缺少依赖：pip install pyyaml")
+    from packages.schema.frontmatter import parse_frontmatter_file, split_frontmatter
+except ModuleNotFoundError:  # 允许直接执行本文件
+    from frontmatter import parse_frontmatter_file, split_frontmatter
 
 # ── 日志 ──────────────────────────────────────────────────────────
 log = logging.getLogger("extract_skills")
@@ -52,8 +51,16 @@ log = logging.getLogger("extract_skills")
 
 # 代码文件扩展名 & 项目配置文件名 → 判定为"工具类 Skill"
 CODE_EXTENSIONS: set[str] = {
-    ".py", ".ts", ".js", ".mjs", ".sh", ".go", ".rs", ".java", ".c", ".cpp",
+    ".py", ".pyw",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
+    ".go", ".rs", ".java", ".kt", ".swift", ".scala",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".m", ".mm",
+    ".rb", ".php", ".pl", ".lua",
 }
+PERMISSION_INFERENCE_MAX_CODE_FILES = 128
+PERMISSION_INFERENCE_MAX_FILE_BYTES = 512 * 1024
+PERMISSION_INFERENCE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
 PROJECT_CONFIG_FILES: set[str] = {
     "package.json", "requirements.txt", "Dockerfile", "tsconfig.json",
     "pyproject.toml", "docker-compose.yaml", "pnpm-lock.yaml",
@@ -119,30 +126,16 @@ CATEGORY_KEYWORDS: list[tuple[list[str], str]] = [
     (["docs", "documentation", "write", "writing"], "documentation"),
 ]
 
-# 权限推断关键词
-PERMISSION_HINTS: dict[str, list[str]] = {
-    "shell_allowed": ["execute", "run command", "bash", "shell", "npm ", "pip ",
-                       "node ", "python ", "npx ", "terminal", "command line"],
-    "network_allowed": ["api", "http", "fetch", "download", "deploy", "curl",
-                         "wget", "request", "url", "endpoint"],
-    "filesystem_write": ["write file", "generate", "create file", "output",
-                          "save", "export", "convert"],
-    "filesystem_delete": ["delete", "remove", "clean", "rm ", "unlink"],
-    "credential_access": ["token", "api key", "api_key", "password", "secret",
-                           "auth", "credential", "oauth"],
-    "database_access": ["mysql", "postgresql", "sqlite", "mongodb",
-                         "psycopg2", "sqlalchemy", "prisma", "database"],
-    "browser_access": ["playwright", "puppeteer", "selenium", "browser automation",
-                       "page.goto", "webdriver", "chromium"],
-}
-
 # 推断系统依赖
 SYSTEM_DEPENDENCY_HINTS: dict[str, str] = {
     ".sh": "bash",
     ".py": "python",
     ".js": "node",
+    ".jsx": "node",
     ".mjs": "node",
+    ".cjs": "node",
     ".ts": "node",
+    ".tsx": "node",
     "Dockerfile": "docker",
     "Makefile": "make",
 }
@@ -179,25 +172,37 @@ def to_kebab_case(name: str) -> str:
 
 def extract_frontmatter(filepath: Path) -> dict[str, Any]:
     """从 Markdown 文件中提取 YAML frontmatter。"""
+    result = parse_frontmatter_file(filepath)
+    return result.data
+
+
+def _read_json_object(filepath: Path) -> dict[str, Any]:
     try:
-        text = filepath.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        value = json.loads(filepath.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("无法解析 JSON 对象 %s: %s", filepath, exc)
         return {}
-    if not text.startswith("---"):
+    if not isinstance(value, dict):
+        log.warning("JSON 根节点必须是对象: %s", filepath)
         return {}
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    try:
-        return yaml.safe_load(parts[1]) or {}
-    except yaml.YAMLError:
-        return {}
+    return value
+
+
+def _require_safe_source_subdirectory(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("source subdirectory must be a non-blank string")
+    if "\x00" in value or "\\" in value:
+        raise ValueError("source subdirectory must use safe POSIX path syntax")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("source subdirectory must be relative")
+    if value != "." and any(part in {"", ".", ".."} for part in value.split("/")):
+        raise ValueError("source subdirectory must not contain empty or traversal segments")
+    return value
 
 
 def first_paragraph(text: str, max_len: int = 200) -> str:
     """提取文本中第一个有意义段落（跳过 frontmatter 和标题行）。"""
-    parts = text.split("---", 2)
-    body = parts[2] if len(parts) >= 3 else text
+    _parsed, body = split_frontmatter(text)
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -228,6 +233,7 @@ class ScanResult:
     has_manifest: bool = False        # 是否存在 manifest.json / plugin.json
     has_plugin_manifest: bool = False  # 是否存在 .claude-plugin/plugin.json 或 plugin.json
     manifest_data: dict[str, Any] = field(default_factory=dict)
+    permission_evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 def scan_directory(skill_dir: Path) -> ScanResult:
@@ -270,10 +276,9 @@ def scan_directory(skill_dir: Path) -> ScanResult:
             full_text = result.skill_md_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             full_text = ""
-        result.frontmatter = extract_frontmatter(result.skill_md_path)
-        # 正文
-        parts = full_text.split("---", 2)
-        result.skill_md_body = parts[2] if len(parts) >= 3 else full_text
+        parsed, body = split_frontmatter(full_text)
+        result.frontmatter = parsed.data
+        result.skill_md_body = body
 
     # 判定类型
     result.skill_type = "tool" if result.has_code else "prompt"
@@ -289,12 +294,7 @@ def scan_directory(skill_dir: Path) -> ScanResult:
             result.has_manifest = True
             if manifest_path.name == "plugin.json":
                 result.has_plugin_manifest = True
-            try:
-                result.manifest_data = json.loads(
-                    manifest_path.read_text(encoding="utf-8")
-                )
-            except (json.JSONDecodeError, OSError):
-                result.manifest_data = {}
+            result.manifest_data = _read_json_object(manifest_path)
             break
 
     log.info("  [%s] 类型=%s, 文件数=%d, SKILL.md=%s",
@@ -361,22 +361,17 @@ def discover_capabilities(
         elif plugin_manifest.is_file() or plugin_json.is_file():
             ptype = "plugin"
         elif manifest_json.is_file():
-            try:
-                manifest = json.loads(
-                    manifest_json.read_text(encoding="utf-8")
-                )
-                mtype = manifest.get("type")
-                if mtype in VALID_PACKAGE_TYPES:
-                    ptype = str(mtype)
-                else:
-                    deps = manifest.get("dependencies") or {}
-                    if (
-                        isinstance(deps, dict) and deps.get("mcp_servers")
-                    ) or manifest.get("transport") or manifest.get("tools"):
-                        ptype = "mcp_server"
-                name = manifest.get("name")
-            except (json.JSONDecodeError, OSError):
-                pass
+            manifest = _read_json_object(manifest_json)
+            mtype = manifest.get("type")
+            if mtype in VALID_PACKAGE_TYPES:
+                ptype = str(mtype)
+            else:
+                deps = manifest.get("dependencies") or {}
+                if (
+                    isinstance(deps, dict) and deps.get("mcp_servers")
+                ) or manifest.get("transport") or manifest.get("tools"):
+                    ptype = "mcp_server"
+            name = manifest.get("name")
 
         if ptype is None:
             continue
@@ -823,119 +818,325 @@ def extract_integrity(_result: ScanResult) -> dict[str, Any]:
 # Step 6: 权限推断
 # ═══════════════════════════════════════════════════════════════════
 
-def _scan_keywords(text: str, keywords: list[str]) -> bool:
-    """检查文本中是否包含关键词。"""
-    lower = text.lower()
-    return any(kw in lower for kw in keywords)
-
-
 def infer_permissions(result: ScanResult) -> dict[str, Any]:
-    """根据类型和关键词推断权限。"""
-    # 合并所有文本
-    all_text = result.skill_md_body
-    for f in result.all_files[:30]:  # 只扫描前30个文件避免过慢
-        fp = result.directory_path / f
-        if fp.suffix.lower() in {".py", ".ts", ".js", ".mjs", ".sh", ".md"}:
-            try:
-                all_text += "\n" + fp.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                pass
+    """Infer permissions from executable evidence and conditional instructions.
 
-    is_tool = result.skill_type == "tool"
+    A keyword in prose is context, not proof that a package can access a
+    database, delete files, or read credentials.  The returned permission
+    contract remains compatible with the existing schema while the
+    permission_evidence field records how each capability was inferred.
+    """
 
-    # ── filesystem ──
-    fs_write_paths: list[str] = []
-    fs_delete = False
-    if is_tool:
-        fs_write_paths = ["./"]
-    if _scan_keywords(all_text, PERMISSION_HINTS["filesystem_write"]):
-        if not fs_write_paths:
-            fs_write_paths = ["./"]
-    if _scan_keywords(all_text, PERMISSION_HINTS["filesystem_delete"]):
-        fs_delete = True
-        # 也检查代码中是否有 sudo/chmod/chown
-    for f in result.all_files:
-        fp = result.directory_path / f
-        if fp.suffix.lower() in {".py", ".ts", ".js", ".sh"}:
-            try:
-                code = fp.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            if re.search(r"\b(sudo|chmod|chown)\b", code):
-                fs_delete = True
+    result.permission_evidence = []
+
+    def add_evidence(
+        capability: str,
+        status: str,
+        confidence: float,
+        source: str,
+        evidence: str,
+        file: str | None = None,
+    ) -> None:
+        item: dict[str, Any] = {
+            "capability": capability,
+            "status": status,
+            "confidence": round(confidence, 2),
+            "source": source,
+            "evidence": evidence[:240],
+        }
+        if file:
+            item["file"] = file
+        result.permission_evidence.append(item)
+
+    def read_bounded_text(path: Path, max_bytes: int) -> tuple[str, int] | None:
+        try:
+            with path.open("rb") as handle:
+                raw_content = handle.read(max_bytes + 1)
+        except OSError:
+            return None
+        if len(raw_content) > max_bytes:
+            log.warning("permission inference skipped oversized file: %s", path)
+            return None
+        try:
+            return raw_content.decode("utf-8"), len(raw_content)
+        except UnicodeDecodeError:
+            return None
+
+    code_parts: list[tuple[str, str]] = []
+    code_candidates = sorted(
+        filename
+        for filename in result.all_files
+        if Path(filename).suffix.lower() in CODE_EXTENSIONS
+    )
+    total_permission_bytes = 0
+    for filename in code_candidates[:PERMISSION_INFERENCE_MAX_CODE_FILES]:
+        path = result.directory_path / filename
+        read_result = read_bounded_text(path, PERMISSION_INFERENCE_MAX_FILE_BYTES)
+        if read_result is None:
+            continue
+        content, content_bytes = read_result
+        if total_permission_bytes + content_bytes > PERMISSION_INFERENCE_MAX_TOTAL_BYTES:
+            log.warning(
+                "permission inference byte limit reached at file: %s",
+                filename,
+            )
+            break
+        code_parts.append((filename, content))
+        total_permission_bytes += content_bytes
+
+    def installer_paths() -> set[str]:
+        """Find package entry points whose effects happen during install."""
+
+        paths: set[str] = set()
+        nonlocal total_permission_bytes
+        package_candidates = sorted(
+            filename
+            for filename in result.all_files
+            if Path(filename).name == "package.json"
+        )
+        for filename in package_candidates[:PERMISSION_INFERENCE_MAX_CODE_FILES]:
+            remaining_bytes = PERMISSION_INFERENCE_MAX_TOTAL_BYTES - total_permission_bytes
+            if remaining_bytes <= 0:
+                log.warning("permission inference byte limit reached in package metadata")
                 break
+            package_path = result.directory_path / filename
+            read_result = read_bounded_text(
+                package_path, min(PERMISSION_INFERENCE_MAX_FILE_BYTES, remaining_bytes)
+            )
+            if read_result is None:
+                continue
+            package_text, package_bytes = read_result
+            total_permission_bytes += package_bytes
+            try:
+                package = json.loads(package_text)
+            except json.JSONDecodeError:
+                continue
+            values: list[str] = []
+            bin_field = package.get("bin") if isinstance(package, dict) else None
+            if isinstance(bin_field, str):
+                values.append(bin_field)
+            elif isinstance(bin_field, dict):
+                values.extend(value for value in bin_field.values() if isinstance(value, str))
+            scripts = package.get("scripts", {}) if isinstance(package, dict) else {}
+            if isinstance(scripts, dict):
+                for lifecycle in ("preinstall", "install", "postinstall"):
+                    command = scripts.get(lifecycle)
+                    if isinstance(command, str):
+                        values.extend(re.findall(
+                            r"(?:node|python3?|bash|sh)\s+([^\s;&|]+)", command
+                        ))
+            for value in values:
+                normalized = value.replace("\\", "/").lstrip("./")
+                paths.add(normalized)
+        return paths
 
-    filesystem: dict[str, Any] = {
-        "read": ["./"],
-        "write": fs_write_paths,
-        "delete": fs_delete,
-    }
+    docs_text = result.skill_md_body
+    if len(docs_text) > PERMISSION_INFERENCE_MAX_FILE_BYTES:
+        log.warning("permission inference truncated SKILL.md content")
+        docs_text = docs_text[:PERMISSION_INFERENCE_MAX_FILE_BYTES]
+    code_text = "\n".join(content for _, content in code_parts)
+    code_file = code_parts[0][0] if code_parts else None
+    installer_file_paths = installer_paths()
+    def code_matches(pattern: str) -> bool:
+        return bool(re.search(pattern, code_text, re.IGNORECASE | re.MULTILINE))
 
-    # ── shell ──
-    shell_allowed = is_tool  # 工具类默认允许
-    if _scan_keywords(all_text, PERMISSION_HINTS["shell_allowed"]):
-        shell_allowed = True
+    def docs_matches(pattern: str) -> bool:
+        return bool(re.search(pattern, docs_text, re.IGNORECASE | re.MULTILINE))
 
-    # 从代码中收集具体命令
+    def domains_from(text: str) -> list[str]:
+        domains = {
+            match.split(":", 1)[0]
+            for match in re.findall(r"https?://([^/\s\"'\`)>]+)", text)
+        }
+        return sorted(domains)[:10]
+
+    # ── filesystem ────────────────────────────────────────────────
+    write_pattern = (
+        r"(?:fs\.(?:writeFile|appendFile|mkdir|copyFile|rename)|"
+        r"writeFile(?:Sync)?|appendFile(?:Sync)?|"
+        r"open\s*\([^\n]{0,120}['\"](?:w|a)|"
+        r"os\.(?:makedirs|mkdir)|pathlib\.[A-Za-z]+\.write_text)"
+    )
+    write_files = [
+        filename for filename, content in code_parts
+        if re.search(write_pattern, content, re.IGNORECASE | re.MULTILINE)
+    ]
+    code_writes = bool(write_files)
+    docs_writes = docs_matches(
+        r"\b(?:write|create|save|export|update|append)\b.{0,90}"
+        r"(?:file|directory|folder|\.json|\.md|\.css|\.html)"
+    )
+    filesystem: dict[str, Any] = {"read": ["./"], "write": [], "delete": False}
+    if code_writes:
+        installer_only = bool(installer_file_paths) and all(
+            filename in installer_file_paths for filename in write_files
+        )
+        if installer_only:
+            add_evidence(
+                "installation.filesystem.write", "observed", 0.9, "code",
+                "安装入口包含文件写入或目录创建 API", write_files[0],
+            )
+        else:
+            filesystem["write"] = ["./"]
+            add_evidence(
+                "filesystem.write", "observed", 0.95, "code",
+                "运行时代码包含文件写入或目录创建 API", write_files[0],
+            )
+    elif docs_writes:
+        add_evidence(
+            "filesystem.write", "conditional", 0.65, "docs",
+            "技能流程要求写入项目文件", "SKILL.md",
+        )
+
+    delete_pattern = (
+        r"(?:fs\.(?:rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync)|"
+        r"os\.(?:remove|unlink|rmdir)|shutil\.rmtree|\brm\s+-[rf]+)"
+    )
+    delete_files = [
+        filename for filename, content in code_parts
+        if re.search(delete_pattern, content, re.IGNORECASE | re.MULTILINE)
+    ]
+    code_deletes = bool(delete_files)
+    docs_deletes = docs_matches(
+        r"(?:\brm\s+-[rf]+|\bunlink\b|\brsync\b[^\n]*--delete|"
+        r"\bdelete\b.{0,60}\b(?:file|directory|folder)\b)"
+    )
+    if code_deletes:
+        installer_only = bool(installer_file_paths) and all(
+            filename in installer_file_paths for filename in delete_files
+        )
+        if installer_only:
+            add_evidence(
+                "installation.filesystem.delete", "observed", 0.9, "code",
+                "安装入口包含递归删除、文件删除或 rm 命令", delete_files[0],
+            )
+        else:
+            filesystem["delete"] = True
+            add_evidence(
+                "filesystem.delete", "observed", 0.98, "code",
+                "运行时代码包含递归删除、文件删除或 rm 命令", delete_files[0],
+            )
+    elif docs_deletes:
+        add_evidence(
+            "filesystem.delete", "conditional", 0.6, "docs",
+            "文档流程包含删除文件或 --delete 操作", "SKILL.md",
+        )
+
+    # ── shell ─────────────────────────────────────────────────────
     shell_commands: set[str] = set()
-    # 从文件扩展名推断
-    for f in result.all_files:
-        ext = Path(f).suffix.lower()
+    known_shell_commands = {
+        "bash", "sh", "zsh", "pwsh", "powershell", "python", "python3",
+        "node", "npm", "npx", "pip", "pip3", "docker", "git", "gh",
+        "curl", "wget", "ssh", "scp", "rsync", "make", "cat", "grep",
+        "sed", "awk", "find", "rm", "chmod", "chown", "tar", "unzip",
+        "zip", "readelf", "objdump", "strings", "checksec", "ropper",
+        "ropgadget",
+    }
+    for filename in result.all_files:
+        ext = Path(filename).suffix.lower()
         if ext in SYSTEM_DEPENDENCY_HINTS:
             shell_commands.add(SYSTEM_DEPENDENCY_HINTS[ext])
-    # 从 SKILL.md 正文搜索
-    for cmd in ["node", "python", "npm", "npx", "pip", "bash", "sh", "docker", "make", "git"]:
-        if re.search(rf"\b{cmd}\b", all_text, re.IGNORECASE):
-            shell_commands.add(cmd)
+    for block in re.findall(r"\`([^\`]+)\`", docs_text):
+        command = block.strip().split(None, 1)[0] if block.strip() else ""
+        command = command.rsplit("/", 1)[-1]
+        if command.lower() in known_shell_commands:
+            shell_commands.add(command.lower())
 
-    shell_desc = ""
-    if is_tool:
-        shell_desc = "需要执行脚本完成自动化任务"
-        if "node" in shell_commands:
-            shell_desc = "需要执行 Node.js 脚本完成自动化任务"
-        elif "python" in shell_commands:
-            shell_desc = "需要执行 Python 脚本完成自动化任务"
-
+    shell_process_api = code_matches(
+        r"(?:child_process\.(?:exec|execFile|spawn|fork)|"
+        r"subprocess\.(?:run|Popen|call|check_call|check_output)|"
+        r"os\.system\s*\(|Runtime\.getRuntime\(\)\.exec)"
+    )
+    script_files = [
+        filename for filename in result.all_files
+        if Path(filename).suffix.lower() in {".sh", ".bash", ".zsh", ".bat", ".ps1"}
+    ]
+    shell_observed = shell_process_api or bool(script_files)
+    docs_commands = docs_matches(
+        r"(?:\b(?:run|execute|start|stop|invoke)\b.{0,50}\`[^\`]+\`|"
+        r"\b(?:ssh|scp|gh\s+api|npm|npx|python3?|node|bash|sh)\b)"
+    )
+    shell_allowed = shell_observed
     shell: dict[str, Any] = {
         "allowed": shell_allowed,
         "commands": sorted(shell_commands) if shell_allowed else [],
     }
-    if shell_desc:
-        shell["description"] = shell_desc
+    if shell_observed:
+        shell["description"] = "技能包含脚本或流程命令，具体执行需按条件确认"
+        add_evidence(
+            "shell",
+            "observed",
+            0.95 if shell_process_api else 0.85,
+            "code",
+            "代码包含进程执行 API" if shell_process_api else "包内包含 Shell/脚本入口",
+            code_file,
+        )
+    elif docs_commands:
+        add_evidence(
+            "shell", "conditional", 0.6, "docs",
+            "技能文件或流程包含可执行命令", "SKILL.md",
+        )
 
-    # ── network ──
-    network_allowed = False
-    network_domains: list[str] = []
-    if _scan_keywords(all_text, PERMISSION_HINTS["network_allowed"]):
-        network_allowed = True
-        # 尝试提取域名
-        domains = set(re.findall(r"https?://([^/\s\"'`)]+)", all_text))
-        network_domains = sorted(domains)[:10]
-
+    # ── network ───────────────────────────────────────────────────
+    code_network = code_matches(
+        r"(?:\b(?:fetch|axios|curl|wget|requests?\.(?:get|post|request)|"
+        r"urllib\.request|http\.(?:get|request)|https?\.request)\b|"
+        r"\b(?:ssh|scp)\s+-)"
+    )
+    docs_network = docs_matches(
+        r"(?:https?://|\b(?:fetch|download|connect|request|deploy|curl|wget|"
+        r"ssh|scp|gh\s+api)\b)"
+    )
+    network_allowed = code_network
+    network_domains = domains_from(code_text) if code_network else []
     network: dict[str, Any] = {
         "allowed": network_allowed,
         "domains": network_domains,
     }
-    if network_allowed:
-        network["description"] = "需要网络访问调用 API / 部署服务"
-    elif not is_tool:
-        network["description"] = "纯提示词 Skill，不需要网络权限"
+    if code_network:
+        network["description"] = "代码包含网络调用"
+        add_evidence(
+            "network",
+            "observed", 0.95, "code", "代码包含网络调用", code_file,
+        )
+    elif docs_network:
+        add_evidence(
+            "network", "conditional", 0.6, "docs",
+            "技能流程包含明确网络访问动作", "SKILL.md",
+        )
 
-    # ── environment ──
-    env_read: list[str] = []
-    env_write: list[str] = []
-    # 搜索环境变量
-    env_vars = set(re.findall(r"\b(?:process\.env|os\.environ)\[?['\"](\w+)['\"]", all_text))
-    env_vars |= set(re.findall(r"\$\{?(\w+)", all_text))
-    # 过滤常见系统变量
-    common_env = {"HOME", "PATH", "USER", "NODE_ENV", "API_KEY", "TOKEN",
-                  "SECRET", "DATABASE_URL", "PORT", "HOST"}
-    env_read = sorted(env_vars & common_env) or (["HOME"] if is_tool else [])
-
+    # ── environment ──────────────────────────────────────────────
+    env_read: set[str] = set()
+    for match in re.finditer(
+        r"(?:process\.env(?:\.([A-Z][A-Z0-9_]*)|\[['\"]([A-Z][A-Z0-9_]*)['\"]\])|"
+        r"os\.environ(?:\.get)?\(['\"]([A-Z][A-Z0-9_]*)['\"]\)|"
+        r"os\.getenv\(['\"]([A-Z][A-Z0-9_]*)['\"]\))",
+        code_text,
+    ):
+        env_read.update(item for item in match.groups() if item)
+    env_write = set(
+        re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)\s*=", code_text)
+    )
+    env_write.update(
+        re.findall(
+            r"os\.environ\[['\"]([A-Z][A-Z0-9_]*)['\"]\]\s*=",
+            code_text,
+        )
+    )
     environment: dict[str, Any] = {
-        "read": env_read,
-        "write": env_write,
+        "read": sorted(env_read),
+        "write": sorted(env_write),
     }
+    if env_read:
+        add_evidence(
+            "environment.read", "observed", 0.95, "code",
+            "代码读取环境变量", code_file,
+        )
+    if env_write:
+        add_evidence(
+            "environment.write", "observed", 0.95, "code",
+            "代码写入环境变量", code_file,
+        )
 
     permissions: dict[str, Any] = {
         "filesystem": filesystem,
@@ -944,41 +1145,128 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         "environment": environment,
     }
 
-    # ── credentials（可选） ──
-    if _scan_keywords(all_text, PERMISSION_HINTS["credential_access"]):
+    # ── credentials ──────────────────────────────────────────────
+    code_credentials = code_matches(
+        r'''(?:process\.env(?:\.[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|'''
+        r'''AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|SECRET|PASSWORD|'''
+        r'''CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY))|'''
+        r'''process\.env\[['"][^'"]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|'''
+        r'''AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|SECRET|PASSWORD|'''
+        r'''CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY)[^'"]*['"]\]|'''
+        r'''os\.(?:getenv|environ(?:\.get)?)\(['"][^'"]*(?:API[_-]?KEY|'''
+        r'''ACCESS[_-]?TOKEN|AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|'''
+        r'''SECRET|PASSWORD|CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY)[^'"]*['"]\)|'''
+        r'''ssh\s+-i|private[_ -]?key|keytar|secret[_ -]?manager|getpass|'''
+        r'''(?:readFile(?:Sync)?|read_text)\([^\n]{0,100}(?:token|secret|credential|key)'''
+        r''')'''
+    )
+    docs_credentials = docs_matches(
+        r"\b(?:set|export|provide|configure|enter|use|confirm|pass)\b.{0,45}"
+        r"\b(?:api key|api_key|token|password|ssh key|credential)\b"
+    )
+    if code_credentials:
+        credential_source = code_text + docs_text
+        access = (
+            ["ssh_key"]
+            if re.search(r"ssh\s+key|ssh\s+-i|private[_ -]?key", credential_source, re.I)
+            else ["api_key"]
+            if re.search(r"api[_ -]?key|access[_ -]?token|auth(?:entication|orization)?[_ -]?(?:token|key)|openai|anthropic", credential_source, re.I)
+            else ["session_token"]
+        )
         permissions["credentials"] = {
-            "access": ["api_key"],
-            "description": "需要访问 API 密钥 / Token",
+            "access": access,
+            "description": "代码或条件流程需要凭据",
         }
+        add_evidence(
+            "credentials",
+            "observed", 0.9, "code", "代码访问凭据或密钥", code_file,
+        )
+    elif docs_credentials:
+        add_evidence(
+            "credentials", "conditional", 0.55, "docs",
+            "流程要求用户提供凭据", "SKILL.md",
+        )
 
-    # ── database（可选） ──
-    if _scan_keywords(all_text, PERMISSION_HINTS["database_access"]):
-        drivers: list[str] = []
-        for db in ["sqlite", "postgresql", "mysql", "mongodb"]:
-            if db in all_text.lower():
-                drivers.append(db)
+    # ── database ──────────────────────────────────────────────────
+    database_matches = code_matches(
+        r"(?:sqlite3|psycopg2?|sqlalchemy|prisma|mongodb|pymongo|mysql|"
+        r"postgres(?:ql)?|create_engine\s*\(|(?:sqlite|mongo|mysql|postgres).*connect)"
+    )
+    docs_database = docs_matches(
+        r"\b(?:database|sqlite|postgres(?:ql)?|mysql|mongodb|sql)\b"
+    )
+    if database_matches:
+        drivers = [
+            driver
+            for driver, pattern in (
+                ("sqlite", r"sqlite"),
+                ("postgresql", r"postgres|psycopg|sqlalchemy"),
+                ("mysql", r"mysql"),
+                ("mongodb", r"mongo|pymongo|prisma"),
+            )
+            if re.search(pattern, code_text, re.I)
+        ]
         permissions["database"] = {
             "allowed": True,
-            "drivers": drivers or ["unknown"],
-            "description": "需要访问数据库",
+            "drivers": sorted(set(drivers)) or ["unknown"],
+            "description": "代码包含数据库驱动或连接调用",
         }
+        add_evidence(
+            "database", "observed", 0.95, "code",
+            "代码包含数据库驱动或连接调用", code_file,
+        )
+    elif docs_database:
+        add_evidence(
+            "database", "conditional", 0.55, "docs",
+            "文档提到数据库或 SQL 流程", "SKILL.md",
+        )
 
-    # ── browser（可选） ──
-    if _scan_keywords(all_text, PERMISSION_HINTS["browser_access"]):
+    # ── browser ───────────────────────────────────────────────────
+    code_browser = code_matches(
+        r"(?:playwright|puppeteer|selenium|webdriver|chromium|page\.goto|"
+        r"browser\.(?:open|launch))"
+    )
+    docs_browser = docs_matches(
+        r"(?:playwright|puppeteer|selenium|browser automation|"
+        r"open (?:a )?browser|visual companion)"
+    )
+    if code_browser:
         permissions["browser"] = {
             "allowed": True,
-            "description": "需要控制浏览器或执行浏览器自动化",
+            "description": "代码包含浏览器控制调用",
         }
+        add_evidence(
+            "browser",
+            "observed", 0.9, "code",
+            "代码包含浏览器自动化调用", code_file,
+        )
+    elif docs_browser:
+        add_evidence(
+            "browser", "conditional", 0.55, "docs",
+            "流程要求打开或控制浏览器", "SKILL.md",
+        )
 
-    # ── external_services（可选） ──
-    # 复用网络白名单，逐个服务展示，避免嵌套对象在审核页退化成
-    # ``[object Object]``，同时让权限契约与实际推断结果对齐。
+    # ── explicit permissions override inferred values ─────────────
+    explicit = result.manifest_data.get("permissions")
+    explicit_source = "manifest"
+    if not isinstance(explicit, dict):
+        explicit = result.frontmatter.get("permissions")
+        explicit_source = "frontmatter"
+    if isinstance(explicit, dict):
+        for capability, value in explicit.items():
+            if value:
+                permissions[capability] = value
+                add_evidence(
+                    str(capability), "declared", 1.0, explicit_source,
+                    "包元数据明确声明该权限",
+                )
+
     if network_domains:
         permissions["external_services"] = [
             {
                 "name": domain.split(":", 1)[0],
                 "url": f"https://{domain}",
-                "description": "从包内容中推断的外部服务",
+                "description": "从代码或明确网络流程中提取的外部服务",
             }
             for domain in network_domains
         ]
@@ -1126,6 +1414,7 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
 
     # command（工具类）
     command = ""
+    distribution_name = ""
     if is_tool:
         # 查找 package.json（可能在子目录）
         pkg_path = result.directory_path / "package.json"
@@ -1137,6 +1426,8 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
         if pkg_path.exists():
             try:
                 pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+                if isinstance(pkg.get("name"), str):
+                    distribution_name = pkg["name"]
                 scripts = pkg.get("scripts", {})
                 if isinstance(scripts, dict):
                     if "start" in scripts:
@@ -1156,6 +1447,8 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
     }
     if command:
         inst["command"] = command
+    if method == "npm_install" and distribution_name:
+        inst["package"] = distribution_name
     return inst
 
 
@@ -1222,6 +1515,9 @@ def build_metadata_json(
         repo_url: 外部传入的 GitHub 仓库 URL（git clone 场景有值）
         git_root: Git 仓库根目录（用于提取 commit_hash/ref）
     """
+    if subdirectory is not None:
+        subdirectory = _require_safe_source_subdirectory(subdirectory)
+
     name_kebab = to_kebab_case(
         result.frontmatter.get("name") or result.directory_name)
 
@@ -1302,20 +1598,17 @@ def build_metadata_json(
     installation = build_installation(result)
     manifest_path = result.directory_path / "manifest.json"
     if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest_deps = manifest.get("dependencies")
-            if isinstance(manifest_deps, dict):
-                merged = dict(dependencies or {})
-                for dep_key, dep_value in manifest_deps.items():
-                    if dep_value is not None:
-                        merged[dep_key] = dep_value
-                dependencies = merged or None
-            manifest_install = manifest.get("installation")
-            if isinstance(manifest_install, dict) and manifest_install.get("method"):
-                installation = {**installation, **manifest_install}
-        except (json.JSONDecodeError, OSError):
-            pass
+        manifest = _read_json_object(manifest_path)
+        manifest_deps = manifest.get("dependencies")
+        if isinstance(manifest_deps, dict):
+            merged = dict(dependencies or {})
+            for dep_key, dep_value in manifest_deps.items():
+                if dep_value is not None:
+                    merged[dep_key] = dep_value
+            dependencies = merged or None
+        manifest_install = manifest.get("installation")
+        if isinstance(manifest_install, dict) and manifest_install.get("method"):
+            installation = {**installation, **manifest_install}
 
     # 构建 JSON
     data: dict[str, Any] = {
@@ -1332,6 +1625,8 @@ def build_metadata_json(
         "permissions": infer_permissions(result),
         "installation": installation,
     }
+    if result.permission_evidence:
+        data["permission_evidence"] = result.permission_evidence
     if pkg_type == "skill":
         data["skill_config"] = build_skill_config(result)
 
@@ -1348,7 +1643,7 @@ def build_metadata_json(
         data["dependencies"] = dependencies
     if entry_points:
         data["entry_points"] = entry_points
-    if subdirectory:
+    if subdirectory is not None:
         data["source"]["subdirectory"] = subdirectory
 
     return data

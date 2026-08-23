@@ -6,6 +6,7 @@ import difflib
 import logging
 import re
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.services.source_snapshots import SourceSnapshotStore
@@ -277,6 +278,17 @@ class ProducerService:
             commit_hash = full_report.get("commit_hash") or (
                 source.get("commit_hash", "") if isinstance(source, dict) else ""
             )
+            source_subdirectory = full_report.get("source_subdirectory") or (
+                source.get("subdirectory", "") if isinstance(source, dict) else ""
+            )
+            if source_subdirectory:
+                persisted_source = dict(source) if isinstance(source, dict) else {}
+                persisted_source["subdirectory"] = str(source_subdirectory)
+                self.repository.update_version_data(
+                    version_id,
+                    {"source": persisted_source},
+                )
+                version["source"] = persisted_source
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")
@@ -288,12 +300,17 @@ class ProducerService:
             if install_method == "copy_directory":
                 if repo_url and package_name and pkg_version:
                     try:
+                        artifact_kwargs = {
+                            "repo_url": repo_url,
+                            "commit_hash": str(commit_hash),
+                            "package_name": package_name,
+                            "version": str(pkg_version),
+                            "local_source_dir": local_source_dir,
+                        }
+                        if source_subdirectory:
+                            artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
                         artifact = build_artifact(
-                            repo_url=repo_url,
-                            commit_hash=str(commit_hash),
-                            package_name=package_name,
-                            version=str(pkg_version),
-                            local_source_dir=local_source_dir,
+                            **artifact_kwargs,
                         )
                         self._apply_artifact_to_version(
                             version_id,
@@ -301,6 +318,7 @@ class ProducerService:
                             package_name,
                             pkg_version,
                             str(commit_hash),
+                            str(source_subdirectory) if source_subdirectory else None,
                         )
                     except ArtifactError as exc:
                         self.repository.update_version_status(
@@ -399,6 +417,7 @@ class ProducerService:
         package_name: str,
         pkg_version: str,
         commit_hash: str,
+        source_subdirectory: str | None = None,
     ) -> None:
         """把安装产物信息写回 version data（source/integrity/installation）。"""
         version = self.repository.get_version(version_id)
@@ -410,6 +429,8 @@ class ProducerService:
         source["download_url"] = artifact.get("download_url", "")
         if commit_hash and len(commit_hash) == 40:
             source["commit_hash"] = commit_hash
+        if source_subdirectory:
+            source["subdirectory"] = source_subdirectory
         data["source"] = source
 
         integrity = dict(data.get("integrity") or {})
@@ -491,9 +512,10 @@ class ProducerService:
             or str((data.get("compatibility") or ["claude-code"])[0])
         )
         if method == "npm_install":
+            npm_package = str(installation.get("package") or package_name)
             step: dict[str, object] = {
                 "action": "npm_install",
-                "package": package_name,
+                "package": npm_package,
                 "version": pkg_version,
                 "registry": "https://registry.npmjs.org",
             }
@@ -990,6 +1012,7 @@ class ProducerService:
         source = version.get("source", {})
         repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
         commit_hash = source.get("commit_hash", "") if isinstance(source, dict) else ""
+        source_subdirectory = source.get("subdirectory", "") if isinstance(source, dict) else ""
         if not repo_url or not commit_hash or len(commit_hash) != 40:
             return False
         package = self.repository.get_package(version.get("package_id", ""))
@@ -998,29 +1021,39 @@ class ProducerService:
         if not package_name or not pkg_version:
             return False
         try:
+            artifact_kwargs = {
+                "repo_url": repo_url,
+                "commit_hash": str(commit_hash),
+                "package_name": str(package_name),
+                "version": str(pkg_version),
+            }
+            if source_subdirectory:
+                artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
             artifact = build_artifact(
-                repo_url=repo_url,
-                commit_hash=str(commit_hash),
-                package_name=str(package_name),
-                version=str(pkg_version),
+                **artifact_kwargs,
             )
         except ArtifactError:
             return False
         self._apply_artifact_to_version(
-            version_id, artifact, str(package_name), str(pkg_version), commit_hash
+            version_id,
+            artifact,
+            str(package_name),
+            str(pkg_version),
+            commit_hash,
+            str(source_subdirectory) if source_subdirectory else None,
         )
         return True
 
     def cleanup_orphan_artifacts(self) -> int:
         """惰性清理 /artifacts 中的孤儿产物。
 
-        保留集：非 rejected/error 状态版本的 zip（发布、审核中、下架等均保留）；
+        保留集：非 rejected/error 状态版本引用的 zip（兼容 v2 和旧文件名）；
         删除：rejected/error 版本、已删除版本遗留的 zip。返回删除数量。
         """
         from src.services.artifacts import ARTIFACTS_ROOT
 
         keep: set[str] = set()
-        for v in self.repository.list_versions_by_status():
+        for v in self.repository.list_artifact_versions():
             status = v.get("status", "")
             if status in ("rejected", "error"):
                 continue
@@ -1029,7 +1062,14 @@ class ProducerService:
             name = v.get("package_name") or ""
             version = v.get("version") or ""
             if name and version and len(commit) >= 8:
+                keep.add(f"{name}-{version}-{commit[:8]}-v2.zip")
                 keep.add(f"{name}-{version}-{commit[:8]}.zip")
+            if isinstance(source, dict):
+                download_url = source.get("download_url")
+                if isinstance(download_url, str):
+                    referenced_name = urlparse(download_url).path.rsplit("/", 1)[-1]
+                    if referenced_name.endswith(".zip"):
+                        keep.add(referenced_name)
 
         deleted = 0
         if ARTIFACTS_ROOT.is_dir():

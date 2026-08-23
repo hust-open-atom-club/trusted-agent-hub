@@ -128,7 +128,9 @@
                 "unnecessary_permissions": {
                   "type": "array",
                   "items": { "type": "string" }
-                }
+                },
+                "permission_evidence_count": { "type": "integer", "minimum": 0 },
+                "ignored_low_confidence_count": { "type": "integer", "minimum": 0 }
               },
               "additionalProperties": false
             }
@@ -303,6 +305,11 @@
           "type": "string",
           "enum": ["safe", "review_recommended", "caution", "not_recommended", "blocked"],
           "description": "安装建议"
+        },
+        "requires_confirmation": {
+          "type": "boolean",
+          "default": false,
+          "description": "安装前是否必须显式确认"
         }
       },
       "additionalProperties": false

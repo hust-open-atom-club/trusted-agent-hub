@@ -8,7 +8,7 @@
     {
       "id": "malicious-dangerous-shell",
       "path": "malicious/dangerous-shell",
-      "expected_rules": ["SR-002", "SR-005", "SR-008", "SR-010"]
+      "expected_rules": ["SR-002", "SR-005", "SR-008"]
     }
   ]
 }

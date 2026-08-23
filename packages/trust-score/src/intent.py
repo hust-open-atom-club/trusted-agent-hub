@@ -79,10 +79,44 @@ def _is_broad_path(path: str) -> bool:
     return False
 
 
-def _count_danger_signals(permissions: dict[str, Any], package_type: str) -> tuple[int, list[str]]:
-    """Count dangerous permission signals and return (count, evidence_list)."""
+def _evidence_supports(
+    permission_evidence: list[dict[str, Any]],
+    capability: str,
+) -> bool:
+    """Return whether a permission has high-confidence executable evidence.
+
+    Older manifests do not have provenance.  They retain the legacy behavior;
+    new extractor output must explicitly say that a capability is observed or
+    declared before it contributes to the main permission score.
+    """
+    if not permission_evidence:
+        return True
+    matching = [
+        item for item in permission_evidence
+        if isinstance(item, dict)
+        if str(item.get("capability", "")) == capability
+        or str(item.get("capability", "")).startswith(capability + ".")
+        or capability.startswith(str(item.get("capability", "")) + ".")
+    ]
+    for item in matching:
+        try:
+            confidence = float(item.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if item.get("status") in {"observed", "declared"} and confidence >= 0.75:
+            return True
+    return False
+
+
+def _count_danger_signals(
+    permissions: dict[str, Any],
+    package_type: str,
+    permission_evidence: list[dict[str, Any]] | None = None,
+) -> tuple[int, list[str]]:
+    """Count high-confidence dangerous permission signals."""
     signals: list[str] = []
     count = 0
+    evidence = permission_evidence or []
 
     filesystem: dict[str, Any] = permissions.get("filesystem", {}) or {}
     shell: dict[str, Any] = permissions.get("shell", {}) or {}
@@ -91,24 +125,24 @@ def _count_danger_signals(permissions: dict[str, Any], package_type: str) -> tup
     credentials: dict[str, Any] = permissions.get("credentials", {}) or {}
 
     # 1. filesystem.delete = true
-    if filesystem.get("delete", False):
+    if filesystem.get("delete", False) and _evidence_supports(evidence, "filesystem.delete"):
         count += 1
         signals.append("Allows file deletion")
 
     # 2. Broad filesystem read
     read_paths: list[str] = filesystem.get("read", []) or []
-    if any(_is_broad_path(p) for p in read_paths):
+    if any(_is_broad_path(p) for p in read_paths) and _evidence_supports(evidence, "filesystem.read"):
         count += 1
         signals.append("Broad filesystem read access (/, ~/, or wildcard)")
 
     # 3. Broad filesystem write
     write_paths: list[str] = filesystem.get("write", []) or []
-    if any(_is_broad_path(p) for p in write_paths):
+    if any(_is_broad_path(p) for p in write_paths) and _evidence_supports(evidence, "filesystem.write"):
         count += 1
         signals.append("Broad filesystem write access (/, ~/, or wildcard)")
 
     # 4. Shell allowed without command whitelist
-    if shell.get("allowed", False):
+    if shell.get("allowed", False) and _evidence_supports(evidence, "shell"):
         commands: list[str] = shell.get("commands", []) or []
         if not commands:
             count += 1
@@ -118,7 +152,7 @@ def _count_danger_signals(permissions: dict[str, Any], package_type: str) -> tup
             signals.append("Excessively large shell command whitelist")
 
     # 5. Network allowed without domain whitelist
-    if network.get("allowed", False):
+    if network.get("allowed", False) and _evidence_supports(evidence, "network"):
         domains: list[str] = network.get("domains", []) or []
         if not domains:
             count += 1
@@ -126,31 +160,35 @@ def _count_danger_signals(permissions: dict[str, Any], package_type: str) -> tup
 
     # 6. Environment variable write
     env_write: list[str] = environment.get("write", []) or []
-    if env_write:
+    if env_write and _evidence_supports(evidence, "environment.write"):
         count += 1
         signals.append(f"Can write environment variables: {env_write}")
 
     # 7. Broad environment read
     env_read: list[str] = environment.get("read", []) or []
-    if "*" in env_read or "**" in env_read:
+    if ("*" in env_read or "**" in env_read) and _evidence_supports(evidence, "environment.read"):
         count += 1
         signals.append("Can read all environment variables (wildcard)")
 
     # 8. Credential access
     cred_access: list[str] = credentials.get("access", []) or []
-    if cred_access:
+    if cred_access and _evidence_supports(evidence, "credentials"):
         count += 1
         signals.append(f"Requests credential access: {cred_access}")
 
     # 9. Database access (may be normal for mcp_server, flag for others)
     database: dict[str, Any] = permissions.get("database", {}) or {}
-    if database.get("allowed", False) and package_type != "mcp_server":
+    if (database.get("allowed", False)
+            and package_type != "mcp_server"
+            and _evidence_supports(evidence, "database")):
         count += 1
         signals.append("Requests database access (unexpected for package type)")
 
     # 10. Browser access (unusual for most types)
     browser: dict[str, Any] = permissions.get("browser", {}) or {}
-    if browser.get("allowed", False) and package_type not in ("plugin",):
+    if (browser.get("allowed", False)
+            and package_type not in ("plugin",)
+            and _evidence_supports(evidence, "browser")):
         count += 1
         signals.append("Requests browser access")
 
@@ -175,15 +213,24 @@ def assess_permission_reasonability(package_metadata: dict[str, Any]) -> dict[st
     """
     permissions: dict[str, Any] = package_metadata.get("permissions", {}) or {}
     package_type: str = package_metadata.get("type", "unknown")
+    raw_permission_evidence = package_metadata.get("permission_evidence", [])
+    permission_evidence: list[dict[str, Any]] = (
+        raw_permission_evidence if isinstance(raw_permission_evidence, list) else []
+    )
 
-    danger_count, signals = _count_danger_signals(permissions, package_type)
+    danger_count, signals = _count_danger_signals(
+        permissions, package_type, permission_evidence
+    )
 
     # Count total declared permission categories
     perm_categories = 0
     for key in ("filesystem", "shell", "network", "environment",
                 "credentials", "database", "browser", "external_services"):
         val = permissions.get(key)
-        if val:
+        if val and (
+            not permission_evidence
+            or _evidence_supports(permission_evidence, key)
+        ):
             if isinstance(val, dict) and val:
                 # Check if it has meaningful content beyond empty dict
                 has_content = False
@@ -204,9 +251,19 @@ def assess_permission_reasonability(package_metadata: dict[str, Any]) -> dict[st
 
     evidence: list[str] = []
 
+    ignored_low_confidence = [
+        item for item in permission_evidence
+        if isinstance(item, dict)
+        if item.get("status") in {"conditional", "mentioned", "inferred"}
+    ]
+
     if danger_count == 0:
         level = "minimal"
         evidence.append("Permissions are tightly scoped with no danger signals")
+        if ignored_low_confidence:
+            evidence.append(
+                f"Ignored {len(ignored_low_confidence)} conditional or low-confidence permission signal(s)"
+            )
     elif danger_count <= 2:
         level = "acceptable"
         evidence.append(f"Permissions have {danger_count} minor concern(s)")
@@ -233,6 +290,8 @@ def assess_permission_reasonability(package_metadata: dict[str, Any]) -> dict[st
         "score": score,
         "evidence": evidence,
         "danger_count": danger_count,
+        "permission_evidence_count": len(permission_evidence),
+        "ignored_low_confidence_count": len(ignored_low_confidence),
     }
 
 

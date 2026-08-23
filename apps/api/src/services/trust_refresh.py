@@ -194,7 +194,7 @@ class TrustScoreRefreshService:
                         for e in (new_ts.get("explanations") or [])
                     )
                     or None,
-                    model_version=new_ts.get("model_version") or "0.2.0",
+                    model_version=new_ts.get("model_version") or "0.3.0",
                 )
             except Exception:
                 logger.exception(

@@ -464,21 +464,33 @@ export default function ReviewDetailPage() {
             <span>v{version?.version}</span>
             <span>{t('review.detail.submitted_at', { date: formatDate(version?.submitted_at) })}</span>
           </div>
-          {version?.source?.repository_url && (
+          {(version?.source?.repository_url || version?.source?.subdirectory) && (
             <div className="review-detail-bar-repo">
-              <a
-                href={version.source.repository_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="repo-link"
-              >
-                {shortUrl(version.source.repository_url)}
-              </a>
+              {version.source.repository_url && (
+                <a
+                  href={version.source.repository_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="repo-link"
+                >
+                  {shortUrl(version.source.repository_url)}
+                </a>
+              )}
+              {version.source.subdirectory && (
+                <code className="source-subdirectory">
+                  {t('review.detail.source_subdirectory')}: {version.source.subdirectory}
+                </code>
+              )}
             </div>
           )}
           {grade && (
             <div className="review-detail-bar-grade-label">
               {t('review.detail.risk_level')}: {version?.effective_grade} — {grade}
+            </div>
+          )}
+          {version?.trust_score?.risk_summary?.requires_confirmation && (
+            <div className="review-detail-bar-result">
+              {t('review.detail.explicit_confirmation_required')}
             </div>
           )}
           {reviewResultLabel && (
@@ -757,6 +769,27 @@ export default function ReviewDetailPage() {
           </>
         )}
 
+        {scanReport?.permission_evidence && scanReport.permission_evidence.length > 0 && (
+          <>
+            <h3 className="review-meta-subtitle">{t('review.detail.permission_evidence_title')}</h3>
+            <div className="review-meta-grid">
+              {scanReport.permission_evidence.map((item, index) => (
+                <div
+                  className="review-meta-field full"
+                  key={`${item.capability}-${item.file || 'package'}-${index}`}
+                >
+                  <span className="review-meta-label">{item.capability}</span>
+                  <span className="review-meta-value">
+                    {item.status} · {Math.round(item.confidence * 100)}% · {item.source}
+                    {item.file ? ` · ${item.file}` : ''}
+                  </span>
+                  <span className="review-meta-value">{item.evidence}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
         {installation && Object.keys(installation).length > 0 && (
           <>
             <h3 className="review-meta-subtitle">{t('review.detail.installation_title')}</h3>
@@ -930,6 +963,14 @@ export default function ReviewDetailPage() {
                                 </button>
                               )}
                               <div className="finding-meta-pills">
+                                {finding.requires_confirmation && (
+                                  <span
+                                    className="finding-meta-pill confirmation"
+                                    title={t('review.finding.requires_confirmation')}
+                                  >
+                                    {t('review.finding.requires_confirmation')}
+                                  </span>
+                                )}
                                 {finding.cwe_id && (
                                   <span className="finding-meta-pill cwe" title={finding.cwe_id}>CWE</span>
                                 )}

@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
+from src.models.common import require_safe_source_subdirectory
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
 
@@ -47,6 +48,7 @@ _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from scanners.risk_scanner.redaction import build_finding_contexts, redact_report
+from packages.schema.frontmatter import parse_frontmatter
 
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
@@ -351,23 +353,31 @@ def _run_scan_task(
                     root_data = json.loads(
                         root_manifest.read_text(encoding="utf-8")
                     )
-                    declared = (root_data.get("source") or {}).get(
-                        "subdirectory"
-                    )
-                    if declared and (Path(repo_root) / declared).is_dir():
-                        subdir = declared
+                    if not isinstance(root_data, dict):
+                        raise ValueError("manifest root must be an object")
+                    source_data = root_data.get("source") or {}
+                    if not isinstance(source_data, dict):
+                        raise ValueError("manifest source must be an object")
+                    declared = source_data.get("subdirectory")
+                    if declared is not None:
+                        subdir = require_safe_source_subdirectory(declared)
                         print(
                             f"[TAH-trust]     manifest 声明子目录: {subdir}"
                         )
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, OSError, ValueError) as exc:
+                    logging.warning("Ignoring invalid root manifest source: %s", exc)
                     pass
         if subdir:
-            scan_dir = os.path.join(repo_root, subdir)
-            if not os.path.isdir(scan_dir):
-                print(f"[TAH-trust]     子目录不存在: {scan_dir}, 回退到根目录")
-                scan_dir = repo_root
-            else:
-                print(f"[TAH-trust]     扫描子目录: {subdir}")
+            subdir = require_safe_source_subdirectory(subdir)
+            repo_path = Path(repo_root).resolve()
+            candidate = (repo_path / subdir).resolve()
+            if candidate != repo_path and repo_path not in candidate.parents:
+                raise ValueError(f"source subdirectory escapes repository root: {subdir}")
+            if not candidate.is_dir():
+                raise ValueError(f"source subdirectory does not exist: {subdir}")
+            subdir = candidate.relative_to(repo_path).as_posix()
+            scan_dir = str(candidate)
+            print(f"[TAH-trust]     扫描子目录: {subdir}")
         else:
             scan_dir = repo_root
 
@@ -497,6 +507,12 @@ def _run_scan_task(
                 **(package_metadata.get("integrity") or {}),
                 **scanned_integrity,
             }
+        # Keep permission provenance in the persisted audit report.  The
+        # score uses the same evidence to avoid treating documentation-only
+        # mentions as observed capabilities.
+        scan_report["permission_evidence"] = package_metadata.get(
+            "permission_evidence", []
+        )
 
         platform_signals = signals or {}
         trust_score_result = calculate_trust_score(
@@ -530,6 +546,7 @@ def _run_scan_task(
             "package_metadata": package_metadata,
             "source_snapshot_id": snapshot_metadata["snapshot_id"],
             "source_snapshot_sha256": snapshot_metadata["sha256"],
+            "source_subdirectory": subdir,
             # 保留本地代码目录供提交时打包安装产物（不重新拉取）。
             # 由 handle_scan_complete 消费后清理，或随扫描记录过期清理。
             "local_source_dir": tmp_dir,
@@ -604,7 +621,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
     if manifest.is_file():
         try:
             with open(manifest, encoding="utf-8") as fh:
-                return json.load(fh)
+                value = json.load(fh)
+            if isinstance(value, dict):
+                return value
+            logging.warning("manifest.json root is not an object for %s", target)
         except (json.JSONDecodeError, OSError) as e:
             logging.warning("manifest.json fallback failed for %s: %s", target, e)
 
@@ -613,7 +633,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
     if plugin.is_file():
         try:
             with open(plugin, encoding="utf-8") as fh:
-                return json.load(fh)
+                value = json.load(fh)
+            if isinstance(value, dict):
+                return value
+            logging.warning("plugin.json root is not an object for %s", target)
         except (json.JSONDecodeError, OSError) as e:
             logging.warning("plugin.json fallback failed for %s: %s", target, e)
 
@@ -623,9 +646,9 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
         try:
             with open(skill, encoding="utf-8") as fh:
                 fm_content = fh.read()
-            fm = _parse_frontmatter(fm_content)
-            if fm:
-                return fm
+            result = parse_frontmatter(fm_content)
+            if result.data:
+                return result.data
         except (OSError, UnicodeDecodeError) as e:
             logging.warning("SKILL.md fallback failed for %s: %s", target, e)
 
@@ -644,50 +667,6 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
         "permissions": {},
         "installation": {"method": "unknown", "targets": []},
     }
-
-
-def _parse_frontmatter(content: str) -> Dict[str, Any] | None:
-    """解析 YAML frontmatter（与 scanner.py 中的实现一致）。"""
-    if not content.startswith("---"):
-        return None
-    end_idx = content.find("---", 3)
-    if end_idx == -1:
-        return None
-    fm_text = content[3:end_idx].strip()
-    result: Dict[str, Any] = {}
-    current_key: Optional[str] = None
-    current_list: List[str] = []
-    for line in fm_text.split("\n"):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("- ") and current_key:
-            current_list.append(stripped[2:].strip())
-            continue
-        if current_key and current_list:
-            result[current_key] = current_list
-            current_list = []
-            current_key = None
-        if ":" in stripped:
-            key, _, value = stripped.partition(":")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            current_key = key
-            if value.lower() == "true":
-                result[key] = True
-            elif value.lower() == "false":
-                result[key] = False
-            else:
-                try:
-                    result[key] = int(value)
-                except ValueError:
-                    try:
-                        result[key] = float(value)
-                    except ValueError:
-                        result[key] = value
-    if current_key and current_list:
-        result[current_key] = current_list
-    return result if result else None
 
 
 # ---------------------------------------------------------------------------

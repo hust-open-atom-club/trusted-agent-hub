@@ -406,7 +406,7 @@ class ProducerRepository:
                     level=level,
                     install_recommendation=recommendation,
                     top_risks=[],
-                    model_version="0.2.0",
+                    model_version="0.3.0",
                 ))
             session.commit()
 
@@ -884,6 +884,28 @@ class ProducerRepository:
             results = [r for r in results if r.get("grade") == grade]
 
         return results
+
+    def list_artifact_versions(self) -> list[dict[str, object]]:
+        """返回制品清理所需的版本状态、命名和来源信息。"""
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(
+                    PackageVersionRow.status,
+                    PackageVersionRow.version,
+                    PackageVersionRow.data,
+                    PackageRow.name.label("package_name"),
+                ).join(PackageRow, PackageRow.id == PackageVersionRow.package_id)
+            ).all()
+
+        return [
+            {
+                "status": row.status,
+                "version": row.version,
+                "package_name": row.package_name,
+                "source": (row.data or {}).get("source") or {},
+            }
+            for row in rows
+        ]
 
     # ── 用户管理 ────────────────────────────────────────────
 

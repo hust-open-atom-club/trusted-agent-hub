@@ -14,6 +14,7 @@ export interface ManifestSource {
   repository_url: string;
   download_url: string | null;
   ref: string;
+  subdirectory?: string | null;
   commit_hash: string | null; // 40-char hex
 }
 
@@ -146,6 +147,7 @@ export interface ManifestRiskSummary {
   grade: 'A' | 'B' | 'C' | 'D' | 'E';
   top_risks?: string[];
   install_recommendation: string;
+  requires_confirmation?: boolean;
   auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
@@ -237,6 +239,19 @@ function isAllowedUrl(value: string): boolean {
   }
 }
 
+function isSafeSourceSubdirectory(value: string): boolean {
+  if (value === '.') return true;
+  if (
+    value.trim().length === 0
+    || value.includes('\x00')
+    || value.includes('\\')
+  ) return false;
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false;
+  return value.split('/').every(
+    segment => segment.length > 0 && segment !== '.' && segment !== '..',
+  );
+}
+
 export function validateManifest(raw: unknown): InstallManifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new ManifestValidationError('Manifest must be an object', ['(root)']);
@@ -268,6 +283,13 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(validSourceTypes.includes(src!.type as string), 'source.type', 'invalid source type');
   check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL');
   check(typeof src!.ref === 'string' && src!.ref.length > 0, 'source.ref', 'must be a non-empty string');
+  if (src!.subdirectory !== undefined && src!.subdirectory !== null) {
+    check(
+      typeof src!.subdirectory === 'string' && isSafeSourceSubdirectory(src!.subdirectory),
+      'source.subdirectory',
+      'must be a safe relative POSIX path',
+    );
+  }
 
   // --- installation ---
   const inst = m.installation as Record<string, unknown> | undefined;
@@ -346,6 +368,9 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(typeof risk!.install_recommendation === 'string', 'risk_summary.install_recommendation', 'must be a string');
   // Blocked recommendation → reject manifest entirely
   check(risk!.install_recommendation !== 'blocked', 'risk_summary.install_recommendation', 'install is blocked by server');
+  if ('requires_confirmation' in risk!) {
+    check(typeof risk!.requires_confirmation === 'boolean', 'risk_summary.requires_confirmation', 'must be a boolean');
+  }
 
   return m as unknown as InstallManifest;
 }

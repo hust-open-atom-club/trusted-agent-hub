@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, HttpUrl, RootModel
 
-from .common import PackageType, StrictContractModel
+from .common import PackageType, SafeSourceSubdirectory, StrictContractModel
 from .packages import (
     Dependencies,
     Permissions,
@@ -87,6 +87,7 @@ class ManifestSource(StrictContractModel):
     repository_url: HttpsUrl
     download_url: HttpsUrl | None = None
     ref: str = Field(min_length=1)
+    subdirectory: SafeSourceSubdirectory | None = None
     commit_hash: str | None = Field(
         default=None,
         pattern=r"^[a-f0-9]{40}$",

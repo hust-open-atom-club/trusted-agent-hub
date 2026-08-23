@@ -18,6 +18,7 @@ import pytest
 from packages.schema.extract_skills import (
     discover_capabilities,
     extract_single_skill,
+    scan_directory,
 )
 from scanners.risk_scanner.scanner import RiskScanner
 
@@ -145,12 +146,104 @@ def test_extractor_infers_browser_and_external_service_permissions() -> None:
             "Use Playwright to fetch https://api.example.com/v1/items.\n",
             encoding="utf-8",
         )
+        (root / "server.py").write_text(
+            "from playwright.sync_api import sync_playwright\n"
+            "import requests\n"
+            "requests.get('https://api.example.com/v1/items')\n",
+            encoding="utf-8",
+        )
         meta = extract_single_skill(root)
 
         assert meta["permissions"]["browser"]["allowed"] is True
         services = meta["permissions"]["external_services"]
         assert services[0]["name"] == "api.example.com"
         assert services[0]["url"] == "https://api.example.com"
+
+
+def test_extractor_scans_tsx_as_executable_code() -> None:
+    with tempfile.TemporaryDirectory(prefix="tah-tsx-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\nname: tsx-demo\ndescription: TSX demo\n---\nRender a component.\n",
+            encoding="utf-8",
+        )
+        (root / "component.tsx").write_text(
+            "export async function load() {\n"
+            "  return fetch('https://api.example.com/items');\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        assert scan_directory(root).skill_type == "tool"
+        meta = extract_single_skill(root)
+        assert meta["permissions"]["network"]["allowed"] is True
+        assert any(
+            item.get("file") == "component.tsx"
+            for item in meta["permission_evidence"]
+        )
+
+
+def test_non_object_manifest_is_recoverable() -> None:
+    with tempfile.TemporaryDirectory(prefix="tah-manifest-root-") as tmp:
+        root = Path(tmp)
+        (root / "manifest.json").write_text("[]\n", encoding="utf-8")
+        assert discover_capabilities(root) == []
+        (root / "SKILL.md").write_text(
+            "---\nname: manifest-root\ndescription: Manifest root handling\n---\nDemo.\n",
+            encoding="utf-8",
+        )
+
+        meta = extract_single_skill(root)
+        report = RiskScanner(root).scan()
+
+        assert meta["name"] == "manifest-root"
+        assert report["metadata_validation"]["valid"] is False
+        assert (
+            report["metadata_validation"]["parse_errors"][0]["file"]
+            == "manifest.json"
+        )
+
+
+@pytest.mark.parametrize(
+    "subdirectory",
+    ["../escape", "skills//demo", "C:/demo", "skills\\demo"],
+)
+def test_extractor_rejects_unsafe_source_subdirectory(subdirectory: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="tah-subdirectory-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\nname: safe-path\ndescription: Safe path validation\n---\nDemo.\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="source subdirectory"):
+            extract_single_skill(root, subdirectory=subdirectory)
+
+
+def test_extractor_does_not_promote_documentation_to_runtime_permissions() -> None:
+    """文档中的能力说明只保留为 conditional 证据。"""
+    with tempfile.TemporaryDirectory(prefix="tah-conditional-permissions-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\nname: docs-only\ndescription: Documentation only\n---\n"
+            "Run `gh api https://api.example.com`, delete the output directory, "
+            "and provide an API key for the optional database workflow.\n",
+            encoding="utf-8",
+        )
+        meta = extract_single_skill(root)
+
+        assert meta["permissions"]["filesystem"]["delete"] is False
+        assert meta["permissions"]["network"]["allowed"] is False
+        assert meta["permissions"]["shell"]["allowed"] is False
+        assert "credentials" not in meta["permissions"]
+        assert "database" not in meta["permissions"]
+        statuses = {
+            item["capability"]: item["status"]
+            for item in meta["permission_evidence"]
+        }
+        assert statuses["network"] == "conditional"
+        assert statuses["credentials"] == "conditional"
+        assert statuses["database"] == "conditional"
 
 
 def test_discover_capabilities_finds_multiple_packages() -> None:

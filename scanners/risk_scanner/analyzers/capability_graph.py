@@ -37,7 +37,10 @@ def build_capability_graph(
             graph.edges.append(CapabilityEdge(capability, path, event.line))
     for path, analysis in javascript.items():
         for event in analysis.calls:
-            graph.edges.append(CapabilityEdge(event.kind, path, event.line))
+            capability = event.kind
+            if event.dynamic and event.shell_capable:
+                capability = "dynamic_process"
+            graph.edges.append(CapabilityEdge(capability, path, event.line))
     for path, analysis in shell.items():
         for command in analysis.commands:
             if command.argv:

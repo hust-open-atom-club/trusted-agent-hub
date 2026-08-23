@@ -79,6 +79,7 @@ export interface Finding {
   suggestion?: string;
   remediation?: string;
   cwe_id?: string;
+  requires_confirmation?: boolean;
   occurrences?: FindingOccurrences;
 }
 
@@ -120,6 +121,7 @@ export interface TrustScore {
     level?: string;
     top_risks?: string[];
     install_recommendation?: string;
+    requires_confirmation?: boolean;
   };
   dimensions?: Record<string, TrustScoreDimension>;
   explanations?: TrustScoreExplanation[];
@@ -141,6 +143,7 @@ export interface VersionSource {
   stars?: number | null;
   last_commit_at?: string | null;
   download_url?: string | null;
+  subdirectory?: string | null;
 }
 
 export interface VersionIntegrity {
@@ -203,6 +206,7 @@ export interface InstallStep {
 
 export interface Installation {
   method?: string;
+  package?: string | null;
   targets?: InstallTarget[];
   steps?: InstallStep[];
   target_client?: string | null;
@@ -268,6 +272,7 @@ export interface ScanReport {
   duration_ms?: number | null;
   summary?: Record<string, unknown> | null;
   findings?: Finding[] | null;
+  permission_evidence?: PermissionEvidence[];
   scan_status?: ScanStatus | null;
   scan_limits?: ScanLimits | null;
   rule_execution?: RuleExecution | null;
@@ -281,6 +286,15 @@ export interface ScanReport {
   scanned_at?: string | null;
   source_snapshot_id?: string | null;
   occurrences_total?: number;
+}
+
+export interface PermissionEvidence {
+  capability: string;
+  status: 'observed' | 'declared' | 'conditional' | 'mentioned' | 'inferred';
+  confidence: number;
+  source: 'code' | 'manifest' | 'frontmatter' | 'docs';
+  file?: string | null;
+  evidence: string;
 }
 
 export interface ScanStatus {
