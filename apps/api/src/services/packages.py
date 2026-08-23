@@ -29,6 +29,7 @@ from .errors import (
     TrustScoreNotFoundError,
     VersionNotFoundError,
 )
+from .file_contents import sanitize_public_file_contents
 
 _GRADE_NUMERIC: dict[Grade | None, int] = {
     Grade.A: 5,
@@ -282,7 +283,7 @@ class PackageService:
         record = self.repository.get_version(name, version)
         if record is None or record.status != "published":
             raise VersionNotFoundError(f"{name}@{version}")
-        return record
+        return self._with_scan_file_contents(record)
 
     def get_package_detail(self, name: str) -> PackageDetail:
         package = self.get_public_package(name)
@@ -366,7 +367,27 @@ class PackageService:
         )
         if package is None or package.status != "published":
             raise VersionNotFoundError(version_id)
-        return version
+        return self._with_scan_file_contents(version)
+
+    def _with_scan_file_contents(self, version: VersionDetail) -> VersionDetail:
+        get_scan_report = getattr(self.repository, "get_scan_report", None)
+        if not callable(get_scan_report):
+            return version
+
+        scan = get_scan_report(version.id)
+        if not scan:
+            return version
+
+        scan_json = scan.get("scan_json", {})
+        if not isinstance(scan_json, dict):
+            return version
+
+        file_contents = scan_json.get("file_contents", {})
+        if not isinstance(file_contents, dict):
+            return version
+
+        sanitized = sanitize_public_file_contents(file_contents)
+        return version.model_copy(update={"scan_file_contents": sanitized})
 
     def get_trust_score(self, version_id: str) -> TrustScore:
         version = self.get_public_version_by_id(version_id)

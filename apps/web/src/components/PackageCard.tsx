@@ -5,79 +5,10 @@ import type { Package } from '@/data/packages';
 import TypeBadge from './TypeBadge';
 import ScoreBadge from './ScoreBadge';
 import StatusBadge from './StatusBadge';
+import PackageIconImage from './PackageIconImage';
 
 interface PackageCardProps {
   pkg: Package;
-}
-
-const ICON_PROPS = {
-  width: 16,
-  height: 16,
-  viewBox: '0 0 24 24',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.8,
-  strokeLinecap: 'round',
-  strokeLinejoin: 'round',
-  'aria-hidden': true,
-} as const;
-
-function TypeIcon({ type }: { type: string }) {
-  switch (type) {
-    case 'skill':
-      return (
-        <svg {...ICON_PROPS}>
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-        </svg>
-      );
-    case 'mcp_server':
-      return (
-        <svg {...ICON_PROPS}>
-          <path d="M12 22v-5" />
-          <path d="M9 8V2" />
-          <path d="M15 8V2" />
-          <path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
-        </svg>
-      );
-    case 'plugin':
-      return (
-        <svg {...ICON_PROPS}>
-          <path d="M16.5 9.4 7.55 4.24" />
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-          <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-          <line x1="12" y1="22.08" x2="12" y2="12" />
-        </svg>
-      );
-    case 'command':
-      return (
-        <svg {...ICON_PROPS}>
-          <polyline points="4 17 10 11 4 5" />
-          <line x1="12" y1="19" x2="20" y2="19" />
-        </svg>
-      );
-    case 'subagent':
-      return (
-        <svg {...ICON_PROPS}>
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-          <circle cx="12" cy="7" r="4" />
-        </svg>
-      );
-    case 'prompt':
-      return (
-        <svg {...ICON_PROPS}>
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      );
-    default:
-      return (
-        <svg {...ICON_PROPS}>
-          <path d="M16.5 9.4 7.55 4.24" />
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-          <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-          <line x1="12" y1="22.08" x2="12" y2="12" />
-        </svg>
-      );
-  }
 }
 
 function formatFeedback(
@@ -92,6 +23,17 @@ function formatFeedback(
   return `好评 ${counts.positive} · 差评 ${counts.negative}`;
 }
 
+function formatRiskLevel(riskLevel: string | null): string {
+  const labels: Record<string, string> = {
+    trusted: '可信',
+    low_risk: '低风险',
+    medium_risk: '中风险',
+    high_risk: '高风险',
+    untrusted: '不可信',
+  };
+  return riskLevel ? labels[riskLevel] ?? riskLevel.replace(/_/g, ' ') : '未评级';
+}
+
 export default function PackageCard({ pkg }: PackageCardProps) {
   const router = useRouter();
 
@@ -103,15 +45,26 @@ export default function PackageCard({ pkg }: PackageCardProps) {
     pkg.install_count >= 1000
       ? `${(pkg.install_count / 1000).toFixed(1)}k`
       : pkg.install_count;
+  const trustSummary = `${pkg.grade ?? '--'} · ${formatRiskLevel(pkg.risk_level)}`;
 
   return (
     <div className={`package-card card-accent-${pkg.type}`} onClick={handleClick}>
       <div className="card-header">
         <div className="card-title-row">
-          <span className="card-type-icon" aria-hidden="true">
-            <TypeIcon type={pkg.type} />
+          <span className="card-type-icon">
+            <PackageIconImage
+              type={pkg.type}
+              iconUrl={pkg.icon_url}
+              alt={`${pkg.name} icon`}
+              className="card-type-image"
+            />
           </span>
-          <h3 className="card-name">{pkg.name}</h3>
+          <div className="card-title-copy">
+            <h3 className="card-name">{pkg.name}</h3>
+            <span className={`card-trust-summary risk-${pkg.risk_level ?? 'unknown'}`}>
+              {trustSummary}
+            </span>
+          </div>
         </div>
         <div className="card-header-right">
           <ScoreBadge grade={pkg.grade} />
@@ -124,7 +77,7 @@ export default function PackageCard({ pkg }: PackageCardProps) {
         <TypeBadge type={pkg.type} />
         <StatusBadge status={pkg.status} />
         {pkg.risk_level && (
-          <span className={`risk-level-badge ${pkg.risk_level}`}>{pkg.risk_level.replace(/_/g, ' ')}</span>
+          <span className={`risk-level-badge ${pkg.risk_level}`}>{formatRiskLevel(pkg.risk_level)}</span>
         )}
       </div>
 

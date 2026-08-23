@@ -83,6 +83,20 @@ class FakeRepository:
         )
 
 
+class FakeRepositoryWithScanReport(FakeRepository):
+    def __init__(
+        self,
+        packages: tuple[PackageSummary, ...],
+        versions: tuple[VersionDetail, ...],
+        scan_reports: dict[str, dict[str, object]],
+    ) -> None:
+        super().__init__(packages, versions)
+        self.scan_reports = scan_reports
+
+    def get_scan_report(self, version_id: str) -> dict[str, object] | None:
+        return self.scan_reports.get(version_id)
+
+
 def grade_document(grade: str, level: str = "low_risk") -> TrustScore:
     return TrustScore(
         model_version="grade-v1",
@@ -516,6 +530,67 @@ def test_public_package_and_version_lookups_return_explicit_records(
     assert package == fake_repository.packages[0]
     assert version == fake_repository.versions[0]
     assert version_by_id == fake_repository.versions[0]
+
+
+def test_public_version_file_contents_are_sanitized_before_output(
+    fake_repository: FakeRepository,
+) -> None:
+    repository = FakeRepositoryWithScanReport(
+        fake_repository.packages,
+        fake_repository.versions,
+        {
+            "v-alpha-published": {
+                "scan_json": {
+                    "file_contents": {
+                        "SKILL.md": "---\nname: alpha\n---\n",
+                        ".env": "OPENAI_API_KEY=secret\n",
+                        "config/credentials.json": '{"token":"secret"}',
+                        "src/main.py": "print('safe')\n",
+                        "docs/huge.md": "x" * (80 * 1024),
+                    }
+                }
+            }
+        },
+    )
+
+    version = PackageService(repository).get_public_version(
+        "alpha-package",
+        "2.0.0",
+    )
+
+    assert version.scan_file_contents == {
+        "SKILL.md": "---\nname: alpha\n---\n",
+        "src/main.py": "print('safe')\n",
+    }
+
+
+def test_seed_file_snapshot_collection_skips_sensitive_and_linked_files(
+    tmp_path: Path,
+) -> None:
+    from src.scripts.seed_producer import _collect_text_file_contents
+
+    (tmp_path / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=secret\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("TOKEN=secret\n", encoding="utf-8")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "credentials.json").write_text(
+        '{"token":"secret"}',
+        encoding="utf-8",
+    )
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('safe')\n", encoding="utf-8")
+
+    try:
+        (tmp_path / "linked.md").symlink_to(tmp_path / "SKILL.md")
+    except OSError:
+        pass
+
+    files = _collect_text_file_contents(tmp_path)
+
+    assert files == {
+        "SKILL.md": "# Demo\n",
+        "src/main.py": "print('safe')\n",
+    }
 
 
 def test_public_package_detail_uses_explicit_published_latest_version(

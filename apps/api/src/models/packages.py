@@ -422,6 +422,7 @@ class VersionDetail(StrictContractModel):
     created_at: str | None = None
     trust_score: TrustScore | None = None
     scan_report: ScanReport | None = None
+    scan_file_contents: dict[str, str] | None = None
     auto_grade: Grade | None = None
     manual_grade: Grade | None = None
     effective_grade: Grade | None = None

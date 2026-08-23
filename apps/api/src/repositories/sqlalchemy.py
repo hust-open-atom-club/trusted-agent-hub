@@ -33,6 +33,7 @@ from .orm import (
     TrustLevelRow,
     utc_now,
 )
+from .orm_producer import ScanReportRow
 
 
 TrustLevelName = Literal[
@@ -104,6 +105,17 @@ class SqlAlchemyPackageRepository(PackageRepository):
         with self.session_factory() as session:
             row = session.get(PackageVersionRow, version_id)
             return None if row is None else _version_from_row(row)
+
+    def get_scan_report(self, version_id: str) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            row = session.get(ScanReportRow, version_id)
+            if row is None:
+                return None
+            return {
+                "scan_json": row.scan_json,
+                "report_path": row.report_path,
+                "scanned_at": _serialize_datetime(row.scanned_at),
+            }
 
     def upsert_package(self, package: PackageSummary) -> None:
         with self.session_factory() as session:

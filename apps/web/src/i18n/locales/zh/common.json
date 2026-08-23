@@ -23,10 +23,31 @@
     "no_results": "未找到包",
     "no_results_hint": "尝试调整搜索条件或筛选器。",
     "results_count": "找到 {{count}} 个包",
+    "results_count_plural": "找到 {{count}} 个包",
     "loading_more": "加载更多…",
     "all_loaded": "已加载全部 {{count}} 个包",
     "prev": "上一页",
-    "next": "下一页"
+    "next": "下一页",
+    "trust_panel_label": "市场可信信号",
+    "trust_panel_eyebrow": "安装前决策",
+    "trust_panel_title": "安全信号前置",
+    "signal_scan": "扫描结果",
+    "signal_scan_value": "信任评分和风险等级",
+    "signal_permissions": "权限范围",
+    "signal_permissions_value": "文件、Shell、网络声明",
+    "signal_integrity": "内容完整性",
+    "signal_integrity_value": "SHA-256 与文件快照",
+    "market_sections": "市场推荐区",
+    "section_low_risk": "低风险推荐",
+    "section_low_risk_kicker": "适合优先查看",
+    "section_popular": "热门安装",
+    "section_popular_kicker": "社区正在使用",
+    "section_recent": "最近更新",
+    "section_recent_kicker": "保持活跃",
+    "section_view": "查看更多",
+    "section_active": "已选中",
+    "results_kicker": "全部能力包",
+    "results_title": "浏览市场"
   },
   "search": {
     "placeholder": "按名称、关键词或描述搜索...",
@@ -36,7 +57,42 @@
     "plugin": "Plugin",
     "command": "Command",
     "subagent": "Subagent",
-    "prompt": "Prompt"
+    "prompt": "Prompt",
+    "quick_filters": "快捷筛选",
+    "enter_hint": "Enter 搜索",
+    "query_action": "搜索 {{query}}",
+    "query_action_desc": "按名称、描述和关键词查找",
+    "quick_low_risk": "低风险推荐",
+    "quick_low_risk_desc": "优先查看 A/B 等级包",
+    "quick_popular": "最多安装",
+    "quick_popular_desc": "按安装量排序",
+    "quick_recent": "最近更新",
+    "quick_recent_desc": "查看活跃维护包",
+    "quick_footer": "聚焦搜索时快速切换市场视图",
+    "esc_hint": "ESC 关闭",
+    "advanced_filters": "高级筛选",
+    "filter_options": "筛选选项",
+    "current_view": "当前视图",
+    "view_all": "全部市场",
+    "view_low_risk": "低风险推荐",
+    "view_popular": "热门安装",
+    "view_recent": "最近更新",
+    "clear_view": "清除视图",
+    "type": "能力类型",
+    "client": "客户端",
+    "all_clients": "全部客户端",
+    "trust_grade": "信任等级",
+    "any_grade": "不限等级",
+    "grade_or_better": "{{grade}} 及以上",
+    "score_range": "评分范围",
+    "min_score": "最低",
+    "max_score": "最高",
+    "updated_time": "更新时间",
+    "any_time": "不限时间",
+    "updated_within_days": "{{days}} 天内更新",
+    "tag": "标签",
+    "tag_placeholder": "标签关键词",
+    "sort": "排序"
   },
   "scanner": {
     "title": "提交包进行信任扫描",
@@ -175,13 +231,176 @@
     "not_evaluated": "此包尚未经过评估。",
     "safe": "此包已通过所有安全扫描，可安全安装。",
     "caution": "此包信任度中等，安装前请仔细阅读详情。",
-    "danger": "此包信任度较低，不建议在未经详细审查的情况下安装。"
+    "danger": "此包信任度较低，不建议在未经详细审查的情况下安装。",
+    "package_label": "包",
+    "unknown": "未知",
+    "source_unavailable": "来源不可用",
+    "by_owner": "由 {{owner}} 发布",
+    "grade_risk": "评级 {{grade}} · {{risk}}",
+    "verified_source": "来源已验证",
+    "calculated": "计算时间",
+    "fallback": {
+      "custom": "custom"
+    },
+    "nav": {
+      "overview": "概览",
+      "trust": "信任评分",
+      "files": "文件",
+      "integrity": "完整性",
+      "permissions": "权限",
+      "installation": "安装",
+      "versions": "版本",
+      "feedback": "反馈"
+    },
+    "section": {
+      "overview_kicker": "来源、客户端和关键词",
+      "trust_history": "信任评分历史",
+      "permissions_kicker": "声明的能力范围",
+      "dependencies_kicker": "运行要求",
+      "entry_points_kicker": "包启动元数据",
+      "installation_kicker": "方式和目标",
+      "versions_kicker": "发布历史"
+    },
+    "meta": {
+      "version": "版本",
+      "license": "许可证",
+      "type": "类型",
+      "installs": "安装",
+      "feedback": "反馈"
+    },
+    "feedback_summary": {
+      "none": "暂无评分",
+      "counts": "好评 {{positive}} · 差评 {{negative}}"
+    },
+    "source": {
+      "repository": "仓库",
+      "reference": "引用",
+      "owner": "所有者",
+      "owner_verified": "所有者已验证",
+      "owner_unverified": "所有者未验证",
+      "open_repository": "打开仓库",
+      "open_homepage": "打开主页"
+    },
+    "empty": {
+      "source": "此包没有发布来源仓库元数据。",
+      "permissions": "此版本没有发布权限清单。",
+      "dependencies_manifest": "此版本没有发布依赖清单。",
+      "dependencies": "未声明运行依赖。",
+      "entry_points": "此版本没有发布入口元数据。",
+      "installation": "此版本没有发布安装清单。",
+      "trust_score": "此版本暂无详细信任评分。"
+    },
+    "files": {
+      "title": "包文件",
+      "kicker": "扫描快照和源码预览",
+      "count": "共 {{count}} 个文件",
+      "file_meta": "{{lines}} 行 · {{size}}",
+      "copy_file": "复制文件",
+      "view_mode": "文件查看模式",
+      "source": "源码",
+      "preview": "预览",
+      "render_limit": "仅渲染前 {{rendered}} 行，共 {{total}} 行。",
+      "empty_title": "暂无文件快照",
+      "empty_desc": "此版本没有公开扫描文件内容，可能需要重新扫描或等待发布数据同步。"
+    },
+    "integrity": {
+      "title": "内容完整性",
+      "kicker": "SHA-256 安装校验",
+      "verify_hint": "安装时 CLI 会使用该哈希校验下载包内容。",
+      "sha256": "SHA-256",
+      "download_size": "安装包大小",
+      "missing": "缺失"
+    },
+    "permissions": {
+      "no_filesystem": "未声明文件系统访问。",
+      "read": "读取：{{value}}",
+      "write": "写入：{{value}}",
+      "commands": "命令：{{value}}",
+      "domains": "域名：{{value}}",
+      "access": "访问：{{value}}",
+      "can_delete": "可删除文件",
+      "allowed": "已允许",
+      "not_allowed": "未允许"
+    },
+    "permission_summary": {
+      "filesystem_none": "无读/写/删除权限",
+      "filesystem_access": "读取 {{readCount}} 个路径 · 写入 {{writeCount}} 个路径 · 删除权限：{{deleteAllowed}}",
+      "shell_not_allowed": "未允许",
+      "shell_allowed": "已允许：{{commands}}",
+      "network_not_allowed": "未允许",
+      "network_allowed": "已允许：{{domains}}",
+      "environment_read": "读取 {{count}} 个变量",
+      "environment_write": "写入 {{count}} 个变量",
+      "credentials_access": "访问：{{access}}"
+    },
+    "install": {
+      "method": "安装方式",
+      "external_warning": "此方式会执行外部命令，安装时需要显式确认。",
+      "mcp_config_hint": "安装可能在确认后写入 MCP 客户端配置。",
+      "target_client": "目标客户端",
+      "target_path": "目标路径",
+      "command_comment": "安装 {{name}}",
+      "copy_command": "复制命令",
+      "copied": "已复制",
+      "copy_failed": "复制失败"
+    },
+    "install_method": {
+      "copy_directory": {
+        "label": "目录复制",
+        "description": "下载 ZIP 并校验 SHA-256 后，复制到目标客户端目录。"
+      },
+      "npm_install": {
+        "label": "npm 安装",
+        "description": "通过 npm 安装到受管目录，不污染系统环境。"
+      },
+      "pip_install": {
+        "label": "pip 安装",
+        "description": "通过 pip 安装到受管目录。"
+      },
+      "docker_run": {
+        "label": "Docker",
+        "description": "拉取镜像并生成运行配置，不会自动启动容器。"
+      },
+      "manual_steps": {
+        "label": "人工步骤",
+        "description": "按包说明手动完成安装，CLI 只记录步骤。"
+      },
+      "unknown": {
+        "label": "未知",
+        "description": "按包说明完成安装。"
+      }
+    },
+    "client": {
+      "claude-code": "Claude Code",
+      "claude-code-plugin": "Claude Code 插件",
+      "cursor": "Cursor"
+    },
+    "rail": {
+      "install": "安装",
+      "trust_summary": "信任摘要",
+      "source": "来源",
+      "sections": "页面章节",
+      "review": "需查看"
+    },
+    "trust_advice": {
+      "unknown": "此包尚未经过评估。",
+      "A": "此包已通过所有安全扫描，可安全安装。",
+      "B": "低风险。安装前建议查看权限。",
+      "C": "中等风险。请阅读详情并确认后再安装。",
+      "D": "高风险。未经详细审查不建议安装。",
+      "E": "不可信。安全策略会阻止安装。"
+    }
   },
   "feedback": {
     "title": "用户反馈",
+    "section_kicker": "社区体验",
     "loading": "加载反馈中...",
     "unavailable": "反馈不可用",
     "share": "分享你的体验",
+    "share_hint": "选择一个体验档位，也可以补充一句评论。",
+    "choose_mood": "选择体验",
+    "platform_question": "这个插件用起来怎么样？",
+    "summary_line": "满意 {{positive}} · 一般 {{neutral}} · 不满意 {{negative}}",
     "comment_placeholder": "可选评论（最多1000字）...",
     "submit": "提交反馈",
     "submitting": "提交中...",
@@ -191,7 +410,13 @@
     "no_feedback": "暂无反馈，成为第一个分享体验的人！",
     "positive": "好评",
     "neutral": "中评",
-    "negative": "差评"
+    "negative": "差评",
+    "positive_mood": "满意",
+    "neutral_mood": "一般",
+    "negative_mood": "不满意",
+    "positive_note": "满意",
+    "neutral_note": "一般",
+    "negative_note": "不满意"
   },
   "sort": {
     "updated": "最近更新",

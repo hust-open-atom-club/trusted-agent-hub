@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Subagent icon">
+  <defs>
+    <linearGradient id="subagent-bg" x1="11" y1="8" x2="85" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D9DAFF"/>
+      <stop offset="0.52" stop-color="#979CEB"/>
+      <stop offset="1" stop-color="#53BBD0"/>
+    </linearGradient>
+    <filter id="subagent-shadow" x="14" y="15" width="70" height="70" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#273274" flood-opacity="0.23"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="80" height="80" rx="22" fill="url(#subagent-bg)"/>
+  <path d="M48 24v-8M31 40H20M65 40h11M35 69l-6 7M61 69l6 7" fill="none" stroke="#25336B" stroke-width="5" stroke-linecap="round" opacity="0.2"/>
+  <g filter="url(#subagent-shadow)">
+    <rect x="25" y="31" width="46" height="36" rx="15" fill="#F8FBFF"/>
+    <rect x="34" y="42" width="28" height="14" rx="7" fill="#EEF3FF"/>
+    <circle cx="40" cy="49" r="4" fill="#5965D8"/>
+    <circle cx="56" cy="49" r="4" fill="#42AFC4"/>
+    <path d="M44 58h8" fill="none" stroke="#6D7894" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="48" cy="24" r="5" fill="#F8FBFF"/>
+    <path d="M48 29v5" stroke="#F8FBFF" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <circle cx="20" cy="40" r="5" fill="#F8FBFF"/>
+  <circle cx="76" cy="40" r="5" fill="#F8FBFF"/>
+  <circle cx="29" cy="76" r="5" fill="#F8FBFF"/>
+  <circle cx="67" cy="76" r="5" fill="#F8FBFF"/>
+</svg>

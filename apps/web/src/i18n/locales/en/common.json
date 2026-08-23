@@ -27,7 +27,27 @@
     "loading_more": "Loading more packages…",
     "all_loaded": "All {{count}} packages loaded",
     "prev": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "trust_panel_label": "Marketplace trust signals",
+    "trust_panel_eyebrow": "Before install",
+    "trust_panel_title": "Safety signals upfront",
+    "signal_scan": "Scan result",
+    "signal_scan_value": "Trust grade and risk level",
+    "signal_permissions": "Permission scope",
+    "signal_permissions_value": "Files, shell, and network claims",
+    "signal_integrity": "Content integrity",
+    "signal_integrity_value": "SHA-256 and file snapshot",
+    "market_sections": "Marketplace sections",
+    "section_low_risk": "Low-risk picks",
+    "section_low_risk_kicker": "Start here",
+    "section_popular": "Popular installs",
+    "section_popular_kicker": "Used by the community",
+    "section_recent": "Recently updated",
+    "section_recent_kicker": "Still active",
+    "section_view": "More",
+    "section_active": "Selected",
+    "results_kicker": "All capabilities",
+    "results_title": "Browse marketplace"
   },
   "search": {
     "placeholder": "Search packages by name, keyword, or description...",
@@ -37,7 +57,42 @@
     "plugin": "Plugin",
     "command": "Command",
     "subagent": "Subagent",
-    "prompt": "Prompt"
+    "prompt": "Prompt",
+    "quick_filters": "Quick filters",
+    "enter_hint": "Enter to search",
+    "query_action": "Search {{query}}",
+    "query_action_desc": "Find by name, description, and keywords",
+    "quick_low_risk": "Low-risk picks",
+    "quick_low_risk_desc": "Prioritize A/B grade packages",
+    "quick_popular": "Most installed",
+    "quick_popular_desc": "Sort by install volume",
+    "quick_recent": "Recently updated",
+    "quick_recent_desc": "View actively maintained packages",
+    "quick_footer": "Focus search to switch marketplace views quickly",
+    "esc_hint": "ESC to close",
+    "advanced_filters": "Advanced filters",
+    "filter_options": "Filter options",
+    "current_view": "Current view",
+    "view_all": "All marketplace",
+    "view_low_risk": "Low-risk picks",
+    "view_popular": "Popular installs",
+    "view_recent": "Recently updated",
+    "clear_view": "Clear view",
+    "type": "Capability type",
+    "client": "Client",
+    "all_clients": "All clients",
+    "trust_grade": "Trust grade",
+    "any_grade": "Any grade",
+    "grade_or_better": "{{grade}} or better",
+    "score_range": "Score range",
+    "min_score": "Min",
+    "max_score": "Max",
+    "updated_time": "Updated",
+    "any_time": "Any time",
+    "updated_within_days": "Updated in {{days}} days",
+    "tag": "Tag",
+    "tag_placeholder": "Tag keyword",
+    "sort": "Sort"
   },
   "scanner": {
     "title": "Submit a Package for Trust Scan",
@@ -176,13 +231,176 @@
     "not_evaluated": "This package has not been evaluated yet.",
     "safe": "This package has passed all security scans and is safe to install.",
     "caution": "This package has medium trust. Review the details before installing.",
-    "danger": "This package has low trust. Installation is not recommended without thorough review."
+    "danger": "This package has low trust. Installation is not recommended without thorough review.",
+    "package_label": "Package",
+    "unknown": "Unknown",
+    "source_unavailable": "Source unavailable",
+    "by_owner": "by {{owner}}",
+    "grade_risk": "Grade {{grade}} · {{risk}}",
+    "verified_source": "Verified source",
+    "calculated": "Calculated",
+    "fallback": {
+      "custom": "custom"
+    },
+    "nav": {
+      "overview": "Overview",
+      "trust": "Trust Score",
+      "files": "Files",
+      "integrity": "Integrity",
+      "permissions": "Permissions",
+      "installation": "Installation",
+      "versions": "Versions",
+      "feedback": "Feedback"
+    },
+    "section": {
+      "overview_kicker": "Source, clients, and keywords",
+      "trust_history": "Trust Score History",
+      "permissions_kicker": "Declared capability scope",
+      "dependencies_kicker": "Runtime requirements",
+      "entry_points_kicker": "Package launch metadata",
+      "installation_kicker": "Method and targets",
+      "versions_kicker": "Published history"
+    },
+    "meta": {
+      "version": "Version",
+      "license": "License",
+      "type": "Type",
+      "installs": "Installs",
+      "feedback": "Feedback"
+    },
+    "feedback_summary": {
+      "none": "No ratings yet",
+      "counts": "Positive {{positive}} · Negative {{negative}}"
+    },
+    "source": {
+      "repository": "Repository",
+      "reference": "Reference",
+      "owner": "Owner",
+      "owner_verified": "Verified owner",
+      "owner_unverified": "Owner not verified",
+      "open_repository": "Open repository",
+      "open_homepage": "Open homepage"
+    },
+    "empty": {
+      "source": "No source repository metadata is available for this package.",
+      "permissions": "No permission manifest was published for this version.",
+      "dependencies_manifest": "No dependency manifest was published for this version.",
+      "dependencies": "No runtime dependencies declared.",
+      "entry_points": "No entry point metadata was published for this version.",
+      "installation": "No installation manifest was published for this version.",
+      "trust_score": "No detailed trust score is available for this version."
+    },
+    "files": {
+      "title": "Package Files",
+      "kicker": "Scan snapshot and source preview",
+      "count": "{{count}} files",
+      "file_meta": "{{lines}} lines · {{size}}",
+      "copy_file": "Copy file",
+      "view_mode": "File view mode",
+      "source": "Source",
+      "preview": "Preview",
+      "render_limit": "Rendering only the first {{rendered}} lines of {{total}} total.",
+      "empty_title": "No file snapshot",
+      "empty_desc": "This version has no public scanned file contents. It may need a fresh scan or publish data sync."
+    },
+    "integrity": {
+      "title": "Content Integrity",
+      "kicker": "SHA-256 install verification",
+      "verify_hint": "The CLI verifies the downloaded package contents against this hash during installation.",
+      "sha256": "SHA-256",
+      "download_size": "Artifact Size",
+      "missing": "Missing"
+    },
+    "permissions": {
+      "no_filesystem": "No filesystem access declared.",
+      "read": "Read: {{value}}",
+      "write": "Write: {{value}}",
+      "commands": "Commands: {{value}}",
+      "domains": "Domains: {{value}}",
+      "access": "Access: {{value}}",
+      "can_delete": "Can delete files",
+      "allowed": "Allowed",
+      "not_allowed": "Not allowed"
+    },
+    "permission_summary": {
+      "filesystem_none": "No read/write/delete access",
+      "filesystem_access": "Read {{readCount}} paths · Write {{writeCount}} paths · Delete allowed: {{deleteAllowed}}",
+      "shell_not_allowed": "Not allowed",
+      "shell_allowed": "Allowed: {{commands}}",
+      "network_not_allowed": "Not allowed",
+      "network_allowed": "Allowed: {{domains}}",
+      "environment_read": "Read {{count}} variables",
+      "environment_write": "Write {{count}} variables",
+      "credentials_access": "Access: {{access}}"
+    },
+    "install": {
+      "method": "Method",
+      "external_warning": "This method executes an external command and requires explicit confirmation.",
+      "mcp_config_hint": "Installation may write MCP client configuration after confirmation.",
+      "target_client": "Target client",
+      "target_path": "Target path",
+      "command_comment": "Install {{name}}",
+      "copy_command": "Copy command",
+      "copied": "Copied",
+      "copy_failed": "Copy failed"
+    },
+    "install_method": {
+      "copy_directory": {
+        "label": "Copy directory",
+        "description": "Download the ZIP, verify SHA-256, then copy it to the target client directory."
+      },
+      "npm_install": {
+        "label": "npm install",
+        "description": "Install through npm into a managed directory without polluting the system environment."
+      },
+      "pip_install": {
+        "label": "pip install",
+        "description": "Install through pip into a managed directory."
+      },
+      "docker_run": {
+        "label": "Docker",
+        "description": "Pull the image and generate runtime configuration without starting the container automatically."
+      },
+      "manual_steps": {
+        "label": "Manual steps",
+        "description": "Complete installation manually from the package instructions; the CLI only records the steps."
+      },
+      "unknown": {
+        "label": "Unknown",
+        "description": "Complete installation from the package instructions."
+      }
+    },
+    "client": {
+      "claude-code": "Claude Code",
+      "claude-code-plugin": "Claude Code Plugin",
+      "cursor": "Cursor"
+    },
+    "rail": {
+      "install": "Install",
+      "trust_summary": "Trust Summary",
+      "source": "Source",
+      "sections": "Sections",
+      "review": "Review"
+    },
+    "trust_advice": {
+      "unknown": "This package has not been evaluated yet.",
+      "A": "This package has passed all security scans and is safe to install.",
+      "B": "Low risk. Review permissions before installing.",
+      "C": "Medium risk. Review the details and confirm before installing.",
+      "D": "High risk. Installation is not recommended without thorough review.",
+      "E": "Untrusted. Installation is blocked by safety policy."
+    }
   },
   "feedback": {
     "title": "Feedback",
+    "section_kicker": "Community experience",
     "loading": "Loading feedback...",
     "unavailable": "Feedback unavailable",
     "share": "Share your experience",
+    "share_hint": "Pick an experience level and optionally add a short note.",
+    "choose_mood": "Choose experience",
+    "platform_question": "How did this plugin work for you?",
+    "summary_line": "Good {{positive}} · Not bad {{neutral}} · Bad {{negative}}",
     "comment_placeholder": "Optional comment (max 1000 characters)...",
     "submit": "Submit Feedback",
     "submitting": "Submitting...",
@@ -192,7 +410,13 @@
     "no_feedback": "No feedback yet. Be the first to share your experience!",
     "positive": "Positive",
     "neutral": "Neutral",
-    "negative": "Negative"
+    "negative": "Negative",
+    "positive_mood": "Good",
+    "neutral_mood": "Not bad",
+    "negative_mood": "Bad",
+    "positive_note": "GOOD",
+    "neutral_note": "NOT BAD",
+    "negative_note": "BAD"
   },
   "sort": {
     "updated": "Recently updated",
