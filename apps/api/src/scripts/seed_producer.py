@@ -24,6 +24,12 @@ from src.repositories.sqlalchemy import (
 )
 from src.repositories.mock import JsonPackageRepository
 from src.repositories.orm_producer import ScanReportRow
+from src.services.file_contents import (
+    PUBLIC_FILE_MAX_BYTES,
+    PUBLIC_FILE_TOTAL_MAX_BYTES,
+    is_public_file_content_path,
+    is_safe_public_file_content,
+)
 from src.settings import get_settings
 
 MOCK_DIR = _PROJECT / "packages" / "schema" / "mock"
@@ -51,41 +57,8 @@ _SKIP_DIRS = {
     ".venv",
 }
 
-_TEXT_SUFFIXES = {
-    ".cfg",
-    ".css",
-    ".csv",
-    ".env",
-    ".html",
-    ".ini",
-    ".js",
-    ".json",
-    ".jsx",
-    ".lock",
-    ".md",
-    ".mjs",
-    ".py",
-    ".sh",
-    ".toml",
-    ".ts",
-    ".tsx",
-    ".txt",
-    ".yaml",
-    ".yml",
-}
-
-_TEXT_FILENAMES = {
-    ".gitignore",
-    ".gitattributes",
-    "Dockerfile",
-    "LICENSE",
-    "Makefile",
-    "README",
-    "SKILL.md",
-}
-
-_MAX_FILE_BYTES = 256 * 1024
-_MAX_TOTAL_BYTES = 2 * 1024 * 1024
+_MAX_FILE_BYTES = PUBLIC_FILE_MAX_BYTES
+_MAX_TOTAL_BYTES = PUBLIC_FILE_TOTAL_MAX_BYTES
 
 
 def seed_packages(repo: SqlAlchemyPackageRepository) -> int:
@@ -204,12 +177,13 @@ def _collect_text_file_contents(root: Path) -> dict[str, str]:
     files: dict[str, str] = {}
     total_bytes = 0
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or _is_under_skipped_dir(path, root):
+        if path.is_symlink() or not path.is_file() or _is_under_skipped_dir(path, root):
             continue
-        if not _looks_like_text_file(path):
+        rel = path.relative_to(root).as_posix()
+        if not is_public_file_content_path(rel):
             continue
         try:
-            size = path.stat().st_size
+            size = path.lstat().st_size
         except OSError:
             continue
         if size > _MAX_FILE_BYTES or total_bytes + size > _MAX_TOTAL_BYTES:
@@ -221,7 +195,8 @@ def _collect_text_file_contents(root: Path) -> dict[str, str]:
         except OSError:
             continue
 
-        rel = path.relative_to(root).as_posix()
+        if not is_safe_public_file_content(rel, content):
+            continue
         files[rel] = content
         total_bytes += size
     return files
@@ -239,7 +214,7 @@ def _find_imported_package_file_contents(
         manifests = sorted(source_root.rglob("manifest.json"))
         manifests.extend(sorted(source_root.rglob("plugin.json")))
         for manifest_path in manifests:
-            if _is_under_skipped_dir(manifest_path, source_root):
+            if manifest_path.is_symlink() or _is_under_skipped_dir(manifest_path, source_root):
                 continue
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -288,10 +263,6 @@ def _is_under_skipped_dir(path: Path, root: Path) -> bool:
     except ValueError:
         return True
     return any(part in _SKIP_DIRS for part in parts[:-1])
-
-
-def _looks_like_text_file(path: Path) -> bool:
-    return path.name in _TEXT_FILENAMES or path.suffix.lower() in _TEXT_SUFFIXES
 
 
 def _parse_report_datetime(value: object) -> datetime | None:

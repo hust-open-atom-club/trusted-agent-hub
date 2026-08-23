@@ -29,6 +29,7 @@ from .errors import (
     TrustScoreNotFoundError,
     VersionNotFoundError,
 )
+from .file_contents import sanitize_public_file_contents
 
 _GRADE_NUMERIC: dict[Grade | None, int] = {
     Grade.A: 5,
@@ -385,12 +386,8 @@ class PackageService:
         if not isinstance(file_contents, dict):
             return version
 
-        normalized = {
-            str(path): content
-            for path, content in file_contents.items()
-            if isinstance(content, str)
-        }
-        return version.model_copy(update={"scan_file_contents": normalized})
+        sanitized = sanitize_public_file_contents(file_contents)
+        return version.model_copy(update={"scan_file_contents": sanitized})
 
     def get_trust_score(self, version_id: str) -> TrustScore:
         version = self.get_public_version_by_id(version_id)
