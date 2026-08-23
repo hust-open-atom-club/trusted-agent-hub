@@ -245,6 +245,7 @@ export interface VersionDetail {
   findings?: Finding[];
   trust_score?: TrustScore | null;
   scan_report?: ScanReport | null;
+  scan_file_contents?: Record<string, string> | null;
   auto_grade?: string | null;
   manual_grade?: string | null;
   manual_grade_by?: string | null;
