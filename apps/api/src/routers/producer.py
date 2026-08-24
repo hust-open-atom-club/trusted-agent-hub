@@ -147,6 +147,25 @@ def submit_version(
             verify_resource_access(_user, pkg.get("submitter_id", ""))
             source_owner_id = str(pkg.get("submitter_id") or _user.id)
 
+    # Reject a non-default branch before changing the version state.  This
+    # protects producer submissions as well as the standalone scan endpoint.
+    source_data = version.get("source")
+    source_url = (
+        source_data.get("repository_url", "")
+        if isinstance(source_data, dict)
+        else ""
+    )
+    resolved_source = None
+    if source_url:
+        from src.routers.trust import (
+            _parse_github_url,
+            _resolve_default_branch_source,
+        )
+
+        resolved_source = _resolve_default_branch_source(
+            _parse_github_url(str(source_url))
+        )
+
     service = ProducerService(repo)
     try:
         repo_url, scan_id, next_status = service.submit_version(version_id, user_id=_user.id)
@@ -231,6 +250,7 @@ def submit_version(
         repo_url,
         on_complete=on_scan_done,
         signals=signals,
+        resolved_source=resolved_source,
     )
 
     return SubmitResponse(

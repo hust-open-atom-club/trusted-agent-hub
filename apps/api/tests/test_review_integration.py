@@ -126,6 +126,14 @@ def _submit_version(client: TestClient, token: str, version_id: str):
     return resp.json()
 
 
+def _mock_repository_default_branch(monkeypatch, default_branch: str = "main"):
+    """Keep synthetic integration-test repositories independent of GitHub."""
+    monkeypatch.setattr(
+        "src.routers.trust._fetch_repository_default_branch",
+        lambda _parsed: default_branch,
+    )
+
+
 def _set_version_status(version_id: str, status: str):
     """Direct DB update to set version status (bypasses background scan task)."""
     settings = get_settings()
@@ -656,6 +664,7 @@ class TestIntegrationAuditFlow:
             return None
 
         monkeypatch.setattr("src.routers.trust._run_scan_task", _noop_scan)
+        _mock_repository_default_branch(monkeypatch)
 
         reg = _register_and_login_as(client, _random_email("sub"), "submitter")
         stoken = reg["access_token"]
@@ -788,9 +797,14 @@ class TestIntegrationAuditFlow:
         assert "approved" not in actions3, f"legacy raw conclusion should not be written: {actions3}"
 
 
-def test_upload_mcp_dependencies_persist_through_producer():
+def test_upload_mcp_dependencies_persist_through_producer(monkeypatch):
     """用户上传的 MCP 包必须保留 dependencies.mcp_servers，发布后消费侧可安装注册。"""
     _needs_db()
+    _mock_repository_default_branch(monkeypatch)
+    monkeypatch.setattr(
+        "src.routers.trust._run_scan_task",
+        lambda *args, **kwargs: None,
+    )
     client = _get_client()
     stoken = _register_and_login_as(
         client, _random_email("sub"), "submitter"
