@@ -271,24 +271,41 @@ class ProducerService:
         # ── 生成安装产物（同步，失败则回退 error） ───────────
         version = self.repository.get_version(version_id)
         if version is not None:
-            source = version.get("source", {})
-            repo_url = (
-                source.get("repository_url", "") if isinstance(source, dict) else ""
+            source = dict(version.get("source") or {})
+            extracted_meta = full_report.get("package_metadata")
+            acquired_source = (
+                extracted_meta.get("source")
+                if isinstance(extracted_meta, dict)
+                else None
             )
-            commit_hash = full_report.get("commit_hash") or (
-                source.get("commit_hash", "") if isinstance(source, dict) else ""
+            # Source identity is an acquisition fact.  It must supersede the
+            # submitted URL/ref so the install manifest identifies the same
+            # repository default branch and commit that were scanned.
+            if isinstance(acquired_source, dict):
+                for key in (
+                    "type",
+                    "repository_url",
+                    "owner",
+                    "repo",
+                    "ref_type",
+                    "ref",
+                    "commit_hash",
+                ):
+                    value = acquired_source.get(key)
+                    if value not in (None, ""):
+                        source[key] = value
+
+            repo_url = str(source.get("repository_url", ""))
+            commit_hash = full_report.get("commit_hash") or source.get(
+                "commit_hash", ""
             )
             source_subdirectory = full_report.get("source_subdirectory") or (
-                source.get("subdirectory", "") if isinstance(source, dict) else ""
+                source.get("subdirectory", "")
             )
             if source_subdirectory:
-                persisted_source = dict(source) if isinstance(source, dict) else {}
-                persisted_source["subdirectory"] = str(source_subdirectory)
-                self.repository.update_version_data(
-                    version_id,
-                    {"source": persisted_source},
-                )
-                version["source"] = persisted_source
+                source["subdirectory"] = str(source_subdirectory)
+            self.repository.update_version_data(version_id, {"source": source})
+            version["source"] = source
             package = self.repository.get_package(version.get("package_id", ""))
             package_name = package.get("name", "") if package else ""
             pkg_version = version.get("version", "")

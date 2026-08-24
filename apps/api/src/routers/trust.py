@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time as _time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
@@ -171,8 +172,125 @@ def _is_github_reachable(timeout: float = 5) -> bool:
         return False
 
 
+def _github_api_headers() -> dict[str, str]:
+    """Return the shared, optional-token headers for GitHub API requests."""
+    headers: dict[str, str] = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
+    """Resolve a repository's GitHub default branch before acquiring source."""
+    api_url = (
+        f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
+    )
+    try:
+        request = urllib.request.Request(api_url, headers=_github_api_headers())
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="GitHub repository was not found or is not accessible.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to resolve the repository default branch from GitHub.",
+        ) from exc
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to resolve the repository default branch from GitHub.",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub did not return a valid repository metadata object.",
+        )
+
+    default_branch = payload.get("default_branch")
+    if not isinstance(default_branch, str) or not default_branch.strip():
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub did not return a valid repository default branch.",
+        )
+    return default_branch
+
+
+def _resolve_default_branch_source(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Allow only a repository's default branch and an optional path within it."""
+    default_branch = _fetch_repository_default_branch(parsed)
+    tree_path = parsed.get("tree_path")
+    subdir: str | None = None
+
+    if tree_path:
+        if tree_path == default_branch:
+            pass
+        elif tree_path.startswith(default_branch + "/"):
+            subdir = tree_path[len(default_branch) + 1:]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Only the repository default branch is supported. "
+                    f"Use '{default_branch}' instead of another branch or tag."
+                ),
+            )
+
+    return {
+        **parsed,
+        "ref": default_branch,
+        "subdir": subdir,
+    }
+
+
+def _is_full_commit_hash(value: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{40}", value))
+
+
+def _apply_acquisition_source_metadata(
+    package_metadata: dict[str, Any],
+    *,
+    parsed: dict[str, Any],
+    commit_hash: str,
+    subdir: str | None,
+    scanned_source: dict[str, Any] | None = None,
+) -> None:
+    """Make the persisted source identity match the acquired source tree."""
+    package_source = dict(package_metadata.get("source") or {})
+    if isinstance(scanned_source, dict):
+        package_source.update(scanned_source)
+    package_source.update({
+        "type": "github",
+        "repository_url": parsed["base_url"],
+        "owner": parsed["owner"],
+        "repo": parsed["repo"],
+        "ref_type": "branch",
+        "ref": parsed["ref"],
+        "commit_hash": commit_hash,
+    })
+    if subdir:
+        package_source["subdirectory"] = subdir
+    else:
+        package_source.pop("subdirectory", None)
+    package_metadata["source"] = package_source
+
+
 def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 2) -> bool:
-    """Phase A：用 GitHub Token 认证的 git clone，重试 max_attempts 次。"""
+    """Phase A：克隆仓库默认分支，重试 max_attempts 次。"""
 
     if not _is_github_reachable():
         print("[TAH-trust]     github.com unreachable, skipping git clone")
@@ -187,10 +305,23 @@ def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: 
         safe_url = clone_url
 
     for attempt in range(1, max_attempts + 1):
-        print(f"[TAH-trust]     git clone {safe_url} (attempt {attempt}/{max_attempts}) --depth 1 ...")
+        print(
+            f"[TAH-trust]     git clone {safe_url} "
+            f"(attempt {attempt}/{max_attempts}) --branch {parsed['ref']} --depth 1 ..."
+        )
         try:
             result = subprocess.run(
-                ["git", "clone", "--depth", "1", clone_url, tmp_dir],
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    "--branch",
+                    parsed["ref"],
+                    "--single-branch",
+                    clone_url,
+                    tmp_dir,
+                ],
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -215,15 +346,14 @@ def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: 
 
 
 def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
-    """Phase B：通过 GitHub API 下载 ZIP 包，解压到 tmp_dir。"""
+    """Phase B：下载与 Git 获取相同默认分支的 ZIP 包，解压到 tmp_dir。"""
     token = os.environ.get("GITHUB_TOKEN", "")
     api_url = (
         f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
         f"/zipball/{parsed['ref']}"
     )
-    headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
+    headers = _github_api_headers()
     if token:
-        headers["Authorization"] = f"Bearer {token}"
         print(f"[TAH-trust]     ZIP 下载使用 Token 认证")
     else:
         print(f"[TAH-trust]     ZIP 下载无 Token（匿名）")
@@ -268,8 +398,9 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
 
     Returns:
         (repo_root, source_method, commit_hash) — repo_root 是仓库内容根目录路径，
-        source_method 为 "git" 或 "zip"，commit_hash 为真实 40 位 git hash
-        （git 模式读 HEAD，zip 模式从目录名提取；提取失败为空字符串）。
+        source_method 为 "git" 或 "zip"，commit_hash 为真实 40 位 git hash。
+        两个获取路径均只能使用已解析的仓库默认分支；无法证明 commit
+        时视为获取失败，避免扫描或下载的源码不可追溯。
         失败返回 (None, "", "")。
     """
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
@@ -277,8 +408,10 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
     print(f"[TAH-trust] === Phase A: git clone ===")
     if _git_clone_with_retries(parsed, tmp_dir):
         commit_hash = _git_head_hash(tmp_dir)
-        print(f"[TAH-trust]     HEAD commit: {commit_hash[:8] if commit_hash else 'N/A'}")
-        return tmp_dir, "git", commit_hash
+        if _is_full_commit_hash(commit_hash):
+            print(f"[TAH-trust]     HEAD commit: {commit_hash[:8]}")
+            return tmp_dir, "git", commit_hash
+        print("[TAH-trust]     Git clone lacks a verifiable 40-character HEAD commit")
 
     force_rmtree(tmp_dir)
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
@@ -296,8 +429,10 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
             for item in os.listdir(inner):
                 shutil.move(os.path.join(inner, item), os.path.join(tmp_dir, item))
             os.rmdir(inner)
-        print(f"[TAH-trust]     ZIP commit: {commit_hash[:8] if commit_hash else 'N/A'}")
-        return tmp_dir, "zip", commit_hash
+        if _is_full_commit_hash(commit_hash):
+            print(f"[TAH-trust]     ZIP commit: {commit_hash[:8]}")
+            return tmp_dir, "zip", commit_hash
+        print("[TAH-trust]     ZIP download lacks a verifiable 40-character commit")
 
     force_rmtree(tmp_dir)
     return None, "", ""
@@ -314,6 +449,7 @@ def _run_scan_task(
     *,
     on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
     signals: Dict[str, Any] | None = None,
+    resolved_source: dict[str, Any] | None = None,
 ) -> None:
     """后台执行扫描流水线：acquire → scan → score → save。
 
@@ -324,9 +460,13 @@ def _run_scan_task(
         print(f"\n[TAH-trust] >>> _run_scan_task 开始 scan_id={scan_id}")
         print(f"[TAH-trust]     source = {source}")
 
-        parsed = _parse_github_url(source)
+        parsed = (
+            dict(resolved_source)
+            if resolved_source is not None
+            else _resolve_default_branch_source(_parse_github_url(source))
+        )
         print(f"[TAH-trust]     owner={parsed['owner']}, repo={parsed['repo']}, "
-              f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+              f"default_branch={parsed['ref']}, subdir={parsed['subdir']}")
 
         _scans[scan_id]["status"] = "cloning"
 
@@ -491,17 +631,25 @@ def _run_scan_task(
         calculate_trust_score = _load_scorer()
 
         repo_url = parsed["base_url"] if parsed else source
-        package_metadata = _build_package_metadata(scan_report, scan_dir, repo_url=repo_url, subdirectory=subdir)
+        package_metadata = _build_package_metadata(
+            scan_report,
+            scan_dir,
+            repo_url=repo_url,
+            subdirectory=subdir,
+        )
         # Preserve acquisition-time facts for scoring as well as SR-009.  The
-        # extractor reads package-authored metadata and must not overwrite them.
+        # extractor reads package-authored metadata and must not overwrite the
+        # repository default branch and commit actually scanned.
         scanned_meta = scanner._package_metadata or {}
         scanned_source = scanned_meta.get("source") or {}
         scanned_integrity = scanned_meta.get("integrity") or {}
-        if isinstance(scanned_source, dict):
-            package_metadata["source"] = {
-                **(package_metadata.get("source") or {}),
-                **scanned_source,
-            }
+        _apply_acquisition_source_metadata(
+            package_metadata,
+            parsed=parsed,
+            commit_hash=commit_hash,
+            subdir=subdir,
+            scanned_source=scanned_source if isinstance(scanned_source, dict) else None,
+        )
         if isinstance(scanned_integrity, dict):
             package_metadata["integrity"] = {
                 **(package_metadata.get("integrity") or {}),
@@ -538,6 +686,8 @@ def _run_scan_task(
             "repo_url": repo_url,
             "package_name": pkg_name,
             "version": pkg_version,
+            "source_ref": parsed["ref"],
+            "source_method": method,
             "commit_hash": commit_hash,
             "created_at": _scans[scan_id]["created_at"],
             "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -675,7 +825,7 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
 
 
 def _parse_github_url(url: str) -> dict[str, Any]:
-    """解析 GitHub URL，提取 owner / repo / ref / subdir。
+    """解析 GitHub URL，提取 owner / repo / tree 路径。
 
     处理以下格式:
         https://github.com/owner/repo
@@ -683,22 +833,14 @@ def _parse_github_url(url: str) -> dict[str, Any]:
         https://github.com/owner/repo/tree/main
         https://github.com/owner/repo/tree/main/subdir/path
 
-    返回:
-        {
-            "base_url": "https://github.com/owner/repo",
-            "owner": "owner",
-            "repo": "repo",
-            "ref": "main",
-            "subdir": "skills/hallmark" | None,
-        }
+    ``tree_path`` 会在查询 GitHub ``default_branch`` 后再解析，避免将
+    非默认分支误作为扫描来源，也能正确处理名称带斜杠的默认分支。
     """
     url = url.strip().rstrip("/")
     if url.endswith(".git"):
         url = url[:-4]
 
-    m = re.search(
-        r"^https://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?$", url
-    )
+    m = re.search(r"^https://github\.com/([^/]+)/([^/]+)(?:/tree/(.+))?$", url)
     if not m:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -707,15 +849,12 @@ def _parse_github_url(url: str) -> dict[str, Any]:
 
     owner = m.group(1)
     repo = m.group(2)
-    ref = m.group(3) or "main"
-    subdir = m.group(4) or None
 
     return {
         "base_url": f"https://github.com/{owner}/{repo}",
         "owner": owner,
         "repo": repo,
-        "ref": ref,
-        "subdir": subdir,
+        "tree_path": m.group(3) or None,
     }
 
 
@@ -725,7 +864,7 @@ def _parse_github_url(url: str) -> dict[str, Any]:
 
 
 @router.post("/scan", response_model=ScanResponse)
-async def submit_scan(
+def submit_scan(
     background_tasks: BackgroundTasks,
     repo_url: Optional[str] = None,
     body: Optional[ScanRequest] = None,
@@ -764,10 +903,11 @@ async def submit_scan(
             detail="Only https://github.com/... URLs are supported at this time.",
         )
 
-    # 解析 URL
-    parsed = _parse_github_url(url)
+    # 解析 URL 并同步校验：仅允许 GitHub 声明的默认分支。
+    # 同步端点由 FastAPI 放入线程池，避免阻塞事件循环的 GitHub API 请求。
+    parsed = _resolve_default_branch_source(_parse_github_url(url))
     print(f"[TAH-trust]     parsed: owner={parsed['owner']}, repo={parsed['repo']}, "
-          f"ref={parsed['ref']}, subdir={parsed['subdir']}")
+          f"default_branch={parsed['ref']}, subdir={parsed['subdir']}")
 
     source = url
 
@@ -791,7 +931,12 @@ async def submit_scan(
     }
 
     # 启动后台扫描
-    background_tasks.add_task(_run_scan_task, scan_id, source)
+    background_tasks.add_task(
+        _run_scan_task,
+        scan_id,
+        source,
+        resolved_source=parsed,
+    )
 
     return {
         "scan_id": scan_id,
