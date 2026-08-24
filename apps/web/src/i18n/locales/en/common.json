@@ -22,10 +22,8 @@
     "load_error": "Failed to load packages",
     "no_results": "No packages found",
     "no_results_hint": "Try adjusting your search or filter criteria.",
-    "results_count": "{{count}} package found",
-    "results_count_plural": "{{count}} packages found",
+    "results_total": "Total {{count}}",
     "loading_more": "Loading more packages…",
-    "all_loaded": "All {{count}} packages loaded",
     "prev": "Previous",
     "next": "Next",
   "market_sections": "Marketplace sections",
@@ -39,7 +37,7 @@
     "results_title": "Browse marketplace"
   },
   "search": {
-    "placeholder": "Search packages by name, keyword, or description...",
+    "placeholder": "Search name, keyword, or description",
     "all": "All",
     "skill": "Skill",
     "mcp_server": "MCP Server",
@@ -67,6 +65,7 @@
     "view_popular": "Popular installs",
     "view_recent": "Recently updated",
     "clear_view": "Clear view",
+    "reset_filters": "Reset filters",
     "type": "Capability type",
     "client": "Client",
     "all_clients": "All clients",

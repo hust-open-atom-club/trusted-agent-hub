@@ -6,6 +6,7 @@ import type { SortField, SortOrder } from '@/data/packages';
 import { AnimatePresence, listItem, listStagger, motion, softPanel } from '@/components/Motion';
 
 type MarketView = 'all' | 'low_risk' | 'popular' | 'recent';
+type SearchBarLayout = 'inline' | 'rail' | 'secondary';
 
 interface SearchBarProps {
   query: string;
@@ -20,6 +21,7 @@ interface SearchBarProps {
   maxScore: string;
   updatedDays: string;
   activeMarketView: MarketView;
+  layout?: SearchBarLayout;
   onQueryChange: (value: string) => void;
   onTypeChange: (value: string) => void;
   onCategoryChange: (value: string) => void;
@@ -80,6 +82,7 @@ export default function SearchBar({
   maxScore,
   updatedDays,
   activeMarketView = 'all',
+  layout = 'inline',
   onQueryChange,
   onTypeChange,
   onCategoryChange,
@@ -94,8 +97,11 @@ export default function SearchBar({
 }: SearchBarProps) {
   const { t } = useTranslation();
   const activeSortKey = `${sortBy}:${sortOrder}`;
+  const isRail = layout === 'rail';
+  const isSecondary = layout === 'secondary';
+  const isPanelLayout = isRail || isSecondary;
   const [isFocused, setIsFocused] = useState(false);
-  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(isPanelLayout);
   const hasActiveFilters = Boolean(
     activeType !== 'all' ||
       client ||
@@ -108,14 +114,15 @@ export default function SearchBar({
       sortBy !== 'updated_at' ||
       sortOrder !== 'desc',
   );
-  const showFilters = isFiltersOpen;
+  const showFilters = isPanelLayout || isFiltersOpen;
   const normalizedQuery = query.trim();
   const isContextView = activeMarketView !== 'all';
-  const showTypeFilters = activeMarketView === 'all' || activeMarketView === 'popular' || activeMarketView === 'recent';
-  const showTrustFilters = activeMarketView === 'all' || activeMarketView === 'low_risk';
-  const showScoreFilters = activeMarketView === 'all' || activeMarketView === 'low_risk';
-  const showFreshnessFilters = activeMarketView === 'all' || activeMarketView === 'recent';
-  const showGeneralFilters = activeMarketView === 'all';
+  const showTypeFilters = isRail || (!isSecondary && (activeMarketView === 'all' || activeMarketView === 'popular' || activeMarketView === 'recent'));
+  const showTrustFilters = isRail || (!isSecondary && (activeMarketView === 'all' || activeMarketView === 'low_risk'));
+  const showScoreFilters = isSecondary || (!isRail && !isSecondary && (activeMarketView === 'all' || activeMarketView === 'low_risk'));
+  const showFreshnessFilters = isSecondary || (!isRail && !isSecondary && (activeMarketView === 'all' || activeMarketView === 'recent'));
+  const showGeneralFilters = isSecondary || (!isRail && !isSecondary && activeMarketView === 'all');
+  const showSortFilter = !isRail;
 
   useEffect(() => {
     if (activeMarketView !== 'all') {
@@ -145,134 +152,151 @@ export default function SearchBar({
   ];
 
   return (
-    <div className="search-section">
-      <div className={`search-command ${isFocused ? 'is-focused' : ''} ${normalizedQuery ? 'has-query' : ''}`}>
-        <div className="search-bar">
-          <span className="search-icon search-icon-stack" aria-hidden="true">
-            <span className={`search-icon-layer ${normalizedQuery ? 'is-hidden' : 'is-visible'}`}>
-              <SearchGlyph />
+    <div className={`search-section ${isPanelLayout ? `search-section--${layout}` : ''}`}>
+      {!isSecondary && (
+        <div className={`search-command ${isFocused ? 'is-focused' : ''} ${normalizedQuery ? 'has-query' : ''}`}>
+          <div className="search-bar">
+            <span className="search-icon search-icon-stack" aria-hidden="true">
+              <span className={`search-icon-layer ${normalizedQuery ? 'is-hidden' : 'is-visible'}`}>
+                <SearchGlyph />
+              </span>
+              <span className={`search-icon-layer ${normalizedQuery ? 'is-visible' : 'is-hidden'}`}>
+                <ArrowGlyph />
+              </span>
             </span>
-            <span className={`search-icon-layer ${normalizedQuery ? 'is-visible' : 'is-hidden'}`}>
-              <ArrowGlyph />
-            </span>
-          </span>
-          <input
-            type="text"
-            className="search-input"
-            placeholder={t('search.placeholder')}
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && normalizedQuery) {
-                onQueryChange(normalizedQuery);
-              }
-              if (e.key === 'Escape') {
-                setIsFocused(false);
-                e.currentTarget.blur();
-              }
-            }}
-            onBlur={() => window.setTimeout(() => setIsFocused(false), 140)}
-          />
-        </div>
+            <input
+              type="text"
+              className="search-input"
+              placeholder={t('search.placeholder')}
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && normalizedQuery) {
+                  onQueryChange(normalizedQuery);
+                }
+                if (e.key === 'Escape') {
+                  setIsFocused(false);
+                  e.currentTarget.blur();
+                }
+              }}
+              onBlur={() => window.setTimeout(() => setIsFocused(false), 140)}
+            />
+          </div>
 
-        <AnimatePresence>
-          {isFocused && (
-            <motion.div
-              className="search-suggestions"
-              role="listbox"
-              aria-label={t('search.quick_filters')}
-              variants={softPanel}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-            >
-              <div className="search-suggestions__header">
-                <span>{t('search.quick_filters')}</span>
-                <span>{t('search.enter_hint')}</span>
-              </div>
-              <motion.div className="search-suggestions__list" variants={listStagger} initial="hidden" animate="visible">
-                {normalizedQuery && (
-                  <motion.button
-                    type="button"
-                    className="search-suggestion-item search-suggestion-item--query"
-                    aria-label={`搜索 ${normalizedQuery}`}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => onQueryChange(normalizedQuery)}
-                    variants={listItem}
-                    whileHover={{ x: 2 }}
-                    whileTap={{ scale: 0.99 }}
-                  >
-                    <span className="search-suggestion-icon"><SearchGlyph /></span>
-                    <span className="search-suggestion-copy">
-                      <strong>{t('search.query_action', { query: normalizedQuery })}</strong>
-                      <span>{t('search.query_action_desc')}</span>
-                    </span>
-                    <span className="search-suggestion-end">Query</span>
-                  </motion.button>
-                )}
-                {suggestionActions.map((action) => (
-                  <motion.button
-                    type="button"
-                    className="search-suggestion-item"
-                    key={action.label}
-                    aria-label={action.label}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={action.onClick}
-                    variants={listItem}
-                    whileHover={{ x: 2 }}
-                    whileTap={{ scale: 0.99 }}
-                  >
-                    <span className="search-suggestion-icon"><ArrowGlyph /></span>
-                    <span className="search-suggestion-copy">
-                      <strong>{action.label}</strong>
-                      <span>{action.description}</span>
-                    </span>
-                    <span className="search-suggestion-end">{action.end}</span>
-                  </motion.button>
-                ))}
+          <AnimatePresence>
+            {isFocused && (
+              <motion.div
+                className="search-suggestions"
+                role="listbox"
+                aria-label={t('search.quick_filters')}
+                variants={softPanel}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+              >
+                <div className="search-suggestions__header">
+                  <span>{t('search.quick_filters')}</span>
+                  <span>{t('search.enter_hint')}</span>
+                </div>
+                <motion.div className="search-suggestions__list" variants={listStagger} initial="hidden" animate="visible">
+                  {normalizedQuery && (
+                    <motion.button
+                      type="button"
+                      className="search-suggestion-item search-suggestion-item--query"
+                      aria-label={`搜索 ${normalizedQuery}`}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => onQueryChange(normalizedQuery)}
+                      variants={listItem}
+                      whileHover={{ x: 2 }}
+                      whileTap={{ scale: 0.99 }}
+                    >
+                      <span className="search-suggestion-icon"><SearchGlyph /></span>
+                      <span className="search-suggestion-copy">
+                        <strong>{t('search.query_action', { query: normalizedQuery })}</strong>
+                        <span>{t('search.query_action_desc')}</span>
+                      </span>
+                      <span className="search-suggestion-end">Query</span>
+                    </motion.button>
+                  )}
+                  {suggestionActions.map((action) => (
+                    <motion.button
+                      type="button"
+                      className="search-suggestion-item"
+                      key={action.label}
+                      aria-label={action.label}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={action.onClick}
+                      variants={listItem}
+                      whileHover={{ x: 2 }}
+                      whileTap={{ scale: 0.99 }}
+                    >
+                      <span className="search-suggestion-icon"><ArrowGlyph /></span>
+                      <span className="search-suggestion-copy">
+                        <strong>{action.label}</strong>
+                        <span>{action.description}</span>
+                      </span>
+                      <span className="search-suggestion-end">{action.end}</span>
+                    </motion.button>
+                  ))}
+                </motion.div>
+                <div className="search-suggestions__footer">
+                  <span>{t('search.quick_footer')}</span>
+                  <span>{t('search.esc_hint')}</span>
+                </div>
               </motion.div>
-              <div className="search-suggestions__footer">
-                <span>{t('search.quick_footer')}</span>
-                <span>{t('search.esc_hint')}</span>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
 
       <div className="search-controls-row">
-        <div className="search-context-bar">
-          <div className="search-context-bar__copy">
-            <span>{t('search.current_view')}</span>
-            <strong>{t(`search.view_${activeMarketView}`)}</strong>
-          </div>
-
-          <div className="search-context-bar__actions">
-            {isContextView && (
-              <button
-                type="button"
-                className="advanced-filter-toggle"
-                onClick={() => onMarketViewChange('all')}
-              >
-                {t('search.clear_view')}
-              </button>
-            )}
+        {isRail ? (
+          <div className="search-panel-heading">
+            <div className="search-panel-heading__copy">
+              <strong>{t(`search.view_${activeMarketView}`)}</strong>
+            </div>
             <button
               type="button"
-              className={`advanced-filter-toggle ${showFilters || hasActiveFilters ? 'active' : ''}`}
-              aria-expanded={showFilters}
-              onClick={() => setIsFiltersOpen((open) => !open)}
+              className="search-reset-button"
+              onClick={() => onMarketViewChange('all')}
             >
-              <span>{t('search.filter_options')}</span>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M3 6h18" />
-                <path d="M7 12h10" />
-                <path d="M10 18h4" />
-              </svg>
+              {t('search.reset_filters')}
             </button>
           </div>
-        </div>
+        ) : !isSecondary ? (
+          <div className="search-context-bar">
+            <div className="search-context-bar__copy">
+              <span>{t('search.current_view')}</span>
+              <strong>{t(`search.view_${activeMarketView}`)}</strong>
+            </div>
+
+            <div className="search-context-bar__actions">
+              {isContextView && (
+                <button
+                  type="button"
+                  className="advanced-filter-toggle"
+                  onClick={() => onMarketViewChange('all')}
+                >
+                  {t('search.clear_view')}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`advanced-filter-toggle ${showFilters || hasActiveFilters ? 'active' : ''}`}
+                aria-expanded={showFilters}
+                onClick={() => setIsFiltersOpen((open) => !open)}
+              >
+                <span>{t('search.filter_options')}</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M7 12h10" />
+                  <path d="M10 18h4" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <AnimatePresence initial={false}>
           {showFilters && (
@@ -289,8 +313,10 @@ export default function SearchBar({
                   <div className="type-filters type-filters--panel">
                     {FILTER_KEYS.map((key) => (
                       <button
+                        type="button"
                         key={key}
                         className={`type-filter-btn ${activeType === key ? 'active' : ''}`}
+                        aria-pressed={activeType === key}
                         onClick={() => onTypeChange(key)}
                       >
                         {t(`search.${key}`)}
@@ -320,17 +346,27 @@ export default function SearchBar({
               {showTrustFilters && (
                 <div className="filter-group">
                   <span className="filter-label">{t('search.trust_grade')}</span>
-                  <select
-                    className="sort-select"
-                    value={minGrade}
-                    onChange={(e) => onMinGradeChange(e.target.value)}
-                    aria-label={t('search.trust_grade')}
-                  >
-                    <option value="">{t('search.any_grade')}</option>
+                  <div className="type-filters type-filters--panel grade-filters" role="group" aria-label={t('search.trust_grade')}>
+                    <button
+                      type="button"
+                      className={`type-filter-btn grade-filter-btn ${minGrade === '' ? 'active' : ''}`}
+                      aria-pressed={minGrade === ''}
+                      onClick={() => onMinGradeChange('')}
+                    >
+                      {t('search.any_grade')}
+                    </button>
                     {GRADE_OPTIONS.map((g) => (
-                      <option key={g} value={g}>{t('search.grade_or_better', { grade: g })}</option>
+                      <button
+                        type="button"
+                        key={g}
+                        className={`type-filter-btn grade-filter-btn ${minGrade === g ? 'active' : ''}`}
+                        aria-pressed={minGrade === g}
+                        onClick={() => onMinGradeChange(g)}
+                      >
+                        {t('search.grade_or_better', { grade: g })}
+                      </button>
                     ))}
-                  </select>
+                  </div>
                 </div>
               )}
 
@@ -397,24 +433,26 @@ export default function SearchBar({
                 </div>
               )}
 
-              <div className="filter-group">
-                <span className="filter-label">{t('search.sort')}</span>
-                <select
-                  className="sort-select"
-                  value={activeSortKey}
-                  onChange={(e) => {
-                    const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
-                    onSortChange(field, order);
-                  }}
-                  aria-label={t('search.sort')}
-                >
-                  {SORT_OPTIONS.map((opt) => (
-                    <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
-                      {t(`sort.${opt.key}`)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {showSortFilter && (
+                <div className="filter-group">
+                  <span className="filter-label">{t('search.sort')}</span>
+                  <select
+                    className="sort-select"
+                    value={activeSortKey}
+                    onChange={(e) => {
+                      const [field, order] = e.target.value.split(':') as [SortField, SortOrder];
+                      onSortChange(field, order);
+                    }}
+                    aria-label={t('search.sort')}
+                  >
+                    {SORT_OPTIONS.map((opt) => (
+                      <option key={`${opt.field}:${opt.order}`} value={`${opt.field}:${opt.order}`}>
+                        {t(`sort.${opt.key}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

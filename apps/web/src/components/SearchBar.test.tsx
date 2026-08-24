@@ -41,7 +41,7 @@ function openFilters() {
 describe('SearchBar', () => {
   it('reflects the query value and reports changes', () => {
     const props = renderSearchBar({ query: 'summarize' });
-    const input = screen.getByPlaceholderText('按名称、关键词或描述搜索...');
+    const input = screen.getByPlaceholderText('搜索名称、关键词或描述');
     expect(input).toHaveValue('summarize');
 
     fireEvent.change(input, { target: { value: 'json' } });
@@ -72,9 +72,7 @@ describe('SearchBar', () => {
     });
     expect(props.onClientChange).toHaveBeenCalledWith('cursor');
 
-    fireEvent.change(screen.getByLabelText('信任等级'), {
-      target: { value: 'C' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'C 及以上' }));
     expect(props.onMinGradeChange).toHaveBeenCalledWith('C');
 
     fireEvent.change(screen.getByLabelText('更新时间'), {

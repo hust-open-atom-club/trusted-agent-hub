@@ -483,6 +483,35 @@ export default function HomeClient() {
     [discoveryPackages],
   );
 
+  const searchBarProps = {
+    query,
+    activeType,
+    sortBy,
+    sortOrder,
+    category,
+    client,
+    tag,
+    minGrade,
+    minScore,
+    maxScore,
+    updatedDays,
+    activeMarketView,
+    onQueryChange: handleQueryChange,
+    onTypeChange: handleTypeChange,
+    onCategoryChange: handleCategoryChange,
+    onSortChange: handleSortChange,
+    onClientChange: handleClientChange,
+    onTagChange: handleTagChange,
+    onMinGradeChange: handleMinGradeChange,
+    onMinScoreChange: handleMinScoreChange,
+    onMaxScoreChange: handleMaxScoreChange,
+    onUpdatedDaysChange: handleUpdatedDaysChange,
+    onMarketViewChange: handleMarketViewChange,
+  };
+
+  const searchBar = <SearchBar {...searchBarProps} layout="rail" />;
+  const secondaryFilters = <SearchBar {...searchBarProps} layout="secondary" />;
+
   /* ── 加载骨架屏 ── */
   if (loading && packages.length === 0) {
     return (
@@ -494,60 +523,45 @@ export default function HomeClient() {
         />
 
         <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
-          <MarketplaceShelves
-            lowRiskPackages={lowRiskPackages}
-            popularPackages={popularPackages}
-            recentPackages={recentPackages}
-            activeMarketView={activeMarketView}
-            onMarketViewChange={handleMarketViewChange}
-          />
-
-          <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
-            <div>
-              <span>{t('home.results_kicker')}</span>
-              <h2>{t('home.results_title')}</h2>
-            </div>
-            <p className="results-meta">{t('home.loading')}</p>
-          </motion.div>
-
-          <motion.div className="search-motion-layer" variants={fadeUp}>
-            <SearchBar
-              query={query}
-              activeType={activeType}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              category={category}
-              client={client}
-              tag={tag}
-              minGrade={minGrade}
-              minScore={minScore}
-              maxScore={maxScore}
-              updatedDays={updatedDays}
+          <div className="marketplace-layout">
+            <MarketplaceShelves
+              lowRiskPackages={lowRiskPackages}
+              popularPackages={popularPackages}
+              recentPackages={recentPackages}
               activeMarketView={activeMarketView}
-              onQueryChange={handleQueryChange}
-              onTypeChange={handleTypeChange}
-              onCategoryChange={handleCategoryChange}
-              onSortChange={handleSortChange}
-              onClientChange={handleClientChange}
-              onTagChange={handleTagChange}
-              onMinGradeChange={handleMinGradeChange}
-              onMinScoreChange={handleMinScoreChange}
-              onMaxScoreChange={handleMaxScoreChange}
-              onUpdatedDaysChange={handleUpdatedDaysChange}
               onMarketViewChange={handleMarketViewChange}
             />
-          </motion.div>
 
-          <motion.div className="package-grid-skeleton" variants={listStagger}>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <motion.div key={i} className="package-card skeleton" variants={listItem}>
-                <div className="skeleton-bar" style={{ width: '60%', height: '1.1rem', marginBottom: '0.5rem' }} />
-                <div className="skeleton-bar" style={{ width: '90%', marginBottom: '0.25rem' }} />
-                <div className="skeleton-bar" style={{ width: '70%', marginBottom: '0.75rem' }} />
-                <div className="skeleton-bar" style={{ width: '40%', height: '0.75rem' }} />
-              </motion.div>
-            ))}
-          </motion.div>
+            <div className="marketplace-results-layout">
+              <aside className="marketplace-controls" aria-label={t('search.filter_options')}>
+                {searchBar}
+              </aside>
+
+              <section className="marketplace-results">
+                <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
+                  <div>
+                    <h2>{t('home.results_title')}</h2>
+                  </div>
+                  <p className="results-meta">{t('home.loading')}</p>
+                </motion.div>
+
+                <div className="marketplace-secondary-filters" aria-label={t('search.filter_options')}>
+                  {secondaryFilters}
+                </div>
+
+                <motion.div className="package-grid-skeleton" variants={listStagger}>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <motion.div key={i} className="package-card skeleton" variants={listItem}>
+                      <div className="skeleton-bar" style={{ width: '60%', height: '1.1rem', marginBottom: '0.5rem' }} />
+                      <div className="skeleton-bar" style={{ width: '90%', marginBottom: '0.25rem' }} />
+                      <div className="skeleton-bar" style={{ width: '70%', marginBottom: '0.75rem' }} />
+                      <div className="skeleton-bar" style={{ width: '40%', height: '0.75rem' }} />
+                    </motion.div>
+                  ))}
+                </motion.div>
+              </section>
+            </div>
+          </div>
         </motion.div>
       </>
     );
@@ -582,106 +596,83 @@ export default function HomeClient() {
       />
 
       <motion.div className="page-container" variants={pageStagger} initial="hidden" animate="visible">
-        <MarketplaceShelves
-          lowRiskPackages={lowRiskPackages}
-          popularPackages={popularPackages}
-          recentPackages={recentPackages}
-          activeMarketView={activeMarketView}
-          onMarketViewChange={handleMarketViewChange}
-        />
-
-        <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
-          <div>
-            <span>{t('home.results_kicker')}</span>
-            <h2>{t('home.results_title')}</h2>
-          </div>
-          <p className="results-meta">
-            {totalPackages === 1
-              ? t('home.results_count', { count: totalPackages })
-              : t('home.results_count_plural', { count: totalPackages })}
-          </p>
-        </motion.div>
-
-        <motion.div className="search-motion-layer" variants={fadeUp}>
-          <SearchBar
-            query={query}
-            activeType={activeType}
-            sortBy={sortBy}
-            sortOrder={sortOrder}
-            category={category}
-            client={client}
-            tag={tag}
-            minGrade={minGrade}
-            minScore={minScore}
-            maxScore={maxScore}
-            updatedDays={updatedDays}
+        <div className="marketplace-layout">
+          <MarketplaceShelves
+            lowRiskPackages={lowRiskPackages}
+            popularPackages={popularPackages}
+            recentPackages={recentPackages}
             activeMarketView={activeMarketView}
-            onQueryChange={handleQueryChange}
-            onTypeChange={handleTypeChange}
-            onCategoryChange={handleCategoryChange}
-            onSortChange={handleSortChange}
-            onClientChange={handleClientChange}
-            onTagChange={handleTagChange}
-            onMinGradeChange={handleMinGradeChange}
-            onMinScoreChange={handleMinScoreChange}
-            onMaxScoreChange={handleMaxScoreChange}
-            onUpdatedDaysChange={handleUpdatedDaysChange}
             onMarketViewChange={handleMarketViewChange}
           />
-        </motion.div>
 
-        {/* 加载指示条（已有数据时的刷新） */}
-        <AnimatePresence>
-          {loading && (
-            <motion.div className="loading-bar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
-          )}
-        </AnimatePresence>
+          <div className="marketplace-results-layout">
+            <aside className="marketplace-controls" aria-label={t('search.filter_options')}>
+              {searchBar}
+            </aside>
 
-        {/* 错误提示（已有缓存数据时） */}
-        <AnimatePresence>
-          {error && packages.length > 0 && (
-            <motion.div className="error-banner" variants={softPanel} initial="hidden" animate="visible" exit="exit">
-              <span>{error}</span>
-              <button className="btn btn-sm btn-secondary" onClick={loadFirstPage}>Retry</button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            <section className="marketplace-results">
+              <motion.div id="marketplace-results" className="market-results-header" variants={fadeUp}>
+                <div>
+                  <h2>{t('home.results_title')}</h2>
+                </div>
+                <p className="results-meta">{t('home.results_total', { count: totalPackages })}</p>
+              </motion.div>
 
-        {packages.length === 0 ? (
-          <motion.div className="empty-state" variants={softPanel} initial="hidden" animate="visible">
-            <svg className="empty-state-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <h3>{t('home.no_results')}</h3>
-            <p>{t('home.no_results_hint')}</p>
-          </motion.div>
-        ) : (
-          <>
-            <motion.div className="package-grid" variants={listStagger}>
-              <AnimatePresence mode="popLayout">
-                {packages.map((pkg) => (
-                  <motion.div key={pkg.id} layout variants={listItem} initial="hidden" animate="visible" exit="exit">
-                    <PackageCard pkg={pkg} />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </motion.div>
-
-            {hasMore ? (
-              <>
-                <div ref={sentinelRef} className="infinite-scroll-sentinel" />
-                {loadingMore && (
-                  <div className="infinite-scroll-status" role="status">
-                    <span className="infinite-scroll-spinner" aria-hidden="true" />
-                    <span>{t('home.loading_more')}</span>
-                  </div>
-                )}
-              </>
-            ) : packages.length > 0 ? (
-              <div className="infinite-scroll-status infinite-scroll-end">
-                <span>{t('home.all_loaded', { count: totalPackages })}</span>
+              <div className="marketplace-secondary-filters" aria-label={t('search.filter_options')}>
+                {secondaryFilters}
               </div>
-            ) : null}
-          </>
-        )}
+
+              {/* 加载指示条（已有数据时的刷新） */}
+              <AnimatePresence>
+                {loading && (
+                  <motion.div className="loading-bar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+                )}
+              </AnimatePresence>
+
+              {/* 错误提示（已有缓存数据时） */}
+              <AnimatePresence>
+                {error && packages.length > 0 && (
+                  <motion.div className="error-banner" variants={softPanel} initial="hidden" animate="visible" exit="exit">
+                    <span>{error}</span>
+                    <button className="btn btn-sm btn-secondary" onClick={loadFirstPage}>Retry</button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {packages.length === 0 ? (
+                <motion.div className="empty-state" variants={softPanel} initial="hidden" animate="visible">
+                  <svg className="empty-state-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <h3>{t('home.no_results')}</h3>
+                  <p>{t('home.no_results_hint')}</p>
+                </motion.div>
+              ) : (
+                <>
+                  <motion.div className="package-grid" variants={listStagger}>
+                    <AnimatePresence mode="popLayout">
+                      {packages.map((pkg) => (
+                        <motion.div key={pkg.id} layout variants={listItem} initial="hidden" animate="visible" exit="exit">
+                          <PackageCard pkg={pkg} />
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                  </motion.div>
+
+                  {hasMore && (
+                    <>
+                      <div ref={sentinelRef} className="infinite-scroll-sentinel" />
+                      {loadingMore && (
+                        <div className="infinite-scroll-status" role="status">
+                          <span className="infinite-scroll-spinner" aria-hidden="true" />
+                          <span>{t('home.loading_more')}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </section>
+          </div>
+        </div>
       </motion.div>
     </>
   );
