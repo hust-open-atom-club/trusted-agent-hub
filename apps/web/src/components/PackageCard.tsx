@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Package } from '@/data/packages';
 import TypeBadge from './TypeBadge';
@@ -34,6 +35,53 @@ function formatRiskLevel(riskLevel: string | null): string {
   return riskLevel ? labels[riskLevel] ?? riskLevel.replace(/_/g, ' ') : '未评级';
 }
 
+const CARD_NAME_FONT_SIZES = [16, 15, 14, 13];
+
+function CardName({ name }: { name: string }) {
+  const nameRef = useRef<HTMLHeadingElement>(null);
+  const [fontSize, setFontSize] = useState(CARD_NAME_FONT_SIZES[0]);
+
+  useEffect(() => {
+    const element = nameRef.current;
+    if (!element) return undefined;
+
+    const fitName = () => {
+      let fittedSize = CARD_NAME_FONT_SIZES[CARD_NAME_FONT_SIZES.length - 1];
+
+      for (const size of CARD_NAME_FONT_SIZES) {
+        element.style.fontSize = `${size}px`;
+        if (element.scrollWidth <= element.clientWidth) {
+          fittedSize = size;
+          break;
+        }
+      }
+
+      setFontSize((currentSize) => currentSize === fittedSize ? currentSize : fittedSize);
+    };
+
+    fitName();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(fitName);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [name]);
+
+  return (
+    <h3
+      ref={nameRef}
+      className="card-name"
+      style={{ fontSize: `${fontSize}px` }}
+      title={name}
+    >
+      {name}
+    </h3>
+  );
+}
+
 export default function PackageCard({ pkg }: PackageCardProps) {
   const router = useRouter();
 
@@ -60,7 +108,7 @@ export default function PackageCard({ pkg }: PackageCardProps) {
             />
           </span>
           <div className="card-title-copy">
-            <h3 className="card-name">{pkg.name}</h3>
+            <CardName name={pkg.name} />
             <span className={`card-trust-summary risk-${pkg.risk_level ?? 'unknown'}`}>
               {trustSummary}
             </span>

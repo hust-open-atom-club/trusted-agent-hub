@@ -64,13 +64,43 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
 
 interface MarketplaceShelfProps {
   title: string;
-  kicker: string;
   items: Package[];
   isActive: boolean;
   onActivate: () => void;
 }
 
-function MarketplaceShelf({ title, kicker, items, isActive, onActivate }: MarketplaceShelfProps) {
+function formatDownloadCount(count: number): string {
+  return new Intl.NumberFormat('en-US').format(count);
+}
+
+function getShelfNameClass(name: string): string {
+  if (name.length > 30) return 'is-very-long';
+  if (name.length > 22) return 'is-long';
+  return '';
+}
+
+function DownloadIcon() {
+  return (
+    <svg
+      className="market-shelf-item__download-icon"
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
+}
+
+function MarketplaceShelf({ title, items, isActive, onActivate }: MarketplaceShelfProps) {
   const { t } = useTranslation();
 
   if (items.length === 0) {
@@ -86,10 +116,7 @@ function MarketplaceShelf({ title, kicker, items, isActive, onActivate }: Market
       viewport={{ once: true, amount: 0.2 }}
     >
       <div className="market-shelf__heading">
-        <div>
-          <span>{kicker}</span>
-          <h2>{title}</h2>
-        </div>
+        <h2>{title}</h2>
         <button
           type="button"
           className="market-shelf__action"
@@ -97,6 +124,10 @@ function MarketplaceShelf({ title, kicker, items, isActive, onActivate }: Market
           onClick={onActivate}
         >
           {isActive ? t('home.section_active') : t('home.section_view')}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 12h14" />
+            <path d="m13 6 6 6-6 6" />
+          </svg>
         </button>
       </div>
       <motion.div className="market-shelf__list" variants={listStagger} initial="hidden" animate="visible">
@@ -109,21 +140,39 @@ function MarketplaceShelf({ title, kicker, items, isActive, onActivate }: Market
             whileHover={{ x: 3 }}
             whileTap={{ scale: 0.99 }}
           >
-            <PackageIconImage
-              type={pkg.type}
-              iconUrl={pkg.icon_url}
-              alt={`${pkg.name} icon`}
-              className="market-shelf-item__icon"
-            />
+            <span className="market-shelf-item__icon">
+              <PackageIconImage
+                type={pkg.type}
+                alt=""
+                className="market-shelf-item__icon-image"
+              />
+            </span>
             <span className="market-shelf-item__copy">
-              <strong>{pkg.name}</strong>
-              <span>
-                {pkg.grade ?? '--'} · {pkg.risk_level
-                  ? t(`trust_score.level.${pkg.risk_level}`, { defaultValue: pkg.risk_level.replace(/_/g, ' ') })
-                  : t('detail.unknown')}
+              <strong
+                className={`market-shelf-item__name ${getShelfNameClass(pkg.name)}`}
+                title={pkg.name}
+              >
+                {pkg.name}
+              </strong>
+              <span className="market-shelf-item__subline">
+                <span className="market-shelf-item__type-label">
+                  {t(`search.${pkg.type}`, { defaultValue: pkg.type.replace(/_/g, ' ') })}
+                </span>
+                <span className="market-shelf-item__separator" aria-hidden="true">·</span>
+                <span className="market-shelf-item__risk">
+                  {pkg.grade ?? '--'} · {pkg.risk_level
+                    ? t(`trust_score.level.${pkg.risk_level}`, { defaultValue: pkg.risk_level.replace(/_/g, ' ') })
+                    : t('detail.unknown')}
+                </span>
               </span>
             </span>
-            <span className="market-shelf-item__meta">{pkg.install_count}</span>
+            <span
+              className="market-shelf-item__meta"
+              aria-label={`${t('home.download_count')}: ${formatDownloadCount(pkg.install_count)}`}
+            >
+              <DownloadIcon />
+              <strong>{formatDownloadCount(pkg.install_count)}</strong>
+            </span>
           </motion.a>
         ))}
       </motion.div>
@@ -157,21 +206,18 @@ function MarketplaceShelves({
     <motion.div className="market-shelves" aria-label={t('home.market_sections')} variants={listStagger}>
       <MarketplaceShelf
         title={t('home.section_low_risk')}
-        kicker={t('home.section_low_risk_kicker')}
         items={lowRiskPackages}
         isActive={activeMarketView === 'low_risk'}
         onActivate={() => onMarketViewChange('low_risk', true)}
       />
       <MarketplaceShelf
         title={t('home.section_popular')}
-        kicker={t('home.section_popular_kicker')}
         items={popularPackages}
         isActive={activeMarketView === 'popular'}
         onActivate={() => onMarketViewChange('popular', true)}
       />
       <MarketplaceShelf
         title={t('home.section_recent')}
-        kicker={t('home.section_recent_kicker')}
         items={recentPackages}
         isActive={activeMarketView === 'recent'}
         onActivate={() => onMarketViewChange('recent', true)}

@@ -1,19 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Package icon">
   <defs>
-    <linearGradient id="package-bg" x1="10" y1="8" x2="86" y2="88" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#E7F0FF"/>
-      <stop offset="0.55" stop-color="#AFC7EA"/>
-      <stop offset="1" stop-color="#7E8BA5"/>
+    <linearGradient id="package-tile" x1="13" y1="8" x2="84" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F0EEE7"/>
+      <stop offset="1" stop-color="#D9E1DD"/>
     </linearGradient>
-    <filter id="package-shadow" x="14" y="14" width="68" height="72" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#34425E" flood-opacity="0.2"/>
+    <filter id="package-shadow" x="17" y="17" width="64" height="66" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#5E6A69" flood-opacity="0.18"/>
     </filter>
   </defs>
-  <rect x="8" y="8" width="80" height="80" rx="22" fill="url(#package-bg)"/>
+  <rect x="6" y="6" width="84" height="84" rx="25" fill="url(#package-tile)"/>
+  <rect x="7.5" y="7.5" width="81" height="81" rx="23.5" fill="none" stroke="#BCCAC5" stroke-width="1.5"/>
+  <path d="M17 72c13 7 29 9 44 5 8-2 14-6 19-12" fill="none" stroke="#FFFDF8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
   <g filter="url(#package-shadow)">
-    <path d="M48 19l25 14v30L48 77 23 63V33l25-14Z" fill="#F9FBFF"/>
-    <path d="M23 33l25 14 25-14" fill="none" stroke="#9BA9BE" stroke-width="4" stroke-linejoin="round"/>
-    <path d="M48 47v30" fill="none" stroke="#9BA9BE" stroke-width="4" stroke-linecap="round"/>
-    <path d="M36 26l25 14" fill="none" stroke="#CED8E8" stroke-width="4" stroke-linecap="round"/>
+    <path d="m48 20 25 13.5v29L48 76 23 62.5v-29L48 20Z" fill="#FFFDF8" stroke="#27333A" stroke-width="3.4" stroke-linejoin="round"/>
+    <path d="m23 33.5 25 14 25-14M48 47.5V76" fill="none" stroke="#8B9B99" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="m36 26.5 25 14" fill="none" stroke="#C2CECA" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M42 30l6-3.2 6 3.2-6 3.2L42 30Z" fill="#D5A84A" stroke="#27333A" stroke-width="1.8" stroke-linejoin="round"/>
   </g>
 </svg>

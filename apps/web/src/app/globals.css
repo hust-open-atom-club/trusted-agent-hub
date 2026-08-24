@@ -498,7 +498,6 @@ h3 {
   border-radius: var(--radius-pill);
 }
 
-.market-shelf__heading span,
 .market-results-header span {
   color: var(--color-muted);
   font-size: 0.72rem;
@@ -948,7 +947,7 @@ h3 {
 
 .market-shelf {
   min-width: 0;
-  padding: 1rem;
+  padding: 1.1rem 1rem 0.85rem;
   background: var(--color-paper-2);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-md);
@@ -965,27 +964,32 @@ h3 {
 
 .market-shelf__heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.65rem;
+  padding: 0 0.1rem 0.7rem;
+  border-bottom: 1px solid var(--color-rule);
 }
 
 .market-shelf__heading h2 {
-  margin-top: 0.18rem;
+  margin: 0;
   color: var(--color-ink);
-  font-size: 1rem;
-  font-weight: 750;
+  font-size: 1.02rem;
+  font-weight: 800;
 }
 
 .market-shelf__action {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   min-height: 30px;
-  padding: 0.32rem 0.7rem;
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-pill);
-  background: var(--color-paper);
-  color: var(--color-ink-2);
+  padding: 0.25rem 0.1rem 0.25rem 0.45rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
   font-family: var(--font-sans);
   font-size: 0.75rem;
   font-weight: 700;
@@ -999,8 +1003,7 @@ h3 {
 
 .market-shelf__action:hover,
 .market-shelf__action[aria-pressed="true"] {
-  border-color: var(--color-accent);
-  background: oklch(86% 0.18 95 / 0.2);
+  background: oklch(86% 0.18 95 / 0.14);
   color: var(--color-accent-deep);
 }
 
@@ -1011,18 +1014,19 @@ h3 {
 .market-shelf__list {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .market-shelf-item {
   display: grid;
-  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.15rem minmax(0, 1fr) 4.75rem;
   align-items: center;
   gap: 0.65rem;
-  min-height: 54px;
-  padding: 0.55rem;
+  min-height: 56px;
+  padding: 0.5rem 0.45rem;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: 0.85rem;
+  background: color-mix(in oklch, var(--color-paper) 34%, transparent);
   color: inherit;
 }
 
@@ -1032,11 +1036,76 @@ h3 {
 }
 
 .market-shelf-item__icon {
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 0.68rem;
+  background: var(--color-paper);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.55);
+  transition: transform 180ms var(--ease-spring);
+}
+
+.market-shelf-item:hover .market-shelf-item__icon {
+  transform: scale(1.05);
+}
+
+.market-shelf-item__icon-image {
+  width: 100%;
+  height: 100%;
+  display: block;
   object-fit: cover;
-  box-shadow: 0 6px 14px oklch(31% 0.05 235 / 0.1);
+}
+
+.market-type-mark {
+  --type-fill: var(--color-paper-3);
+  --type-ink: var(--color-ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in oklch, var(--type-ink) 22%, var(--color-rule));
+  border-radius: 0.65rem;
+  background: color-mix(in oklch, var(--type-fill) 36%, var(--color-paper));
+  color: var(--type-ink);
+  transition: transform 180ms var(--ease-spring), background-color 180ms var(--ease-out);
+}
+
+.market-shelf-item:hover .market-type-mark {
+  transform: scale(1.05);
+  background: color-mix(in oklch, var(--type-fill) 52%, var(--color-paper));
+}
+
+.market-type-mark--skill,
+.market-type-mark--prompt {
+  --type-fill: var(--color-lavender);
+  --type-ink: var(--color-lavender-deep);
+}
+
+.market-type-mark--mcp_server,
+.market-type-mark--subagent {
+  --type-fill: var(--color-cyan);
+  --type-ink: var(--color-cyan-deep);
+}
+
+.market-type-mark--plugin {
+  --type-fill: var(--color-coral);
+  --type-ink: var(--color-coral-deep);
+}
+
+.market-type-mark--command {
+  --type-fill: var(--color-warning);
+  --type-ink: var(--color-warning);
+}
+
+.market-type-mark__glyph {
+  width: 1.08rem;
+  height: 1.08rem;
 }
 
 .market-shelf-item__copy {
@@ -1046,29 +1115,89 @@ h3 {
   gap: 0.12rem;
 }
 
-.market-shelf-item__copy strong,
-.market-shelf-item__copy span {
+.market-shelf-item__copy > strong {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.market-shelf-item__copy strong {
+.market-shelf-item__name {
   color: var(--color-ink);
-  font-size: 0.86rem;
+  font-size: 0.88rem;
+  letter-spacing: -0.015em;
+  line-height: 1.18;
 }
 
-.market-shelf-item__copy span,
-.market-shelf-item__meta {
+.market-shelf-item__name.is-long {
+  font-size: 0.79rem;
+  letter-spacing: -0.025em;
+}
+
+.market-shelf-item__name.is-very-long {
+  font-size: 0.71rem;
+  letter-spacing: -0.03em;
+}
+
+.market-shelf-item__subline {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.28rem;
   color: var(--color-muted);
-  font-size: 0.74rem;
+  font-size: 0.71rem;
   font-weight: 650;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.market-shelf-item__type-label {
+  flex-shrink: 0;
+  color: var(--color-ink-2);
+  font-weight: 750;
+}
+
+.market-shelf-item__separator {
+  flex-shrink: 0;
+  color: var(--color-rule-2);
+}
+
+.market-shelf-item__risk {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .market-shelf-item__meta {
-  padding: 0.18rem 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.28rem;
+  min-width: 4.75rem;
+  min-height: 1.8rem;
+  padding: 0.18rem 0.2rem;
+  border: 0;
   border-radius: var(--radius-pill);
-  background: var(--color-paper-3);
+  background: transparent;
+  color: var(--color-ink-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.market-shelf-item__download-icon {
+  flex-shrink: 0;
+  width: 1.06rem;
+  height: 1.06rem;
+  color: oklch(80% 0.2 92);
+}
+
+.market-shelf-item__meta strong {
+  color: var(--color-ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .market-results-header {
@@ -1098,6 +1227,11 @@ h3 {
   padding-bottom: 3rem;
 }
 
+.package-grid > div {
+  display: flex;
+  min-width: 0;
+}
+
 /* ============================================================
    Package Card
    ============================================================ */
@@ -1105,6 +1239,8 @@ h3 {
 .package-card {
   position: relative;
   overflow: hidden;
+  width: 100%;
+  height: 100%;
   background: var(--color-paper-2);
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-lg);
@@ -1134,8 +1270,10 @@ h3 {
 .card-title-row {
   display: flex;
   align-items: flex-start;
+  flex: 1 1 auto;
   gap: 0.7rem;
   min-width: 0;
+  min-height: 3.25rem;
 }
 
 .card-type-icon {
@@ -1159,7 +1297,13 @@ h3 {
 }
 
 .card-title-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  flex: 1 1 auto;
+  height: 3.25rem;
   min-width: 0;
+  overflow: hidden;
 }
 
 .card-header {
@@ -1169,12 +1313,22 @@ h3 {
   gap: 0.75rem;
 }
 
+.card-header-right {
+  flex-shrink: 0;
+}
+
 .card-name {
-  font-size: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 1.3rem;
+  margin: 0;
   font-weight: 700;
   color: var(--color-ink);
   line-height: 1.3;
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .card-trust-summary {
@@ -1217,7 +1371,8 @@ h3 {
   font-size: 0.85rem;
   color: var(--color-ink-2);
   line-height: 1.55;
-  flex-grow: 1;
+  flex: 0 0 2.65rem;
+  min-height: 2.65rem;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1227,6 +1382,7 @@ h3 {
 .card-badges {
   display: flex;
   align-items: center;
+  min-height: 1.65rem;
   gap: 0.5rem;
   flex-wrap: wrap;
 }
@@ -1235,6 +1391,7 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  min-height: 1.5rem;
   gap: 0.35rem;
   font-size: 0.8rem;
   font-weight: 600;
@@ -1253,6 +1410,7 @@ h3 {
 .card-meta {
   display: flex;
   align-items: center;
+  min-height: 1.75rem;
   gap: 1rem;
   font-size: 0.8rem;
   color: var(--color-muted);

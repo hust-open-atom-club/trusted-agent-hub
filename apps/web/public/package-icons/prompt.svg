@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Prompt icon">
   <defs>
-    <linearGradient id="prompt-bg" x1="10" y1="8" x2="86" y2="88" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F0D3FF"/>
-      <stop offset="0.55" stop-color="#CE91F2"/>
-      <stop offset="1" stop-color="#E074A5"/>
+    <linearGradient id="prompt-tile" x1="12" y1="9" x2="84" y2="89" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFE5F5"/>
+      <stop offset="1" stop-color="#E7D3E7"/>
     </linearGradient>
-    <filter id="prompt-shadow" x="14" y="16" width="70" height="66" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#80376D" flood-opacity="0.22"/>
+    <filter id="prompt-shadow" x="17" y="17" width="65" height="65" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#7A5B88" flood-opacity="0.2"/>
     </filter>
   </defs>
-  <rect x="8" y="8" width="80" height="80" rx="22" fill="url(#prompt-bg)"/>
-  <path d="M24 31c0-5.5 4.5-10 10-10h28c5.5 0 10 4.5 10 10v21c0 5.5-4.5 10-10 10H47.2c-1.4 0-2.7.5-3.8 1.4l-10.6 8.9c-1.9 1.6-4.8.3-4.8-2.2V62c-2.5-1.8-4-4.7-4-8V31Z" fill="#6D2D6F" opacity="0.18"/>
+  <rect x="6" y="6" width="84" height="84" rx="25" fill="url(#prompt-tile)"/>
+  <rect x="7.5" y="7.5" width="81" height="81" rx="23.5" fill="none" stroke="#C9B6D2" stroke-width="1.5"/>
+  <path d="M17 26c10-10 23-14 37-13 9 1 17 4 24 10" fill="none" stroke="#FFFDF8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
   <g filter="url(#prompt-shadow)">
-    <path d="M24 29c0-4.4 3.6-8 8-8h32c4.4 0 8 3.6 8 8v21c0 4.4-3.6 8-8 8H47.8c-1.2 0-2.3.4-3.2 1.2L34.7 67c-1.3 1.1-3.3.1-3.3-1.6v-8.2C27.1 56.5 24 52.8 24 48.5V29Z" fill="#FFF8FD"/>
-    <path d="M36 35h24M36 45h18" fill="none" stroke="#A75CDD" stroke-width="4.5" stroke-linecap="round"/>
-    <circle cx="62" cy="45" r="2.5" fill="#E074A5"/>
+    <path d="M24 29c0-4.4 3.6-8 8-8h32c4.4 0 8 3.6 8 8v23c0 4.4-3.6 8-8 8H48l-12.5 10c-2.1 1.7-5.2.2-5.2-2.5V60.5c-3.7-1.2-6.3-4.7-6.3-8.8V29Z" fill="#FFFDF8" stroke="#27333A" stroke-width="3.4" stroke-linejoin="round"/>
+    <path d="M35 36h25M35 47h17" fill="none" stroke="#9270B0" stroke-width="4" stroke-linecap="round"/>
+    <path d="M62 47h.01" stroke="#D4799C" stroke-width="5" stroke-linecap="round"/>
   </g>
 </svg>

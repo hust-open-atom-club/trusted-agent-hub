@@ -1,23 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Command icon">
   <defs>
-    <linearGradient id="command-bg" x1="9" y1="10" x2="87" y2="86" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#D8F9B8"/>
-      <stop offset="0.52" stop-color="#77D9A7"/>
-      <stop offset="1" stop-color="#21A8B8"/>
+    <linearGradient id="command-tile" x1="13" y1="8" x2="84" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF1C5"/>
+      <stop offset="1" stop-color="#F4DE9E"/>
     </linearGradient>
-    <filter id="command-shadow" x="12" y="16" width="72" height="64" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#0C5E63" flood-opacity="0.22"/>
+    <filter id="command-shadow" x="17" y="19" width="64" height="58" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#9A741D" flood-opacity="0.2"/>
     </filter>
   </defs>
-  <rect x="8" y="8" width="80" height="80" rx="22" fill="url(#command-bg)"/>
-  <rect x="22" y="27" width="52" height="42" rx="10" fill="#0A5963" opacity="0.2"/>
+  <rect x="6" y="6" width="84" height="84" rx="25" fill="url(#command-tile)"/>
+  <rect x="7.5" y="7.5" width="81" height="81" rx="23.5" fill="none" stroke="#E4C873" stroke-width="1.5"/>
+  <path d="M17 72c13 7 29 9 44 5 8-2 14-6 19-12" fill="none" stroke="#FFFDF8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
   <g filter="url(#command-shadow)">
-    <rect x="20" y="24" width="56" height="42" rx="10" fill="#F8FFF9"/>
-    <path d="M20 34h56" stroke="#D7EFE6" stroke-width="2"/>
-    <circle cx="30" cy="29.5" r="2.2" fill="#EF6F61"/>
-    <circle cx="38" cy="29.5" r="2.2" fill="#F2B84B"/>
-    <circle cx="46" cy="29.5" r="2.2" fill="#50C497"/>
-    <path d="M32 45l7 6-7 6" fill="none" stroke="#178C82" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M47 57h16" fill="none" stroke="#226A73" stroke-width="4.5" stroke-linecap="round"/>
+    <rect x="21" y="24" width="54" height="46" rx="9" fill="#FFFDF8" stroke="#27333A" stroke-width="3.4"/>
+    <path d="M22 37h52" stroke="#D6C27C" stroke-width="2.8"/>
+    <circle cx="30" cy="30.5" r="2.2" fill="#D4795C"/>
+    <circle cx="38" cy="30.5" r="2.2" fill="#D5A84A"/>
+    <circle cx="46" cy="30.5" r="2.2" fill="#62A98C"/>
+    <path d="m32 48 8 7-8 7M47 62h16" fill="none" stroke="#A07209" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
