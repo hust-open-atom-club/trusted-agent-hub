@@ -57,26 +57,6 @@ function MarketplaceHero({ totalPackages, publishedCount, topRatedCount }: Marke
           </div>
         </motion.div>
 
-        <motion.div className="market-trust-panel" aria-label={t('home.trust_panel_label')} variants={softPanel}>
-          <div className="market-trust-panel__header">
-            <span>{t('home.trust_panel_eyebrow')}</span>
-            <strong>{t('home.trust_panel_title')}</strong>
-          </div>
-          <div className="market-trust-panel__grid">
-            <div>
-              <span>{t('home.signal_scan')}</span>
-              <strong>{t('home.signal_scan_value')}</strong>
-            </div>
-            <div>
-              <span>{t('home.signal_permissions')}</span>
-              <strong>{t('home.signal_permissions_value')}</strong>
-            </div>
-            <div>
-              <span>{t('home.signal_integrity')}</span>
-              <strong>{t('home.signal_integrity_value')}</strong>
-            </div>
-          </div>
-        </motion.div>
       </div>
     </motion.section>
   );
