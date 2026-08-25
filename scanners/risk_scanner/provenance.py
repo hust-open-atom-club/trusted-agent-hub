@@ -58,13 +58,12 @@ def verify_acquired_repository(
     acquisition_method: str,
     commit_hash: str,
 ) -> bool:
-    """Verify that the acquired source identity is internally consistent.
+    """Verify that the acquired repository identity is internally consistent.
 
     A successful git/zip acquisition plus a valid commit proves that the
     bytes came from the canonical GitHub repository requested by the server.
-    It does *not* trust a package-authored owner claim.  The stricter
-    repository-owner/API check used by the default-branch flow can be passed
-    in as ``parsed['repository_verified']`` and is also accepted here.
+    It does *not* prove that the submitter or package author owns that
+    repository.
     """
     if not isinstance(parsed, dict):
         return False
@@ -81,10 +80,7 @@ def verify_acquired_repository(
     if not owner or not repo or (owner, repo) != expected:
         return False
 
-    # Repository identity is not the same as repository ownership.  Only an
-    # explicit server-side verification result may promote this flag; missing
-    # or malformed values remain unverified.
-    return parsed.get("repository_verified") is True
+    return True
 
 
 def build_verification_facts(
@@ -97,17 +93,18 @@ def build_verification_facts(
     content_hash_complete: bool = False,
     server_verification: dict[str, Any] | None = None,
 ) -> dict[str, bool]:
-    """Build the four persisted verification flags.
+    """Build the persisted repository, owner, and artifact verification flags.
 
     ``server_verification`` is intentionally an input from a verifier owned by
     the server (for example a signature/attestation worker), never from
     package metadata.  Artifact flags are accepted only when that verifier
-    binds them to the exact content hash being scored.  The owner flag is
-    always derived from the acquired repository identity rather than copied
-    from an input flag.  Unknown or malformed values remain false.
+    binds them to the exact content hash being scored.  Repository identity
+    and repository ownership are deliberately separate: acquisition can
+    establish the former, while the latter additionally requires an explicit
+    independent verifier result. Unknown or malformed values remain false.
     """
     supplied = server_verification if isinstance(server_verification, dict) else {}
-    owner_verified = verify_acquired_repository(
+    repository_verified = verify_acquired_repository(
         parsed,
         repository_url,
         acquisition_method,
@@ -121,7 +118,8 @@ def build_verification_facts(
         and supplied_content_sha256 == content_sha256
     )
     return {
-        "owner": owner_verified,
+        "repository": repository_verified,
+        "owner": repository_verified and supplied.get("owner") is True,
         "signature": supplied.get("signature") is True and content_bound,
         "attestation": supplied.get("attestation") is True and content_bound,
         "sbom": supplied.get("sbom") is True and content_bound,

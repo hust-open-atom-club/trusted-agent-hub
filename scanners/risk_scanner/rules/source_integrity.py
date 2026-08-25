@@ -49,31 +49,28 @@ def run(scanner: Any) -> None:
 
     issues: list[str] = []
 
-    sha256_value = integrity.get("sha256", "")
-    sha256_format_ok = isinstance(sha256_value, str) and re.fullmatch(
-        r"^[a-f0-9]{64}$", sha256_value
-    ) is not None
-    hash_complete = (
-        sha256_format_ok
-        and integrity.get("hash_complete") is True
-        and integrity.get("hash_scope") == HASH_SCOPE_SCANNED_SOURCE
+    sha256 = integrity.get("sha256", "")
+    sha256_format_ok = isinstance(sha256, str) and bool(
+        re.fullmatch(r"^[a-f0-9]{64}$", sha256)
     )
-    sha256 = integrity.get("sha256", "") if hash_complete else ""
+    hash_scope_ok = integrity.get("hash_scope") == HASH_SCOPE_SCANNED_SOURCE
+    hash_complete = integrity.get("is_complete") is True
+    sha256_ok = sha256_format_ok and hash_scope_ok and hash_complete
     if not sha256_format_ok:
-        issues.append("缺少完整扫描源码 SHA256 完整性校验值")
-    elif integrity.get("hash_scope") != HASH_SCOPE_SCANNED_SOURCE:
-        issues.append("SHA256 校验范围未声明为扫描源码")
-    elif integrity.get("hash_complete") is not True:
+        issues.append("缺少 SHA256 完整性校验值")
+    elif not hash_scope_ok:
+        issues.append("SHA256 校验范围未声明为采集源码")
+    elif not hash_complete:
         issues.append("SHA256 仅覆盖部分扫描内容")
 
     has_verified_signature = (
-        hash_complete
+        sha256_ok
         and (
             verification.get("signature") is True
             or verification.get("attestation") is True
         )
     )
-    has_verified_sbom = hash_complete and verification.get("sbom") is True
+    has_verified_sbom = sha256_ok and verification.get("sbom") is True
 
     missing_sig = not has_verified_signature
     if missing_sig:
@@ -89,14 +86,15 @@ def run(scanner: Any) -> None:
             issues.append("缺少 SBOM 文档 URL")
 
     commit_hash = source.get("commit_hash", "")
-    if not re.fullmatch(r"^[a-f0-9]{40}$", commit_hash):
+    commit_ok = isinstance(commit_hash, str) and bool(
+        re.fullmatch(r"^[a-f0-9]{40}$", commit_hash)
+    )
+    if not commit_ok:
         issues.append("来源未锁定 commit hash")
 
     if issues:
         # 分级：sha256 或 commit_hash 缺失/非法 → medium；
         # 仅缺签名/证明/SBOM（生态常态）→ low
-        sha256_ok = hash_complete
-        commit_ok = bool(re.fullmatch(r"^[a-f0-9]{40}$", commit_hash))
         severity = "medium" if (not sha256_ok or not commit_ok) else "low"
         manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
         scanner._add_finding(

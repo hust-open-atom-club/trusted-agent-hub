@@ -257,6 +257,24 @@ export function getIntegrityRows(
       value: integrity?.sha256 || 'detail.integrity.missing',
       kind: integrity?.sha256 ? 'code' : 'status',
     },
+    {
+      labelKey: 'detail.integrity.hash_scope',
+      value: integrity?.hash_scope === 'scanned_source'
+        ? 'detail.integrity.scope_scanned_source'
+        : integrity?.hash_scope === 'artifact_archive'
+          ? 'detail.integrity.scope_artifact_archive'
+          : 'detail.integrity.unknown',
+      kind: 'status',
+    },
+    {
+      labelKey: 'detail.integrity.completeness',
+      value: integrity?.is_complete === true
+        ? 'detail.integrity.complete'
+        : integrity?.is_complete === false
+          ? 'detail.integrity.incomplete'
+          : 'detail.integrity.unknown',
+      kind: 'status',
+    },
   ];
 
   if (integrity?.download_size_bytes != null) {

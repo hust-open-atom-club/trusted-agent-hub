@@ -125,6 +125,17 @@ alembic upgrade head
 python -m src.scripts.seed_producer
 ```
 
+评分模型版本升级后，应在发布新 API 镜像时执行一次幂等回填：
+
+```bash
+cd apps/api
+python -m src.scripts.backfill_trust_scores --batch-size 100 --max-attempts 3
+```
+
+命令会跳过已使用当前模型的版本，逐批记录扫描、更新、跳过和失败数量；
+单个版本失败会自动重试，最终仍有失败时以非零状态退出。修复故障后可直接重跑，
+已完成版本不会重复计算。
+
 ### 启动服务
 
 ```bash

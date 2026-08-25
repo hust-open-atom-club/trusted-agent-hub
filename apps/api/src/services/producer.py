@@ -24,7 +24,8 @@ from src.models.producer import (
 from schema.constants import (
     STATUS_TRANSITIONS, VersionStatus, AuditAction,
     GRADE_TO_RISK_LEVEL, GRADE_TO_RECOMMENDATION,
-    PACKAGE_TYPE_INSTALL_CLIENTS, HASH_SCOPE_ARTIFACT_ARCHIVE,
+    PACKAGE_TYPE_INSTALL_CLIENTS,
+    HASH_SCOPE_ARTIFACT_ARCHIVE,
 )
 
 _SEMVER_RE = re.compile(
@@ -280,11 +281,10 @@ class ProducerService:
         # ── 生成安装产物（同步，失败则回退 error） ───────────
         version = self.repository.get_version(version_id)
         if version is not None:
-            # Top-level integrity is a public server-owned projection.  Clear
-            # every package-authored value before branching by install method;
-            # copy_directory replaces it below with the generated archive
-            # hash, while registry/docker/manual installs intentionally expose
-            # no server-verified top-level integrity.
+            # Top-level integrity is a public server-owned projection. Clear
+            # package-authored values before an install artifact is generated;
+            # _apply_artifact_to_version writes the archive hash only for the
+            # copy_directory path.
             provenance_updates: dict[str, object] = {"integrity": None}
             if isinstance(acquisition_facts, dict):
                 safe_source = deepcopy(acquisition_facts.get("source") or {})
@@ -479,9 +479,10 @@ class ProducerService:
         acquisition_facts = data.get("acquisition_facts")
         if isinstance(acquisition_facts, dict):
             source = dict(acquisition_facts.get("source") or {})
+            integrity = dict(acquisition_facts.get("integrity") or {})
         else:
             source = dict(data.get("source") or {})
-        integrity: dict[str, object] = {}
+            integrity = {}
         source["download_url"] = artifact.get("download_url", "")
         if commit_hash and len(commit_hash) == 40:
             source["commit_hash"] = commit_hash
@@ -491,7 +492,7 @@ class ProducerService:
 
         integrity["sha256"] = artifact.get("sha256", "")
         integrity["hash_scope"] = HASH_SCOPE_ARTIFACT_ARCHIVE
-        integrity["hash_complete"] = True
+        integrity["is_complete"] = True
         integrity["download_size_bytes"] = artifact.get("download_size_bytes", 0)
         data["integrity"] = integrity
 
@@ -739,9 +740,9 @@ class ProducerService:
                 version["source_snapshot_id"] = safe_scan_json.get(
                     "source_snapshot_id"
                 )
-                # Expose coverage/provenance fields to the review UI without
-                # exposing source contents.  These fields are part of the
-                # persisted consumer-facing scan contract.
+                # Expose the redacted consumer-facing scan report to the
+                # review UI, including scan coverage and provenance metadata
+                # without exposing source contents.
                 version["scan_report"] = safe_scan_json
         if isinstance(version.get("provenance_claims"), dict):
             # Older rows may have been written before the persistence-side

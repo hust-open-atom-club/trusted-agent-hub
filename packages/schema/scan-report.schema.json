@@ -101,19 +101,9 @@
             "integrity": {
               "type": "object",
               "properties": {
-                "sha256": {
-                  "anyOf": [
-                    { "type": "string", "pattern": "^(?:[a-f0-9]{64})?$" },
-                    { "type": "null" }
-                  ]
-                },
-                "hash_scope": {
-                  "anyOf": [
-                    { "type": "string", "enum": ["scanned_source"] },
-                    { "type": "null" }
-                  ]
-                },
-                "hash_complete": { "type": "boolean" }
+                "sha256": { "type": "string", "pattern": "^(?:[a-f0-9]{64})?$" },
+                "hash_scope": { "type": "string", "enum": ["scanned_source"] },
+                "is_complete": { "type": "boolean" }
               },
               "additionalProperties": false
             },
@@ -121,6 +111,7 @@
               "type": "object",
               "required": ["owner", "signature", "attestation", "sbom"],
               "properties": {
+                "repository": { "type": "boolean", "default": false },
                 "owner": { "type": "boolean" },
                 "signature": { "type": "boolean" },
                 "attestation": { "type": "boolean" },

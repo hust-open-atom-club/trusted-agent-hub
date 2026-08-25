@@ -163,9 +163,9 @@
         "hash_scope": {
           "type": "string",
           "enum": ["scanned_source", "artifact_archive"],
-          "description": "SHA256 覆盖范围；服务端采集事实使用 scanned_source，安装制品使用 artifact_archive"
+          "description": "SHA256 覆盖范围；服务端事实使用 scanned_source，安装制品使用 artifact_archive"
         },
-        "hash_complete": {
+        "is_complete": {
           "type": "boolean",
           "description": "该 hash 是否覆盖其声明范围内的全部内容"
         },

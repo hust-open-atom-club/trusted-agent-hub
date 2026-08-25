@@ -17,7 +17,9 @@ from typing import Final
 # scheduled explicitly rather than inferred from duplicated literals.
 TRUST_SCORE_MODEL_VERSION: Final[str] = "0.4.0"
 
-# Hashes cover different byte domains and must not be used interchangeably.
+# Integrity hashes are produced for different byte domains.  Keep the scope
+# explicit so a bounded scan-tree digest cannot be confused with the archive
+# hash used by the installation manifest.
 HASH_SCOPE_SCANNED_SOURCE: Final[str] = "scanned_source"
 HASH_SCOPE_ARTIFACT_ARCHIVE: Final[str] = "artifact_archive"
 

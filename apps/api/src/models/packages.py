@@ -41,7 +41,7 @@ class Source(StrictContractModel):
 class Integrity(StrictContractModel):
     sha256: str
     hash_scope: Literal["scanned_source", "artifact_archive"] | None = None
-    hash_complete: bool | None = None
+    is_complete: bool | None = None
     signature: str | None = None
     attestation_url: str | None = None
     sbom_url: str | None = None
@@ -364,12 +364,13 @@ class ProvenanceIntegrity(StrictContractModel):
         pattern=r"^(?:[a-f0-9]{64})?$",
     )
     hash_scope: Literal["scanned_source"] | None = None
-    hash_complete: bool = False
+    is_complete: bool | None = None
 
 
 class ProvenanceVerification(StrictContractModel):
     """Independent verification results for provenance claims."""
 
+    repository: bool = False
     owner: bool
     signature: bool
     attestation: bool

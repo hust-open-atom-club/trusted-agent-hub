@@ -41,13 +41,13 @@ def _verification_flag(
 
 
 def has_complete_scanned_hash(integrity: dict[str, Any]) -> bool:
-    """Return whether the facts contain a complete scanned-source hash."""
+    """Return whether integrity contains a complete scanned-source hash."""
     sha256 = integrity.get("sha256", "")
     return (
         isinstance(sha256, str)
-        and re.fullmatch(r"^[a-f0-9]{64}$", sha256) is not None
+        and bool(re.fullmatch(r"^[a-f0-9]{64}$", sha256))
         and integrity.get("hash_scope") == HASH_SCOPE_SCANNED_SOURCE
-        and integrity.get("hash_complete") is True
+        and integrity.get("is_complete") is True
     )
 
 
@@ -149,8 +149,8 @@ def assess_signature_chain(
     Args:
         package_metadata: package claims and descriptive metadata. Its
             integrity section is never trusted for this assessment.
-        acquisition_facts: server-established complete artifact hash and
-            verification results. If omitted, provenance is assessed fail-closed.
+        acquisition_facts: server-established content hash and verification
+            results. If omitted, provenance is assessed fail-closed.
 
     Returns:
         dict with keys: level (str), score (int 0-100), evidence (list[str])
@@ -161,22 +161,18 @@ def assess_signature_chain(
     checks_passed: int = 0
     checks_total: int = 3
 
+    sha256: str = integrity.get("sha256", "")
     hash_complete = has_complete_scanned_hash(integrity)
-    sha256: str = integrity.get("sha256", "") if hash_complete else ""
-    signature_verified = hash_complete and _verification_flag(
-        acquisition_facts, "signature"
-    )
-    attestation_verified = hash_complete and _verification_flag(
-        acquisition_facts, "attestation"
-    )
-    sbom_verified = hash_complete and _verification_flag(acquisition_facts, "sbom")
+    signature_verified = _verification_flag(acquisition_facts, "signature")
+    attestation_verified = _verification_flag(acquisition_facts, "attestation")
+    sbom_verified = _verification_flag(acquisition_facts, "sbom")
 
     # Check 1: SHA256 hash (64 hex chars)
-    if re.fullmatch(r"^[a-f0-9]{64}$", sha256):
+    if hash_complete:
         checks_passed += 1
         evidence.append("Complete scanned-source SHA256 integrity hash is present")
     else:
-        evidence.append("Missing or incomplete scanned-source SHA256 integrity hash")
+        evidence.append("Missing, incomplete, or improperly scoped SHA256 integrity hash")
 
     # Check 2: Signature or attestation
     if signature_verified or attestation_verified:
