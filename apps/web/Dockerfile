@@ -2,13 +2,15 @@
 # Stage 1: 构建
 FROM node:20-alpine AS builder
 
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm config set registry https://registry.npmmirror.com
 RUN npm ci
 
-COPY . .
+COPY apps/web/ .
+COPY packages/schema/constants.ts /packages/schema/constants.ts
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
@@ -22,6 +24,7 @@ ENV NODE_ENV=production
 # 从构建阶段拷贝 standalone 输出
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 
