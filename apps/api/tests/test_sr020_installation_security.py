@@ -23,6 +23,7 @@ def test_bin_installer_with_user_path_deletion_requires_confirmation() -> None:
 
     assert len(scanner.findings) == 1
     assert scanner.findings[0]["rule_id"] == "SR-020"
+    assert scanner.findings[0]["category"] == "installation_security"
     assert scanner.findings[0]["severity"] == "medium"
     assert scanner.findings[0]["requires_confirmation"] is True
 

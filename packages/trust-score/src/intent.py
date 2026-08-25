@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from packages.schema.constants import FINDING_CATEGORY_POLICY
 from scanners.risk_scanner.weights import SEVERITY_POINTS
 
 # ---------------------------------------------------------------------------
@@ -43,20 +44,11 @@ _EXPECTED_FILESYSTEM_SCOPE: dict[str, bool] = {
 # Danger signals for permission assessment
 # ---------------------------------------------------------------------------
 
-_DANGEROUS_CATEGORIES = frozenset({
-    "prompt_injection",
-    "dangerous_shell",
-    "credential_access",
-    "hardcoded_secret",
-    "remote_code_execution",
-    "supply_chain",
-    "output_handling",
-    "system_prompt_leakage",
-    "memory_poisoning",
-    "ssrf",
-    "agent_snooping",
-    "tool_misuse",
-})
+def _is_veto_eligible_finding(finding: dict[str, Any]) -> bool:
+    """Return whether a finding's category/severity enters the veto policy."""
+    category = str(finding.get("category", ""))
+    severity = str(finding.get("severity", ""))
+    return severity in FINDING_CATEGORY_POLICY.get(category, frozenset())
 
 
 def _compute_i2_score(findings: list[dict[str, Any]]) -> int:
@@ -353,7 +345,7 @@ def assess_prompt_safety(
     for f in findings:
         sev = f.get("severity", "")
         category = f.get("category", "")
-        if sev in ("critical", "high") and category in _DANGEROUS_CATEGORIES:
+        if _is_veto_eligible_finding(f):
             llm_note = ""
             llm_label = f.get("llm_label", "")
             if llm_label == "llm:suspected-malicious":
@@ -373,16 +365,14 @@ def assess_prompt_safety(
         confirmed_malicious = any(
             f.get("llm_label") == "llm:suspected-malicious"
             for f in findings
-            if f.get("severity", "") in ("critical", "high")
-            and f.get("category", "") in _DANGEROUS_CATEGORIES
+            if _is_veto_eligible_finding(f)
         )
         # 已配置 LLM 但重试后调用失败 → 无法排除恶意(fail-closed 信号)。
         # 未配置时 finding 没有 llm_label，由上层进入人工复核，不触发此信号。
         llm_unavailable = any(
             f.get("llm_label") == "llm:unavailable"
             for f in findings
-            if f.get("severity", "") in ("critical", "high")
-            and f.get("category", "") in _DANGEROUS_CATEGORIES
+            if _is_veto_eligible_finding(f)
         )
         score = _compute_i2_score(findings)
         return {

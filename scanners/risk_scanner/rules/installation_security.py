@@ -79,7 +79,7 @@ def run(scanner: Any) -> None:
                     scanner._add_finding(
                         rule_id="SR-020",
                         severity="medium",
-                        category="supply_chain",
+                        category="installation_security",
                         title=f"安装生命周期脚本: {name} ({manifest_path})",
                         description=(
                             f"{manifest_path} 声明了 {name} 生命周期脚本，"
@@ -116,7 +116,7 @@ def run(scanner: Any) -> None:
                 scanner._add_finding(
                     rule_id="SR-020",
                     severity=severity,
-                    category="supply_chain",
+                    category="installation_security",
                     title=f"安装器包含破坏性文件操作 ({manifest_path})",
                     description=(
                         f"{manifest_path} 的安装入口 {target} 包含递归删除、"

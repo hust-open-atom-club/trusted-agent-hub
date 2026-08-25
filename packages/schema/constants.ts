@@ -174,12 +174,16 @@ export const FINDING_CATEGORIES = [
   'source_integrity',
   'metadata_quality',
   'supply_chain',
+  'installation_security',
   'output_handling',
   'system_prompt_leakage',
   'memory_poisoning',
   'ssrf',
   'agent_snooping',
   'tool_misuse',
+  'mcp_security',
+  'plugin_security',
+  'subagent_security',
 ] as const;
 export type FindingCategory = (typeof FINDING_CATEGORIES)[number];
 
@@ -195,12 +199,46 @@ export const FINDING_CATEGORY_LABELS: Record<FindingCategory, string> = {
   source_integrity: '来源完整性',
   metadata_quality: '元数据质量',
   supply_chain: '供应链风险',
+  installation_security: '安装器安全',
   output_handling: '输出处理风险',
   system_prompt_leakage: '系统提示泄露',
   memory_poisoning: '记忆投毒',
   ssrf: 'SSRF 服务端请求伪造',
   agent_snooping: 'Agent 窥探',
   tool_misuse: '工具滥用',
+  mcp_security: 'MCP安全',
+  plugin_security: '插件安全',
+  subagent_security: '子Agent安全',
+};
+
+// Severities that enter the trust-score dangerous/veto path. Empty arrays are
+// intentional: the category still contributes to scoring and review signals.
+const VETO_SEVERITIES = ['critical', 'high'] as const satisfies readonly FindingSeverity[];
+
+export const FINDING_CATEGORY_POLICY: Readonly<
+  Record<FindingCategory, readonly FindingSeverity[]>
+> = {
+  prompt_injection: VETO_SEVERITIES,
+  dangerous_shell: VETO_SEVERITIES,
+  credential_access: VETO_SEVERITIES,
+  hardcoded_secret: VETO_SEVERITIES,
+  remote_code_execution: VETO_SEVERITIES,
+  excessive_permission: VETO_SEVERITIES,
+  network_access: VETO_SEVERITIES,
+  dependency_risk: [],
+  source_integrity: VETO_SEVERITIES,
+  metadata_quality: [],
+  supply_chain: VETO_SEVERITIES,
+  installation_security: VETO_SEVERITIES,
+  output_handling: VETO_SEVERITIES,
+  system_prompt_leakage: VETO_SEVERITIES,
+  memory_poisoning: VETO_SEVERITIES,
+  ssrf: VETO_SEVERITIES,
+  agent_snooping: VETO_SEVERITIES,
+  tool_misuse: VETO_SEVERITIES,
+  mcp_security: VETO_SEVERITIES,
+  plugin_security: VETO_SEVERITIES,
+  subagent_security: VETO_SEVERITIES,
 };
 
 // ============================================================

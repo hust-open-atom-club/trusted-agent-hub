@@ -240,6 +240,7 @@
               "source_integrity",
               "metadata_quality",
               "supply_chain",
+              "installation_security",
               "output_handling",
               "system_prompt_leakage",
               "memory_poisoning",
