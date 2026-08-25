@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useRouter } from 'next/navigation';
 import type { Package } from '@/data/packages';
 import TypeBadge from './TypeBadge';
@@ -83,6 +84,7 @@ function CardName({ name }: { name: string }) {
 }
 
 export default function PackageCard({ pkg }: PackageCardProps) {
+  const { t } = useTranslation();
   const router = useRouter();
 
   const handleClick = () => {
@@ -93,8 +95,6 @@ export default function PackageCard({ pkg }: PackageCardProps) {
     pkg.install_count >= 1000
       ? `${(pkg.install_count / 1000).toFixed(1)}k`
       : pkg.install_count;
-  const trustSummary = `${pkg.grade ?? '--'} · ${formatRiskLevel(pkg.risk_level)}`;
-
   return (
     <div className={`package-card card-accent-${pkg.type}`} onClick={handleClick}>
       <div className="card-header">
@@ -109,9 +109,6 @@ export default function PackageCard({ pkg }: PackageCardProps) {
           </span>
           <div className="card-title-copy">
             <CardName name={pkg.name} />
-            <span className={`card-trust-summary risk-${pkg.risk_level ?? 'unknown'}`}>
-              {trustSummary}
-            </span>
           </div>
         </div>
         <div className="card-header-right">
@@ -127,11 +124,10 @@ export default function PackageCard({ pkg }: PackageCardProps) {
         {pkg.risk_level && (
           <span className={`risk-level-badge ${pkg.risk_level}`}>{formatRiskLevel(pkg.risk_level)}</span>
         )}
-      </div>
-
-      <div className="card-cta">
-        <span>查看详情</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        <span className="card-cta">
+          <span>{t('card.view_details')}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </span>
       </div>
 
       <div className="card-meta">

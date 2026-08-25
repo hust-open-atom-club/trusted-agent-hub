@@ -38,6 +38,11 @@ describe('PackageCard', () => {
     expect(screen.getByText('demo-summarizer')).toBeInTheDocument();
     expect(screen.getByText('Summarizes documents safely.')).toBeInTheDocument();
     expect(screen.getByText('B')).toBeInTheDocument();
+    expect(screen.getByText('Skill')).toBeInTheDocument();
+    expect(screen.getByText('已发布')).toBeInTheDocument();
+    expect(screen.getByText('低风险')).toBeInTheDocument();
+    expect(screen.queryByText('B · 低风险')).not.toBeInTheDocument();
+    expect(screen.getByText('查看详情')).toBeInTheDocument();
     expect(screen.getByText('好评 3 · 差评 1')).toBeInTheDocument();
     expect(screen.getByText('1.5k')).toBeInTheDocument();
     expect(screen.getByText('v1.2.0')).toBeInTheDocument();
@@ -46,6 +51,12 @@ describe('PackageCard', () => {
   it('formats install count under 1000 without suffix', () => {
     render(<PackageCard pkg={makePackage({ install_count: 999 })} />);
     expect(screen.getByText('999')).toBeInTheDocument();
+  });
+
+  it('keeps risk information in the badge row only', () => {
+    render(<PackageCard pkg={makePackage({ risk_level: 'medium_risk', grade: 'C' })} />);
+    expect(screen.getByText('中风险')).toBeInTheDocument();
+    expect(screen.queryByText('C · 中风险')).not.toBeInTheDocument();
   });
 
   it('shows no-rating hint when feedback counts are missing', () => {
