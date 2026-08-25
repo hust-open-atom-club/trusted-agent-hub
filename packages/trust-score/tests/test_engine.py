@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 # Ensure the trust-score package root is importable so that
 # relative imports in src/*.py resolve correctly.
 _PKG_ROOT = Path(__file__).resolve().parent.parent
@@ -658,6 +660,99 @@ def test_new_dangerous_category_triggers_v2_supply_chain() -> None:
     assert result["risk_summary"]["level"] == "untrusted", \
         f"Supply chain critical should trigger V2 veto, got {result['risk_summary']['level']}"
     assert result["risk_summary"]["grade"] == "E"
+
+
+@pytest.mark.parametrize("category", [
+    "mcp_security",
+    "plugin_security",
+    "subagent_security",
+    "source_integrity",
+    "network_access",
+    "excessive_permission",
+    "installation_security",
+])
+@pytest.mark.parametrize("severity", ["critical", "high"])
+def test_shared_veto_policy_covers_new_security_categories(
+    category: str,
+    severity: str,
+) -> None:
+    """Critical/high findings in the shared policy must trigger V2 veto."""
+    fx = _load_fixture("b1_code_review_skill")
+    scan = dict(fx["scan_report"])
+    scan["findings"] = [{
+        "id": f"f-{category}",
+        "rule_id": "SR-X",
+        "severity": severity,
+        "llm_label": "llm:suspected-malicious",
+        "category": category,
+        "title": f"{category} finding",
+        "description": "malicious test finding",
+        "location": {"file": "manifest.json", "line": 1},
+    }]
+    scan["summary"] = {
+        "total": 1,
+        "critical": int(severity == "critical"),
+        "high": int(severity == "high"),
+        "medium": 0,
+        "low": 0,
+        "info": 0,
+    }
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["level"] == "untrusted"
+    assert result["risk_summary"]["grade"] == "E"
+
+
+@pytest.mark.parametrize("category", [
+    "mcp_security",
+    "plugin_security",
+    "subagent_security",
+    "source_integrity",
+    "network_access",
+    "excessive_permission",
+    "installation_security",
+])
+def test_shared_veto_policy_keeps_medium_and_benign_findings_reviewable(
+    category: str,
+) -> None:
+    """Medium or LLM-benign findings do not trigger an automatic veto."""
+    fx = _load_fixture("b1_code_review_skill")
+
+    for severity, llm_label in (("medium", "llm:suspected-malicious"), ("critical", "llm:likely-benign")):
+        scan = dict(fx["scan_report"])
+        scan["findings"] = [{
+            "id": f"f-{category}-{severity}",
+            "rule_id": "SR-X",
+            "severity": severity,
+            "llm_label": llm_label,
+            "category": category,
+            "title": f"{category} finding",
+            "description": "reviewable test finding",
+            "location": {"file": "manifest.json", "line": 1},
+        }]
+        scan["summary"] = {
+            "total": 1,
+            "critical": int(severity == "critical"),
+            "high": int(severity == "high"),
+            "medium": int(severity == "medium"),
+            "low": 0,
+            "info": 0,
+        }
+
+        result = rate(
+            package_metadata=fx["package_metadata"],
+            scan_report=scan,
+            author_history=fx["author_history"],
+            review_records=fx["review_records"],
+        )
+
+        assert result["risk_summary"]["level"] != "untrusted"
 
 
 def test_new_category_low_severity_does_not_trigger_v2() -> None:

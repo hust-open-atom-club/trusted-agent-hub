@@ -12,6 +12,7 @@ import jsonschema
 import pytest
 
 from src.models.packages import ScanReport
+from packages.schema.constants import FINDING_CATEGORY_POLICY, FindingCategory
 from scanners.risk_scanner.scanner import RiskScanner
 
 def _find_scan_report_schema() -> Path:
@@ -102,6 +103,13 @@ def test_schema_category_enum_includes_sr017_018_019():
     enum = SCHEMA["properties"]["findings"]["items"]["properties"]["category"]["enum"]
     for category in ("mcp_security", "plugin_security", "subagent_security"):
         assert category in enum
+
+
+def test_schema_categories_match_shared_finding_policy():
+    enum = set(SCHEMA["properties"]["findings"]["items"]["properties"]["category"]["enum"])
+    assert enum == set(FINDING_CATEGORY_POLICY)
+    assert {category.value for category in FindingCategory} == enum
+    assert "installation_security" in enum
 
 
 def test_schema_accepts_report_with_new_category_and_fields():

@@ -182,6 +182,7 @@ class FindingCategory(StrEnum):
     MCP_SECURITY = "mcp_security"
     PLUGIN_SECURITY = "plugin_security"
     SUBAGENT_SECURITY = "subagent_security"
+    INSTALLATION_SECURITY = "installation_security"
 
 
 FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
@@ -205,6 +206,44 @@ FINDING_CATEGORY_LABELS: Final[dict[str, str]] = {
     "mcp_security": "MCP安全",
     "plugin_security": "插件安全",
     "subagent_security": "子Agent安全",
+    "installation_security": "安装器安全",
+}
+
+
+# ============================================================
+# 评分策略：发现类别对应的自动 veto 严重度
+# ============================================================
+# Values are the severities that make a finding in the category eligible for
+# the trust-score dangerous/veto path. An empty set is intentional: the
+# category still contributes to score and review signals, but does not by
+# itself force an untrusted result.
+_VETO_SEVERITIES: Final[frozenset[str]] = frozenset({
+    FindingSeverity.CRITICAL.value,
+    FindingSeverity.HIGH.value,
+})
+
+FINDING_CATEGORY_POLICY: Final[dict[str, frozenset[str]]] = {
+    "prompt_injection": _VETO_SEVERITIES,
+    "dangerous_shell": _VETO_SEVERITIES,
+    "credential_access": _VETO_SEVERITIES,
+    "hardcoded_secret": _VETO_SEVERITIES,
+    "remote_code_execution": _VETO_SEVERITIES,
+    "excessive_permission": _VETO_SEVERITIES,
+    "network_access": _VETO_SEVERITIES,
+    "dependency_risk": frozenset(),
+    "source_integrity": _VETO_SEVERITIES,
+    "metadata_quality": frozenset(),
+    "supply_chain": _VETO_SEVERITIES,
+    "installation_security": _VETO_SEVERITIES,
+    "output_handling": _VETO_SEVERITIES,
+    "system_prompt_leakage": _VETO_SEVERITIES,
+    "memory_poisoning": _VETO_SEVERITIES,
+    "ssrf": _VETO_SEVERITIES,
+    "agent_snooping": _VETO_SEVERITIES,
+    "tool_misuse": _VETO_SEVERITIES,
+    "mcp_security": _VETO_SEVERITIES,
+    "plugin_security": _VETO_SEVERITIES,
+    "subagent_security": _VETO_SEVERITIES,
 }
 
 
