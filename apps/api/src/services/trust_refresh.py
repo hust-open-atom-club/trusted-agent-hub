@@ -18,7 +18,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from schema.constants import TRUST_SCORE_MODEL_VERSION
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE, TRUST_SCORE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +68,29 @@ def build_acquisition_facts(
             candidates.append(provenance.get("acquisition_facts"))
     for candidate in candidates:
         if isinstance(candidate, dict):
-            # Historical records may contain hashes produced over a different
-            # file set.  Never infer or rewrite their scope/completeness at
-            # read time: the scorer only credits an explicitly marked
-            # ``scanned_source`` hash with ``hash_complete is True``.  Legacy
-            # data therefore remains fail-closed until a trusted rescan or
-            # migration recomputes the hash.
-            return deepcopy(candidate)
+            facts = deepcopy(candidate)
+            integrity = facts.get("integrity")
+            if isinstance(integrity, dict):
+                # Facts written before hash scope markers existed are still
+                # server-owned scan hashes.  Recover their scope, but infer
+                # completeness only from the persisted scan status; never
+                # assume a bounded hash is complete when that evidence is
+                # unavailable.
+                if "hash_scope" not in integrity:
+                    integrity["hash_scope"] = HASH_SCOPE_SCANNED_SOURCE
+                if "is_complete" not in integrity:
+                    scan_status = (
+                        scan_report.get("scan_status")
+                        if isinstance(scan_report, dict)
+                        else None
+                    )
+                    integrity["is_complete"] = (
+                        isinstance(scan_status, dict)
+                        and scan_status.get("state") == "complete"
+                        and scan_status.get("complete") is True
+                    )
+                facts["integrity"] = integrity
+            return facts
     return {}
 
 
@@ -145,20 +161,13 @@ class TrustScoreRefreshService:
             str(version.get("status", "")),
         )
         stored = version.get("trust_score_refresh")
-        trust_score = version.get("trust_score")
-        stored_model_version = (
-            trust_score.get("model_version")
-            if isinstance(trust_score, dict)
-            else None
-        )
-        # A model upgrade must invalidate the cached score even when platform
-        # signals are unchanged.  This makes every published version converge
-        # to the current model when its score is next read/refreshed.
-        if (
-            not force
-            and stored == fingerprint
-            and stored_model_version == TRUST_SCORE_MODEL_VERSION
-        ):
+        # A model-version change is deliberately not a lazy-refresh trigger.
+        # The read path can be called for every published version, so treating
+        # a historical version mismatch as a reason to refresh would cause a
+        # deployment-wide rescore (and potentially a deployment-wide score
+        # drop) in one request wave.  Model upgrades must use ``force=True``
+        # through an explicit, observable backfill job.
+        if not force and stored == fingerprint:
             return None
 
         scan_report: dict[str, Any] | None = None
@@ -282,3 +291,116 @@ class TrustScoreRefreshService:
                     "package grade sync failed for %s",
                     package_id,
                 )
+
+
+class TrustScoreBackfillService:
+    """Idempotently migrate every published version to the active model.
+
+    A rerun skips versions already written with ``target_model_version``.
+    Individual failures are retried and retained in the returned summary so
+    operators can monitor progress and safely rerun only unfinished work.
+    """
+
+    def __init__(
+        self,
+        refresh_service: TrustScoreRefreshService,
+        *,
+        target_model_version: str = TRUST_SCORE_MODEL_VERSION,
+    ) -> None:
+        self.refresh_service = refresh_service
+        self.producer_repo = refresh_service.producer_repo
+        self.target_model_version = target_model_version
+
+    def run(
+        self,
+        *,
+        batch_size: int = 100,
+        max_attempts: int = 3,
+    ) -> dict[str, Any]:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be positive")
+
+        summary: dict[str, Any] = {
+            "model_version": self.target_model_version,
+            "scanned": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": [],
+        }
+        offset = 0
+        while True:
+            rows = self.producer_repo.list_versions_by_status(
+                status="published",
+                limit=batch_size,
+                offset=offset,
+            )
+            if not rows:
+                break
+
+            for row in rows:
+                version_id = str(row.get("version_id") or row.get("id") or "")
+                if not version_id:
+                    summary["failed"].append({
+                        "version_id": "",
+                        "attempts": 0,
+                        "error": "published version row has no id",
+                    })
+                    continue
+
+                summary["scanned"] += 1
+                version = self.producer_repo.get_version(version_id) or {}
+                trust_score = version.get("trust_score")
+                if (
+                    isinstance(trust_score, dict)
+                    and trust_score.get("model_version")
+                    == self.target_model_version
+                ):
+                    summary["skipped"] += 1
+                    continue
+
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        refreshed = self.refresh_service.refresh(
+                            version_id,
+                            force=True,
+                        )
+                    except Exception as exc:  # continue the batch; retry below
+                        logger.warning(
+                            "trust-score backfill attempt %s/%s failed for %s",
+                            attempt,
+                            max_attempts,
+                            version_id,
+                            exc_info=True,
+                        )
+                        if attempt == max_attempts:
+                            summary["failed"].append({
+                                "version_id": version_id,
+                                "attempts": attempt,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            })
+                        continue
+
+                    if refreshed is None:
+                        # The version may have changed status between listing
+                        # and refresh. It no longer belongs to this backfill.
+                        summary["skipped"] += 1
+                    else:
+                        summary["updated"] += 1
+                    break
+
+            logger.info(
+                "trust-score backfill progress model=%s scanned=%s updated=%s "
+                "skipped=%s failed=%s",
+                self.target_model_version,
+                summary["scanned"],
+                summary["updated"],
+                summary["skipped"],
+                len(summary["failed"]),
+            )
+            offset += len(rows)
+            if len(rows) < batch_size:
+                break
+
+        return summary

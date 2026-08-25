@@ -37,6 +37,7 @@ from src.dependencies import CurrentUser
 from src.models.common import require_safe_source_subdirectory
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
 router = APIRouter(tags=["trust-scan"])
 
@@ -129,6 +130,112 @@ def _load_scanner():
     sys.modules["risk_scanner"] = mod
     spec.loader.exec_module(mod)
     return mod.RiskScanner
+
+
+_LLM_REVIEWED_SEVERITIES = frozenset({"critical", "high"})
+
+
+def _load_llm_reviewer() -> Any:
+    """动态加载 LLM 审查器模块。"""
+    llm_reviewer_path = _PROJECT_ROOT / "scanners" / "risk_scanner" / "llm_reviewer.py"
+    spec = importlib.util.spec_from_file_location(
+        "llm_reviewer", str(llm_reviewer_path)
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load LLM reviewer from {llm_reviewer_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _mark_llm_review_unavailable(
+    findings: list[dict[str, Any]],
+    error: Exception,
+) -> dict[str, Any]:
+    """Fail closed when the outer LLM-review orchestration cannot complete.
+
+    The reviewer normally labels every critical/high finding. If loading the
+    reviewer, building context, or invoking it raises before labels are
+    returned, attach the same unavailable label directly so scoring retains
+    its per-finding fail-closed signal.
+    """
+    labels: dict[str, str] = {}
+    reviewed_count = 0
+    skipped_count = 0
+
+    for finding in findings:
+        if not isinstance(finding, dict):
+            skipped_count += 1
+            continue
+
+        severity = str(finding.get("severity", "")).lower()
+        if severity not in _LLM_REVIEWED_SEVERITIES:
+            skipped_count += 1
+            continue
+
+        finding["llm_label"] = "llm:unavailable"
+        finding_id = str(finding.get("id", ""))
+        if finding_id:
+            labels[finding_id] = "llm:unavailable"
+        reviewed_count += 1
+
+    return {
+        "triggered": True,
+        "findings_reviewed": reviewed_count,
+        "findings_skipped": skipped_count,
+        "findings_pending": 0,
+        "status": "call_failed",
+        "attempts": 0,
+        "labels": labels,
+        "labels_summary": {
+            "suspected_malicious": 0,
+            "suspected_negligent": 0,
+            "likely_benign": 0,
+            "uncertain": 0,
+            "unavailable": reviewed_count,
+        },
+        "error": f"{type(error).__name__}: {error}",
+        "fallback": "fail_closed_after_outer_exception",
+    }
+
+
+def _run_llm_review_with_fallback(
+    findings: list[dict[str, Any]],
+    scanner: Any,
+) -> dict[str, Any]:
+    """Run LLM review and preserve fail-closed labels on outer failures."""
+    try:
+        reviewer = _load_llm_reviewer()
+        finding_contexts = build_finding_contexts(findings, scanner._file_contents)
+        result = reviewer.run_llm_review(
+            findings=findings,
+            finding_contexts=finding_contexts,
+            manifest=scanner._package_metadata,
+        )
+        labels = result.get("labels", {})
+        if not isinstance(labels, dict):
+            raise ValueError("LLM review labels must be an object")
+
+        for finding in findings:
+            finding_id = finding.get("id", "")
+            if finding_id in labels:
+                finding["llm_label"] = labels[finding_id]
+
+        labels_summary = result.get("labels_summary")
+        if not isinstance(labels_summary, dict):
+            raise ValueError("LLM review result is missing labels_summary")
+        print(
+            f"[TAH-trust]     LLM 审查完成: "
+            f"malicious={labels_summary['suspected_malicious']}, "
+            f"negligent={labels_summary['suspected_negligent']}, "
+            f"benign={labels_summary['likely_benign']}, "
+            f"uncertain={labels_summary['uncertain']}, "
+            f"unavailable={labels_summary['unavailable']}"
+        )
+        return result
+    except Exception as exc:
+        print(f"[TAH-trust]     LLM 审查跳过（{exc}）")
+        return _mark_llm_review_unavailable(findings, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -275,39 +382,15 @@ def _resolve_default_branch_source(parsed: dict[str, Any]) -> dict[str, Any]:
         "repository_verified": True,
         "ref": default_branch,
         "subdir": subdir,
+        # This proves only that the canonical repository endpoint resolved.
+        # Repository ownership is a separate claim and remains unverified
+        # until an independent server-side verifier establishes it.
+        "repository_resolved": True,
     }
 
 
 def _is_full_commit_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value))
-
-
-def _apply_acquisition_source_metadata(
-    package_metadata: dict[str, Any],
-    *,
-    parsed: dict[str, Any],
-    commit_hash: str,
-    subdir: str | None,
-    scanned_source: dict[str, Any] | None = None,
-) -> None:
-    """Make the persisted source identity match the acquired source tree."""
-    package_source = dict(package_metadata.get("source") or {})
-    if isinstance(scanned_source, dict):
-        package_source.update(scanned_source)
-    package_source.update({
-        "type": "github",
-        "repository_url": parsed["base_url"],
-        "owner": parsed["owner"],
-        "repo": parsed["repo"],
-        "ref_type": "branch",
-        "ref": parsed["ref"],
-        "commit_hash": commit_hash,
-    })
-    if subdir:
-        package_source["subdirectory"] = subdir
-    else:
-        package_source.pop("subdirectory", None)
-    package_metadata["source"] = package_source
 
 
 def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 2) -> bool:
@@ -474,9 +557,9 @@ def _build_acquisition_facts(
 ) -> dict[str, Any]:
     """Build provenance facts from acquisition, never from package metadata.
 
-    Repository identity is accepted only after the server-side GitHub resolver
-    validates the requested owner/repo.  Signature, attestation, and SBOM flags
-    require an independent verifier; package metadata is never a fallback.
+    Repository identity is verified from the acquired URL/commit.  Signature,
+    attestation, and SBOM flags are accepted only from an independent
+    server-side verifier; package metadata is never used as a fallback.
     """
     scanner_facts = getattr(scanner, "acquisition_facts", {})
     if not isinstance(scanner_facts, dict):
@@ -495,25 +578,24 @@ def _build_acquisition_facts(
     acquired_commit = commit_hash if valid_commit else scanner_source.get("commit_hash", "")
     if not re.fullmatch(r"^[a-f0-9]{40}$", str(acquired_commit)):
         acquired_commit = ""
+    acquired_sha256 = scanner_integrity.get("sha256", "")
+    if not re.fullmatch(r"^[a-f0-9]{64}$", str(acquired_sha256)):
+        acquired_sha256 = ""
     hash_scope = scanner_integrity.get("hash_scope")
     if hash_scope != HASH_SCOPE_SCANNED_SOURCE:
         hash_scope = None
     hash_complete = (
-        scanner_integrity.get("hash_complete") is True
+        bool(acquired_sha256)
         and hash_scope == HASH_SCOPE_SCANNED_SOURCE
+        and scanner_integrity.get("is_complete") is True
     )
-    acquired_sha256 = (
-        scanner_integrity.get("sha256", "") if hash_complete else ""
-    )
-    if not re.fullmatch(r"^[a-f0-9]{64}$", str(acquired_sha256)):
-        acquired_sha256 = ""
     verification = build_verification_facts(
         parsed=parsed,
         repository_url=repo_url,
         acquisition_method=method,
         commit_hash=str(acquired_commit),
         content_sha256=str(acquired_sha256),
-        content_hash_complete=hash_complete and bool(acquired_sha256),
+        content_hash_complete=hash_complete,
         server_verification=scanner_verification,
     )
 
@@ -533,9 +615,9 @@ def _build_acquisition_facts(
         source["subdirectory"] = subdir
 
     integrity = {
-        "sha256": acquired_sha256 or None,
+        "sha256": acquired_sha256,
         "hash_scope": hash_scope,
-        "hash_complete": hash_complete and bool(acquired_sha256),
+        "is_complete": hash_complete,
     }
     return {
         "source": source,
@@ -709,42 +791,10 @@ def _run_scan_task(
         if findings:
             _scans[scan_id]["status"] = "llm_review"
             print(f"[TAH-trust]     LLM 审查: {len(findings)} findings 待审查...")
-            try:
-                _LLM_REVIEWER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "llm_reviewer.py"
-                spec_lr = importlib.util.spec_from_file_location(
-                    "llm_reviewer", str(_LLM_REVIEWER_PATH)
-                )
-                if spec_lr and spec_lr.loader:
-                    mod_lr = importlib.util.module_from_spec(spec_lr)
-                    spec_lr.loader.exec_module(mod_lr)
-                    finding_contexts = build_finding_contexts(
-                        findings, scanner._file_contents,
-                    )
-                    llm_result = mod_lr.run_llm_review(
-                        findings=findings,
-                        finding_contexts=finding_contexts,
-                        manifest=scanner._package_metadata,
-                    )
-                    for f_item in findings:
-                        fid = f_item.get("id", "")
-                        if fid in llm_result.get("labels", {}):
-                            f_item["llm_label"] = llm_result["labels"][fid]
-                    scan_report["llm_review"] = llm_result
-                    print(
-                        f"[TAH-trust]     LLM 审查完成: "
-                        f"malicious={llm_result['labels_summary']['suspected_malicious']}, "
-                        f"negligent={llm_result['labels_summary']['suspected_negligent']}, "
-                        f"benign={llm_result['labels_summary']['likely_benign']}, "
-                        f"uncertain={llm_result['labels_summary']['uncertain']}, "
-                        f"unavailable={llm_result['labels_summary']['unavailable']}"
-                    )
-            except Exception as e:
-                print(f"[TAH-trust]     LLM 审查跳过（{e}）")
-                scan_report["llm_review"] = {
-                    "triggered": True,
-                    "error": str(e),
-                    "fallback": "LLM review unavailable, all findings preserved",
-                }
+            scan_report["llm_review"] = _run_llm_review_with_fallback(
+                findings,
+                scanner,
+            )
         else:
             scan_report["llm_review"] = {"triggered": False}
 
@@ -774,24 +824,6 @@ def _run_scan_task(
             repo_url=repo_url,
             subdirectory=subdir,
         )
-        # Preserve the default-branch source identity established by the
-        # acquisition layer before replacing provenance namespaces with the
-        # server-established facts below.
-        scanned_meta = scanner._package_metadata or {}
-        scanned_source = scanned_meta.get("source") or {}
-        scanned_integrity = scanned_meta.get("integrity") or {}
-        _apply_acquisition_source_metadata(
-            package_metadata,
-            parsed=parsed,
-            commit_hash=commit_hash,
-            subdir=subdir,
-            scanned_source=scanned_source if isinstance(scanned_source, dict) else None,
-        )
-        if isinstance(scanned_integrity, dict):
-            package_metadata["integrity"] = {
-                **(package_metadata.get("integrity") or {}),
-                **scanned_integrity,
-            }
         acquisition_facts = _build_acquisition_facts(
             parsed,
             repo_url,

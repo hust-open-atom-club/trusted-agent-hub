@@ -149,7 +149,7 @@ export interface VersionSource {
 export interface VersionIntegrity {
   sha256?: string;
   hash_scope?: 'scanned_source' | 'artifact_archive' | null;
-  hash_complete?: boolean | null;
+  is_complete?: boolean | null;
   signature?: string | null;
   attestation_url?: string | null;
   sbom_url?: string | null;
@@ -306,10 +306,11 @@ export interface ProvenanceSource {
 export interface ProvenanceIntegrity {
   sha256?: string | null;
   hash_scope?: 'scanned_source' | null;
-  hash_complete?: boolean;
+  is_complete?: boolean | null;
 }
 
 export interface ProvenanceVerification {
+  repository?: boolean;
   owner: boolean;
   signature: boolean;
   attestation: boolean;

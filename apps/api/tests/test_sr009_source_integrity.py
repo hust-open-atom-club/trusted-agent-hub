@@ -42,7 +42,7 @@ class TestSR009SourceIntegrity:
             "integrity": {
                 "sha256": sha256,
                 "hash_scope": "scanned_source",
-                "hash_complete": True,
+                "is_complete": True,
             },
             "source": {"commit_hash": commit_hash},
             "verification": {
@@ -68,6 +68,8 @@ class TestSR009SourceIntegrity:
         assert "SHA256" not in finding["description"]
         assert "commit hash" not in finding["description"]
         assert scanner.acquisition_facts["integrity"]["sha256"]
+        assert scanner.acquisition_facts["integrity"]["hash_scope"] == "scanned_source"
+        assert scanner.acquisition_facts["integrity"]["is_complete"] is True
         assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
 
     def test_manifest_provenance_claims_are_not_promoted(self, tmp_path):
@@ -111,6 +113,30 @@ class TestSR009SourceIntegrity:
         assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
         assert "signature" not in scanner.acquisition_facts["integrity"]
         assert "sbom_url" not in scanner.acquisition_facts["integrity"]
+
+    def test_manifest_changes_are_covered_by_scanned_source_hash(self, tmp_path):
+        (tmp_path / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps({"name": "demo", "version": "1.0.0"}),
+            encoding="utf-8",
+        )
+
+        first_scanner = RiskScanner(tmp_path)
+        first_report = first_scanner.scan()
+        first_hash = first_scanner.acquisition_facts["integrity"]["sha256"]
+
+        manifest.write_text(
+            json.dumps({"name": "demo", "version": "2.0.0"}),
+            encoding="utf-8",
+        )
+        second_scanner = RiskScanner(tmp_path)
+        second_scanner.scan()
+
+        assert first_report["scan_status"]["complete"] is True
+        assert first_scanner.acquisition_facts["integrity"]["is_complete"] is True
+        assert second_scanner.acquisition_facts["integrity"]["is_complete"] is True
+        assert second_scanner.acquisition_facts["integrity"]["sha256"] != first_hash
 
     def test_missing_metadata(self, tmp_path):
         """No metadata file at all → medium finding."""
@@ -179,32 +205,6 @@ class TestSR009SourceIntegrity:
         source_integrity.run(s)
         assert s.findings == []
 
-    def test_incomplete_hash_cannot_credit_verification_flags(self, tmp_path):
-        s = MockScanner(
-            files={"SKILL.md": "# hi"},
-            _package_metadata=_full_meta(),
-            _acquisition_facts={
-                "integrity": {
-                    "sha256": None,
-                    "hash_scope": "scanned_source",
-                    "hash_complete": False,
-                },
-                "source": {"commit_hash": "a" * 40},
-                "verification": {
-                    "owner": False,
-                    "signature": True,
-                    "attestation": False,
-                    "sbom": True,
-                },
-            },
-            target_dir=tmp_path,
-        )
-
-        source_integrity.run(s)
-
-        assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "medium"
-
     def test_manifest_integrity_does_not_fallback_without_acquisition_facts(
         self,
         tmp_path,
@@ -219,3 +219,20 @@ class TestSR009SourceIntegrity:
 
         assert len(s.findings) == 1
         assert s.findings[0]["severity"] == "medium"
+
+    def test_incomplete_scanned_hash_is_medium(self, tmp_path):
+        meta = _full_meta()
+        facts = self._trusted_facts()
+        facts["integrity"]["is_complete"] = False
+        s = MockScanner(
+            files={"SKILL.md": "# hi"},
+            _package_metadata=meta,
+            _acquisition_facts=facts,
+            target_dir=tmp_path,
+        )
+
+        source_integrity.run(s)
+
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "medium"
+        assert "部分扫描内容" in s.findings[0]["description"]

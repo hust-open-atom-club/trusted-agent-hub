@@ -44,7 +44,7 @@ def _trusted_acquisition_facts(package_metadata: dict[str, Any]) -> dict[str, An
         "integrity": {
             "sha256": integrity.get("sha256", ""),
             "hash_scope": "scanned_source",
-            "hash_complete": True,
+            "is_complete": True,
         },
         "verification": {
             "owner": source.get("verified_owner") is True,

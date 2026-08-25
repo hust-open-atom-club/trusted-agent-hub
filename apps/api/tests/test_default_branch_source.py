@@ -50,7 +50,7 @@ def test_resolve_default_branch_from_github_metadata(monkeypatch: pytest.MonkeyP
     }
     assert resolved["ref"] == "master"
     assert resolved["subdir"] is None
-    assert resolved["repository_verified"] is True
+    assert resolved["repository_resolved"] is True
 
 
 def test_default_branch_with_slash_keeps_its_subdirectory(
@@ -207,30 +207,36 @@ def test_acquisition_metadata_overrides_repository_claims() -> None:
             "subdirectory": "wrong/path",
         }
     }
-    parsed = {
-        "base_url": "https://github.com/acme/demo",
-        "owner": "acme",
-        "repo": "demo",
-        "ref": "master",
+    facts = {
+        "source": {
+            "repository_url": "https://github.com/acme/demo",
+            "ref": "a" * 40,
+            "commit_hash": "a" * 40,
+            "type": "github",
+            "owner": "acme",
+            "repo": "demo",
+            "ref_type": "commit",
+        },
+        "integrity": {
+            "sha256": "c" * 64,
+            "hash_scope": "scanned_source",
+            "is_complete": True,
+        },
     }
 
-    trust._apply_acquisition_source_metadata(
-        metadata,
-        parsed=parsed,
-        commit_hash="a" * 40,
-        subdir=None,
-        scanned_source={"ref": "feature-x", "commit_hash": "b" * 40},
-    )
+    safe = trust._apply_acquisition_facts(metadata, facts)
 
-    assert metadata["source"] == {
+    assert safe["source"] == {
         "repository_url": "https://github.com/acme/demo",
-        "ref": "master",
+        "ref": "a" * 40,
         "commit_hash": "a" * 40,
         "type": "github",
         "owner": "acme",
         "repo": "demo",
-        "ref_type": "branch",
+        "ref_type": "commit",
     }
+    assert safe["integrity"] == facts["integrity"]
+    assert metadata["source"]["repository_url"].endswith("untrusted/other")
 
 
 class _ProducerRepository:

@@ -162,7 +162,7 @@ class RiskScanner:
             for r in rule_results if r.status == "failed"
         ]
         self._record_source_integrity_changes()
-        self._invalidate_acquisition_hash_on_source_change()
+        self._sync_acquisition_integrity_completeness()
         self._record_structured_analysis_errors()
         if self.dependency_scan.get("status") == "partial" and "dependency_scan_partial" not in self.inventory.limit_violations:
             self.inventory.limit_violations.append("dependency_scan_partial")
@@ -241,22 +241,32 @@ class RiskScanner:
                             self._package_metadata[key] = pkg_json[key]
 
     def _inject_acquired_source_integrity(self) -> None:
-        """Record acquisition facts without mutating package-authored claims."""
+        """Record facts established by acquisition without mutating claims.
+
+        A repository's own metadata cannot safely attest to the bytes currently
+        being scanned. The scanner therefore computes a bounded content hash
+        from the inventory and accepts the commit only from the acquisition
+        layer (``git rev-parse HEAD`` / GitHub zipball resolution).
+        """
+        # Calculate this once from the already bounded inventory.  The API may
+        # request the hash again while persisting the source snapshot, but that
+        # call is served from this cache and never walks or rereads the tree.
         content_hash = self._content_tree_sha256()
-        hash_complete = self._content_tree_hash_complete is True
         self._acquisition_facts = {
             "source": {},
             "integrity": {
-                "sha256": content_hash if hash_complete else None,
+                "sha256": content_hash,
                 "hash_scope": HASH_SCOPE_SCANNED_SOURCE,
-                "hash_complete": hash_complete,
+                "is_complete": "content_hash_limited" not in self.inventory.limit_violations,
             },
             "verification": {
                 "owner": False,
                 "signature": False,
                 "attestation": False,
                 "sbom": False,
-                "content_sha256": content_hash if hash_complete else "",
+                # Internal marker used to ensure any future verifier result
+                # is bound to this exact scanned content before persistence.
+                "content_sha256": content_hash,
             },
         }
 
@@ -292,7 +302,6 @@ class RiskScanner:
         max_file_bytes = max(self.policy.max_file_bytes, 0)
         max_total_bytes = max(self.policy.max_total_bytes, 0)
         total_bytes = 0
-
         for record in sorted(inventory.files, key=lambda item: item.relative_path):
             path = record.absolute_path
             rel = record.relative_path
@@ -301,6 +310,7 @@ class RiskScanner:
             except OSError:
                 complete = False
                 continue
+
             if path.is_symlink() or not path.is_file():
                 complete = False
                 continue
@@ -352,22 +362,15 @@ class RiskScanner:
         self._content_tree_hash = digest.hexdigest()
         return self._content_tree_hash
 
-    def _invalidate_acquisition_hash_on_source_change(self) -> None:
-        """Do not retain a hash after source mutation during analysis."""
-        source_issues = {
-            reason
-            for reason in self.inventory.limit_violations
-            if reason.startswith("source_")
-        }
-        if not source_issues:
-            return
+    def _sync_acquisition_integrity_completeness(self) -> None:
+        """Update the scan hash marker after the source re-check completes."""
         integrity = self._acquisition_facts.get("integrity")
-        if isinstance(integrity, dict):
-            integrity["sha256"] = None
-            integrity["hash_complete"] = False
-        verification = self._acquisition_facts.get("verification")
-        if isinstance(verification, dict):
-            verification["content_sha256"] = ""
+        if not isinstance(integrity, dict):
+            return
+        integrity["is_complete"] = (
+            integrity.get("hash_scope") == HASH_SCOPE_SCANNED_SOURCE
+            and "content_hash_limited" not in self.inventory.limit_violations
+        )
 
     def _read_file_content(self, rel_path: str) -> str:
         return self._file_contents.get(rel_path, "")
@@ -376,6 +379,11 @@ class RiskScanner:
         """Record files that changed or escaped the root during analysis."""
         source_snapshot = getattr(self.analysis, "source_integrity", None)
         issues = verify_source_state(self.target_dir, source_snapshot)
+        if issues and "content_hash_limited" not in self.inventory.limit_violations:
+            # A post-capture source mutation or an incomplete second pass
+            # means the previously computed tree hash is not a complete
+            # representation of the acquired source.
+            self.inventory.limit_violations.append("content_hash_limited")
         for issue in issues:
             kind = issue["kind"]
             if kind not in self.inventory.limit_violations:

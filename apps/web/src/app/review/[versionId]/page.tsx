@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
+import ProvenanceSummary from './ProvenanceSummary';
 import { toast } from 'sonner';
 import type {
   Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord, FileContext,
@@ -385,7 +386,7 @@ export default function ReviewDetailPage() {
   const provenanceSource = provenance?.acquisition_facts?.source;
   const provenanceIntegrity = provenance?.acquisition_facts?.integrity;
   const provenanceHashComplete = (
-    provenanceIntegrity?.hash_complete === true
+    provenanceIntegrity?.is_complete === true
     && provenanceIntegrity.hash_scope === 'scanned_source'
   );
   const provenanceVerification = provenance?.acquisition_facts?.verification;
@@ -889,6 +890,13 @@ export default function ReviewDetailPage() {
             </div>
           )}
         </div>
+
+        {scanReport?.provenance && (
+          <>
+            <h3 className="review-meta-subtitle">{t('review.detail.provenance_title')}</h3>
+            <ProvenanceSummary provenance={scanReport.provenance} />
+          </>
+        )}
 
         {pkg?.permissions && Object.keys(pkg.permissions).length > 0 && (
           <>

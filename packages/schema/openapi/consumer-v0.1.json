@@ -1058,17 +1058,6 @@
             ],
             "title": "Download Size Bytes"
           },
-          "hash_complete": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Hash Complete"
-          },
           "hash_scope": {
             "anyOf": [
               {
@@ -1083,6 +1072,17 @@
               }
             ],
             "title": "Hash Scope"
+          },
+          "is_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Complete"
           },
           "sbom_url": {
             "anyOf": [
@@ -2253,11 +2253,6 @@
         "additionalProperties": false,
         "description": "Server-computed content integrity facts.",
         "properties": {
-          "hash_complete": {
-            "default": false,
-            "title": "Hash Complete",
-            "type": "boolean"
-          },
           "hash_scope": {
             "anyOf": [
               {
@@ -2269,6 +2264,17 @@
               }
             ],
             "title": "Hash Scope"
+          },
+          "is_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Complete"
           },
           "sha256": {
             "anyOf": [
@@ -2398,6 +2404,11 @@
           },
           "owner": {
             "title": "Owner",
+            "type": "boolean"
+          },
+          "repository": {
+            "default": false,
+            "title": "Repository",
             "type": "boolean"
           },
           "sbom": {

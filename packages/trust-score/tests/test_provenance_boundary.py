@@ -55,7 +55,7 @@ def _acquisition_facts() -> dict[str, Any]:
         "integrity": {
             "sha256": "d" * 64,
             "hash_scope": "scanned_source",
-            "hash_complete": True,
+            "is_complete": True,
         },
         "verification": {
             "owner": False,
@@ -134,35 +134,16 @@ def test_only_independently_verified_artifacts_complete_p2() -> None:
     assert p2["score"] == 100
 
 
-def test_incomplete_hash_cannot_credit_verification_flags() -> None:
+def test_incomplete_scanned_hash_does_not_get_integrity_credit() -> None:
     metadata = _forged_metadata()
     facts = _acquisition_facts()
-    facts["integrity"]["hash_complete"] = False
-    facts["verification"] = {
-        "owner": True,
-        "signature": True,
-        "attestation": True,
-        "sbom": True,
-    }
+    facts["integrity"]["is_complete"] = False
 
-    result = assess_signature_chain(metadata, facts)
+    p2 = assess_signature_chain(metadata, facts)
+    result = rate(package_metadata=metadata, acquisition_facts=facts)
 
-    assert result["level"] == "none"
-    assert result["score"] == 10
-
-
-def test_legacy_unscoped_hash_cannot_credit_verification_flags() -> None:
-    metadata = _forged_metadata()
-    facts = _acquisition_facts()
-    facts["integrity"] = {"sha256": "d" * 64}
-    facts["verification"] = {
-        "owner": True,
-        "signature": True,
-        "attestation": True,
-        "sbom": True,
-    }
-
-    result = assess_signature_chain(metadata, facts)
-
-    assert result["level"] == "none"
-    assert result["score"] == 10
+    assert p2["level"] == "none"
+    assert p2["score"] == 10
+    assert result["dimensions"]["source_trust"]["details"][
+        "has_integrity_hash"
+    ] is False

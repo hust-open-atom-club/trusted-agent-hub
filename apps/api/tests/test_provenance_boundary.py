@@ -7,11 +7,13 @@ from pathlib import Path
 
 import jsonschema
 
-from src.models.packages import ScanReport, VersionDetail
+from src.models.packages import ScanReport
 from src.routers.trust import (
     _apply_acquisition_facts,
     _build_acquisition_facts,
+    _parse_github_url,
     _provenance_claims,
+    _resolve_default_branch_source,
 )
 from src.services.producer import ProducerService
 from scanners.risk_scanner.provenance import (
@@ -26,7 +28,7 @@ class _Scanner:
         "integrity": {
             "sha256": "d" * 64,
             "hash_scope": "scanned_source",
-            "hash_complete": True,
+            "is_complete": True,
         },
     }
     package_claims = {
@@ -125,44 +127,15 @@ def test_acquisition_facts_ignore_manifest_provenance_claims() -> None:
     assert facts["integrity"] == {
         "sha256": "d" * 64,
         "hash_scope": "scanned_source",
-        "hash_complete": True,
+        "is_complete": True,
     }
     assert facts["verification"] == {
+        "repository": True,
         "owner": False,
         "signature": False,
         "attestation": False,
         "sbom": False,
     }
-
-
-class _ArtifactRepository:
-    def __init__(self) -> None:
-        self.version = {
-            "id": "ver-1",
-            "package_id": "pkg-1",
-            "version": "1.0.0",
-            "source": {"repository_url": "https://github.com/acme/demo"},
-            "integrity": {"sha256": "a" * 64},
-            "acquisition_facts": {
-                "source": {"commit_hash": "c" * 40},
-                "integrity": {
-                    "sha256": "d" * 64,
-                    "hash_scope": "scanned_source",
-                    "hash_complete": True,
-                },
-            },
-        }
-
-    def get_version(self, _version_id: str) -> dict[str, object]:
-        return self.version
-
-    def get_package(self, _package_id: str) -> dict[str, object]:
-        return {"type": "skill"}
-
-    def update_version_data(
-        self, _version_id: str, updates: dict[str, object]
-    ) -> None:
-        self.version.update(updates)
 
 
 def test_only_server_verification_facts_are_carried_forward() -> None:
@@ -175,9 +148,10 @@ def test_only_server_verification_facts_are_carried_forward() -> None:
         _VerifiedScanner(),
     )
 
-    assert facts["source"]["verified_owner"] is False
+    assert facts["source"]["verified_owner"] is True
     assert facts["verification"] == {
-        "owner": False,
+        "repository": True,
+        "owner": True,
         "signature": True,
         "attestation": False,
         "sbom": True,
@@ -195,7 +169,8 @@ def test_artifact_verification_must_bind_to_acquired_content() -> None:
     )
 
     assert facts["verification"] == {
-        "owner": False,
+        "repository": True,
+        "owner": True,
         "signature": False,
         "attestation": False,
         "sbom": False,
@@ -213,35 +188,55 @@ def test_repository_identity_mismatch_cannot_verify_owner() -> None:
     )
 
     assert facts["source"]["verified_owner"] is False
+    assert facts["verification"]["repository"] is False
     assert facts["verification"]["owner"] is False
 
 
-def test_repository_owner_requires_explicit_server_verification() -> None:
-    base = {
-        "owner": "trusted",
-        "repo": "acquired",
-    }
-    for value in (None, False, "true", 1):
-        parsed = {**base, "repository_verified": value}
-        assert (
-            verify_acquired_repository(
-                parsed,
-                "https://github.com/trusted/acquired",
-                "git",
-                "c" * 40,
-            )
-            is False
-        )
-
-    assert (
-        verify_acquired_repository(
-            {**base, "repository_verified": True},
-            "https://github.com/trusted/acquired",
-            "git",
-            "c" * 40,
-        )
-        is True
+def test_default_branch_resolution_verifies_repository_not_owner(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "src.routers.trust._fetch_repository_default_branch",
+        lambda _parsed: "main",
     )
+    parsed = _resolve_default_branch_source(
+        _parse_github_url("https://github.com/trusted/acquired")
+    )
+
+    facts = _build_acquisition_facts(
+        parsed,
+        "https://github.com/trusted/acquired",
+        None,
+        "git",
+        "c" * 40,
+        _Scanner(),
+    )
+
+    assert parsed["repository_resolved"] is True
+    assert facts["verification"]["repository"] is True
+    assert facts["source"]["verified_owner"] is False
+    assert facts["verification"]["owner"] is False
+
+
+def test_repository_identity_does_not_depend_on_owner_verification() -> None:
+    parsed = {"owner": "trusted", "repo": "acquired"}
+    assert verify_acquired_repository(
+        parsed,
+        "https://github.com/trusted/acquired",
+        "git",
+        "c" * 40,
+    ) is True
+
+    facts = build_verification_facts(
+        parsed=parsed,
+        repository_url="https://github.com/trusted/acquired",
+        acquisition_method="git",
+        commit_hash="c" * 40,
+        content_sha256="d" * 64,
+        server_verification={"owner": True},
+    )
+    assert facts["repository"] is True
+    assert facts["owner"] is True
 
 
 def test_artifact_verification_requires_valid_sha256_binding() -> None:
@@ -261,11 +256,44 @@ def test_artifact_verification_requires_valid_sha256_binding() -> None:
         )
 
         assert facts == {
+            "repository": True,
             "owner": False,
             "signature": False,
             "attestation": False,
             "sbom": False,
         }
+
+
+class _ArtifactRepository:
+    def __init__(self) -> None:
+        self.version = {
+            "id": "ver-1",
+            "package_id": "pkg-1",
+            "version": "1.0.0",
+            "source": {"repository_url": "https://github.com/acme/demo"},
+            "integrity": {"sha256": "d" * 64},
+            "acquisition_facts": {
+                "source": {"commit_hash": "c" * 40},
+                "integrity": {
+                    "sha256": "d" * 64,
+                    "hash_scope": "scanned_source",
+                    "is_complete": True,
+                },
+            },
+        }
+
+    def get_version(self, _version_id: str) -> dict[str, object]:
+        return self.version
+
+    def get_package(self, _package_id: str) -> dict[str, object]:
+        return {}
+
+    def update_version_data(
+        self,
+        _version_id: str,
+        updates: dict[str, object],
+    ) -> None:
+        self.version.update(updates)
 
 
 def test_metadata_replacement_drops_untrusted_source_and_integrity_fields() -> None:
@@ -324,10 +352,12 @@ def test_version_detail_redacts_all_scan_projections() -> None:
 
 def test_artifact_hash_is_scoped_separately_from_scan_hash() -> None:
     repository = _ArtifactRepository()
-    ProducerService(repository)._apply_artifact_to_version(
+    service = ProducerService(repository)
+
+    service._apply_artifact_to_version(
         "ver-1",
         {
-            "download_url": "/api/v0/artifacts/demo.zip",
+            "download_url": "https://downloads.example/demo.zip",
             "sha256": "e" * 64,
             "download_size_bytes": 123,
         },
@@ -339,35 +369,14 @@ def test_artifact_hash_is_scoped_separately_from_scan_hash() -> None:
     assert repository.version["integrity"] == {
         "sha256": "e" * 64,
         "hash_scope": "artifact_archive",
-        "hash_complete": True,
+        "is_complete": True,
         "download_size_bytes": 123,
     }
     assert repository.version["acquisition_facts"]["integrity"] == {
         "sha256": "d" * 64,
         "hash_scope": "scanned_source",
-        "hash_complete": True,
+        "is_complete": True,
     }
-
-
-def test_public_version_integrity_accepts_server_hash_scope_fields() -> None:
-    detail = VersionDetail.model_validate(
-        {
-            "id": "ver-1",
-            "package_id": "pkg-1",
-            "version": "1.0.0",
-            "status": "published",
-            "integrity": {
-                "sha256": "e" * 64,
-                "hash_scope": "artifact_archive",
-                "hash_complete": True,
-                "download_size_bytes": 123,
-            },
-        }
-    )
-
-    assert detail.integrity is not None
-    assert detail.integrity.hash_scope == "artifact_archive"
-    assert detail.integrity.hash_complete is True
 
 
 def test_provenance_audit_shape_is_declared_in_scan_schema() -> None:
@@ -383,11 +392,12 @@ def test_provenance_audit_shape_is_declared_in_scan_schema() -> None:
         "acquisition_facts": {
             "source": {"commit_hash": "c" * 40},
             "integrity": {
-                "sha256": None,
+                "sha256": "d" * 64,
                 "hash_scope": "scanned_source",
-                "hash_complete": False,
+                "is_complete": True,
             },
             "verification": {
+                "repository": True,
                 "owner": False,
                 "signature": False,
                 "attestation": False,
