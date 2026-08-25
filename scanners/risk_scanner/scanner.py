@@ -66,6 +66,15 @@ logger = logging.getLogger(__name__)
 
 SCANNER_VERSION = "0.6.0"
 
+_DOCUMENTATION_BASENAME_PREFIXES = (
+    "readme",
+    "changelog",
+    "release-notes",
+    "notice",
+    "license",
+)
+_DOCUMENTATION_EXTENSIONS = frozenset({"", ".md", ".markdown", ".txt", ".rst"})
+
 
 class RiskScanner:
     """自动风险扫描器 — 静态分析 Agent 能力包目录。"""
@@ -329,6 +338,12 @@ class RiskScanner:
         ext = Path(file_path).suffix.lower()
         if ext not in (".md", ".markdown", ".txt", ".rst"):
             return False
+        # Agent instructions and policy files are executable input to an agent,
+        # even when a suspicious line is wrapped in a Markdown code block.
+        # Only apply the code-example relaxation to files that are also
+        # recognized as ordinary documentation.
+        if not self._is_documentation_file(file_path):
+            return False
         lines = content.split("\n")
         context_start = max(0, line_no - 6)
         context_end = min(len(lines), line_no + 5)
@@ -341,25 +356,58 @@ class RiskScanner:
                 return True
         return False
 
-    def _is_documentation_file(self, rel_path: str) -> bool:
-        """判断文件是否为说明性文档（README/docs/CHANGELOG 等）。
+    @staticmethod
+    def _is_instruction_or_policy_file(rel_path: str) -> bool:
+        """Return whether *rel_path* is agent-executable instruction/policy input."""
+        normalized = rel_path.replace("\\", "/").lower().strip("/")
+        if not normalized:
+            return False
 
-        真正的能力内容（SKILL.md、*.prompt.md、system_prompt.md、agent.json）
-        不视为文档，避免削弱提示注入等专项检测。
-        """
-        normalized = rel_path.replace("\\", "/").lower()
         basename = normalized.rsplit("/", 1)[-1]
         if basename in {
+            "agents.md",
+            "claude.md",
+            "gemini.md",
+            "copilot-instructions.md",
+            "prompt.md",
+            "policy.md",
+            "instructions.md",
             "skill.md",
             "system_prompt.md",
             "agent.json",
-        } or basename.endswith(".prompt.md"):
+        }:
+            return True
+        if basename.endswith((".prompt.md", ".policy.md", ".instructions.md")):
+            return True
+        if normalized.startswith(".github/instructions/"):
+            return True
+
+        # Prompts and policies can be nested below another directory (for
+        # example docs/prompts/foo.md), so inspect directory components rather
+        # than only checking the repository root.
+        directory_parts = normalized.split("/")[:-1]
+        return any(
+            part in {"prompts", "policies", "instructions"}
+            for part in directory_parts
+        )
+
+    def _is_documentation_file(self, rel_path: str) -> bool:
+        """Return whether *rel_path* is ordinary documentation.
+
+        Only well-known repository documentation names are trusted. Generic
+        Markdown below ``docs/`` can still be agent-consumed input.
+        """
+        normalized = rel_path.replace("\\", "/").lower()
+        basename = normalized.rsplit("/", 1)[-1]
+        if self._is_instruction_or_policy_file(normalized):
             return False
-        if normalized.startswith("docs/"):
-            return True
-        if basename.startswith(("readme", "changelog", "release-notes", "notice", "license")):
-            return True
-        return basename.endswith((".md", ".markdown", ".txt", ".rst"))
+        if Path(basename).suffix.lower() not in _DOCUMENTATION_EXTENSIONS:
+            return False
+        return any(
+            basename == prefix
+            or basename.startswith((f"{prefix}.", f"{prefix}-", f"{prefix}_"))
+            for prefix in _DOCUMENTATION_BASENAME_PREFIXES
+        )
 
     def _downgrade_documentation_findings(self) -> None:
         """把说明性文档中的 critical/high/medium 发现降级为 low。
