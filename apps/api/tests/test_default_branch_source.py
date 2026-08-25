@@ -24,8 +24,13 @@ class _JsonResponse:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, size: int = -1) -> bytes:
+        if not self._payload:
+            return b""
+        if size < 0:
+            size = len(self._payload)
+        chunk, self._payload = self._payload[:size], self._payload[size:]
+        return chunk
 
 
 def test_resolve_default_branch_from_github_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,28 +157,25 @@ def test_producer_endpoint_rejects_non_default_branch_before_state_change(
     assert repository.update_calls == []
 
 
-def test_git_clone_explicitly_uses_resolved_default_branch(
+def test_commit_resolution_uses_the_resolved_default_branch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setattr(trust, "_is_github_reachable", lambda: True)
-    commands: list[list[str]] = []
+    requested_urls: list[str] = []
+    commit_hash = "a" * 40
 
-    def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
-        commands.append(command)
-        return SimpleNamespace(returncode=0, stderr="", stdout="")
+    def fake_urlopen(request, timeout: int):
+        requested_urls.append(request.full_url)
+        assert timeout == 20
+        return _JsonResponse({"sha": commit_hash})
 
-    monkeypatch.setattr(trust.subprocess, "run", fake_run)
+    monkeypatch.setattr(trust.urllib.request, "urlopen", fake_urlopen)
 
-    assert trust._git_clone_with_retries(
-        {"owner": "acme", "repo": "demo", "ref": "master"},
-        "unused-clone-directory",
-        max_attempts=1,
-    )
-
-    command = commands[0]
-    assert command[command.index("--branch") + 1] == "master"
-    assert "--single-branch" in command
+    assert trust._fetch_repository_commit_hash(
+        {"owner": "acme", "repo": "demo", "ref": "release/main"}
+    ) == commit_hash
+    assert requested_urls == [
+        "https://api.github.com/repos/acme/demo/commits/release%2Fmain"
+    ]
 
 
 def test_zipball_uses_the_same_resolved_default_branch(

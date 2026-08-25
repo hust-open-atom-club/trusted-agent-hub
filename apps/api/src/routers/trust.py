@@ -15,12 +15,13 @@ import logging
 import os
 import re
 import shutil
-import socket
-import subprocess
+import stat
+import struct
 import sys
 import tempfile
 import time as _time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -37,7 +38,6 @@ from src.dependencies import CurrentUser
 from src.models.common import require_safe_source_subdirectory
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
-from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
 router = APIRouter(tags=["trust-scan"])
 
@@ -56,6 +56,8 @@ from scanners.risk_scanner.redaction import (
     redact_value,
 )
 from scanners.risk_scanner.provenance import build_verification_facts
+from scanners.risk_scanner.inventory import ScanInventory
+from scanners.risk_scanner.policy import ScanPolicy
 from packages.schema.frontmatter import parse_frontmatter
 from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
@@ -67,6 +69,12 @@ _scans: Dict[str, Dict[str, Any]] = {}
 _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 _SCAN_TTL_SECONDS = 3600  # 临时扫描结果保留 1 小时
+_SOURCE_POLICY = ScanPolicy()
+_ZIP_READ_CHUNK_BYTES = 64 * 1024
+
+
+class _DeterministicAcquisitionError(ValueError):
+    """A source validation or budget failure that must not be retried."""
 
 
 def _cleanup_expired_scans() -> None:
@@ -272,18 +280,8 @@ def _load_scorer():
 
 
 # ---------------------------------------------------------------------------
-# 远程仓库获取：Phase A git clone → Phase B ZIP 下载
+# 远程仓库获取：固定 commit + 受限 ZIP 下载
 # ---------------------------------------------------------------------------
-
-
-def _is_github_reachable(timeout: float = 5) -> bool:
-    """Quick TCP connectivity check before attempting git clone."""
-    try:
-        s = socket.create_connection(("github.com", 443), timeout=timeout)
-        s.close()
-        return True
-    except OSError:
-        return False
 
 
 def _github_api_headers() -> dict[str, str]:
@@ -306,7 +304,9 @@ def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
     try:
         request = urllib.request.Request(api_url, headers=_github_api_headers())
         with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            buffer = io.BytesIO()
+            _copy_response_bounded(response, buffer, _SOURCE_POLICY.max_file_bytes)
+            payload = json.loads(buffer.getvalue().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise HTTPException(
@@ -322,6 +322,7 @@ def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
         TimeoutError,
         OSError,
         UnicodeDecodeError,
+        ValueError,
         json.JSONDecodeError,
     ) as exc:
         raise HTTPException(
@@ -393,64 +394,206 @@ def _is_full_commit_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value))
 
 
-def _git_clone_with_retries(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 2) -> bool:
-    """Phase A：克隆仓库默认分支，重试 max_attempts 次。"""
+def _fetch_repository_commit_hash(parsed: dict[str, Any]) -> str:
+    """Resolve the default branch to an immutable full commit hash."""
+    encoded_ref = urllib.parse.quote(parsed["ref"], safe="")
+    api_url = (
+        f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
+        f"/commits/{encoded_ref}"
+    )
+    request = urllib.request.Request(api_url, headers=_github_api_headers())
+    with urllib.request.urlopen(request, timeout=20) as response:
+        buffer = io.BytesIO()
+        _copy_response_bounded(response, buffer, _SOURCE_POLICY.max_file_bytes)
+    payload = json.loads(buffer.getvalue().decode("utf-8"))
+    commit_hash = payload.get("sha") if isinstance(payload, dict) else None
+    if not isinstance(commit_hash, str) or not _is_full_commit_hash(commit_hash):
+        raise ValueError("GitHub did not return a valid full commit hash")
+    return commit_hash
 
-    if not _is_github_reachable():
-        print("[TAH-trust]     github.com unreachable, skipping git clone")
-        return False
 
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if token:
-        clone_url = f"https://{token}@github.com/{parsed['owner']}/{parsed['repo']}.git"
-        safe_url = f"https://***@github.com/{parsed['owner']}/{parsed['repo']}.git"
-    else:
-        clone_url = f"https://github.com/{parsed['owner']}/{parsed['repo']}.git"
-        safe_url = clone_url
-
-    for attempt in range(1, max_attempts + 1):
-        print(
-            f"[TAH-trust]     git clone {safe_url} "
-            f"(attempt {attempt}/{max_attempts}) --branch {parsed['ref']} --depth 1 ..."
+def _copy_response_bounded(response: Any, destination: Any, max_bytes: int) -> int:
+    """Stream an HTTP body into a seekable file without exceeding max_bytes."""
+    if max_bytes < 0:
+        raise _DeterministicAcquisitionError(
+            "HTTP response byte limit must not be negative"
         )
+    headers = getattr(response, "headers", None)
+    content_length = headers.get("Content-Length") if headers else None
+    declared_length: int | None = None
+    if content_length:
         try:
-            result = subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--branch",
-                    parsed["ref"],
-                    "--single-branch",
-                    clone_url,
-                    tmp_dir,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            pass
+    if declared_length is not None and declared_length > max_bytes:
+        raise _DeterministicAcquisitionError(
+            f"HTTP response exceeds {max_bytes} byte limit"
+        )
+
+    total = 0
+    while True:
+        chunk = response.read(min(_ZIP_READ_CHUNK_BYTES, max_bytes - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise _DeterministicAcquisitionError(
+                f"HTTP response exceeds {max_bytes} byte limit"
             )
-        except subprocess.TimeoutExpired:
-            print(f"[TAH-trust]     clone attempt {attempt} timed out after 60s")
-            if attempt < max_attempts:
-                _time.sleep(3)
-                force_rmtree(tmp_dir)
-                os.makedirs(tmp_dir, exist_ok=True)
+        destination.write(chunk)
+    destination.seek(0)
+    return total
+
+
+def _preflight_zip_entry_count(archive_file: Any, max_entries: int) -> None:
+    """Reject oversized ZIP central directories before ZipFile parses them."""
+    eocd_struct = "<4s4H2LH"
+    zip64_eocd_struct = "<4sQ2H2L4Q"
+    eocd_size = struct.calcsize(eocd_struct)
+    max_comment_size = 0xFFFF
+    signature = b"PK\x05\x06"
+    archive_file.seek(0, 2)
+    archive_size = archive_file.tell()
+    tail_size = min(archive_size, eocd_size + max_comment_size)
+    archive_file.seek(archive_size - tail_size)
+    tail = archive_file.read(tail_size)
+    archive_file.seek(0)
+
+    eocd_offset = tail.rfind(signature)
+    if eocd_offset < 0 or eocd_offset + eocd_size > len(tail):
+        return
+
+    fields = struct.unpack_from(eocd_struct, tail, eocd_offset)
+    total_entries = fields[4]
+    if total_entries == 0xFFFF:
+        zip64_signature = b"PK\x06\x06"
+        zip64_offset = tail.rfind(zip64_signature, 0, eocd_offset)
+        zip64_size = struct.calcsize(zip64_eocd_struct)
+        if zip64_offset < 0 or zip64_offset + zip64_size > len(tail):
+            raise _DeterministicAcquisitionError(
+                "ZIP64 entry count cannot be bounded before archive parsing"
+            )
+        zip64_fields = struct.unpack_from(zip64_eocd_struct, tail, zip64_offset)
+        total_entries = zip64_fields[7]
+    if total_entries > max_entries:
+        raise _DeterministicAcquisitionError(
+            f"ZIP contains more than {max_entries} entries"
+        )
+
+
+def _read_text_file_bounded(path: Path, max_bytes: int) -> str:
+    """Read a UTF-8 file with an explicit byte ceiling."""
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"file exceeds {max_bytes} byte limit: {path.name}")
+    return data.decode("utf-8")
+
+
+def _safe_extract_zip(
+    archive: zipfile.ZipFile,
+    destination: str | Path,
+    policy: ScanPolicy = _SOURCE_POLICY,
+) -> None:
+    """Extract a ZIP under the scanner's file/count/depth/byte budgets."""
+    destination_path = Path(destination).resolve()
+    infos = archive.infolist()
+    if len(infos) > policy.max_files:
+        raise _DeterministicAcquisitionError(
+            f"ZIP contains more than {policy.max_files} entries"
+        )
+
+    declared_total = 0
+    normalized_targets: set[str] = set()
+    validated: list[tuple[zipfile.ZipInfo, Path, bool]] = []
+    for info in infos:
+        name = info.filename
+        if not name or "\x00" in name or "\\" in name:
+            raise _DeterministicAcquisitionError("ZIP contains an invalid entry name")
+        path = Path(name)
+        if path.is_absolute() or re.match(r"^[A-Za-z]:", name):
+            raise _DeterministicAcquisitionError(f"ZIP entry is absolute: {name!r}")
+        parts = tuple(part for part in path.parts if part not in {"", "."})
+        if not parts or any(part == ".." for part in parts):
+            raise _DeterministicAcquisitionError(
+                f"ZIP entry escapes extraction root: {name!r}"
+            )
+        # GitHub zipballs add one wrapper directory which is removed later.
+        if len(parts) - 1 > policy.max_depth + 1:
+            raise _DeterministicAcquisitionError(
+                f"ZIP entry exceeds depth limit: {name!r}"
+            )
+        if info.flag_bits & 0x1:
+            raise _DeterministicAcquisitionError(
+                f"encrypted ZIP entry is not supported: {name!r}"
+            )
+
+        unix_mode = info.external_attr >> 16
+        unix_file_type = stat.S_IFMT(unix_mode)
+        is_directory = info.is_dir()
+        if unix_file_type and not (
+            stat.S_ISDIR(unix_mode) if is_directory else stat.S_ISREG(unix_mode)
+        ):
+            raise _DeterministicAcquisitionError(
+                f"ZIP contains a special file: {name!r}"
+            )
+
+        target = destination_path.joinpath(*parts)
+        resolved_target = target.resolve()
+        if (
+            resolved_target != destination_path
+            and destination_path not in resolved_target.parents
+        ):
+            raise _DeterministicAcquisitionError(
+                f"ZIP entry escapes extraction root: {name!r}"
+            )
+        target_key = os.path.normcase(str(resolved_target))
+        if target_key in normalized_targets:
+            raise _DeterministicAcquisitionError(
+                f"ZIP contains a duplicate entry: {name!r}"
+            )
+        normalized_targets.add(target_key)
+
+        if not is_directory:
+            declared_total += info.file_size
+            if declared_total > policy.max_total_bytes:
+                raise _DeterministicAcquisitionError(
+                    f"ZIP expands beyond {policy.max_total_bytes} byte limit"
+                )
+        validated.append((info, resolved_target, is_directory))
+
+    actual_total = 0
+    for info, target, is_directory in validated:
+        if is_directory:
+            target.mkdir(parents=True, exist_ok=True)
             continue
-        if result.returncode == 0:
-            print(f"[TAH-trust]     git clone OK (attempt {attempt})")
-            return True
-        last_err = result.stderr[:500].replace("\n", " ")
-        print(f"[TAH-trust]     clone attempt {attempt} failed: {last_err}")
-        if attempt < max_attempts:
-            _time.sleep(3)
-            force_rmtree(tmp_dir)
-            os.makedirs(tmp_dir, exist_ok=True)
-    return False
+        target.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        with (
+            archive.open(info, "r") as source_handle,
+            target.open("xb") as target_handle,
+        ):
+            while True:
+                remaining = policy.max_total_bytes - actual_total
+                chunk = source_handle.read(min(_ZIP_READ_CHUNK_BYTES, remaining + 1))
+                if not chunk:
+                    break
+                actual_total += len(chunk)
+                written += len(chunk)
+                if actual_total > policy.max_total_bytes:
+                    raise _DeterministicAcquisitionError(
+                        f"ZIP expands beyond {policy.max_total_bytes} byte limit"
+                    )
+                target_handle.write(chunk)
+        if written != info.file_size:
+            raise _DeterministicAcquisitionError(
+                f"ZIP entry size changed while extracting: {info.filename!r}"
+            )
 
 
 def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
-    """Phase B：下载与 Git 获取相同默认分支的 ZIP 包，解压到 tmp_dir。"""
+    """下载固定 ref 的 ZIP 包，并在资源预算内解压到 tmp_dir。"""
     token = os.environ.get("GITHUB_TOKEN", "")
     api_url = (
         f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
@@ -466,77 +609,75 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
         print(f"[TAH-trust]     ZIP download (attempt {attempt}/{max_attempts}) {api_url}")
         try:
             req = urllib.request.Request(api_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                zip_data = resp.read()
-            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                zf.extractall(tmp_dir)
+            with tempfile.TemporaryFile() as archive_file:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    _copy_response_bounded(
+                        resp,
+                        archive_file,
+                        _SOURCE_POLICY.max_total_bytes,
+                    )
+                _preflight_zip_entry_count(
+                    archive_file,
+                    _SOURCE_POLICY.max_files,
+                )
+                with zipfile.ZipFile(archive_file) as zf:
+                    _safe_extract_zip(zf, tmp_dir, _SOURCE_POLICY)
             print(f"[TAH-trust]     ZIP download OK (attempt {attempt})")
             return True
-        except Exception as exc:
+        except _DeterministicAcquisitionError as exc:
+            print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
+            return False
+        except urllib.error.HTTPError as exc:
+            print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
+            if exc.code not in {408, 429, 500, 502, 503, 504}:
+                return False
+            if attempt < max_attempts:
+                _time.sleep(3)
+                force_rmtree(tmp_dir)
+                os.makedirs(tmp_dir, exist_ok=True)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
             if attempt < max_attempts:
                 _time.sleep(3)
                 force_rmtree(tmp_dir)
                 os.makedirs(tmp_dir, exist_ok=True)
+        except Exception as exc:
+            print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
+            return False
     return False
 
 
-def _git_head_hash(repo_dir: str) -> str:
-    """读取 git 仓库当前 HEAD 的完整 commit hash（40 位 hex）。"""
-    try:
-        result = subprocess.run(
-            ["git", "-C", repo_dir, "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    return ""
-
-
 def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
-    """级联获取代码：Phase A git clone → Phase B ZIP 下载。
+    """Resolve a commit and acquire it through the budgeted ZIP path.
 
     Returns:
         (repo_root, source_method, commit_hash) — repo_root 是仓库内容根目录路径，
-        source_method 为 "git" 或 "zip"，commit_hash 为真实 40 位 git hash。
-        两个获取路径均只能使用已解析的仓库默认分支；无法证明 commit
-        时视为获取失败，避免扫描或下载的源码不可追溯。
+        source_method 为 "zip"，commit_hash 为真实 40 位 git hash。
+        ZIP 使用默认分支解析出的不可变 commit，而不是可变分支名。
         失败返回 (None, "", "")。
     """
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
+    try:
+        commit_hash = _fetch_repository_commit_hash(parsed)
+    except Exception as exc:
+        print(f"[TAH-trust]     commit resolution failed: {exc}")
+        force_rmtree(tmp_dir)
+        return None, "", ""
 
-    print(f"[TAH-trust] === Phase A: git clone ===")
-    if _git_clone_with_retries(parsed, tmp_dir):
-        commit_hash = _git_head_hash(tmp_dir)
-        if _is_full_commit_hash(commit_hash):
-            print(f"[TAH-trust]     HEAD commit: {commit_hash[:8]}")
-            return tmp_dir, "git", commit_hash
-        print("[TAH-trust]     Git clone lacks a verifiable 40-character HEAD commit")
-
-    force_rmtree(tmp_dir)
-    tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
-    print(f"[TAH-trust] === Phase B: ZIP download ===")
-    if _download_zipball(parsed, tmp_dir):
-        commit_hash = ""
+    print(f"[TAH-trust] === Budgeted ZIP acquisition: {commit_hash[:8]} ===")
+    pinned = {**parsed, "ref": commit_hash}
+    if _download_zipball(pinned, tmp_dir):
         # ZIP 解压后内容在一层子目录中 {owner}-{repo}-{hash}/
         entries = os.listdir(tmp_dir)
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
             inner = os.path.join(tmp_dir, entries[0])
-            match = re.search(r"-([0-9a-f]{40})$", entries[0])
-            if match:
-                commit_hash = match.group(1)
             # 将内层目录内容移到 tmp_dir
             for item in os.listdir(inner):
                 shutil.move(os.path.join(inner, item), os.path.join(tmp_dir, item))
             os.rmdir(inner)
-        if _is_full_commit_hash(commit_hash):
             print(f"[TAH-trust]     ZIP commit: {commit_hash[:8]}")
             return tmp_dir, "zip", commit_hash
-        print("[TAH-trust]     ZIP download lacks a verifiable 40-character commit")
+        print("[TAH-trust]     ZIP download lacks a single repository root")
 
     force_rmtree(tmp_dir)
     return None, "", ""
@@ -687,16 +828,16 @@ def _run_scan_task(
         print(f"[TAH-trust]     owner={parsed['owner']}, repo={parsed['repo']}, "
               f"default_branch={parsed['ref']}, subdir={parsed['subdir']}")
 
-        _scans[scan_id]["status"] = "cloning"
+        _scans[scan_id]["status"] = "downloading"
 
         repo_root, method, commit_hash = _acquire_repo_source(parsed)
         if repo_root is None:
             _scans[scan_id]["status"] = "error"
             _scans[scan_id]["error"] = (
-                "无法获取仓库（Git clone + ZIP 下载均失败）。"
+                "无法解析或下载受限的仓库快照。"
                 "请检查 GitHub 连接。"
             )
-            print(f"[TAH-trust] *** 获取仓库失败（git + zip 均失败）")
+            print(f"[TAH-trust] *** 获取仓库失败（commit + budgeted ZIP）")
             if on_complete:
                 on_complete(scan_id, None, _scans[scan_id]["error"])
             return
@@ -709,9 +850,10 @@ def _run_scan_task(
             root_manifest = Path(repo_root) / "manifest.json"
             if root_manifest.is_file():
                 try:
-                    root_data = json.loads(
-                        root_manifest.read_text(encoding="utf-8")
-                    )
+                    root_data = json.loads(_read_text_file_bounded(
+                        root_manifest,
+                        _SOURCE_POLICY.max_file_bytes,
+                    ))
                     if not isinstance(root_data, dict):
                         raise ValueError("manifest root must be an object")
                     source_data = root_data.get("source") or {}
@@ -740,6 +882,26 @@ def _run_scan_task(
         else:
             scan_dir = repo_root
 
+        parent_package_json: dict[str, Any] | None = None
+        if subdir:
+            root_package = Path(repo_root) / "package.json"
+            if root_package.is_file():
+                try:
+                    root_package_data = json.loads(_read_text_file_bounded(
+                        root_package,
+                        _SOURCE_POLICY.max_file_bytes,
+                    ))
+                    if (
+                        isinstance(root_package_data, dict)
+                        and root_package_data.get("author")
+                    ):
+                        parent_package_json = root_package_data
+                except (json.JSONDecodeError, OSError, ValueError) as exc:
+                    logging.warning(
+                        "Ignoring invalid bounded parent package metadata: %s",
+                        exc,
+                    )
+
         # ── 多能力发现（供提交页选择子目录） ──
         capabilities: list[dict[str, str]] = []
         try:
@@ -755,7 +917,8 @@ def _run_scan_task(
                     sys.modules["extract_skills"] = extract_mod
                     spec.loader.exec_module(extract_mod)
             capabilities = sys.modules["extract_skills"].discover_capabilities(
-                repo_root
+                repo_root,
+                policy=_SOURCE_POLICY,
             )
             if subdir:
                 prefix = str(subdir).rstrip("/")
@@ -778,7 +941,11 @@ def _run_scan_task(
         _scans[scan_id]["status"] = "scanning"
         print(f"[TAH-trust]     加载扫描器, scan_dir={scan_dir}")
         RiskScanner = _load_scanner()
-        scanner = RiskScanner(scan_dir, source_commit_hash=commit_hash)
+        scanner = RiskScanner(
+            scan_dir,
+            source_commit_hash=commit_hash,
+            policy=_SOURCE_POLICY,
+        )
         scan_report = scanner.scan()
 
         pkg_name = scan_report.get("package_name", "unknown")
@@ -823,6 +990,10 @@ def _run_scan_task(
             scan_dir,
             repo_url=repo_url,
             subdirectory=subdir,
+            policy=scanner.policy,
+            inventory=scanner.inventory,
+            file_contents=scanner._file_contents,
+            parent_package_json=parent_package_json,
         )
         acquisition_facts = _build_acquisition_facts(
             parsed,
@@ -932,7 +1103,17 @@ def _run_scan_task(
         if on_complete:
             on_complete(scan_id, None, err_msg)
 
-def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_url: str = "", subdirectory: str | None = None) -> Dict[str, Any]:
+def _build_package_metadata(
+    scan_report: Dict[str, Any],
+    target_dir: str,
+    repo_url: str = "",
+    subdirectory: str | None = None,
+    *,
+    policy: ScanPolicy | None = None,
+    inventory: ScanInventory | None = None,
+    file_contents: dict[str, str] | None = None,
+    parent_package_json: dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """从扫描报告和目标目录构建 package_metadata 用于评分引擎。
 
     优先使用 extract_skills 模块进行完整提取（11 个必填字段、依赖解析、
@@ -952,7 +1133,15 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
                 spec.loader.exec_module(mod)
 
         extract_single_skill = sys.modules["extract_skills"].extract_single_skill
-        data = extract_single_skill(target, repo_url=repo_url, subdirectory=subdirectory)
+        data = extract_single_skill(
+            target,
+            repo_url=repo_url,
+            subdirectory=subdirectory,
+            policy=policy,
+            inventory=inventory,
+            file_contents=file_contents,
+            parent_package_json=parent_package_json,
+        )
         if data:
             print(f"[TAH-trust]     extract_skills 成功提取: name={data.get('name')}, "
                   f"version={data.get('version')}, category={data.get('category')}")
@@ -964,11 +1153,11 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
 
     # ── 回退：原始简易提取逻辑 ──
     # 尝试 manifest.json
-    manifest = target / "manifest.json"
-    if manifest.is_file():
+    bounded_contents = file_contents or {}
+    manifest_text = bounded_contents.get("manifest.json")
+    if manifest_text is not None:
         try:
-            with open(manifest, encoding="utf-8") as fh:
-                value = json.load(fh)
+            value = json.loads(manifest_text)
             if isinstance(value, dict):
                 return value
             logging.warning("manifest.json root is not an object for %s", target)
@@ -976,11 +1165,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
             logging.warning("manifest.json fallback failed for %s: %s", target, e)
 
     # 尝试 plugin.json
-    plugin = target / "plugin.json"
-    if plugin.is_file():
+    plugin_text = bounded_contents.get("plugin.json")
+    if plugin_text is not None:
         try:
-            with open(plugin, encoding="utf-8") as fh:
-                value = json.load(fh)
+            value = json.loads(plugin_text)
             if isinstance(value, dict):
                 return value
             logging.warning("plugin.json root is not an object for %s", target)
@@ -988,12 +1176,10 @@ def _build_package_metadata(scan_report: Dict[str, Any], target_dir: str, repo_u
             logging.warning("plugin.json fallback failed for %s: %s", target, e)
 
     # 尝试解析 SKILL.md frontmatter
-    skill = target / "SKILL.md"
-    if skill.is_file():
+    skill_text = bounded_contents.get("SKILL.md")
+    if skill_text is not None:
         try:
-            with open(skill, encoding="utf-8") as fh:
-                fm_content = fh.read()
-            result = parse_frontmatter(fm_content)
+            result = parse_frontmatter(skill_text)
             if result.data:
                 return result.data
         except (OSError, UnicodeDecodeError) as e:
@@ -1157,7 +1343,7 @@ def get_scan_status(
 
     status 可能的值:
         pending  — 已入队，等待处理
-        cloning  — 正在克隆仓库
+        downloading — 正在下载受限仓库快照
         scanning — 正在运行风险扫描
         scoring  — 正在计算信任评分
         saving   — 正在保存报告
