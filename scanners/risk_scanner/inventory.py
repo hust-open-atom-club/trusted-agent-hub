@@ -89,115 +89,149 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
 
     max_files = max(policy.max_files, 0)
 
-    for root, dirs, files in os.walk(target_dir, topdown=True, followlinks=False):
-        root_path = Path(root)
-        dirs[:] = sorted(d for d in dirs if d != ".git")
-        # Do not descend through directory symlinks, including links outside root.
-        dirs[:] = [d for d in dirs if not (root_path / d).is_symlink()]
-
-        relative_root = root_path.relative_to(target_dir)
+    def iter_files(current_dir: Path, relative_root: Path):
+        """Yield files without materializing a directory's full file list."""
         root_depth = 0 if relative_root == Path(".") else len(relative_root.parts)
-        if root_depth >= policy.max_depth and dirs:
-            add_violation("max_depth")
-            for directory in dirs[: policy.max_skipped_samples]:
-                add_skipped(
-                    "max_depth_exceeded",
-                    (relative_root / directory).as_posix()
-                    if relative_root != Path(".")
-                    else directory,
-                )
-            dirs[:] = []
 
-        # Keep discovery bounded.  Sorting by read priority preserves the old
-        # preference for manifests and source files without collecting an
-        # unbounded candidate list first.
-        relative_names = [
-            ((relative_root / name).as_posix() if relative_root != Path(".") else name, name)
-            for name in files
-        ]
-        for rel, name in sorted(relative_names, key=lambda item: _read_priority(item[0])):
-            # The limit is exclusive: reaching max_files is valid.  Only a
-            # further candidate proves that the tree contains more files than
-            # the configured bound.  Keep the extra candidate out of the
-            # inventory so memory and downstream work remain bounded.
-            if len(records) >= max_files and (max_files == 0 or records):
-                discovered_at_least = True
-                add_violation("max_files")
-                records.sort(key=lambda record: record.relative_path)
-                return ScanInventory(
-                    records,
-                    discovered_bytes,
-                    analyzed_bytes,
-                    violations,
-                    discovered_files,
-                    skipped,
-                    samples,
-                    discovered_files,
-                    discovered_at_least,
-                    policy.max_skipped_samples,
-                    policy,
-                )
-
-            path = root_path / name
-            discovered_files += 1
+        # Scan one priority bucket at a time.  Each scandir iterator is bounded
+        # by the OS directory handle rather than by the number of entries.
+        for priority in range(5):
             try:
-                stat = path.lstat()
-                size = stat.st_size if not path.is_symlink() else 0
-                stat_mtime_ns = getattr(stat, "st_mtime_ns", None)
-                stat_inode = getattr(stat, "st_ino", None)
+                with os.scandir(current_dir) as entries:
+                    for entry in entries:
+                        try:
+                            is_symlink = entry.is_symlink()
+                            if entry.is_dir(follow_symlinks=True) and is_symlink:
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                continue
+                            relative_path = (
+                                relative_root / entry.name
+                            ).as_posix() if relative_root != Path(".") else entry.name
+                            if _read_priority(relative_path)[0] == priority:
+                                yield relative_path, Path(entry.path)
+                        except OSError:
+                            continue
             except OSError:
-                size = 0
-                stat_mtime_ns = None
-                stat_inode = None
-            discovered_bytes += size
-            ext = path.suffix.lower()
-            depth = _depth(rel)
-            is_symlink = path.is_symlink()
-            reason: str | None = None
-            if is_symlink:
-                try:
-                    if target_dir not in path.resolve().parents:
-                        reason = "symlink_outside_root"
-                    else:
-                        reason = "symlink"
-                except OSError:
-                    reason = "symlink_unreadable"
-            elif size > policy.max_file_bytes:
-                reason = "file_too_large"
-                add_violation("max_file_bytes")
-            elif ext in NON_TEXT_EXTENSIONS:
-                reason = "binary" if ext in {".exe", ".dll", ".so", ".bin", ".dylib"} else "known_non_text"
-            elif total_budget + size > policy.max_total_bytes:
-                reason = "total_budget_exceeded"
-                add_violation("max_total_bytes")
-            elif path.name in GENERAL_RULE_EXCLUDED_FILES:
-                reason = "general_rule_excluded"
+                return
 
-            special = reason == "general_rule_excluded"
-            record = FileRecord(
-                rel,
-                path,
-                size,
-                ext,
-                infer_file_type(rel),
-                depth,
-                is_symlink,
-                "special_pending" if special else ("skipped" if reason else "eligible"),
-                reason,
-                stat_mtime_ns,
-                stat_inode,
+        if root_depth >= policy.max_depth:
+            try:
+                with os.scandir(current_dir) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.name == ".git" or entry.is_symlink():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                add_violation("max_depth")
+                                relative_path = (
+                                    relative_root / entry.name
+                                ).as_posix() if relative_root != Path(".") else entry.name
+                                add_skipped("max_depth_exceeded", relative_path)
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+            return
+
+        try:
+            with os.scandir(current_dir) as entries:
+                for entry in entries:
+                    try:
+                        if entry.name == ".git" or entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            child_root = (
+                                relative_root / entry.name
+                            ) if relative_root != Path(".") else Path(entry.name)
+                            yield from iter_files(Path(entry.path), child_root)
+                    except OSError:
+                        continue
+        except OSError:
+            return
+
+    for rel, path in iter_files(target_dir, Path(".")):
+        # The limit is exclusive: reaching max_files is valid.  Only a
+        # further candidate proves that the tree contains more files than
+        # the configured bound.  Keep the extra candidate out of the
+        # inventory so memory and downstream work remain bounded.
+        if len(records) >= max_files and (max_files == 0 or records):
+            discovered_at_least = True
+            add_violation("max_files")
+            records.sort(key=lambda record: record.relative_path)
+            return ScanInventory(
+                records,
+                discovered_bytes,
+                analyzed_bytes,
+                violations,
+                discovered_files,
+                skipped,
+                samples,
+                discovered_files,
+                discovered_at_least,
+                policy.max_skipped_samples,
+                policy,
             )
-            records.append(record)
-            if reason:
-                add_skipped(reason, rel)
-            elif not special:
-                total_budget += size
-                analyzed_bytes += size
-                record.read_status = "pending"
-            else:
-                # Lock/manifests are parsed by dedicated analyzers, never generic regex rules.
-                total_budget += size
-                analyzed_bytes += size
+
+        discovered_files += 1
+        try:
+            stat = path.lstat()
+            size = stat.st_size if not path.is_symlink() else 0
+            stat_mtime_ns = getattr(stat, "st_mtime_ns", None)
+            stat_inode = getattr(stat, "st_ino", None)
+        except OSError:
+            size = 0
+            stat_mtime_ns = None
+            stat_inode = None
+        discovered_bytes += size
+        ext = path.suffix.lower()
+        depth = _depth(rel)
+        is_symlink = path.is_symlink()
+        reason: str | None = None
+        if is_symlink:
+            try:
+                if target_dir not in path.resolve().parents:
+                    reason = "symlink_outside_root"
+                else:
+                    reason = "symlink"
+            except OSError:
+                reason = "symlink_unreadable"
+        elif size > policy.max_file_bytes:
+            reason = "file_too_large"
+            add_violation("max_file_bytes")
+        elif ext in NON_TEXT_EXTENSIONS:
+            reason = "binary" if ext in {".exe", ".dll", ".so", ".bin", ".dylib"} else "known_non_text"
+        elif total_budget + size > policy.max_total_bytes:
+            reason = "total_budget_exceeded"
+            add_violation("max_total_bytes")
+        elif path.name in GENERAL_RULE_EXCLUDED_FILES:
+            reason = "general_rule_excluded"
+
+        special = reason == "general_rule_excluded"
+        record = FileRecord(
+            rel,
+            path,
+            size,
+            ext,
+            infer_file_type(rel),
+            depth,
+            is_symlink,
+            "special_pending" if special else ("skipped" if reason else "eligible"),
+            reason,
+            stat_mtime_ns,
+            stat_inode,
+        )
+        records.append(record)
+        if reason:
+            add_skipped(reason, rel)
+        elif not special:
+            total_budget += size
+            analyzed_bytes += size
+            record.read_status = "pending"
+        else:
+            # Lock/manifests are parsed by dedicated analyzers, never generic regex rules.
+            total_budget += size
+            analyzed_bytes += size
 
     records.sort(key=lambda record: record.relative_path)
     return ScanInventory(records, discovered_bytes, analyzed_bytes, violations,

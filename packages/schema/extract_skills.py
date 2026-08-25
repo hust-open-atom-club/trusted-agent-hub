@@ -36,11 +36,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from scanners.risk_scanner.inventory import (
+    ScanInventory,
+    build_inventory,
+    load_text_files,
+)
+from scanners.risk_scanner.policy import ScanPolicy
+
 # ── 共享 YAML frontmatter 解析器 ─────────────────────────────────
 try:
-    from packages.schema.frontmatter import parse_frontmatter_file, split_frontmatter
+    from packages.schema.frontmatter import split_frontmatter
 except ModuleNotFoundError:  # 允许直接执行本文件
-    from frontmatter import parse_frontmatter_file, split_frontmatter
+    from frontmatter import split_frontmatter
 
 # ── 日志 ──────────────────────────────────────────────────────────
 log = logging.getLogger("extract_skills")
@@ -170,20 +177,14 @@ def to_kebab_case(name: str) -> str:
     return s
 
 
-def extract_frontmatter(filepath: Path) -> dict[str, Any]:
-    """从 Markdown 文件中提取 YAML frontmatter。"""
-    result = parse_frontmatter_file(filepath)
-    return result.data
-
-
-def _read_json_object(filepath: Path) -> dict[str, Any]:
+def _parse_json_object(text: str, source: str | Path) -> dict[str, Any]:
     try:
-        value = json.loads(filepath.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        log.warning("无法解析 JSON 对象 %s: %s", filepath, exc)
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        log.warning("无法解析 JSON 对象 %s: %s", source, exc)
         return {}
     if not isinstance(value, dict):
-        log.warning("JSON 根节点必须是对象: %s", filepath)
+        log.warning("JSON 根节点必须是对象: %s", source)
         return {}
     return value
 
@@ -234,37 +235,96 @@ class ScanResult:
     has_plugin_manifest: bool = False  # 是否存在 .claude-plugin/plugin.json 或 plugin.json
     manifest_data: dict[str, Any] = field(default_factory=dict)
     permission_evidence: list[dict[str, Any]] = field(default_factory=list)
+    file_contents: dict[str, str] = field(default_factory=dict, repr=False)
+    inventory: ScanInventory | None = field(default=None, repr=False)
+
+    def text(self, relative_path: str | Path) -> str | None:
+        """Return text from the bounded scan snapshot, never from disk."""
+        key = Path(relative_path).as_posix()
+        if key.startswith("./"):
+            key = key[2:]
+        return self.file_contents.get(key)
+
+    def json_object(self, relative_path: str | Path) -> dict[str, Any]:
+        text = self.text(relative_path)
+        if text is None:
+            return {}
+        return _parse_json_object(text, relative_path)
+
+    def has_file(self, relative_path: str | Path) -> bool:
+        key = Path(relative_path).as_posix()
+        if key.startswith("./"):
+            key = key[2:]
+        return key in self.all_files
 
 
-def scan_directory(skill_dir: Path) -> ScanResult:
-    """扫描单个 Skill 目录，判定类型并提取基础信息。"""
+def scan_directory(
+    skill_dir: Path,
+    *,
+    policy: ScanPolicy | None = None,
+    inventory: ScanInventory | None = None,
+    file_contents: dict[str, str] | None = None,
+) -> ScanResult:
+    """扫描单个 Skill 目录，判定类型并提取基础信息。
+
+    All discovery and reads use one bounded inventory.  Callers that already
+    scanned the directory can pass the scanner's inventory and text snapshot
+    to avoid a second traversal and, critically, to preserve the same budget.
+    """
+    skill_dir = skill_dir.resolve()
+    effective_policy = (
+        policy or (inventory.policy if inventory else None) or ScanPolicy()
+    )
+    if (
+        policy is not None
+        and inventory is not None
+        and inventory.policy not in {None, policy}
+    ):
+        raise ValueError("inventory policy does not match extraction policy")
+    if inventory is None:
+        inventory = build_inventory(skill_dir, effective_policy)
+    if file_contents is None:
+        file_contents = load_text_files(inventory, policy=effective_policy)
+
+    for record in inventory.files:
+        try:
+            record.absolute_path.relative_to(skill_dir)
+        except ValueError as exc:
+            raise ValueError("inventory is outside the extraction root") from exc
+
+    inventory_paths = {record.relative_path for record in inventory.files}
     result = ScanResult(
         directory_name=skill_dir.name,
         directory_path=skill_dir,
+        all_files=[record.relative_path for record in inventory.files],
+        file_contents={
+            path: content for path, content in file_contents.items()
+            if path in inventory_paths
+        },
+        inventory=inventory,
     )
 
-    for root, _dirs, files in os.walk(skill_dir):
-        for fname in files:
-            full = Path(root) / fname
-            rel = str(full.relative_to(skill_dir)).replace("\\", "/")
-            result.all_files.append(rel)
-
-            # 检查是否为代码文件或项目配置文件
-            ext = full.suffix.lower()
-            if ext in CODE_EXTENSIONS or fname in PROJECT_CONFIG_FILES:
-                result.has_code = True
+    for rel in result.all_files:
+        path = Path(rel)
+        if path.suffix.lower() in CODE_EXTENSIONS or path.name in PROJECT_CONFIG_FILES:
+            result.has_code = True
 
     # 查找 SKILL.md
     skill_md_candidate = skill_dir / "SKILL.md"
-    if skill_md_candidate.exists():
+    if result.text("SKILL.md") is not None:
         result.has_skill_md = True
         result.skill_md_path = skill_md_candidate
     else:
         # 回退：找目录内最大的 .md 文件
-        md_files = [skill_dir / f for f in result.all_files
-                    if f.lower().endswith(".md") and "/" not in f]
-        if md_files:
-            largest = max(md_files, key=lambda p: p.stat().st_size)
+        md_records = [
+            record for record in inventory.files
+            if record.relative_path.lower().endswith(".md")
+            and "/" not in record.relative_path
+            and record.relative_path in result.file_contents
+        ]
+        if md_records:
+            largest_record = max(md_records, key=lambda item: item.size_bytes)
+            largest = skill_dir / largest_record.relative_path
             result.has_skill_md = True
             result.skill_md_path = largest
             log.warning("%s: 无 SKILL.md，使用 %s 作为替代",
@@ -272,10 +332,8 @@ def scan_directory(skill_dir: Path) -> ScanResult:
 
     # 解析 frontmatter 和正文
     if result.has_skill_md and result.skill_md_path:
-        try:
-            full_text = result.skill_md_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            full_text = ""
+        relative_skill_path = result.skill_md_path.relative_to(skill_dir).as_posix()
+        full_text = result.text(relative_skill_path) or ""
         parsed, body = split_frontmatter(full_text)
         result.frontmatter = parsed.data
         result.skill_md_body = body
@@ -290,11 +348,12 @@ def scan_directory(skill_dir: Path) -> ScanResult:
         skill_dir / "plugin.json",
     ]
     for manifest_path in manifest_candidates:
-        if manifest_path.is_file():
+        relative_manifest = manifest_path.relative_to(skill_dir).as_posix()
+        if result.text(relative_manifest) is not None:
             result.has_manifest = True
             if manifest_path.name == "plugin.json":
                 result.has_plugin_manifest = True
-            result.manifest_data = _read_json_object(manifest_path)
+            result.manifest_data = result.json_object(relative_manifest)
             break
 
     log.info("  [%s] 类型=%s, 文件数=%d, SKILL.md=%s",
@@ -323,6 +382,10 @@ def _infer_package_type(result: ScanResult) -> str:
 def discover_capabilities(
     source_dir: str | Path,
     max_depth: int = 4,
+    *,
+    policy: ScanPolicy | None = None,
+    inventory: ScanInventory | None = None,
+    file_contents: dict[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """发现仓库中的多个能力包目录（多 Skill / MCP / Plugin 仓库）。
 
@@ -330,38 +393,77 @@ def discover_capabilities(
     返回按深度排序的 [{path, name, type}]。
     """
     root = Path(source_dir).resolve()
+    effective_policy = (
+        policy or (inventory.policy if inventory else None) or ScanPolicy()
+    )
+    if (
+        policy is not None
+        and inventory is not None
+        and inventory.policy not in {None, policy}
+    ):
+        raise ValueError("inventory policy does not match discovery policy")
+    if inventory is None:
+        inventory = build_inventory(root, effective_policy)
+    if file_contents is None:
+        file_contents = load_text_files(inventory, policy=effective_policy)
+
+    for record in inventory.files:
+        try:
+            record.absolute_path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("inventory is outside the discovery root") from exc
+
     found: list[dict[str, str]] = []
     seen: set[str] = set()
 
-    for current, dirs, files in os.walk(root):
-        current = Path(current)
-        dirs[:] = [
-            d for d in dirs
-            if d not in _SKIP_CAPABILITY_DIRS and not d.startswith(".")
-        ]
-        rel_dir = current.relative_to(root)
-        depth = 0 if str(rel_dir) == "." else len(rel_dir.parts)
-        if depth > max_depth:
-            dirs[:] = []
+    relative_files = {record.relative_path for record in inventory.files}
+    directories: set[Path] = {Path(".")}
+    for relative_file in relative_files:
+        path = Path(relative_file)
+        directory_parts = path.parts[:-1]
+        if any(
+            part in _SKIP_CAPABILITY_DIRS or part.startswith(".")
+            for part in directory_parts
+        ):
             continue
+        directory = Path(*directory_parts) if directory_parts else Path(".")
+        depth = 0 if directory == Path(".") else len(directory.parts)
+        if depth <= min(max_depth, effective_policy.max_depth):
+            directories.add(directory)
+
+    boundaries: list[Path] = []
+    for rel_dir in sorted(directories, key=lambda item: (len(item.parts), item.as_posix())):
+        if any(parent == rel_dir or parent in rel_dir.parents for parent in boundaries):
+            continue
+        current = root if rel_dir == Path(".") else root / rel_dir
+        depth = 0 if rel_dir == Path(".") else len(rel_dir.parts)
+
+        def relative_file(name: str) -> str:
+            return name if depth == 0 else (rel_dir / name).as_posix()
 
         ptype: str | None = None
         name: str | None = None
-        skill_md = current / "SKILL.md"
-        plugin_manifest = current / ".claude-plugin" / "plugin.json"
-        plugin_json = current / "plugin.json"
-        manifest_json = current / "manifest.json"
+        skill_md = relative_file("SKILL.md")
+        plugin_manifest = relative_file(".claude-plugin/plugin.json")
+        plugin_json = relative_file("plugin.json")
+        manifest_json = relative_file("manifest.json")
 
-        if skill_md.is_file():
+        if skill_md in relative_files:
             ptype = "skill"
-            try:
-                name = extract_frontmatter(skill_md).get("name")
-            except Exception:
-                pass
-        elif plugin_manifest.is_file() or plugin_json.is_file():
+            skill_text = file_contents.get(skill_md)
+            if skill_text is not None:
+                try:
+                    name = split_frontmatter(skill_text)[0].data.get("name")
+                except Exception:
+                    pass
+        elif plugin_manifest in relative_files or plugin_json in relative_files:
             ptype = "plugin"
-        elif manifest_json.is_file():
-            manifest = _read_json_object(manifest_json)
+        elif manifest_json in relative_files:
+            manifest_text = file_contents.get(manifest_json)
+            manifest = (
+                _parse_json_object(manifest_text, manifest_json)
+                if manifest_text is not None else {}
+            )
             mtype = manifest.get("type")
             if mtype in VALID_PACKAGE_TYPES:
                 ptype = str(mtype)
@@ -387,7 +489,7 @@ def discover_capabilities(
             "type": ptype,
         })
         # manifest / SKILL.md 标记能力包边界：命中后不深入子目录
-        dirs[:] = []
+        boundaries.append(rel_dir)
 
     found.sort(key=lambda item: (item["path"].count("/"), item["path"]))
     return found
@@ -404,56 +506,24 @@ def detect_license(spdx_text: str) -> str:
     return "UNLICENSED"
 
 
-def _get_parent_dirs(start: Path) -> list[Path]:
-    """向上遍历获取父目录列表（最多 10 层）。"""
-    parents: list[Path] = []
-    current = start.resolve().parent
-    for _ in range(10):
-        parents.append(current)
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return parents
-
-
 def extract_license(result: ScanResult) -> str:
-    """从目录及其父目录中提取 license 信息。"""
-    search_dirs = [result.directory_path] + _get_parent_dirs(result.directory_path)
+    """从受限快照中的 license 元数据提取 SPDX 标识符。"""
+    for fname in ("LICENSE", "LICENSE.md", "LICENSE.txt"):
+        text = result.text(fname)
+        if text is not None:
+            spdx = detect_license(text)
+            if spdx != "UNLICENSED":
+                return spdx
 
-    for search_dir in search_dirs:
-        # 1) LICENSE 文件
-        for fname in ("LICENSE", "LICENSE.md", "LICENSE.txt"):
-            lic_path = search_dir / fname
-            if lic_path.exists():
-                try:
-                    text = lic_path.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue
-                spdx = detect_license(text)
-                if spdx != "UNLICENSED":
-                    return spdx
+    pkg = result.json_object("package.json")
+    if "license" in pkg:
+        return str(pkg["license"])
 
-        # 2) package.json
-        pkg_path = search_dir / "package.json"
-        if pkg_path.exists():
-            try:
-                pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-                if "license" in pkg:
-                    return str(pkg["license"])
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        # 3) pyproject.toml
-        ppt_path = search_dir / "pyproject.toml"
-        if ppt_path.exists():
-            try:
-                text = ppt_path.read_text(encoding="utf-8")
-                m = re.search(r'license\s*=\s*"([^"]+)"', text)
-                if m:
-                    return m.group(1)
-            except OSError:
-                pass
+    text = result.text("pyproject.toml")
+    if text is not None:
+        m = re.search(r'license\s*=\s*"([^"]+)"', text)
+        if m:
+            return m.group(1)
 
     return "UNLICENSED"
 
@@ -465,14 +535,11 @@ def extract_license(result: ScanResult) -> str:
 def extract_version(result: ScanResult) -> str:
     """提取版本号：VERSION > package.json > pyproject.toml > 默认。"""
     # 1) VERSION 文件
-    ver_path = result.directory_path / "VERSION"
-    if ver_path.exists():
-        try:
-            v = ver_path.read_text(encoding="utf-8").strip()
-            if re.match(r"^\d+\.\d+\.\d+", v):
-                return v
-        except OSError:
-            pass
+    version_text = result.text("VERSION")
+    if version_text is not None:
+        v = version_text.strip()
+        if re.match(r"^\d+\.\d+\.\d+", v):
+            return v
 
     # 2) frontmatter 中的 version
     fm_ver = result.frontmatter.get("version")
@@ -487,45 +554,33 @@ def extract_version(result: ScanResult) -> str:
             return str(meta_ver)
 
     # 3) package.json
-    pkg_path = result.directory_path / "package.json"
-    if pkg_path.exists():
-        try:
-            pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-            v = pkg.get("version", "")
-            if re.match(r"^\d+\.\d+\.\d+", str(v)):
-                return str(v)
-        except (json.JSONDecodeError, OSError):
-            pass
+    pkg = result.json_object("package.json")
+    v = pkg.get("version", "")
+    if re.match(r"^\d+\.\d+\.\d+", str(v)):
+        return str(v)
 
     # 4) pyproject.toml
-    ppt_path = result.directory_path / "pyproject.toml"
-    if ppt_path.exists():
-        try:
-            text = ppt_path.read_text(encoding="utf-8")
-            m = re.search(r'version\s*=\s*"([^"]+)"', text)
-            if m:
-                return m.group(1)
-        except OSError:
-            pass
+    text = result.text("pyproject.toml")
+    if text is not None:
+        m = re.search(r'version\s*=\s*"([^"]+)"', text)
+        if m:
+            return m.group(1)
 
     return "0.1.0"
 
 
 def extract_package_json_deps(result: ScanResult) -> list[dict[str, str]]:
     """从 package.json 提取 npm 依赖。"""
-    pkg_path = result.directory_path / "package.json"
-    if not pkg_path.exists():
+    pkg_relative = "package.json"
+    if result.text(pkg_relative) is None:
         # 也查子目录
         for f in result.all_files:
-            if f.endswith("/package.json"):
-                pkg_path = result.directory_path / f
+            if f.endswith("/package.json") and result.text(f) is not None:
+                pkg_relative = f
                 break
         else:
             return []
-    try:
-        pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
+    pkg = result.json_object(pkg_relative)
 
     deps: dict[str, str] = {}
     for section in ("dependencies", "devDependencies"):
@@ -541,61 +596,50 @@ def extract_pip_deps(result: ScanResult) -> list[dict[str, str]]:
 
     # requirements.txt
     for fname in ("requirements.txt", "Requirements.txt"):
-        req_path = result.directory_path / fname
-        if not req_path.exists():
+        req_text = result.text(fname)
+        if req_text is None:
             continue
-        try:
-            for line in req_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith("-"):
-                    continue
-                # 格式: package==version 或 package>=version 或 package
-                m = re.match(r"^([a-zA-Z0-9_.-]+)\s*([><=!~]+\s*[\d.*]+)?", line)
-                if m:
-                    name = m.group(1)
-                    ver = m.group(2).strip() if m.group(2) else "*"
-                    deps.append({"name": name, "version": ver})
-        except OSError:
-            pass
+        for line in req_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+            # 格式: package==version 或 package>=version 或 package
+            m = re.match(r"^([a-zA-Z0-9_.-]+)\s*([><=!~]+\s*[\d.*]+)?", line)
+            if m:
+                name = m.group(1)
+                ver = m.group(2).strip() if m.group(2) else "*"
+                deps.append({"name": name, "version": ver})
 
     # pyproject.toml (仅解析 [project] dependencies 列表)
-    ppt_path = result.directory_path / "pyproject.toml"
-    if ppt_path.exists():
-        try:
-            text = ppt_path.read_text(encoding="utf-8")
-            # 简单提取 dependencies 数组中的包名版本
-            in_deps = False
-            for line in text.splitlines():
-                if re.match(r"^dependencies\s*=\s*\[", line):
-                    in_deps = True
+    text = result.text("pyproject.toml")
+    if text is not None:
+        # 简单提取 dependencies 数组中的包名版本
+        in_deps = False
+        for line in text.splitlines():
+            if re.match(r"^dependencies\s*=\s*\[", line):
+                in_deps = True
+                continue
+            if in_deps:
+                if line.strip() == "]":
+                    in_deps = False
                     continue
-                if in_deps:
-                    if line.strip() == "]":
-                        in_deps = False
-                        continue
-                    m = re.search(r'"([^"]+)"', line)
-                    if m:
-                        pkg_str = m.group(1)
-                        pkg_m = re.match(r"^([a-zA-Z0-9_.-]+)\s*([><=!~]+[\d.*]+)?",
-                                         pkg_str)
-                        if pkg_m:
-                            name = pkg_m.group(1)
-                            ver = pkg_m.group(2) if pkg_m.group(2) else "*"
-                            deps.append({"name": name, "version": ver})
-        except OSError:
-            pass
+                m = re.search(r'"([^"]+)"', line)
+                if m:
+                    pkg_str = m.group(1)
+                    pkg_m = re.match(r"^([a-zA-Z0-9_.-]+)\s*([><=!~]+[\d.*]+)?",
+                                     pkg_str)
+                    if pkg_m:
+                        name = pkg_m.group(1)
+                        ver = pkg_m.group(2) if pkg_m.group(2) else "*"
+                        deps.append({"name": name, "version": ver})
 
     return deps
 
 
 def extract_docker_deps(result: ScanResult) -> tuple[list[dict[str, str]], str]:
     """从 Dockerfile 提取 docker 依赖和安装命令。返回 (images, cmd)。"""
-    docker_path = result.directory_path / "Dockerfile"
-    if not docker_path.exists():
-        return [], ""
-    try:
-        text = docker_path.read_text(encoding="utf-8")
-    except OSError:
+    text = result.text("Dockerfile")
+    if text is None:
         return [], ""
 
     images: list[dict[str, str]] = []
@@ -666,20 +710,16 @@ def extract_entry_points(result: ScanResult) -> dict[str, Any] | None:
     if result.skill_type == "prompt":
         return None
 
-    pkg_path = result.directory_path / "package.json"
-    if not pkg_path.exists():
+    pkg_relative = "package.json"
+    if result.text(pkg_relative) is None:
         # 查子目录
         for f in result.all_files:
-            if f.endswith("/package.json"):
-                pkg_path = result.directory_path / f
+            if f.endswith("/package.json") and result.text(f) is not None:
+                pkg_relative = f
                 break
         else:
             return None
-
-    try:
-        pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    pkg = result.json_object(pkg_relative)
 
     entry: dict[str, Any] = {}
     if "main" in pkg:
@@ -709,6 +749,44 @@ def _find_git_root(start_dir: Path) -> Path | None:
         if parent == d:
             return None
         d = parent
+    return None
+
+
+def _load_parent_package_json(
+    source_path: Path,
+    policy: ScanPolicy,
+) -> dict[str, Any] | None:
+    """Read ancestor package metadata through a bounded snapshot."""
+    max_bytes = max(policy.max_file_bytes, 0)
+    candidates: list[Path] = []
+    git_root = _find_git_root(source_path)
+    if git_root is not None:
+        candidates.append(git_root / "package.json")
+
+    current = source_path.resolve().parent
+    for _ in range(10):
+        candidates.append(current / "package.json")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            with candidate.open("rb") as handle:
+                raw = handle.read(max_bytes + 1)
+            if len(raw) > max_bytes:
+                continue
+            value = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("author"):
+            return value
     return None
 
 
@@ -848,19 +926,15 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             item["file"] = file
         result.permission_evidence.append(item)
 
-    def read_bounded_text(path: Path, max_bytes: int) -> tuple[str, int] | None:
-        try:
-            with path.open("rb") as handle:
-                raw_content = handle.read(max_bytes + 1)
-        except OSError:
+    def read_bounded_text(relative_path: str, max_bytes: int) -> tuple[str, int] | None:
+        content = result.text(relative_path)
+        if content is None:
             return None
-        if len(raw_content) > max_bytes:
-            log.warning("permission inference skipped oversized file: %s", path)
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > max_bytes:
+            log.warning("permission inference skipped oversized file: %s", relative_path)
             return None
-        try:
-            return raw_content.decode("utf-8"), len(raw_content)
-        except UnicodeDecodeError:
-            return None
+        return content, content_bytes
 
     code_parts: list[tuple[str, str]] = []
     code_candidates = sorted(
@@ -870,8 +944,7 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     )
     total_permission_bytes = 0
     for filename in code_candidates[:PERMISSION_INFERENCE_MAX_CODE_FILES]:
-        path = result.directory_path / filename
-        read_result = read_bounded_text(path, PERMISSION_INFERENCE_MAX_FILE_BYTES)
+        read_result = read_bounded_text(filename, PERMISSION_INFERENCE_MAX_FILE_BYTES)
         if read_result is None:
             continue
         content, content_bytes = read_result
@@ -899,9 +972,8 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             if remaining_bytes <= 0:
                 log.warning("permission inference byte limit reached in package metadata")
                 break
-            package_path = result.directory_path / filename
             read_result = read_bounded_text(
-                package_path, min(PERMISSION_INFERENCE_MAX_FILE_BYTES, remaining_bytes)
+                filename, min(PERMISSION_INFERENCE_MAX_FILE_BYTES, remaining_bytes)
             )
             if read_result is None:
                 continue
@@ -1388,7 +1460,7 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
 
     # 辅助：递归查找项目配置文件
     def _has_config_file(filename: str) -> bool:
-        if (result.directory_path / filename).exists():
+        if result.has_file(filename):
             return True
         for f in result.all_files:
             if f.endswith(f"/{filename}"):
@@ -1417,25 +1489,21 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
     distribution_name = ""
     if is_tool:
         # 查找 package.json（可能在子目录）
-        pkg_path = result.directory_path / "package.json"
-        if not pkg_path.exists():
+        pkg_relative = "package.json"
+        if result.text(pkg_relative) is None:
             for f in result.all_files:
-                if f.endswith("/package.json"):
-                    pkg_path = result.directory_path / f
+                if f.endswith("/package.json") and result.text(f) is not None:
+                    pkg_relative = f
                     break
-        if pkg_path.exists():
-            try:
-                pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-                if isinstance(pkg.get("name"), str):
-                    distribution_name = pkg["name"]
-                scripts = pkg.get("scripts", {})
-                if isinstance(scripts, dict):
-                    if "start" in scripts:
-                        command = scripts["start"]
-                    elif "build" in scripts:
-                        command = scripts["build"]
-            except (json.JSONDecodeError, OSError):
-                pass
+        pkg = result.json_object(pkg_relative)
+        if isinstance(pkg.get("name"), str):
+            distribution_name = pkg["name"]
+        scripts = pkg.get("scripts", {})
+        if isinstance(scripts, dict):
+            if "start" in scripts:
+                command = scripts["start"]
+            elif "build" in scripts:
+                command = scripts["build"]
         if not command:
             _, docker_cmd = extract_docker_deps(result)
             if docker_cmd:
@@ -1460,6 +1528,11 @@ def extract_single_skill(
     source_dir: str | Path,
     repo_url: str = "",
     subdirectory: str | None = None,
+    *,
+    policy: ScanPolicy | None = None,
+    inventory: ScanInventory | None = None,
+    file_contents: dict[str, str] | None = None,
+    parent_package_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """提取单个 Skill 目录的完整 agent-package 元数据。
 
@@ -1482,7 +1555,12 @@ def extract_single_skill(
     if not source_path.is_dir():
         raise FileNotFoundError(f"目录不存在: {source_path}")
 
-    result = scan_directory(source_path)
+    result = scan_directory(
+        source_path,
+        policy=policy,
+        inventory=inventory,
+        file_contents=file_contents,
+    )
     if not result.has_skill_md and not (
         result.has_manifest or result.has_plugin_manifest
     ):
@@ -1492,8 +1570,19 @@ def extract_single_skill(
         )
 
     git_root = _find_git_root(source_path)
+    effective_policy = (
+        policy or (inventory.policy if inventory else None) or ScanPolicy()
+    )
+    if parent_package_json is None and not result.frontmatter.get("author"):
+        parent_package_json = _load_parent_package_json(source_path, effective_policy)
 
-    data = build_metadata_json(result, repo_url=repo_url, git_root=git_root, subdirectory=subdirectory)
+    data = build_metadata_json(
+        result,
+        repo_url=repo_url,
+        git_root=git_root,
+        subdirectory=subdirectory,
+        parent_package_json=parent_package_json,
+    )
     issues = validate_metadata(data, result.directory_name)
     if issues:
         log.warning("[%s] 校验发现 %d 个问题: %s",
@@ -1507,6 +1596,7 @@ def build_metadata_json(
     repo_url: str = "",
     git_root: Path | None = None,
     subdirectory: str | None = None,
+    parent_package_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """根据 ScanResult 构建完整的 agent-package JSON 对象。
 
@@ -1536,27 +1626,21 @@ def build_metadata_json(
     fm_email = result.frontmatter.get("email")
     fm_url = result.frontmatter.get("url")
 
-    # ── 回退：从父目录 package.json 提取 author ──
+    # ── 回退：从受限快照中的当前或父级 package.json 提取 author ──
     if not fm_author:
-        for parent_dir in _get_parent_dirs(result.directory_path):
-            pkg_path = parent_dir / "package.json"
-            if pkg_path.exists():
-                try:
-                    pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
-                    pkg_author = pkg.get("author")
-                    if pkg_author:
-                        if isinstance(pkg_author, str):
-                            fm_author = pkg_author
-                        elif isinstance(pkg_author, dict):
-                            fm_author = pkg_author.get("name", str(pkg_author))
-                            if not fm_email and pkg_author.get("email"):
-                                fm_email = pkg_author["email"]
-                            if not fm_url and pkg_author.get("url"):
-                                fm_url = pkg_author["url"]
-                    if fm_author:
-                        break
-                except (json.JSONDecodeError, OSError):
-                    pass
+        pkg = result.json_object("package.json")
+        pkg_author = pkg.get("author")
+        if not pkg_author and isinstance(parent_package_json, dict):
+            pkg_author = parent_package_json.get("author")
+        if pkg_author:
+            if isinstance(pkg_author, str):
+                fm_author = pkg_author
+            elif isinstance(pkg_author, dict):
+                fm_author = pkg_author.get("name", str(pkg_author))
+                if not fm_email and pkg_author.get("email"):
+                    fm_email = pkg_author["email"]
+                if not fm_url and pkg_author.get("url"):
+                    fm_url = pkg_author["url"]
 
     author: dict[str, str] = {
         "name": str(fm_author) if fm_author else "UNKNOWN",
@@ -1596,9 +1680,9 @@ def build_metadata_json(
     # 扫描器无法可靠推断 MCP server 注册信息（dependencies.mcp_servers）
     # 以及 npm/pip/docker 等安装方式与 targets；仓库 manifest 是权威来源。
     installation = build_installation(result)
-    manifest_path = result.directory_path / "manifest.json"
-    if manifest_path.is_file():
-        manifest = _read_json_object(manifest_path)
+    manifest_text = result.text("manifest.json")
+    if manifest_text is not None:
+        manifest = _parse_json_object(manifest_text, "manifest.json")
         manifest_deps = manifest.get("dependencies")
         if isinstance(manifest_deps, dict):
             merged = dict(dependencies or {})
