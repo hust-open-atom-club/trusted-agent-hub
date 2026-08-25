@@ -1,6 +1,32 @@
 {
   "components": {
     "schemas": {
+      "AcquisitionFacts": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisition_method": {
+            "title": "Acquisition Method",
+            "type": "string"
+          },
+          "integrity": {
+            "$ref": "#/components/schemas/ProvenanceIntegrity"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProvenanceSource"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/ProvenanceVerification"
+          }
+        },
+        "required": [
+          "source",
+          "integrity",
+          "verification",
+          "acquisition_method"
+        ],
+        "title": "AcquisitionFacts",
+        "type": "object"
+      },
       "Author": {
         "additionalProperties": false,
         "properties": {
@@ -1032,6 +1058,32 @@
             ],
             "title": "Download Size Bytes"
           },
+          "hash_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hash Complete"
+          },
+          "hash_scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "scanned_source",
+                  "artifact_archive"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hash Scope"
+          },
           "sbom_url": {
             "anyOf": [
               {
@@ -1752,6 +1804,24 @@
         "title": "PackagePage",
         "type": "object"
       },
+      "PackageProvenanceClaims": {
+        "additionalProperties": false,
+        "description": "Redacted package-authored provenance claims retained for audit.",
+        "properties": {
+          "integrity": {
+            "additionalProperties": true,
+            "title": "Integrity",
+            "type": "object"
+          },
+          "source": {
+            "additionalProperties": true,
+            "title": "Source",
+            "type": "object"
+          }
+        },
+        "title": "PackageProvenanceClaims",
+        "type": "object"
+      },
       "PackageStats": {
         "additionalProperties": false,
         "properties": {
@@ -2177,6 +2247,175 @@
           "package"
         ],
         "title": "PipInstallationStep",
+        "type": "object"
+      },
+      "ProvenanceIntegrity": {
+        "additionalProperties": false,
+        "description": "Server-computed content integrity facts.",
+        "properties": {
+          "hash_complete": {
+            "default": false,
+            "title": "Hash Complete",
+            "type": "boolean"
+          },
+          "hash_scope": {
+            "anyOf": [
+              {
+                "const": "scanned_source",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hash Scope"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[a-f0-9]{64})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          }
+        },
+        "title": "ProvenanceIntegrity",
+        "type": "object"
+      },
+      "ProvenanceSource": {
+        "additionalProperties": false,
+        "description": "Server-established source facts recorded alongside a scan report.",
+        "properties": {
+          "commit_hash": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[a-f0-9]{40})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Hash"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "ref_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "repository_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Url"
+          },
+          "subdirectory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subdirectory"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "verified_owner": {
+            "default": false,
+            "title": "Verified Owner",
+            "type": "boolean"
+          }
+        },
+        "title": "ProvenanceSource",
+        "type": "object"
+      },
+      "ProvenanceVerification": {
+        "additionalProperties": false,
+        "description": "Independent verification results for provenance claims.",
+        "properties": {
+          "attestation": {
+            "title": "Attestation",
+            "type": "boolean"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "boolean"
+          },
+          "sbom": {
+            "title": "Sbom",
+            "type": "boolean"
+          },
+          "signature": {
+            "title": "Signature",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "owner",
+          "signature",
+          "attestation",
+          "sbom"
+        ],
+        "title": "ProvenanceVerification",
         "type": "object"
       },
       "RiskSummary": {
@@ -2702,6 +2941,23 @@
         "title": "ScanLimitsSkipped",
         "type": "object"
       },
+      "ScanProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "acquisition_facts": {
+            "$ref": "#/components/schemas/AcquisitionFacts"
+          },
+          "package_claims": {
+            "$ref": "#/components/schemas/PackageProvenanceClaims"
+          }
+        },
+        "required": [
+          "acquisition_facts",
+          "package_claims"
+        ],
+        "title": "ScanProvenance",
+        "type": "object"
+      },
       "ScanReport": {
         "additionalProperties": false,
         "description": "Consumer-facing projection of the scanner report.\n\nScanner-internal source contents and implementation details are not part\nof this model; completeness, limits, rule execution and structural\nanalysis are explicitly declared so extra=forbid catches contract drift.",
@@ -2794,6 +3050,16 @@
             },
             "title": "Permission Evidence",
             "type": "array"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScanProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "rule_execution": {
             "anyOf": [

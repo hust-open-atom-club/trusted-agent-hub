@@ -148,6 +148,8 @@ export interface VersionSource {
 
 export interface VersionIntegrity {
   sha256?: string;
+  hash_scope?: 'scanned_source' | 'artifact_archive' | null;
+  hash_complete?: boolean | null;
   signature?: string | null;
   attestation_url?: string | null;
   sbom_url?: string | null;
@@ -286,6 +288,49 @@ export interface ScanReport {
   scanned_at?: string | null;
   source_snapshot_id?: string | null;
   occurrences_total?: number;
+  provenance?: ScanProvenance | null;
+}
+
+export interface ProvenanceSource {
+  type?: string | null;
+  repository_url?: string | null;
+  owner?: string | null;
+  repo?: string | null;
+  ref_type?: string | null;
+  ref?: string | null;
+  commit_hash?: string | null;
+  verified_owner?: boolean;
+  subdirectory?: string | null;
+}
+
+export interface ProvenanceIntegrity {
+  sha256?: string | null;
+  hash_scope?: 'scanned_source' | null;
+  hash_complete?: boolean;
+}
+
+export interface ProvenanceVerification {
+  owner: boolean;
+  signature: boolean;
+  attestation: boolean;
+  sbom: boolean;
+}
+
+export interface AcquisitionFacts {
+  source: ProvenanceSource;
+  integrity: ProvenanceIntegrity;
+  verification: ProvenanceVerification;
+  acquisition_method: string;
+}
+
+export interface PackageProvenanceClaims {
+  source?: Record<string, unknown>;
+  integrity?: Record<string, unknown>;
+}
+
+export interface ScanProvenance {
+  acquisition_facts: AcquisitionFacts;
+  package_claims: PackageProvenanceClaims;
 }
 
 export interface PermissionEvidence {

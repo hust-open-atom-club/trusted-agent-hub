@@ -74,6 +74,75 @@
       "type": "integer",
       "minimum": 0
     },
+    "provenance": {
+      "type": "object",
+      "description": "源码声明与采集层事实的隔离审计记录",
+      "required": ["acquisition_facts", "package_claims"],
+      "properties": {
+        "acquisition_facts": {
+          "type": "object",
+          "required": ["source", "integrity", "verification", "acquisition_method"],
+          "properties": {
+            "source": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" },
+                "repository_url": { "type": "string" },
+                "owner": { "type": "string" },
+                "repo": { "type": "string" },
+                "ref_type": { "type": "string" },
+                "ref": { "type": "string" },
+                "commit_hash": { "type": "string", "pattern": "^(?:[a-f0-9]{40})?$" },
+                "verified_owner": { "type": "boolean" },
+                "subdirectory": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "integrity": {
+              "type": "object",
+              "properties": {
+                "sha256": {
+                  "anyOf": [
+                    { "type": "string", "pattern": "^(?:[a-f0-9]{64})?$" },
+                    { "type": "null" }
+                  ]
+                },
+                "hash_scope": {
+                  "anyOf": [
+                    { "type": "string", "enum": ["scanned_source"] },
+                    { "type": "null" }
+                  ]
+                },
+                "hash_complete": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            },
+            "verification": {
+              "type": "object",
+              "required": ["owner", "signature", "attestation", "sbom"],
+              "properties": {
+                "owner": { "type": "boolean" },
+                "signature": { "type": "boolean" },
+                "attestation": { "type": "boolean" },
+                "sbom": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            },
+            "acquisition_method": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "package_claims": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "object", "additionalProperties": true },
+            "integrity": { "type": "object", "additionalProperties": true }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "duration_ms": {
       "type": "integer",
       "minimum": 0,

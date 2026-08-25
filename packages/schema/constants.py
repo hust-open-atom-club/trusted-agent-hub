@@ -11,6 +11,16 @@ API (FastAPI) 和 扫描器 (scanner) 均引用此文件。
 from enum import StrEnum
 from typing import Final
 
+
+# The trust-score engine and every persistence projection must use the same
+# model identifier.  A model upgrade is an operational event and should be
+# scheduled explicitly rather than inferred from duplicated literals.
+TRUST_SCORE_MODEL_VERSION: Final[str] = "0.4.0"
+
+# Hashes cover different byte domains and must not be used interchangeably.
+HASH_SCOPE_SCANNED_SOURCE: Final[str] = "scanned_source"
+HASH_SCOPE_ARTIFACT_ARCHIVE: Final[str] = "artifact_archive"
+
 # ============================================================
 # 能力包类型
 # ============================================================

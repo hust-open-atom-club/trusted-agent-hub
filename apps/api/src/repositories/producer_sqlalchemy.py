@@ -14,6 +14,8 @@ from uuid import uuid4
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from schema.constants import TRUST_SCORE_MODEL_VERSION
+
 from src.repositories.orm import (
     FeedbackRecordRow,
     PackageRow,
@@ -394,19 +396,21 @@ class ProducerRepository:
         version_id: str,
         level: str,
         recommendation: str,
+        model_version: str = TRUST_SCORE_MODEL_VERSION,
     ) -> None:
         with self.session_factory() as session:
             existing = session.get(TrustLevelRow, version_id)
             if existing:
                 existing.level = level
                 existing.install_recommendation = recommendation
+                existing.model_version = model_version
             else:
                 session.add(TrustLevelRow(
                     version_id=version_id,
                     level=level,
                     install_recommendation=recommendation,
                     top_risks=[],
-                    model_version="0.3.0",
+                    model_version=model_version,
                 ))
             session.commit()
 

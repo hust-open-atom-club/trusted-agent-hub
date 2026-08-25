@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional
@@ -48,8 +49,14 @@ _SCANNER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "scanner.py"
 _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from scanners.risk_scanner.redaction import build_finding_contexts, redact_report
+from scanners.risk_scanner.redaction import (
+    build_finding_contexts,
+    redact_report,
+    redact_value,
+)
+from scanners.risk_scanner.provenance import build_verification_facts
 from packages.schema.frontmatter import parse_frontmatter
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
@@ -221,6 +228,17 @@ def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
             detail="GitHub did not return a valid repository metadata object.",
         )
 
+    expected_full_name = f"{parsed['owner']}/{parsed['repo']}".casefold()
+    actual_full_name = payload.get("full_name")
+    if (
+        not isinstance(actual_full_name, str)
+        or actual_full_name.casefold() != expected_full_name
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="GitHub repository identity did not match the requested source.",
+        )
+
     default_branch = payload.get("default_branch")
     if not isinstance(default_branch, str) or not default_branch.strip():
         raise HTTPException(
@@ -252,6 +270,9 @@ def _resolve_default_branch_source(parsed: dict[str, Any]) -> dict[str, Any]:
 
     return {
         **parsed,
+        # This marker is written only after the server validates the GitHub
+        # repository response against the requested owner/repo.
+        "repository_verified": True,
         "ref": default_branch,
         "subdir": subdir,
     }
@@ -441,6 +462,122 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
 # ---------------------------------------------------------------------------
 # 后台扫描任务
 # ---------------------------------------------------------------------------
+
+
+def _build_acquisition_facts(
+    parsed: dict[str, Any] | None,
+    repo_url: str,
+    subdir: str | None,
+    method: str,
+    commit_hash: str,
+    scanner: Any,
+) -> dict[str, Any]:
+    """Build provenance facts from acquisition, never from package metadata.
+
+    Repository identity is accepted only after the server-side GitHub resolver
+    validates the requested owner/repo.  Signature, attestation, and SBOM flags
+    require an independent verifier; package metadata is never a fallback.
+    """
+    scanner_facts = getattr(scanner, "acquisition_facts", {})
+    if not isinstance(scanner_facts, dict):
+        scanner_facts = {}
+    scanner_source = scanner_facts.get("source", {})
+    if not isinstance(scanner_source, dict):
+        scanner_source = {}
+    scanner_integrity = scanner_facts.get("integrity", {})
+    if not isinstance(scanner_integrity, dict):
+        scanner_integrity = {}
+    scanner_verification = scanner_facts.get("verification", {})
+    if not isinstance(scanner_verification, dict):
+        scanner_verification = {}
+
+    valid_commit = bool(re.fullmatch(r"^[a-f0-9]{40}$", commit_hash))
+    acquired_commit = commit_hash if valid_commit else scanner_source.get("commit_hash", "")
+    if not re.fullmatch(r"^[a-f0-9]{40}$", str(acquired_commit)):
+        acquired_commit = ""
+    hash_scope = scanner_integrity.get("hash_scope")
+    if hash_scope != HASH_SCOPE_SCANNED_SOURCE:
+        hash_scope = None
+    hash_complete = (
+        scanner_integrity.get("hash_complete") is True
+        and hash_scope == HASH_SCOPE_SCANNED_SOURCE
+    )
+    acquired_sha256 = (
+        scanner_integrity.get("sha256", "") if hash_complete else ""
+    )
+    if not re.fullmatch(r"^[a-f0-9]{64}$", str(acquired_sha256)):
+        acquired_sha256 = ""
+    verification = build_verification_facts(
+        parsed=parsed,
+        repository_url=repo_url,
+        acquisition_method=method,
+        commit_hash=str(acquired_commit),
+        content_sha256=str(acquired_sha256),
+        content_hash_complete=hash_complete and bool(acquired_sha256),
+        server_verification=scanner_verification,
+    )
+
+    source: dict[str, Any] = {
+        "type": "github" if parsed else "unknown",
+        "repository_url": repo_url if repo_url.startswith("https://") else "",
+        "owner": (parsed or {}).get("owner", ""),
+        "repo": (parsed or {}).get("repo", ""),
+        # Treat the resolved commit as the only stable ref we know was
+        # acquired.  A manifest cannot upgrade a branch into a tag/release.
+        "ref_type": "commit" if acquired_commit else "branch",
+        "ref": acquired_commit or (parsed or {}).get("ref", ""),
+        "commit_hash": acquired_commit,
+        "verified_owner": verification["owner"],
+    }
+    if subdir:
+        source["subdirectory"] = subdir
+
+    integrity = {
+        "sha256": acquired_sha256 or None,
+        "hash_scope": hash_scope,
+        "hash_complete": hash_complete and bool(acquired_sha256),
+    }
+    return {
+        "source": source,
+        "integrity": integrity,
+        "verification": verification,
+        "acquisition_method": method,
+    }
+
+
+def _provenance_claims(scanner: Any) -> dict[str, Any]:
+    """Retain redacted source/integrity claims for audit, never for scoring."""
+    claims = getattr(scanner, "package_claims", None)
+    if not isinstance(claims, dict):
+        claims = getattr(scanner, "_package_metadata", None)
+    if not isinstance(claims, dict):
+        return {"source": {}, "integrity": {}}
+    source_claims = claims.get("source")
+    integrity_claims = claims.get("integrity")
+    claims = {
+        "source": deepcopy(source_claims) if isinstance(source_claims, dict) else {},
+        "integrity": (
+            deepcopy(integrity_claims)
+            if isinstance(integrity_claims, dict)
+            else {}
+        ),
+    }
+    redacted_claims = redact_value(claims)
+    return redacted_claims if isinstance(redacted_claims, dict) else {
+        "source": {},
+        "integrity": {},
+    }
+
+
+def _apply_acquisition_facts(
+    package_metadata: dict[str, Any],
+    acquisition_facts: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace provenance namespaces with server-established facts."""
+    safe_metadata = deepcopy(package_metadata)
+    safe_metadata["source"] = deepcopy(acquisition_facts.get("source") or {})
+    safe_metadata["integrity"] = deepcopy(acquisition_facts.get("integrity") or {})
+    return safe_metadata
 
 
 def _run_scan_task(
@@ -637,9 +774,9 @@ def _run_scan_task(
             repo_url=repo_url,
             subdirectory=subdir,
         )
-        # Preserve acquisition-time facts for scoring as well as SR-009.  The
-        # extractor reads package-authored metadata and must not overwrite the
-        # repository default branch and commit actually scanned.
+        # Preserve the default-branch source identity established by the
+        # acquisition layer before replacing provenance namespaces with the
+        # server-established facts below.
         scanned_meta = scanner._package_metadata or {}
         scanned_source = scanned_meta.get("source") or {}
         scanned_integrity = scanned_meta.get("integrity") or {}
@@ -655,12 +792,35 @@ def _run_scan_task(
                 **(package_metadata.get("integrity") or {}),
                 **scanned_integrity,
             }
+        acquisition_facts = _build_acquisition_facts(
+            parsed,
+            repo_url,
+            subdir,
+            method,
+            commit_hash,
+            scanner,
+        )
+        package_claims = _provenance_claims(scanner)
+        package_metadata = _apply_acquisition_facts(
+            package_metadata,
+            acquisition_facts,
+        )
+        # Persist claims as evidence, but keep them outside the metadata
+        # namespaces consumed by the score engine.
+        scan_report["provenance"] = {
+            "acquisition_facts": deepcopy(acquisition_facts),
+            "package_claims": deepcopy(package_claims),
+        }
         # Keep permission provenance in the persisted audit report.  The
         # score uses the same evidence to avoid treating documentation-only
         # mentions as observed capabilities.
         scan_report["permission_evidence"] = package_metadata.get(
             "permission_evidence", []
         )
+        # Provenance claims are untrusted package input.  Redact once more at
+        # the report boundary so future additions cannot bypass the scanner's
+        # earlier redaction pass.
+        scan_report = redact_report(scan_report)
 
         platform_signals = signals or {}
         trust_score_result = calculate_trust_score(
@@ -669,6 +829,7 @@ def _run_scan_task(
             author_history=platform_signals.get("author_history"),
             review_records=platform_signals.get("review_records"),
             feedback=platform_signals.get("feedback"),
+            acquisition_facts=acquisition_facts,
         )
         if platform_signals:
             print(
@@ -694,6 +855,8 @@ def _run_scan_task(
             "scan_report": scan_report,
             "trust_score": trust_score_result,
             "package_metadata": package_metadata,
+            "acquisition_facts": acquisition_facts,
+            "package_claims": package_claims,
             "source_snapshot_id": snapshot_metadata["snapshot_id"],
             "source_snapshot_sha256": snapshot_metadata["sha256"],
             "source_subdirectory": subdir,
@@ -708,6 +871,8 @@ def _run_scan_task(
             "finished_at": full_report["finished_at"],
             "full_report": full_report,
             "package_metadata": package_metadata,
+            "acquisition_facts": acquisition_facts,
+            "package_claims": package_claims,
             "summary": scan_report.get("summary", {}),
             "trust_score": {
                 "level": trust_score_result.get("risk_summary", {}).get("level"),

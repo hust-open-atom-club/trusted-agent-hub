@@ -40,6 +40,8 @@ class Source(StrictContractModel):
 
 class Integrity(StrictContractModel):
     sha256: str
+    hash_scope: Literal["scanned_source", "artifact_archive"] | None = None
+    hash_complete: bool | None = None
     signature: str | None = None
     attestation_url: str | None = None
     sbom_url: str | None = None
@@ -337,6 +339,62 @@ class StructuralAnalysis(StrictContractModel):
     capability_graph: CapabilityGraphSummary = Field(default_factory=CapabilityGraphSummary)
 
 
+class ProvenanceSource(StrictContractModel):
+    """Server-established source facts recorded alongside a scan report."""
+
+    type: str | None = None
+    repository_url: str | None = None
+    owner: str | None = None
+    repo: str | None = None
+    ref_type: str | None = None
+    ref: str | None = None
+    commit_hash: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40})?$",
+    )
+    verified_owner: bool = False
+    subdirectory: str | None = None
+
+
+class ProvenanceIntegrity(StrictContractModel):
+    """Server-computed content integrity facts."""
+
+    sha256: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{64})?$",
+    )
+    hash_scope: Literal["scanned_source"] | None = None
+    hash_complete: bool = False
+
+
+class ProvenanceVerification(StrictContractModel):
+    """Independent verification results for provenance claims."""
+
+    owner: bool
+    signature: bool
+    attestation: bool
+    sbom: bool
+
+
+class AcquisitionFacts(StrictContractModel):
+    source: ProvenanceSource
+    integrity: ProvenanceIntegrity
+    verification: ProvenanceVerification
+    acquisition_method: str
+
+
+class PackageProvenanceClaims(StrictContractModel):
+    """Redacted package-authored provenance claims retained for audit."""
+
+    source: dict[str, object] = Field(default_factory=dict)
+    integrity: dict[str, object] = Field(default_factory=dict)
+
+
+class ScanProvenance(StrictContractModel):
+    acquisition_facts: AcquisitionFacts
+    package_claims: PackageProvenanceClaims
+
+
 class ScanReport(StrictContractModel):
     """Consumer-facing projection of the scanner report.
 
@@ -368,6 +426,7 @@ class ScanReport(StrictContractModel):
     structural_analysis: StructuralAnalysis | None = None
     llm_review: LLMReview | None = None
     scanned_at: str | None = None
+    provenance: ScanProvenance | None = None
 
 
 class FeedbackCounts(StrictContractModel):

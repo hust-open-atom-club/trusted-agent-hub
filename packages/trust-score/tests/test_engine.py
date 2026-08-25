@@ -22,10 +22,50 @@ _PKG_ROOT = Path(__file__).resolve().parent.parent
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
-from src.engine import rate
+from src.engine import rate as _engine_rate
+from packages.schema.constants import TRUST_SCORE_MODEL_VERSION
 
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+def _trusted_acquisition_facts(package_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Model server-established facts for the legacy score fixtures.
+
+    The fixtures predate the explicit acquisition-facts boundary and carry
+    their expected provenance in package metadata.  This adapter makes that
+    test intent explicit without weakening the production default, which is
+    fail-closed when facts are omitted.
+    """
+    source = dict(package_metadata.get("source") or {})
+    integrity = dict(package_metadata.get("integrity") or {})
+    return {
+        "source": source,
+        "integrity": {
+            "sha256": integrity.get("sha256", ""),
+            "hash_scope": "scanned_source",
+            "hash_complete": True,
+        },
+        "verification": {
+            "owner": source.get("verified_owner") is True,
+            "signature": bool(integrity.get("signature")),
+            "attestation": bool(integrity.get("attestation_url")),
+            "sbom": bool(integrity.get("sbom_url")),
+        },
+    }
+
+
+def rate(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Keep existing fixture calls explicit about trusted acquisition facts."""
+    package_metadata = kwargs.get("package_metadata")
+    if package_metadata is None and args:
+        package_metadata = args[0]
+    if isinstance(package_metadata, dict):
+        kwargs.setdefault(
+            "acquisition_facts",
+            _trusted_acquisition_facts(package_metadata),
+        )
+    return _engine_rate(*args, **kwargs)
 
 
 def _load_fixture(name: str) -> dict[str, Any]:
@@ -52,7 +92,7 @@ def test_b1_code_review_skill_all_green_approved() -> None:
         f"Expected trusted, got {result['risk_summary']['level']}"
     assert 85 <= result["score"] <= 100
     assert result["package_name"] == "code-review-skill"
-    assert result["model_version"] == "0.3.0"
+    assert result["model_version"] == TRUST_SCORE_MODEL_VERSION
     # Verify schema-compatible structure
     _assert_valid_output(result, fx["expected_level"])
 

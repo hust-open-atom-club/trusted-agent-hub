@@ -1,5 +1,7 @@
 """SR-009: Source integrity rule unit tests."""
 
+import json
+
 import pytest
 
 from scanners.risk_scanner.rules import source_integrity
@@ -27,6 +29,30 @@ def _full_meta() -> dict:
 
 class TestSR009SourceIntegrity:
 
+    @staticmethod
+    def _trusted_facts(
+        *,
+        sha256: str = "a" * 64,
+        commit_hash: str = "a" * 40,
+        signature: bool = False,
+        attestation: bool = False,
+        sbom: bool = False,
+    ) -> dict:
+        return {
+            "integrity": {
+                "sha256": sha256,
+                "hash_scope": "scanned_source",
+                "hash_complete": True,
+            },
+            "source": {"commit_hash": commit_hash},
+            "verification": {
+                "owner": False,
+                "signature": signature,
+                "attestation": attestation,
+                "sbom": sbom,
+            },
+        }
+
     def test_scanner_injects_acquired_commit_and_content_hash(self, tmp_path):
         """Acquisition facts make an ordinary GitHub package low, not medium."""
         (tmp_path / "SKILL.md").write_text(
@@ -41,8 +67,50 @@ class TestSR009SourceIntegrity:
         assert finding["severity"] == "low"
         assert "SHA256" not in finding["description"]
         assert "commit hash" not in finding["description"]
-        assert scanner._package_metadata["integrity"]["sha256"]
-        assert scanner._package_metadata["source"]["commit_hash"] == "b" * 40
+        assert scanner.acquisition_facts["integrity"]["sha256"]
+        assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
+
+    def test_manifest_provenance_claims_are_not_promoted(self, tmp_path):
+        """Manifest claims remain audit data and do not satisfy SR-009."""
+        (tmp_path / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+        (tmp_path / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "name": "demo",
+                    "version": "1.0.0",
+                    "type": "skill",
+                    "description": "demo",
+                    "author": {"name": "attacker"},
+                    "license": "MIT",
+                    "source": {
+                        "type": "github",
+                        "repository_url": "https://github.com/attacker/repo",
+                        "ref_type": "tag",
+                        "ref": "v1.0.0",
+                        "commit_hash": "a" * 40,
+                        "verified_owner": True,
+                    },
+                    "integrity": {
+                        "sha256": "a" * 64,
+                        "signature": "fake",
+                        "attestation_url": "https://attacker.example/attestation",
+                        "sbom_url": "https://attacker.example/sbom",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        scanner = RiskScanner(tmp_path, source_commit_hash="b" * 40)
+        report = scanner.scan()
+        finding = next(f for f in report["findings"] if f["rule_id"] == "SR-009")
+
+        assert finding["severity"] == "low"
+        assert "未经独立验证" in finding["description"]
+        assert scanner._package_metadata["source"]["verified_owner"] is True
+        assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
+        assert "signature" not in scanner.acquisition_facts["integrity"]
+        assert "sbom_url" not in scanner.acquisition_facts["integrity"]
 
     def test_missing_metadata(self, tmp_path):
         """No metadata file at all → medium finding."""
@@ -76,6 +144,7 @@ class TestSR009SourceIntegrity:
         s = MockScanner(
             files={"SKILL.md": "# hi"},
             _package_metadata=meta,
+            _acquisition_facts=self._trusted_facts(),
             target_dir=tmp_path,
         )
         source_integrity.run(s)
@@ -89,6 +158,7 @@ class TestSR009SourceIntegrity:
         s = MockScanner(
             files={"SKILL.md": "# hi"},
             _package_metadata=meta,
+            _acquisition_facts=self._trusted_facts(sha256="not-a-hash"),
             target_dir=tmp_path,
         )
         source_integrity.run(s)
@@ -100,7 +170,52 @@ class TestSR009SourceIntegrity:
         s = MockScanner(
             files={"SKILL.md": "# hi"},
             _package_metadata=_full_meta(),
+            _acquisition_facts=self._trusted_facts(
+                signature=True,
+                sbom=True,
+            ),
             target_dir=tmp_path,
         )
         source_integrity.run(s)
         assert s.findings == []
+
+    def test_incomplete_hash_cannot_credit_verification_flags(self, tmp_path):
+        s = MockScanner(
+            files={"SKILL.md": "# hi"},
+            _package_metadata=_full_meta(),
+            _acquisition_facts={
+                "integrity": {
+                    "sha256": None,
+                    "hash_scope": "scanned_source",
+                    "hash_complete": False,
+                },
+                "source": {"commit_hash": "a" * 40},
+                "verification": {
+                    "owner": False,
+                    "signature": True,
+                    "attestation": False,
+                    "sbom": True,
+                },
+            },
+            target_dir=tmp_path,
+        )
+
+        source_integrity.run(s)
+
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "medium"
+
+    def test_manifest_integrity_does_not_fallback_without_acquisition_facts(
+        self,
+        tmp_path,
+    ):
+        s = MockScanner(
+            files={"SKILL.md": "# hi"},
+            _package_metadata=_full_meta(),
+            target_dir=tmp_path,
+        )
+
+        source_integrity.run(s)
+
+        assert len(s.findings) == 1
+        assert s.findings[0]["severity"] == "medium"

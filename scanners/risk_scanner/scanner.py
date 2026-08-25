@@ -1,5 +1,5 @@
 """
-Risk Scanner — 自动风险扫描器 v0.6.0
+Risk Scanner — 自动风险扫描器 v0.7.0
 
 遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
@@ -40,6 +40,7 @@ import json
 import logging
 import re
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -59,12 +60,13 @@ from scanners.risk_scanner.reporting import aggregate_findings, determine_scan_s
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.redaction import redact_report
 from scanners.risk_scanner.weights import SEVERITY_POINTS
+from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
 from packages.schema.frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.6.0"
+SCANNER_VERSION = "0.7.0"
 
 
 class RiskScanner:
@@ -91,9 +93,12 @@ class RiskScanner:
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False
         self._package_metadata: dict[str, Any] | None = None
+        self._package_claims: dict[str, Any] | None = None
+        self._acquisition_facts: dict[str, Any] = {}
         self._file_contents: dict[str, str] = {}
         self.analysis = None
         self._content_tree_hash: str | None = None
+        self._content_tree_hash_complete: bool | None = None
         self._metadata_parse_errors: list[dict[str, str]] = []
 
     def scan(self) -> dict[str, Any]:
@@ -110,8 +115,11 @@ class RiskScanner:
         self._file_contents = {}
         self.analysis = None
         self._content_tree_hash = None
+        self._content_tree_hash_complete = None
         self._metadata_parse_errors = []
         self._package_metadata = None
+        self._package_claims = None
+        self._acquisition_facts = {}
         start = datetime.now(timezone.utc)
 
         self._inventory = build_inventory(self.target_dir, self.policy)
@@ -123,6 +131,9 @@ class RiskScanner:
         self.dependency_scan: dict[str, Any] = {"status": "complete", "dependencies_found": 0,
                                                 "dependencies_queried": 0, "query_failures": 0}
         self._load_metadata()
+        # Keep the package-authored metadata available for audit/explanation,
+        # but never use it as the source of acquisition provenance.
+        self._package_claims = deepcopy(self._package_metadata)
         self.analysis = analyze_snapshot(
             self._file_contents,
             self.analyzed_files,
@@ -142,6 +153,7 @@ class RiskScanner:
             for r in rule_results if r.status == "failed"
         ]
         self._record_source_integrity_changes()
+        self._invalidate_acquisition_hash_on_source_change()
         self._record_structured_analysis_errors()
         if self.dependency_scan.get("status") == "partial" and "dependency_scan_partial" not in self.inventory.limit_violations:
             self.inventory.limit_violations.append("dependency_scan_partial")
@@ -220,68 +232,133 @@ class RiskScanner:
                             self._package_metadata[key] = pkg_json[key]
 
     def _inject_acquired_source_integrity(self) -> None:
-        """Attach facts established by acquisition instead of trusting manifests.
-
-        A repository's own metadata cannot safely attest to the bytes currently
-        being scanned. The scanner therefore computes a bounded content hash
-        from the inventory and accepts the commit only from the acquisition
-        layer (``git rev-parse HEAD`` / GitHub zipball resolution).
-        """
-        # Calculate this once from the already bounded inventory.  The API may
-        # request the hash again while persisting the source snapshot, but that
-        # call is served from this cache and never walks or rereads the tree.
+        """Record acquisition facts without mutating package-authored claims."""
         content_hash = self._content_tree_sha256()
-        if not self._package_metadata:
-            return
-
-        integrity = self._package_metadata.get("integrity")
-        if not isinstance(integrity, dict):
-            integrity = {}
-        integrity["sha256"] = content_hash
-        self._package_metadata["integrity"] = integrity
+        hash_complete = self._content_tree_hash_complete is True
+        self._acquisition_facts = {
+            "source": {},
+            "integrity": {
+                "sha256": content_hash if hash_complete else None,
+                "hash_scope": HASH_SCOPE_SCANNED_SOURCE,
+                "hash_complete": hash_complete,
+            },
+            "verification": {
+                "owner": False,
+                "signature": False,
+                "attestation": False,
+                "sbom": False,
+                "content_sha256": content_hash if hash_complete else "",
+            },
+        }
 
         if re.fullmatch(r"^[a-f0-9]{40}$", self.source_commit_hash):
-            source = self._package_metadata.get("source")
-            if not isinstance(source, dict):
-                source = {}
-            source["commit_hash"] = self.source_commit_hash
-            self._package_metadata["source"] = source
+            self._acquisition_facts["source"]["commit_hash"] = self.source_commit_hash
+
+    @property
+    def acquisition_facts(self) -> dict[str, Any]:
+        """Return server-established source/integrity facts for scoring.
+
+        The returned copy intentionally excludes package-authored provenance
+        claims such as ``verified_owner`` and signature URLs.
+        """
+        return deepcopy(self._acquisition_facts)
+
+    @property
+    def package_claims(self) -> dict[str, Any] | None:
+        """Return the package-authored metadata retained for audit purposes."""
+        return deepcopy(self._package_claims)
 
     def _content_tree_sha256(self) -> str:
-        """Return the bounded content hash for the current scan snapshot.
-
-        This is deliberately a *restricted scan hash*, not an unrestricted
-        source-tree digest.  It hashes only content loaded through the
-        inventory's per-file and aggregate byte budgets, so it cannot turn a
-        skipped or growing file into an unbounded read during the hash phase.
-        """
+        """Return a bounded hash over the inventory's source snapshot."""
         if self._content_tree_hash is not None:
             return self._content_tree_hash
 
-        inventory = self.inventory
         digest = hashlib.sha256()
-        hash_limited = inventory.discovered_at_least
+        inventory = self.inventory
+        complete = (
+            self.target_dir.is_dir()
+            and not inventory.limit_violations
+            and not inventory.discovered_at_least
+        )
+        max_file_bytes = max(self.policy.max_file_bytes, 0)
+        max_total_bytes = max(self.policy.max_total_bytes, 0)
+        total_bytes = 0
+
         for record in sorted(inventory.files, key=lambda item: item.relative_path):
+            path = record.absolute_path
             rel = record.relative_path
-            # A manifest cannot include its own digest without recursion.
-            if rel == "manifest.json":
+            try:
+                before = path.lstat()
+            except OSError:
+                complete = False
                 continue
-            if record.read_status != "analyzed" or rel not in self._file_contents:
-                hash_limited = True
+            if path.is_symlink() or not path.is_file():
+                complete = False
                 continue
-            if record.content_truncated or record.changed_during_scan:
-                hash_limited = True
-            data = self._file_contents[rel].encode("utf-8")
-            if b"\0" not in data:
-                data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+            size = int(before.st_size)
+            if size > max_file_bytes or total_bytes + size > max_total_bytes:
+                complete = False
+                continue
+
             digest.update(rel.encode("utf-8"))
             digest.update(b"\0")
-            digest.update(data)
+            digest.update(str(size).encode("ascii"))
             digest.update(b"\0")
-        if hash_limited and "content_hash_limited" not in inventory.limit_violations:
-            inventory.limit_violations.append("content_hash_limited")
+            bytes_read = 0
+            try:
+                with path.open("rb") as handle:
+                    while bytes_read < size:
+                        remaining = min(
+                            size - bytes_read,
+                            max_file_bytes - bytes_read,
+                            max_total_bytes - total_bytes - bytes_read,
+                        )
+                        if remaining <= 0:
+                            complete = False
+                            break
+                        chunk = handle.read(min(64 * 1024, remaining))
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                        bytes_read += len(chunk)
+                after = path.lstat()
+            except OSError:
+                complete = False
+                continue
+            if (
+                bytes_read != size
+                or path.is_symlink()
+                or int(after.st_size) != size
+                or int(after.st_mtime_ns) != int(before.st_mtime_ns)
+                or int(getattr(after, "st_ino", 0)) != int(getattr(before, "st_ino", 0))
+            ):
+                complete = False
+            total_bytes += bytes_read
+            digest.update(b"\0")
+
+        if not complete and "content_hash_limited" not in self.inventory.limit_violations:
+            self.inventory.limit_violations.append("content_hash_limited")
+        self._content_tree_hash_complete = complete
         self._content_tree_hash = digest.hexdigest()
         return self._content_tree_hash
+
+    def _invalidate_acquisition_hash_on_source_change(self) -> None:
+        """Do not retain a hash after source mutation during analysis."""
+        source_issues = {
+            reason
+            for reason in self.inventory.limit_violations
+            if reason.startswith("source_")
+        }
+        if not source_issues:
+            return
+        integrity = self._acquisition_facts.get("integrity")
+        if isinstance(integrity, dict):
+            integrity["sha256"] = None
+            integrity["hash_complete"] = False
+        verification = self._acquisition_facts.get("verification")
+        if isinstance(verification, dict):
+            verification["content_sha256"] = ""
 
     def _read_file_content(self, rel_path: str) -> str:
         return self._file_contents.get(rel_path, "")

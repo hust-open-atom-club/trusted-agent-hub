@@ -130,7 +130,7 @@
         "verified_owner": {
           "type": "boolean",
           "default": false,
-          "description": "仓库所有者是否通过平台验证"
+          "description": "包声明的仓库所有者验证状态；仅服务端独立验证结果可影响信任评分"
         },
         "stars": {
           "type": "integer",
@@ -160,19 +160,28 @@
           "pattern": "^[a-f0-9]{64}$",
           "description": "包内容 SHA256 校验值"
         },
+        "hash_scope": {
+          "type": "string",
+          "enum": ["scanned_source", "artifact_archive"],
+          "description": "SHA256 覆盖范围；服务端采集事实使用 scanned_source，安装制品使用 artifact_archive"
+        },
+        "hash_complete": {
+          "type": "boolean",
+          "description": "该 hash 是否覆盖其声明范围内的全部内容"
+        },
         "signature": {
           "type": "string",
-          "description": "PGP 签名或 Sigstore 签名"
+          "description": "包声明的 PGP/Sigstore 签名；仅绑定到采集内容的独立验证结果可影响信任评分"
         },
         "attestation_url": {
           "type": "string",
           "format": "uri",
-          "description": "构建证明（attestation）URL"
+          "description": "包声明的构建证明 URL；仅服务端独立验证结果可影响信任评分"
         },
         "sbom_url": {
           "type": "string",
           "format": "uri",
-          "description": "SBOM 文档 URL"
+          "description": "包声明的 SBOM 文档 URL；仅服务端独立验证结果可影响信任评分"
         }
       },
       "additionalProperties": false
