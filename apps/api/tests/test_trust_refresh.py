@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from schema.constants import TRUST_SCORE_MODEL_VERSION
+
 from src.services.trust_refresh import (
     TrustScoreRefreshService,
+    build_acquisition_facts,
     build_package_metadata,
     compute_signals_fingerprint,
 )
@@ -75,6 +78,26 @@ def _published_version() -> dict:
         "submitter_id": "user-1",
         "source": {"repository_url": "https://github.com/example/repo"},
         "integrity": {"sha256": "a" * 64},
+        "acquisition_facts": {
+            "source": {
+                "type": "github",
+                "repository_url": "https://github.com/example/repo",
+                "ref_type": "commit",
+                "ref": "a" * 40,
+                "commit_hash": "a" * 40,
+            },
+            "integrity": {
+                "sha256": "a" * 64,
+                "hash_scope": "scanned_source",
+                "hash_complete": True,
+            },
+            "verification": {
+                "owner": False,
+                "signature": False,
+                "attestation": False,
+                "sbom": False,
+            },
+        },
         "permissions": {"filesystem": {"read": [], "write": []}},
         "compatibility": ["claude-code"],
         "installation": {"method": "copy_directory", "targets": []},
@@ -94,13 +117,49 @@ def _published_package() -> dict:
     }
 
 
+def test_build_acquisition_facts_requires_version_facts() -> None:
+    assert build_acquisition_facts({}) == {}
+
+
+def test_build_acquisition_facts_does_not_promote_legacy_hash() -> None:
+    legacy = {
+        "acquisition_facts": {
+            "source": {"commit_hash": "a" * 40},
+            "integrity": {"sha256": "b" * 64},
+        }
+    }
+    scan_report = {
+        "scan_status": {"state": "complete", "complete": True},
+    }
+
+    facts = build_acquisition_facts(legacy, scan_report)
+
+    assert facts["integrity"] == {"sha256": "b" * 64}
+
+
+def test_build_acquisition_facts_does_not_rewrite_legacy_scope() -> None:
+    legacy = {
+        "acquisition_facts": {
+            "integrity": {
+                "sha256": "b" * 64,
+                "hash_scope": "acquired_artifact",
+                "hash_complete": True,
+            },
+        }
+    }
+
+    facts = build_acquisition_facts(legacy)
+
+    assert facts["integrity"]["hash_scope"] == "acquired_artifact"
+
+
 def _fake_scorer(**kwargs):
     return {
         "score": 88,
         "package_name": kwargs.get("package_metadata", {}).get("name", "x"),
         "version": "1.0.0",
         "calculated_at": "2026-08-03T00:00:00Z",
-        "model_version": "0.2.0",
+        "model_version": TRUST_SCORE_MODEL_VERSION,
         "dimensions": {},
         "explanations": [],
         "risk_summary": {
@@ -166,6 +225,7 @@ def test_refresh_computes_and_persists_with_signals() -> None:
     assert call["review_records"]["status"] == "approved"
     assert call["feedback"]["total_installs"] == 3
     assert call["author_history"] is not None
+    assert call["acquisition_facts"]["source"]["commit_hash"] == "a" * 40
 
     write = repo.version_writes[-1]
     assert write["trust_score"]["score"] == 88
@@ -196,6 +256,29 @@ def test_refresh_noop_when_signals_unchanged() -> None:
     second = service.refresh("ver-1")
     assert second is None
     assert len(repo.version_writes) == writes_after_first
+
+
+def test_refresh_rescores_for_model_version_mismatch() -> None:
+    repo = FakeProducerRepository(
+        version=_published_version(),
+        package=_published_package(),
+        scan={"scan_json": {"summary": {"total": 0}}},
+    )
+    service = TrustScoreRefreshService(
+        repo,
+        None,
+        scorer=_fake_scorer,
+    )
+
+    service.refresh("ver-1")
+    writes_after_first = len(repo.version_writes)
+    repo.version["trust_score"]["model_version"] = "0.3.0"
+
+    refreshed = service.refresh("ver-1")
+
+    assert refreshed is not None
+    assert refreshed["model_version"] == TRUST_SCORE_MODEL_VERSION
+    assert len(repo.version_writes) == writes_after_first + 1
 
 
 def test_refresh_force_recomputes_even_when_unchanged() -> None:

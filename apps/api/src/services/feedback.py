@@ -2,7 +2,11 @@
 
 from datetime import datetime, timezone
 
-from schema.constants import GRADE_TO_RECOMMENDATION, GRADE_TO_RISK_LEVEL
+from schema.constants import (
+    GRADE_TO_RECOMMENDATION,
+    GRADE_TO_RISK_LEVEL,
+    TRUST_SCORE_MODEL_VERSION,
+)
 from src.errors import ConsumerAPIError
 from src.models.feedback import (
     FeedbackListQuery,
@@ -114,7 +118,7 @@ class FeedbackService:
         recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
         top_risks: list[str] = []
         explanation: str | None = None
-        model_version = "0.3.0"
+        model_version = TRUST_SCORE_MODEL_VERSION
         if version.trust_score is not None:
             rs = version.trust_score.risk_summary
             if rs is not None:

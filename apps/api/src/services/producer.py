@@ -5,11 +5,13 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.services.source_snapshots import SourceSnapshotStore
+from scanners.risk_scanner.redaction import redact_report
 from src.models.producer import (
     CreatePackageRequest,
     CreateVersionRequest,
@@ -22,7 +24,7 @@ from src.models.producer import (
 from schema.constants import (
     STATUS_TRANSITIONS, VersionStatus, AuditAction,
     GRADE_TO_RISK_LEVEL, GRADE_TO_RECOMMENDATION,
-    PACKAGE_TYPE_INSTALL_CLIENTS,
+    PACKAGE_TYPE_INSTALL_CLIENTS, HASH_SCOPE_ARTIFACT_ARCHIVE,
 )
 
 _SEMVER_RE = re.compile(
@@ -262,22 +264,54 @@ class ProducerService:
         """
         from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
-        scan_report = full_report.get("scan_report", {})
+        raw_scan_report = full_report.get("scan_report", {})
+        scan_report = (
+            redact_report(raw_scan_report)
+            if isinstance(raw_scan_report, dict)
+            else {}
+        )
         trust_score = full_report.get("trust_score", {})
         report_path = full_report.get("report_path", "")
         # 初始扫描保留的本地代码目录（打包产物时优先复用，不再重新拉取）
         local_source_dir = full_report.get("local_source_dir")
+        acquisition_facts = full_report.get("acquisition_facts")
+        package_claims = full_report.get("package_claims")
 
         # ── 生成安装产物（同步，失败则回退 error） ───────────
         version = self.repository.get_version(version_id)
         if version is not None:
+            # Top-level integrity is a public server-owned projection.  Clear
+            # every package-authored value before branching by install method;
+            # copy_directory replaces it below with the generated archive
+            # hash, while registry/docker/manual installs intentionally expose
+            # no server-verified top-level integrity.
+            provenance_updates: dict[str, object] = {"integrity": None}
+            if isinstance(acquisition_facts, dict):
+                safe_source = deepcopy(acquisition_facts.get("source") or {})
+                provenance_updates.update(
+                    {
+                        "source": safe_source,
+                        "acquisition_facts": deepcopy(acquisition_facts),
+                    }
+                )
+            if isinstance(package_claims, dict):
+                provenance_updates["provenance_claims"] = redact_report(
+                    deepcopy(package_claims)
+                )
+            self.repository.update_version_data(version_id, provenance_updates)
+            version.update(provenance_updates)
+
             source = dict(version.get("source") or {})
             extracted_meta = full_report.get("package_metadata")
-            acquired_source = (
-                extracted_meta.get("source")
-                if isinstance(extracted_meta, dict)
-                else None
-            )
+            acquired_source = None
+            if isinstance(acquisition_facts, dict):
+                acquired_source = acquisition_facts.get("source")
+            if not isinstance(acquired_source, dict):
+                acquired_source = (
+                    extracted_meta.get("source")
+                    if isinstance(extracted_meta, dict)
+                    else None
+                )
             # Source identity is an acquisition fact.  It must supersede the
             # submitted URL/ref so the install manifest identifies the same
             # repository default branch and commit that were scanned.
@@ -442,7 +476,12 @@ class ProducerService:
             return
         data = dict(version)
 
-        source = dict(data.get("source") or {})
+        acquisition_facts = data.get("acquisition_facts")
+        if isinstance(acquisition_facts, dict):
+            source = dict(acquisition_facts.get("source") or {})
+        else:
+            source = dict(data.get("source") or {})
+        integrity: dict[str, object] = {}
         source["download_url"] = artifact.get("download_url", "")
         if commit_hash and len(commit_hash) == 40:
             source["commit_hash"] = commit_hash
@@ -450,8 +489,9 @@ class ProducerService:
             source["subdirectory"] = source_subdirectory
         data["source"] = source
 
-        integrity = dict(data.get("integrity") or {})
         integrity["sha256"] = artifact.get("sha256", "")
+        integrity["hash_scope"] = HASH_SCOPE_ARTIFACT_ARCHIVE
+        integrity["hash_complete"] = True
         integrity["download_size_bytes"] = artifact.get("download_size_bytes", 0)
         data["integrity"] = integrity
 
@@ -692,13 +732,23 @@ class ProducerService:
         if scan:
             scan_json = scan.get("scan_json", {})
             if isinstance(scan_json, dict):
-                version["scan_summary"] = scan_json.get("summary", {})
-                version["findings"] = scan_json.get("findings", [])
-                version["source_snapshot_id"] = scan_json.get("source_snapshot_id")
+                safe_scan_json = redact_report(dict(scan_json))
+                safe_scan_json.pop("file_contents", None)
+                version["scan_summary"] = safe_scan_json.get("summary", {})
+                version["findings"] = safe_scan_json.get("findings", [])
+                version["source_snapshot_id"] = safe_scan_json.get(
+                    "source_snapshot_id"
+                )
                 # Expose coverage/provenance fields to the review UI without
                 # exposing source contents.  These fields are part of the
                 # persisted consumer-facing scan contract.
-                version["scan_report"] = dict(scan_json)
+                version["scan_report"] = safe_scan_json
+        if isinstance(version.get("provenance_claims"), dict):
+            # Older rows may have been written before the persistence-side
+            # redaction was added; never expose those claims verbatim.
+            version["provenance_claims"] = redact_report(
+                version["provenance_claims"]
+            )
         # 确保 trust_score 存在
         if not version.get("trust_score"):
             version["trust_score"] = {"risk_summary": None}

@@ -381,6 +381,38 @@ export default function ReviewDetailPage() {
     ...(scanStatus?.reasons || []),
     ...(scanReport?.scan_limits?.exceeded || []),
   ].filter((reason, index, all) => all.indexOf(reason) === index);
+  const provenance = scanReport?.provenance;
+  const provenanceSource = provenance?.acquisition_facts?.source;
+  const provenanceIntegrity = provenance?.acquisition_facts?.integrity;
+  const provenanceHashComplete = (
+    provenanceIntegrity?.hash_complete === true
+    && provenanceIntegrity.hash_scope === 'scanned_source'
+  );
+  const provenanceVerification = provenance?.acquisition_facts?.verification;
+  const provenanceVerificationItems = [
+    { key: 'owner', label: t('review.detail.provenance_verification_owner'), value: provenanceVerification?.owner },
+    { key: 'signature', label: t('review.detail.provenance_verification_signature'), value: provenanceVerification?.signature },
+    { key: 'attestation', label: t('review.detail.provenance_verification_attestation'), value: provenanceVerification?.attestation },
+    { key: 'sbom', label: t('review.detail.provenance_verification_sbom'), value: provenanceVerification?.sbom },
+  ];
+  const provenanceClaimSections = [
+    {
+      key: 'source',
+      label: t('review.detail.provenance_package_source'),
+      values: flattenDisplayEntries(provenance?.package_claims?.source ?? {}),
+    },
+    {
+      key: 'integrity',
+      label: t('review.detail.provenance_package_integrity'),
+      values: flattenDisplayEntries(provenance?.package_claims?.integrity ?? {}),
+    },
+  ];
+
+  const verificationLabel = (value: boolean | undefined) => {
+    if (value === true) return t('review.detail.provenance_verified');
+    if (value === false) return t('review.detail.provenance_not_verified');
+    return '—';
+  };
 
   const reviewResultLabel = version?.review_conclusion
     ? (version.review_conclusion === 'approved'
@@ -578,6 +610,119 @@ export default function ReviewDetailPage() {
               {(scanReport.rule_execution.failed ?? 0) > 0 && ` · ${t('review.detail.scan_rules_failed')}: ${scanReport.rule_execution.failed}`}
             </div>
           )}
+        </section>
+      )}
+
+      {provenance && (
+        <section className="review-detail-section">
+          <h2 className="review-detail-section-title">{t('review.detail.provenance_title')}</h2>
+          <p style={{ margin: '-0.4rem 0 1rem', color: 'var(--color-muted)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+            {t('review.detail.provenance_description')}
+          </p>
+
+          <h3 className="review-meta-subtitle" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+            {t('review.detail.provenance_acquisition_title')}
+          </h3>
+          <div className="review-meta-grid">
+            <div className="review-meta-field full">
+              <span className="review-meta-label">{t('review.detail.provenance_repository_url')}</span>
+              <span className="review-meta-value">
+                {provenanceSource?.repository_url ? (
+                  <a href={provenanceSource.repository_url} target="_blank" rel="noopener noreferrer">
+                    {shortUrl(provenanceSource.repository_url)}
+                  </a>
+                ) : '—'}
+              </span>
+            </div>
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.provenance_ref_type')}</span>
+              <span className="review-meta-value">{provenanceSource?.ref_type || '—'}</span>
+            </div>
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.provenance_ref')}</span>
+              <span className="review-meta-value">{provenanceSource?.ref || '—'}</span>
+            </div>
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.provenance_commit_hash')}</span>
+              <span className="review-meta-value">
+                {provenanceSource?.commit_hash ? <code>{provenanceSource.commit_hash}</code> : '—'}
+              </span>
+            </div>
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.provenance_subdirectory')}</span>
+              <span className="review-meta-value">
+                {provenanceSource?.subdirectory ? <code>{provenanceSource.subdirectory}</code> : '—'}
+              </span>
+            </div>
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.provenance_acquisition_method')}</span>
+              <span className="review-meta-value">{provenance.acquisition_facts?.acquisition_method || '—'}</span>
+            </div>
+            <div className="review-meta-field full">
+              <span className="review-meta-label">{t('review.detail.provenance_server_sha256')}</span>
+              <span className="review-meta-value">
+                {provenanceHashComplete && provenanceIntegrity?.sha256 ? (
+                  <code style={{ wordBreak: 'break-all' }}>{provenanceIntegrity.sha256}</code>
+                ) : t('review.detail.provenance_hash_unavailable')}
+              </span>
+            </div>
+            <div className="review-meta-field full">
+              <span className="review-meta-label">{t('review.detail.provenance_hash_scope')}</span>
+              <span className="review-meta-value">
+                {(provenanceIntegrity?.hash_scope || '—') + ' · ' + (provenanceHashComplete
+                  ? t('review.detail.provenance_hash_complete')
+                  : t('review.detail.provenance_hash_incomplete'))}
+              </span>
+            </div>
+          </div>
+
+          <h3 className="review-meta-subtitle">{t('review.detail.provenance_verification_title')}</h3>
+          <div className="review-meta-grid">
+            {provenanceVerificationItems.map((item) => (
+              <div className="review-meta-field" key={item.key}>
+                <span className="review-meta-label">{item.label}</span>
+                <span
+                  className="review-meta-value"
+                  style={{
+                    color: item.value === true
+                      ? 'var(--color-success)'
+                      : item.value === false
+                        ? 'var(--color-danger)'
+                        : 'var(--color-muted)',
+                    fontWeight: 600,
+                  }}
+                >
+                  {verificationLabel(item.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <h3 className="review-meta-subtitle">{t('review.detail.provenance_claims_title')}</h3>
+          <p style={{ margin: '0 0 0.75rem', color: 'var(--color-muted)', fontSize: '0.8rem', lineHeight: 1.5 }}>
+            {t('review.detail.provenance_claims_description')}
+          </p>
+          <div className="review-meta-grid">
+            {provenanceClaimSections.map((section) => (
+              <div className="review-meta-field full" key={section.key}>
+                <span className="review-meta-label">{section.label}</span>
+                {section.values.length > 0 ? (
+                  <div
+                    className="review-meta-value"
+                    style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}
+                  >
+                    {section.values.map(([path, value]) => (
+                      <span key={`${section.key}-${path || 'value'}`}>
+                        <code>{path || t('review.detail.provenance_claim_root')}</code>: {value}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="review-meta-value">—</span>
+                )}
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

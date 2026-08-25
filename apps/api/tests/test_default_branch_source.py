@@ -34,7 +34,9 @@ def test_resolve_default_branch_from_github_metadata(monkeypatch: pytest.MonkeyP
     def fake_urlopen(request, timeout: int):
         observed["url"] = request.full_url
         observed["timeout"] = timeout
-        return _JsonResponse({"default_branch": "master"})
+        return _JsonResponse(
+            {"full_name": "acme/demo", "default_branch": "master"}
+        )
 
     monkeypatch.setattr(trust.urllib.request, "urlopen", fake_urlopen)
 
@@ -48,6 +50,7 @@ def test_resolve_default_branch_from_github_metadata(monkeypatch: pytest.MonkeyP
     }
     assert resolved["ref"] == "master"
     assert resolved["subdir"] is None
+    assert resolved["repository_verified"] is True
 
 
 def test_default_branch_with_slash_keeps_its_subdirectory(
@@ -241,6 +244,11 @@ class _ProducerRepository:
                 "repository_url": "https://github.com/acme/demo/tree/feature-x",
                 "ref": "feature-x",
             },
+            "integrity": {
+                "sha256": "f" * 64,
+                "signature": "package-authored-signature",
+                "sbom_url": "https://attacker.example/sbom.json",
+            },
             "installation": {"method": "npm_install"},
         }
 
@@ -263,10 +271,16 @@ class _ProducerRepository:
         return None
 
 
-def test_producer_persists_acquired_default_branch_source(
+@pytest.mark.parametrize(
+    "install_method",
+    ["npm_install", "pip_install", "docker_run", "manual_steps"],
+)
+def test_producer_persists_acquired_source_and_clears_untrusted_integrity(
     monkeypatch: pytest.MonkeyPatch,
+    install_method: str,
 ) -> None:
     repo = _ProducerRepository()
+    repo.version["installation"] = {"method": install_method}
     service = ProducerService(repo)  # type: ignore[arg-type]
     monkeypatch.setattr(
         service,
@@ -289,6 +303,13 @@ def test_producer_persists_acquired_default_branch_source(
             "commit_hash": commit_hash,
             "source_subdirectory": None,
             "local_source_dir": None,
+            "package_claims": {
+                "integrity": {
+                    "sha256": "f" * 64,
+                    "signature": "package-authored-signature",
+                    "sbom_url": "https://attacker.example/sbom.json",
+                },
+            },
             "package_metadata": {
                 "source": {
                     "type": "github",
@@ -308,3 +329,11 @@ def test_producer_persists_acquired_default_branch_source(
     assert source["repository_url"] == "https://github.com/acme/demo"
     assert source["ref"] == "master"
     assert source["commit_hash"] == commit_hash
+    assert repo.version["integrity"] is None
+    assert repo.version["provenance_claims"] == {
+        "integrity": {
+            "sha256": "f" * 64,
+            "signature": "package-authored-signature",
+            "sbom_url": "https://attacker.example/sbom.json",
+        },
+    }

@@ -14,6 +14,7 @@ class MockScanner:
     code_example_predicate: Callable[[str, int], bool] = lambda f, ln: False
     findings: list[dict[str, Any]] = field(default_factory=list)
     _package_metadata: dict[str, Any] | None = None
+    _acquisition_facts: dict[str, Any] | None = None
     target_dir: Path = field(default_factory=lambda: Path("."))
 
     @property

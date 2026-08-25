@@ -14,8 +14,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+from schema.constants import TRUST_SCORE_MODEL_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,34 @@ def build_package_metadata(
         "permissions": version.get("permissions") or {},
         "installation": version.get("installation") or {},
     }
+
+
+def build_acquisition_facts(
+    version: dict[str, Any],
+    scan_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Load server-owned provenance facts for a stored version.
+
+    Legacy records without this namespace intentionally return an empty
+    mapping so the scorer fails closed instead of reviving manifest claims.
+    """
+    candidates: list[Any] = [
+        version.get("acquisition_facts"),
+    ]
+    if isinstance(scan_report, dict):
+        provenance = scan_report.get("provenance")
+        if isinstance(provenance, dict):
+            candidates.append(provenance.get("acquisition_facts"))
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            # Historical records may contain hashes produced over a different
+            # file set.  Never infer or rewrite their scope/completeness at
+            # read time: the scorer only credits an explicitly marked
+            # ``scanned_source`` hash with ``hash_complete is True``.  Legacy
+            # data therefore remains fail-closed until a trusted rescan or
+            # migration recomputes the hash.
+            return deepcopy(candidate)
+    return {}
 
 
 def compute_signals_fingerprint(
@@ -114,7 +145,20 @@ class TrustScoreRefreshService:
             str(version.get("status", "")),
         )
         stored = version.get("trust_score_refresh")
-        if not force and stored == fingerprint:
+        trust_score = version.get("trust_score")
+        stored_model_version = (
+            trust_score.get("model_version")
+            if isinstance(trust_score, dict)
+            else None
+        )
+        # A model upgrade must invalidate the cached score even when platform
+        # signals are unchanged.  This makes every published version converge
+        # to the current model when its score is next read/refreshed.
+        if (
+            not force
+            and stored == fingerprint
+            and stored_model_version == TRUST_SCORE_MODEL_VERSION
+        ):
             return None
 
         scan_report: dict[str, Any] | None = None
@@ -126,12 +170,17 @@ class TrustScoreRefreshService:
             scan_report = scan_row["scan_json"]
 
         metadata = build_package_metadata(package, version)
+        acquisition_facts = build_acquisition_facts(
+            version,
+            scan_report,
+        )
         new_ts = self._load_scorer()(
             package_metadata=metadata,
             scan_report=scan_report,
             author_history=signals.get("author_history"),
             review_records=signals.get("review_records"),
             feedback=signals.get("feedback"),
+            acquisition_facts=acquisition_facts,
         )
         new_ts["calculated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -194,7 +243,9 @@ class TrustScoreRefreshService:
                         for e in (new_ts.get("explanations") or [])
                     )
                     or None,
-                    model_version=new_ts.get("model_version") or "0.3.0",
+                    model_version=(
+                        new_ts.get("model_version") or TRUST_SCORE_MODEL_VERSION
+                    ),
                 )
             except Exception:
                 logger.exception(
@@ -207,6 +258,9 @@ class TrustScoreRefreshService:
                     version_id=version_id,
                     level=level,
                     recommendation=recommendation,
+                    model_version=(
+                        new_ts.get("model_version") or TRUST_SCORE_MODEL_VERSION
+                    ),
                 )
             except Exception:
                 logger.exception(

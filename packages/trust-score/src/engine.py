@@ -28,7 +28,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .provenance import assess_source_verifiability, assess_signature_chain
+from .provenance import (
+    assess_source_verifiability,
+    assess_signature_chain,
+    has_complete_scanned_hash,
+)
 from .intent import (
     assess_permission_reasonability,
     assess_prompt_safety,
@@ -37,6 +41,7 @@ from .intent import (
 from .community import assess_manual_review, assess_author_history
 from .derived_score import derive_score, get_recommendation
 from .explainer import generate_explanations, extract_top_risks
+from packages.schema.constants import TRUST_SCORE_MODEL_VERSION
 from scanners.risk_scanner.weights import SEVERITY_POINTS, LEVEL_TO_GRADE
 
 # Level ordering for upgrade/downgrade (index 0 = best)
@@ -337,6 +342,7 @@ def _build_dimensions(
     c2_disc: dict[str, Any],
     fb_data: dict[str, Any] | None = None,
     scan_report: dict[str, Any] | None = None,
+    acquisition_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the nine-dimension output object per trust-score.schema.json.
 
@@ -345,8 +351,24 @@ def _build_dimensions(
     """
     if fb_data is None:
         fb_data = {}
-    source = package_metadata.get("source", {}) or {}
-    integrity = package_metadata.get("integrity", {}) or {}
+    raw_source = (
+        acquisition_facts.get("source", {})
+        if isinstance(acquisition_facts, dict)
+        else {}
+    ) or {}
+    source = raw_source if isinstance(raw_source, dict) else {}
+    raw_integrity = (
+        acquisition_facts.get("integrity", {})
+        if isinstance(acquisition_facts, dict)
+        else {}
+    ) or {}
+    integrity = raw_integrity if isinstance(raw_integrity, dict) else {}
+    raw_verification = (
+        acquisition_facts.get("verification", {})
+        if isinstance(acquisition_facts, dict)
+        else {}
+    ) or {}
+    verification = raw_verification if isinstance(raw_verification, dict) else {}
     permissions = package_metadata.get("permissions", {}) or {}
     raw_permission_evidence = package_metadata.get("permission_evidence", [])
     permission_evidence = (
@@ -363,11 +385,11 @@ def _build_dimensions(
         "score": p1.get("score", 50),
         "weight": 0.15,
         "details": {
-            "is_verified_owner": source.get("verified_owner", False),
+            "is_verified_owner": verification.get("owner") is True,
             "source_type": source.get("type", "unknown"),
             "repo_age_days": 0,
             "has_commit_hash": bool(source.get("commit_hash", "")),
-            "has_integrity_hash": bool(integrity.get("sha256", "")),
+            "has_integrity_hash": has_complete_scanned_hash(integrity),
         },
     }
 
@@ -522,9 +544,9 @@ def _build_dimensions(
         "score": p2.get("score", 50),
         "weight": 0.05,
         "details": {
-            "has_signature": bool(integrity.get("signature", "")),
-            "has_attestation": bool(integrity.get("attestation_url", "")),
-            "has_sbom": bool(integrity.get("sbom_url", "")),
+            "has_signature": verification.get("signature") is True,
+            "has_attestation": verification.get("attestation") is True,
+            "has_sbom": verification.get("sbom") is True,
         },
     }
 
@@ -631,17 +653,22 @@ def rate(
     author_history: dict[str, Any] | None = None,
     review_records: dict[str, Any] | None = None,
     feedback: dict[str, Any] | None = None,
+    acquisition_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full 9-step decision engine for trust scoring.
 
     Args:
-        package_metadata: dict conforming to agent-package.schema.json
+        package_metadata: dict conforming to agent-package.schema.json. Its
+            source/integrity fields are treated as package claims.
         scan_report: dict conforming to scan-report.schema.json, or None
         author_history: dict with packages_published, avg_historical_score,
                         violations_count
         review_records: dict with status, reviewer_count, last_reviewed_at
         feedback: dict with avg_rating (0-5), total_ratings, total_installs,
                   reports_count — feeds the user_feedback dimension
+        acquisition_facts: server-established source/integrity facts and
+            independent verification flags. Omitting this argument is
+            fail-closed and does not grant provenance credit from claims.
 
     Returns:
         dict with all fields required by trust-score.schema.json:
@@ -649,8 +676,8 @@ def rate(
         dimensions, explanations, risk_summary
     """
     # --- Step 1: Layer 1 — Provenance ---
-    p1 = assess_source_verifiability(package_metadata)
-    p2 = assess_signature_chain(package_metadata)
+    p1 = assess_source_verifiability(package_metadata, acquisition_facts)
+    p2 = assess_signature_chain(package_metadata, acquisition_facts)
 
     # --- Step 2: Layer 2 — Intent ---
     i1 = assess_permission_reasonability(package_metadata)
@@ -704,6 +731,7 @@ def rate(
         c2_disc,
         fb_data=feedback,
         scan_report=scan_report,
+        acquisition_facts=acquisition_facts,
     )
 
     dimension_scores: dict[str, int] = {
@@ -752,7 +780,7 @@ def rate(
         "package_name": package_metadata.get("name", "unknown"),
         "version": package_metadata.get("version", "0.0.0"),
         "calculated_at": datetime.now(timezone.utc).isoformat(),
-        "model_version": "0.3.0",
+        "model_version": TRUST_SCORE_MODEL_VERSION,
         "dimensions": dimensions,
         "explanations": explanations,
         "risk_summary": {
