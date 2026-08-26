@@ -1,6 +1,6 @@
 """供给侧 ORM 模型定义。
 
-对应迁移 20260717_0002_producer_tables.py 创建的四张表：
+对应 Alembic migration 创建的四张表：
 - users: 用户账户
 - review_records: 审核记录
 - scan_reports: 扫描报告
@@ -11,7 +11,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, Boolean
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.database import Base
@@ -23,13 +32,18 @@ def _utc_now() -> datetime:
 
 class UserRow(Base):
     __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    email: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(256), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(32), index=True)
     display_name: Mapped[str] = mapped_column(String(128))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now
     )

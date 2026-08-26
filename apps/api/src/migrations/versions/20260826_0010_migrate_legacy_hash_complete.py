@@ -6,7 +6,7 @@ database columns, so the rename needs an explicit data migration before the
 strict contract models are used against historical rows.
 
 Revision ID: 20260826_0010
-Revises: 20260803_0009
+Revises: 20260826_0001
 Create Date: 2026-08-26
 """
 
@@ -18,7 +18,7 @@ from alembic import op
 
 
 revision: str = "20260826_0010"
-down_revision: str | None = "20260803_0009"
+down_revision: str | None = "20260826_0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

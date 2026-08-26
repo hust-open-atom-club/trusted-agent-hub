@@ -162,7 +162,7 @@ def test_alembic_migration_rewrites_persisted_json_documents(
     database_path = tmp_path / "legacy-marker.db"
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
     config = _alembic_config(database_url)
-    command.upgrade(config, "20260803_0009")
+    command.upgrade(config, "20260826_0001")
 
     engine = create_engine_from_url(database_url)
     try:

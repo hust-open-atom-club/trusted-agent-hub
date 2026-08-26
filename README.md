@@ -125,6 +125,18 @@ alembic upgrade head
 python -m src.scripts.seed_producer
 ```
 
+### 数据库迁移策略
+
+项目当前仍处于预发布阶段，数据库迁移已整理为单一初始 schema。新建数据库执行：
+
+```bash
+alembic upgrade head
+```
+
+本次整理不兼容此前的旧 revision 链。已有本地数据库如无需要保留的数据，建议删除后
+重新创建；如果包含重要数据，应先备份，再按当前 schema 迁移数据。不要仅使用
+`alembic stamp` 跳过 schema 创建，除非数据库结构已经与当前初始 schema 完全一致。
+
 评分模型版本升级后，应在发布新 API 镜像时执行一次幂等回填：
 
 ```bash

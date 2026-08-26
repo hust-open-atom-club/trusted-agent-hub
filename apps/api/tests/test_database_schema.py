@@ -10,6 +10,7 @@ import zipfile
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -39,6 +40,16 @@ def _alembic_config(database_url: str) -> Config:
     return config
 
 
+def test_migration_graph_has_one_initial_revision() -> None:
+    script = ScriptDirectory.from_config(_alembic_config("sqlite+pysqlite:///:memory:"))
+    assert script.get_bases() == ["20260826_0001"]
+    assert script.get_heads() == ["20260826_0010"]
+    assert [revision.revision for revision in script.walk_revisions()] == [
+        "20260826_0010",
+        "20260826_0001",
+    ]
+
+
 @pytest.fixture
 def migrated_sqlite_engine(tmp_path: Path) -> Iterator[Engine]:
     database_path = tmp_path / "consumer.db"
@@ -59,6 +70,8 @@ def test_migration_foreign_keys_reference_parents_with_cascade(
         "trust_levels": ("version_id", "package_versions", "id"),
         "install_records": ("version_id", "package_versions", "id"),
         "feedback_records": ("package_id", "packages", "id"),
+        "review_records": ("version_id", "package_versions", "id"),
+        "scan_reports": ("version_id", "package_versions", "id"),
     }
     for table_name, (column, parent_table, parent_column) in expected_foreign_keys.items():
         foreign_keys = inspector.get_foreign_keys(table_name)
@@ -151,7 +164,7 @@ def test_migration_check_rejects_invalid_trust_level(
             )
 
 
-def test_alembic_upgrade_head_creates_exact_consumer_schema(
+def test_alembic_upgrade_head_creates_exact_schema(
     migrated_sqlite_engine: Engine,
 ) -> None:
     inspector = inspect(migrated_sqlite_engine)
@@ -159,18 +172,64 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
         BUSINESS_TABLES | PRODUCER_TABLES
     )
 
-    assert {
-        constraint["name"]
-        for constraint in inspector.get_unique_constraints("package_versions")
-    } == {"uq_package_version"}
-    assert {
-        constraint["name"]
-        for constraint in inspector.get_unique_constraints("install_records")
-    } == {"uq_install_event_id"}
-    assert {
-        constraint["name"]
-        for constraint in inspector.get_unique_constraints("feedback_records")
-    } == {"uq_feedback_user_package"}
+    expected_columns = {
+        "packages": {
+            "id", "name", "status", "latest_version", "data",
+        },
+        "package_versions": {
+            "id", "package_id", "version", "status", "data",
+            "manual_grade", "manual_grade_by", "manual_grade_at",
+            "manual_grade_reason",
+        },
+        "trust_levels": {
+            "version_id", "level", "install_recommendation", "top_risks",
+            "explanation", "model_version", "calculated_at",
+        },
+        "install_records": {
+            "id", "version_id", "user_id", "client", "event_id",
+            "install_path", "integrity_verified", "installed_at",
+        },
+        "feedback_records": {
+            "id", "package_id", "user_id", "level", "comment",
+            "created_at", "updated_at",
+        },
+        "users": {
+            "id", "email", "password_hash", "role", "display_name",
+            "is_active", "created_at",
+        },
+        "review_records": {
+            "id", "version_id", "reviewer_id", "conclusion", "comment",
+            "created_at",
+        },
+        "scan_reports": {"version_id", "scan_json", "report_path", "scanned_at"},
+        "audit_logs": {
+            "id", "action", "target_type", "target_id", "operator_id",
+            "detail", "timestamp",
+        },
+    }
+    for table_name, column_names in expected_columns.items():
+        assert {column["name"] for column in inspector.get_columns(table_name)} == column_names
+
+    expected_nullable = {
+        "users": {
+            "email": False,
+            "display_name": False,
+            "is_active": False,
+        },
+        "install_records": {
+            "user_id": True,
+            "event_id": False,
+            "install_path": True,
+        },
+    }
+    for table_name, column_nullability in expected_nullable.items():
+        actual_nullability = {
+            column["name"]: column["nullable"]
+            for column in inspector.get_columns(table_name)
+            if column["name"] in column_nullability
+        }
+        assert actual_nullability == column_nullability
+
     assert {
         constraint["name"]
         for constraint in inspector.get_check_constraints("trust_levels")
@@ -179,6 +238,18 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
         constraint["name"]
         for constraint in inspector.get_check_constraints("feedback_records")
     } == {"ck_feedback_records_level"}
+
+    expected_unique_constraints = {
+        "package_versions": {"uq_package_version"},
+        "install_records": {"uq_install_event_id"},
+        "feedback_records": {"uq_feedback_user_package"},
+        "users": {"uq_users_email"},
+    }
+    for table_name, constraint_names in expected_unique_constraints.items():
+        assert {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(table_name)
+        } == constraint_names
 
     expected_indexes = {
         "packages": {"ix_packages_name", "ix_packages_status"},
@@ -199,6 +270,13 @@ def test_alembic_upgrade_head_creates_exact_consumer_schema(
             "ix_feedback_records_package_id",
             "ix_feedback_records_user_id",
         },
+        "users": {"ix_users_role"},
+        "review_records": {
+            "ix_review_records_conclusion",
+            "ix_review_records_version_id",
+        },
+        "scan_reports": set(),
+        "audit_logs": {"ix_audit_logs_target", "ix_audit_logs_timestamp"},
     }
     for table_name, index_names in expected_indexes.items():
         assert {index["name"] for index in inspector.get_indexes(table_name)} == index_names
@@ -322,11 +400,16 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
         names = set(wheel.namelist())
         assert "src/migrations/env.py" in names
         assert "src/migrations/script.py.mako" in names
-        assert any(
-            name.startswith("src/migrations/versions/")
-            and name.endswith("_consumer_persistence.py")
+        migration_files = {
+            name.removeprefix("src/migrations/versions/")
             for name in names
-        )
+            if name.startswith("src/migrations/versions/") and name.endswith(".py")
+        }
+        assert migration_files == {
+            "__init__.py",
+            "20260826_0001_initial_schema.py",
+            "20260826_0010_migrate_legacy_hash_complete.py",
+        }
         unpacked = tmp_path / "unpacked"
         wheel.extractall(unpacked)
 
