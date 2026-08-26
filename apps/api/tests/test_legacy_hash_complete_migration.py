@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 import importlib
+from io import StringIO
 import json
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
@@ -33,6 +35,12 @@ def _load_fixture() -> dict[str, object]:
 
 def _alembic_config(database_url: str) -> Config:
     config = Config(str(API_ROOT / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def _offline_alembic_config(database_url: str, output: StringIO) -> Config:
+    config = Config(str(API_ROOT / "alembic.ini"), output_buffer=output)
     config.set_main_option("sqlalchemy.url", database_url)
     return config
 
@@ -146,6 +154,41 @@ def test_normalized_records_pass_current_strict_models() -> None:
         MIGRATION._SCAN_REPORT_PATHS,
     )
     ScanReport.model_validate(report)
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "sqlite+pysqlite:///:memory:",
+        "postgresql+psycopg://user:pass@localhost/db",
+    ],
+)
+def test_base_to_head_offline_sql_skips_cleanup_with_warning(
+    database_url: str,
+) -> None:
+    output = StringIO()
+    config = _offline_alembic_config(database_url, output)
+
+    command.upgrade(config, "head", sql=True)
+
+    rendered_sql = output.getvalue()
+    assert "20260826_0010 skips legacy JSON cleanup" in rendered_sql
+    assert "SELECT package_versions" not in rendered_sql
+    assert "SELECT scan_reports" not in rendered_sql
+
+
+def test_incremental_offline_sql_requires_online_upgrade() -> None:
+    output = StringIO()
+    config = _offline_alembic_config("sqlite+pysqlite:///:memory:", output)
+
+    with pytest.raises(RuntimeError, match="requires an online upgrade"):
+        command.upgrade(
+            config,
+            "20260826_0001:20260826_0010",
+            sql=True,
+        )
+
+    assert "UPDATE alembic_version" not in output.getvalue()
 
 
 def test_alembic_migration_rewrites_persisted_json_documents(

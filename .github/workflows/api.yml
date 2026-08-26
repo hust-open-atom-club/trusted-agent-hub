@@ -54,6 +54,8 @@ jobs:
         run: |
           pip install -U pip setuptools wheel build
           pip install -e ".[dev]" jsonschema psycopg2-binary numpy
+      - name: Render offline migration SQL
+        run: alembic upgrade head --sql > "$RUNNER_TEMP/alembic-head.sql"
       - name: Apply migrations
         run: alembic upgrade head
       - name: Run full test suite
