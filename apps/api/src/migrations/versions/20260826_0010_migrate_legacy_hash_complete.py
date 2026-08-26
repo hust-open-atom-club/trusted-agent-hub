@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 
 revision: str = "20260826_0010"
@@ -115,6 +115,25 @@ def _normalize_json_column(
 
 def upgrade() -> None:
     """Convert legacy markers and remove the obsolete JSON key."""
+    if context.is_offline_mode():
+        starting_revision = context.get_context().get_current_revision()
+        if starting_revision is not None:
+            raise RuntimeError(
+                "Revision 20260826_0010 requires an online upgrade when "
+                f"starting from existing revision {starting_revision!r} because "
+                "persisted JSON rows must be inspected and rewritten."
+            )
+
+        context.static_output(
+            "-- WARNING: revision 20260826_0010 skips legacy JSON cleanup "
+            "during base-to-head offline SQL generation."
+        )
+        context.static_output(
+            "-- If package_versions or scan_reports may contain hash_complete, "
+            "run an online Alembic upgrade instead."
+        )
+        return
+
     bind = op.get_bind()
     _normalize_json_column(
         bind,

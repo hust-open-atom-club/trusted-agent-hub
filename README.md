@@ -133,6 +133,17 @@ python -m src.scripts.seed_producer
 alembic upgrade head
 ```
 
+如需为新建的空数据库生成离线 SQL，可以执行：
+
+```bash
+alembic upgrade head --sql > migration.sql
+```
+
+离线输出仅支持从 `base` 创建空数据库。修订 `20260826_0010` 需要读取并重写
+`package_versions` 和 `scan_reports` 中的历史 JSON，因此完整离线建库脚本会跳过
+这一步数据清理。如果这些表中可能已有数据，必须执行在线 `alembic upgrade head`；
+不支持从已有 revision 生成跨越 `20260826_0010` 的增量离线 SQL。
+
 本次整理不兼容此前的旧 revision 链。已有本地数据库如无需要保留的数据，建议删除后
 重新创建；如果包含重要数据，应先备份，再按当前 schema 迁移数据。不要仅使用
 `alembic stamp` 跳过 schema 创建，除非数据库结构已经与当前初始 schema 完全一致。
