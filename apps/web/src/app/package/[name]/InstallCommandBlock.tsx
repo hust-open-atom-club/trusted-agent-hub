@@ -109,6 +109,10 @@ export default function InstallCommandBlock({ command, packageName, client }: In
       <span className="comment"># {String(t('detail.install.command_comment', { name: packageName }))}</span>
       {'\n'}
       <span className="install-command-text">{command}</span>
+      {'\n\n'}
+      <span className="comment"># {String(t('detail.install.ai_prompt_comment'))}</span>
+      {'\n'}
+      <span className="install-ai-prompt-text">{aiPrompt}</span>
     </div>
   );
 }

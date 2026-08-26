@@ -337,6 +337,7 @@
       "command_comment": "Install {{name}}",
       "copy_command": "Copy command",
       "copy_ai_prompt": "Copy for AI",
+      "ai_prompt_comment": "Prompt to send to AI",
       "ai_prompt": "Please follow {{guideUrl}} and install {{name}} for {{client}}. Before installing, show the package name, version, type, risk grade, permission summary, and target path; ask me first if confirmation is required.",
       "copied": "Copied",
       "copy_failed": "Copy failed"

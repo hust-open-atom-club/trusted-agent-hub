@@ -2945,6 +2945,13 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.install-ai-prompt-text {
+  display: block;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ============================================================
    包文件快照 / 内容完整性
    ============================================================ */
