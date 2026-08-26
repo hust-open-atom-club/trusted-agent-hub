@@ -109,6 +109,7 @@
   },
   "card": {
     "installs": "安装",
+    "view_details": "查看详情",
     "version": "版本"
   },
   "login": {

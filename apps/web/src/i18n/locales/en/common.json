@@ -109,6 +109,7 @@
   },
   "card": {
     "installs": "installs",
+    "view_details": "View details",
     "version": "version"
   },
   "login": {
