@@ -385,7 +385,7 @@ export default function ReviewDetailPage() {
   const provenance = scanReport?.provenance;
   const provenanceSource = provenance?.acquisition_facts?.source;
   const provenanceIntegrity = provenance?.acquisition_facts?.integrity;
-  const provenanceHashComplete = (
+  const provenanceIsComplete = (
     provenanceIntegrity?.is_complete === true
     && provenanceIntegrity.hash_scope === 'scanned_source'
   );
@@ -662,7 +662,7 @@ export default function ReviewDetailPage() {
             <div className="review-meta-field full">
               <span className="review-meta-label">{t('review.detail.provenance_server_sha256')}</span>
               <span className="review-meta-value">
-                {provenanceHashComplete && provenanceIntegrity?.sha256 ? (
+                {provenanceIsComplete && provenanceIntegrity?.sha256 ? (
                   <code style={{ wordBreak: 'break-all' }}>{provenanceIntegrity.sha256}</code>
                 ) : t('review.detail.provenance_hash_unavailable')}
               </span>
@@ -670,9 +670,9 @@ export default function ReviewDetailPage() {
             <div className="review-meta-field full">
               <span className="review-meta-label">{t('review.detail.provenance_hash_scope')}</span>
               <span className="review-meta-value">
-                {(provenanceIntegrity?.hash_scope || '—') + ' · ' + (provenanceHashComplete
-                  ? t('review.detail.provenance_hash_complete')
-                  : t('review.detail.provenance_hash_incomplete'))}
+                {(provenanceIntegrity?.hash_scope || '—') + ' · ' + (provenanceIsComplete
+                  ? t('review.detail.provenance_is_complete')
+                  : t('review.detail.provenance_is_incomplete'))}
               </span>
             </div>
           </div>

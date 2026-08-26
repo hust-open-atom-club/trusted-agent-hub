@@ -121,7 +121,7 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
         value={hashScopeLabel}
       />
       <MetaField
-        label={String(t('review.detail.provenance.hash_completeness'))}
+        label={String(t('review.detail.provenance.is_complete'))}
         value={completenessLabel}
       />
       <MetaField

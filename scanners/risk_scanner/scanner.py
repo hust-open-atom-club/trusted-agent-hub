@@ -107,7 +107,6 @@ class RiskScanner:
         self._file_contents: dict[str, str] = {}
         self.analysis = None
         self._content_tree_hash: str | None = None
-        self._content_tree_hash_complete: bool | None = None
         self._metadata_parse_errors: list[dict[str, str]] = []
 
     def scan(self) -> dict[str, Any]:
@@ -124,7 +123,6 @@ class RiskScanner:
         self._file_contents = {}
         self.analysis = None
         self._content_tree_hash = None
-        self._content_tree_hash_complete = None
         self._metadata_parse_errors = []
         self._package_metadata = None
         self._package_claims = None
@@ -358,7 +356,6 @@ class RiskScanner:
 
         if not complete and "content_hash_limited" not in self.inventory.limit_violations:
             self.inventory.limit_violations.append("content_hash_limited")
-        self._content_tree_hash_complete = complete
         self._content_tree_hash = digest.hexdigest()
         return self._content_tree_hash
 

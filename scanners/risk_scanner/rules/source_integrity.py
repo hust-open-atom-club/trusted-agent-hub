@@ -54,13 +54,13 @@ def run(scanner: Any) -> None:
         re.fullmatch(r"^[a-f0-9]{64}$", sha256)
     )
     hash_scope_ok = integrity.get("hash_scope") == HASH_SCOPE_SCANNED_SOURCE
-    hash_complete = integrity.get("is_complete") is True
-    sha256_ok = sha256_format_ok and hash_scope_ok and hash_complete
+    is_complete = integrity.get("is_complete") is True
+    sha256_ok = sha256_format_ok and hash_scope_ok and is_complete
     if not sha256_format_ok:
         issues.append("缺少 SHA256 完整性校验值")
     elif not hash_scope_ok:
         issues.append("SHA256 校验范围未声明为采集源码")
-    elif not hash_complete:
+    elif not is_complete:
         issues.append("SHA256 仅覆盖部分扫描内容")
 
     has_verified_signature = (

@@ -90,7 +90,7 @@ def build_verification_facts(
     acquisition_method: str,
     commit_hash: str,
     content_sha256: str,
-    content_hash_complete: bool = False,
+    is_complete: bool = False,
     server_verification: dict[str, Any] | None = None,
 ) -> dict[str, bool]:
     """Build the persisted repository, owner, and artifact verification flags.
@@ -112,7 +112,7 @@ def build_verification_facts(
     )
     supplied_content_sha256 = supplied.get("content_sha256")
     content_bound = (
-        content_hash_complete
+        is_complete
         and _is_sha256(content_sha256)
         and _is_sha256(supplied_content_sha256)
         and supplied_content_sha256 == content_sha256
