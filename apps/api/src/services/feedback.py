@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from schema.constants import (
     GRADE_TO_RECOMMENDATION,
     GRADE_TO_RISK_LEVEL,
-    TRUST_SCORE_MODEL_VERSION,
 )
 from src.errors import ConsumerAPIError
 from src.models.feedback import (
@@ -118,7 +117,8 @@ class FeedbackService:
         recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
         top_risks: list[str] = []
         explanation: str | None = None
-        model_version = TRUST_SCORE_MODEL_VERSION
+        model_version = "legacy-unknown"
+        model_fingerprint: str | None = None
         if version.trust_score is not None:
             rs = version.trust_score.risk_summary
             if rs is not None:
@@ -127,7 +127,12 @@ class FeedbackService:
                 explanation = "; ".join(
                     e.message for e in version.trust_score.explanations
                 )
-            model_version = version.trust_score.model_version or model_version
+            model_fingerprint = version.trust_score.model_fingerprint
+            model_version = version.trust_score.model_version or (
+                f"auto-{model_fingerprint[:12]}"
+                if model_fingerprint
+                else model_version
+            )
 
         # Backfill the trust_levels row for future requests
         self.repository.upsert_trust_level(
@@ -137,6 +142,7 @@ class FeedbackService:
             top_risks=top_risks,
             explanation=explanation,
             model_version=model_version,
+            model_fingerprint=model_fingerprint,
         )
 
         return TrustLevelResponse(
@@ -146,6 +152,7 @@ class FeedbackService:
             top_risks=top_risks,
             explanation=explanation,
             model_version=model_version,
+            model_fingerprint=model_fingerprint,
             calculated_at=datetime.now(timezone.utc).isoformat(),
         )
 

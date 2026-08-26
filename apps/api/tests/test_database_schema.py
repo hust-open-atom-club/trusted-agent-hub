@@ -40,11 +40,12 @@ def _alembic_config(database_url: str) -> Config:
     return config
 
 
-def test_migration_graph_has_one_initial_revision() -> None:
+def test_migration_graph_has_single_base_and_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config("sqlite+pysqlite:///:memory:"))
     assert script.get_bases() == ["20260826_0001"]
-    assert script.get_heads() == ["20260826_0010"]
+    assert script.get_heads() == ["20260826_0011"]
     assert [revision.revision for revision in script.walk_revisions()] == [
+        "20260826_0011",
         "20260826_0010",
         "20260826_0001",
     ]
@@ -183,7 +184,7 @@ def test_alembic_upgrade_head_creates_exact_schema(
         },
         "trust_levels": {
             "version_id", "level", "install_recommendation", "top_risks",
-            "explanation", "model_version", "calculated_at",
+            "explanation", "model_version", "model_fingerprint", "calculated_at",
         },
         "install_records": {
             "id", "version_id", "user_id", "client", "event_id",
@@ -280,7 +281,6 @@ def test_alembic_upgrade_head_creates_exact_schema(
     }
     for table_name, index_names in expected_indexes.items():
         assert {index["name"] for index in inspector.get_indexes(table_name)} == index_names
-
 
 def test_postgresql_migration_smoke() -> None:
     database_url = os.getenv("TEST_DATABASE_URL")
@@ -409,6 +409,7 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
             "__init__.py",
             "20260826_0001_initial_schema.py",
             "20260826_0010_migrate_legacy_hash_complete.py",
+            "20260826_0011_add_trust_model_fingerprint.py",
         }
         unpacked = tmp_path / "unpacked"
         wheel.extractall(unpacked)

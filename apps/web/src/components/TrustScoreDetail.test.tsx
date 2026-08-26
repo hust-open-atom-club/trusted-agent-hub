@@ -22,6 +22,7 @@ function makeTrustScore(overrides: Partial<TrustScore> = {}): TrustScore {
       },
     ],
     calculated_at: '2026-08-03T00:00:00Z',
+    model_fingerprint: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
     model_version: '0.2.0',
     ...overrides,
   };
@@ -49,6 +50,20 @@ describe('TrustScoreDetail', () => {
     expect(
       screen.getByText('Permissions exceed declared intent.'),
     ).toBeInTheDocument();
+  });
+
+  it('shows the model version and a shortened fingerprint with the full value in a tooltip', () => {
+    const modelFingerprint = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+    render(
+      <TrustScoreDetail
+        trustScore={makeTrustScore({ model_fingerprint: modelFingerprint })}
+      />,
+    );
+
+    expect(screen.getByText(/模型版本/)).toBeInTheDocument();
+    expect(screen.getByText('0.2.0')).toBeInTheDocument();
+    expect(screen.getByText(/模型指纹/)).toBeInTheDocument();
+    expect(screen.getByTitle(modelFingerprint)).toHaveTextContent('abcdef012345…');
   });
 
   it('prefers effectiveGrade over risk_summary grade', () => {

@@ -25,7 +25,7 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 from src.engine import rate as _engine_rate
-from packages.schema.constants import TRUST_SCORE_MODEL_VERSION
+from src.model_identity import get_model_fingerprint, get_model_version
 
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -94,7 +94,8 @@ def test_b1_code_review_skill_all_green_approved() -> None:
         f"Expected trusted, got {result['risk_summary']['level']}"
     assert 85 <= result["score"] <= 100
     assert result["package_name"] == "code-review-skill"
-    assert result["model_version"] == TRUST_SCORE_MODEL_VERSION
+    assert result["model_fingerprint"] == get_model_fingerprint()
+    assert result["model_version"] == get_model_version()
     # Verify schema-compatible structure
     _assert_valid_output(result, fx["expected_level"])
 
@@ -488,6 +489,7 @@ def test_edge_output_schema_compliance() -> None:
     assert isinstance(result["package_name"], str)
     assert isinstance(result["version"], str)
     assert isinstance(result["calculated_at"], str)  # ISO 8601
+    assert isinstance(result["model_fingerprint"], str)
     assert isinstance(result["model_version"], str)
 
     # Dimensions: 9 required keys
@@ -1120,6 +1122,7 @@ def _assert_valid_output(result: dict[str, Any], expected_level: str | None) -> 
     assert "package_name" in result
     assert "version" in result
     assert "calculated_at" in result
+    assert "model_fingerprint" in result
     assert "model_version" in result
     assert "dimensions" in result
     assert "explanations" in result

@@ -47,5 +47,5 @@ ENV PYTHONPATH=/packages:/
 # 暴露端口
 EXPOSE 8000
 
-# 启动：先跑数据库迁移，再启动 uvicorn
-CMD ["sh", "-c", "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000"]
+# 启动：迁移失败时阻断；评分回填失败仅告警，避免影响 API 可用性
+CMD ["sh", "-c", "alembic upgrade head && (python -m src.scripts.backfill_trust_scores || echo '[startup] backfill failed, rerun manually') && exec uvicorn src.main:app --host 0.0.0.0 --port 8000"]

@@ -927,6 +927,8 @@
     "top_risks": "Top Risks",
     "explanations": "Explanations",
     "no_data": "No trust score information is available",
+    "model_version": "Model Version",
+    "model_fingerprint": "Model Fingerprint",
     "grade": {
       "A": "A · Trusted",
       "B": "B · Low Risk",

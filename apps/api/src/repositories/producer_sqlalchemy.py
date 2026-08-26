@@ -14,8 +14,6 @@ from uuid import uuid4
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
-from schema.constants import TRUST_SCORE_MODEL_VERSION
-
 from src.repositories.orm import (
     FeedbackRecordRow,
     PackageRow,
@@ -396,21 +394,43 @@ class ProducerRepository:
         version_id: str,
         level: str,
         recommendation: str,
-        model_version: str = TRUST_SCORE_MODEL_VERSION,
+        model_version: str | None = None,
+        model_fingerprint: str | None = None,
     ) -> None:
         with self.session_factory() as session:
             existing = session.get(TrustLevelRow, version_id)
             if existing:
                 existing.level = level
                 existing.install_recommendation = recommendation
-                existing.model_version = model_version
+                if model_version is not None:
+                    existing.model_version = model_version
+                if model_fingerprint is not None:
+                    existing.model_fingerprint = model_fingerprint
             else:
+                version = session.get(PackageVersionRow, version_id)
+                trust_score = (
+                    version.data.get("trust_score")
+                    if version is not None and isinstance(version.data, dict)
+                    else None
+                )
+                if model_version is None and isinstance(trust_score, dict):
+                    model_version = trust_score.get("model_version")
+                if model_fingerprint is None and isinstance(trust_score, dict):
+                    model_fingerprint = trust_score.get("model_fingerprint")
+                if model_version is None and model_fingerprint:
+                    model_version = f"auto-{model_fingerprint[:12]}"
+                # The score refresh immediately following publication replaces
+                # this compatibility fallback when a legacy version has no
+                # model identity yet.  The fingerprint, never this fallback,
+                # is used by backfill decisions.
+                model_version = model_version or "legacy-unknown"
                 session.add(TrustLevelRow(
                     version_id=version_id,
                     level=level,
                     install_recommendation=recommendation,
                     top_risks=[],
                     model_version=model_version,
+                    model_fingerprint=model_fingerprint,
                 ))
             session.commit()
 

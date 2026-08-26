@@ -251,7 +251,6 @@ def _run_llm_review_with_fallback(
 # ---------------------------------------------------------------------------
 
 def _load_scorer():
-    """动态加载 calculate_trust_score 函数。"""
     """加载评分引擎（虚拟包方式处理相对导入）。"""
     import types as _types
     ts_src = _PROJECT_ROOT / "packages" / "trust-score" / "src"
@@ -260,7 +259,14 @@ def _load_scorer():
         src_pkg.__path__ = [str(ts_src)]
         src_pkg.__package__ = "src"
         sys.modules["src"] = src_pkg
-    for name in ["provenance", "intent", "community", "derived_score", "explainer"]:
+    for name in [
+        "model_identity",
+        "provenance",
+        "intent",
+        "community",
+        "derived_score",
+        "explainer",
+    ]:
         key = f"src.{name}"
         if key not in sys.modules:
             s = importlib.util.spec_from_file_location(key, str(ts_src / f"{name}.py"))
@@ -277,6 +283,19 @@ def _load_scorer():
     sys.modules[ek] = em
     es.loader.exec_module(em)
     return em.rate
+
+
+def _load_score_model() -> tuple[Callable[..., dict[str, Any]], str, str]:
+    """Load the scorer together with its deterministic model identity."""
+    scorer = _load_scorer()
+    identity = sys.modules.get("src.model_identity")
+    if identity is None:  # pragma: no cover - guarded by _load_scorer
+        raise RuntimeError("trust-score model identity was not loaded")
+    return (
+        scorer,
+        identity.get_model_fingerprint(),
+        identity.get_model_version(),
+    )
 
 
 # ---------------------------------------------------------------------------

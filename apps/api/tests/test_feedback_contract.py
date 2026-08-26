@@ -283,6 +283,7 @@ def test_persisted_trust_level_exposes_no_numeric_score(
         top_risks=["Requests shell access"],
         explanation="Review the requested shell permissions before install.",
         model_version="trust-level-v1",
+        model_fingerprint="f" * 64,
     )
 
     response = db_client.get(f"/api/v0/versions/{version.id}/trust-level")
@@ -291,6 +292,7 @@ def test_persisted_trust_level_exposes_no_numeric_score(
     assert response.json()["level"] == "low_risk"
     assert "score" not in response.json()
     assert response.json()["top_risks"] == ["Requests shell access"]
+    assert response.json()["model_fingerprint"] == "f" * 64
 
 
 @pytest.mark.parametrize("version_id", ["missing-version", "ver-005"])

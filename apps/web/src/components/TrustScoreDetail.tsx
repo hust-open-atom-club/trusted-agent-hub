@@ -72,6 +72,11 @@ export default function TrustScoreDetail({
   const summary = trustScore.risk_summary;
   const topRisks = summary?.top_risks ?? [];
   const explanations = trustScore.explanations;
+  const modelFingerprint = trustScore.model_fingerprint;
+  const fingerprintPreview = modelFingerprint && modelFingerprint.length > 12
+    ? `${modelFingerprint.slice(0, 12)}…`
+    : modelFingerprint;
+  const hasModelMetadata = Boolean(trustScore.model_version || modelFingerprint);
 
   // Use effective_grade from props first, fall back to risk_summary.grade
   const grade = effectiveGrade ?? summary?.grade;
@@ -257,8 +262,40 @@ export default function TrustScoreDetail({
         </div>
       )}
 
+      {/* ── Trust-score model identity ── */}
+      {hasModelMetadata && (
+        <div style={{
+          padding: '0.6rem 1.25rem',
+          borderTop: '1px solid var(--color-rule)',
+          display: 'flex',
+          gap: '1rem',
+          flexWrap: 'wrap',
+          fontSize: '0.72rem',
+          color: 'var(--color-ink-2)',
+        }}>
+          {trustScore.model_version && (
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
+                {t('trust_score.model_version')}:
+              </span>
+              {' '}
+              <code>{trustScore.model_version}</code>
+            </div>
+          )}
+          {modelFingerprint && (
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
+                {t('trust_score.model_fingerprint')}:
+              </span>
+              {' '}
+              <code title={modelFingerprint}>{fingerprintPreview}</code>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Empty state ── */}
-      {!grade && topRisks.length === 0 && (!explanations || explanations.length === 0) && (
+      {!grade && topRisks.length === 0 && (!explanations || explanations.length === 0) && !hasModelMetadata && (
         <div style={{
           padding: '1.5rem 1.25rem',
           textAlign: 'center',

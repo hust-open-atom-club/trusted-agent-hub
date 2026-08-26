@@ -126,6 +126,7 @@ export interface TrustScore {
   dimensions?: Record<string, TrustScoreDimension>;
   explanations?: TrustScoreExplanation[];
   calculated_at?: string;
+  model_fingerprint?: string;
   model_version?: string;
 }
 

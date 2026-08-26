@@ -11,12 +11,6 @@ API (FastAPI) 和 扫描器 (scanner) 均引用此文件。
 from enum import StrEnum
 from typing import Final
 
-
-# The trust-score engine and every persistence projection must use the same
-# model identifier.  A model upgrade is an operational event and should be
-# scheduled explicitly rather than inferred from duplicated literals.
-TRUST_SCORE_MODEL_VERSION: Final[str] = "0.4.0"
-
 # Integrity hashes are produced for different byte domains.  Keep the scope
 # explicit so a bounded scan-tree digest cannot be confused with the archive
 # hash used by the installation manifest.
