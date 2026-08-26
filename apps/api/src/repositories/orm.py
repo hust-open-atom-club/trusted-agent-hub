@@ -122,7 +122,7 @@ class InstallRecordRow(Base):
     )
     user_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     client: Mapped[str] = mapped_column(String(64), index=True)
-    event_id: Mapped[str] = mapped_column(String(128), unique=True)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False)
     install_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     integrity_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     installed_at: Mapped[datetime] = mapped_column(

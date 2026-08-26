@@ -1,1 +1,1 @@
-"""Packaged Alembic migrations for Consumer persistence."""
+"""Packaged Alembic migrations for the API database schema."""
