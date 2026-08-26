@@ -691,10 +691,22 @@ class ProducerService:
                     "grade": effective,
                     "risk_level": level,
                 })
+            model_version = (
+                trust_data.get("model_version")
+                if isinstance(trust_data, dict)
+                else None
+            )
+            model_fingerprint = (
+                trust_data.get("model_fingerprint")
+                if isinstance(trust_data, dict)
+                else None
+            )
             self.repository.upsert_trust_level(
                 version_id=version_id,
                 level=level,
                 recommendation=recommendation,
+                model_version=model_version,
+                model_fingerprint=model_fingerprint,
             )
 
         self.repository.create_audit_log(
@@ -1039,10 +1051,22 @@ class ProducerService:
                     }
                 )
             # 同步 consumer 侧 trust_levels
+            model_version = (
+                trust_data.get("model_version")
+                if isinstance(trust_data, dict)
+                else None
+            )
+            model_fingerprint = (
+                trust_data.get("model_fingerprint")
+                if isinstance(trust_data, dict)
+                else None
+            )
             self.repository.upsert_trust_level(
                 version_id=version_id,
                 level=level,
                 recommendation=recommendation,
+                model_version=model_version,
+                model_fingerprint=model_fingerprint,
             )
 
         self.repository.create_audit_log(

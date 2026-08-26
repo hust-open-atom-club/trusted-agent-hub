@@ -168,6 +168,10 @@ class RiskSummary(StrictContractModel):
 
 class TrustScore(StrictContractModel):
     model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
+    model_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     model_version: str | None = None
     dimensions: dict[str, TrustScoreDimension] | None = None
     explanations: list[TrustScoreExplanation] | None = None

@@ -11,8 +11,8 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 from src.engine import rate
+from src.model_identity import get_model_version
 from src.provenance import assess_signature_chain, assess_source_verifiability
-from packages.schema.constants import TRUST_SCORE_MODEL_VERSION
 
 
 def _forged_metadata() -> dict[str, Any]:
@@ -78,7 +78,8 @@ def test_manifest_claims_are_ignored_without_acquisition_facts() -> None:
     assert p2["score"] == 10
 
     result = rate(package_metadata=metadata)
-    assert result["model_version"] == TRUST_SCORE_MODEL_VERSION
+    assert result["model_version"] == get_model_version()
+    assert len(result["model_fingerprint"]) == 64
     assert result["dimensions"]["source_trust"]["details"] == {
         "is_verified_owner": False,
         "source_type": "unknown",

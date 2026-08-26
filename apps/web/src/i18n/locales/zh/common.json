@@ -927,6 +927,8 @@
     "top_risks": "主要风险",
     "explanations": "说明",
     "no_data": "暂无可用的信任评分信息",
+    "model_version": "模型版本",
+    "model_fingerprint": "模型指纹",
     "grade": {
       "A": "A · 可信",
       "B": "B · 低风险",

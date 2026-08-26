@@ -98,6 +98,9 @@ class TrustLevelRow(Base):
     top_risks: Mapped[list[str]] = mapped_column(JSON, default=list)
     explanation: Mapped[str | None] = mapped_column(Text)
     model_version: Mapped[str] = mapped_column(String(64))
+    model_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     calculated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,

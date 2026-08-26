@@ -136,6 +136,7 @@ class SqlAlchemyPackageRepository(PackageRepository):
         top_risks: list[str],
         explanation: str | None,
         model_version: str,
+        model_fingerprint: str | None = None,
     ) -> None:
         with self.session_factory() as session:
             if session.get(PackageVersionRow, version_id) is None:
@@ -153,6 +154,7 @@ class SqlAlchemyPackageRepository(PackageRepository):
                         top_risks=top_risks,
                         explanation=explanation,
                         model_version=model_version,
+                        model_fingerprint=model_fingerprint,
                         calculated_at=now,
                     )
                 )
@@ -162,6 +164,8 @@ class SqlAlchemyPackageRepository(PackageRepository):
                 row.top_risks = top_risks
                 row.explanation = explanation
                 row.model_version = model_version
+                if model_fingerprint is not None:
+                    row.model_fingerprint = model_fingerprint
                 row.calculated_at = now
             session.commit()
 
@@ -177,6 +181,7 @@ class SqlAlchemyPackageRepository(PackageRepository):
                 "top_risks": row.top_risks,
                 "explanation": row.explanation,
                 "model_version": row.model_version,
+                "model_fingerprint": row.model_fingerprint,
                 "calculated_at": _serialize_datetime(row.calculated_at),
             }
 

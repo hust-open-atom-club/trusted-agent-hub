@@ -77,4 +77,8 @@ class TrustLevelResponse(StrictContractModel):
     top_risks: list[str] = Field(default_factory=list)
     explanation: str | None = None
     model_version: str
+    model_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     calculated_at: str

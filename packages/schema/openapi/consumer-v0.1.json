@@ -3648,6 +3648,18 @@
           "level": {
             "$ref": "#/components/schemas/TrustLevelName"
           },
+          "model_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Fingerprint"
+          },
           "model_version": {
             "title": "Model Version",
             "type": "string"
@@ -3715,6 +3727,18 @@
               }
             ],
             "title": "Explanations"
+          },
+          "model_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Fingerprint"
           },
           "model_version": {
             "anyOf": [

@@ -9,6 +9,7 @@
     "package_name",
     "version",
     "calculated_at",
+    "model_fingerprint",
     "model_version",
     "dimensions",
     "explanations"
@@ -33,9 +34,14 @@
       "format": "date-time",
       "description": "评分计算时间"
     },
+    "model_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "评分源码和相关配置的确定性 SHA-256 指纹"
+    },
     "model_version": {
       "type": "string",
-      "description": "评分模型版本"
+      "description": "由 model_fingerprint 派生的兼容展示标识，不用于模型变更判断"
     },
     "dimensions": {
       "type": "object",

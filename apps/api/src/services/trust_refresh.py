@@ -18,7 +18,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from schema.constants import HASH_SCOPE_SCANNED_SOURCE, TRUST_SCORE_MODEL_VERSION
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +116,17 @@ class TrustScoreRefreshService:
         producer_repository: Any,
         consumer_repository: Any | None = None,
         scorer: Callable[..., dict[str, Any]] | None = None,
+        model_fingerprint: str | None = None,
     ) -> None:
         self.producer_repo = producer_repository
         self.consumer_repo = consumer_repository
         self._scorer = scorer
+        self._model_fingerprint = model_fingerprint
+        self._model_version = (
+            f"auto-{model_fingerprint[:12]}"
+            if model_fingerprint
+            else None
+        )
 
     def _load_scorer(self) -> Callable[..., dict[str, Any]]:
         if self._scorer is not None:
@@ -128,6 +135,27 @@ class TrustScoreRefreshService:
         from src.routers.trust import _load_scorer
 
         return _load_scorer()
+
+    def _load_model_identity(self) -> tuple[str, str]:
+        """Resolve the scorer identity once for this refresh service."""
+        if self._model_fingerprint is not None:
+            return self._model_fingerprint, self._model_version or (
+                f"auto-{self._model_fingerprint[:12]}"
+            )
+
+        # Keep the dynamic import here so API startup and test doubles do not
+        # need to import the trust-score package eagerly.
+        from src.routers.trust import _load_score_model
+
+        _, fingerprint, version = _load_score_model()
+        self._model_fingerprint = fingerprint
+        self._model_version = version
+        return fingerprint, version
+
+    @property
+    def model_fingerprint(self) -> str:
+        """Return the identity used by this service's scorer."""
+        return self._load_model_identity()[0]
 
     def refresh(
         self,
@@ -161,7 +189,7 @@ class TrustScoreRefreshService:
             str(version.get("status", "")),
         )
         stored = version.get("trust_score_refresh")
-        # A model-version change is deliberately not a lazy-refresh trigger.
+        # A model-identity change is deliberately not a lazy-refresh trigger.
         # The read path can be called for every published version, so treating
         # a historical version mismatch as a reason to refresh would cause a
         # deployment-wide rescore (and potentially a deployment-wide score
@@ -183,6 +211,7 @@ class TrustScoreRefreshService:
             version,
             scan_report,
         )
+        model_fingerprint, model_version = self._load_model_identity()
         new_ts = self._load_scorer()(
             package_metadata=metadata,
             scan_report=scan_report,
@@ -191,6 +220,22 @@ class TrustScoreRefreshService:
             feedback=signals.get("feedback"),
             acquisition_facts=acquisition_facts,
         )
+        if not isinstance(new_ts, dict):
+            raise TypeError("trust-score scorer must return a dictionary")
+        reported_fingerprint = new_ts.get("model_fingerprint")
+        if (
+            reported_fingerprint is not None
+            and reported_fingerprint != model_fingerprint
+        ):
+            raise ValueError(
+                "trust-score scorer returned a model fingerprint that does "
+                "not match the loaded model"
+            )
+        # The refresh service is the persistence boundary.  Stamp both fields
+        # centrally so test doubles and legacy callers cannot write a stale
+        # manually-maintained version identifier.
+        new_ts["model_fingerprint"] = model_fingerprint
+        new_ts["model_version"] = model_version
         new_ts["calculated_at"] = datetime.now(timezone.utc).isoformat()
 
         self.producer_repo.update_version_data(
@@ -253,8 +298,9 @@ class TrustScoreRefreshService:
                     )
                     or None,
                     model_version=(
-                        new_ts.get("model_version") or TRUST_SCORE_MODEL_VERSION
+                        new_ts.get("model_version")
                     ),
+                    model_fingerprint=new_ts.get("model_fingerprint"),
                 )
             except Exception:
                 logger.exception(
@@ -267,9 +313,8 @@ class TrustScoreRefreshService:
                     version_id=version_id,
                     level=level,
                     recommendation=recommendation,
-                    model_version=(
-                        new_ts.get("model_version") or TRUST_SCORE_MODEL_VERSION
-                    ),
+                    model_version=new_ts.get("model_version"),
+                    model_fingerprint=new_ts.get("model_fingerprint"),
                 )
             except Exception:
                 logger.exception(
@@ -296,7 +341,7 @@ class TrustScoreRefreshService:
 class TrustScoreBackfillService:
     """Idempotently migrate every published version to the active model.
 
-    A rerun skips versions already written with ``target_model_version``.
+    A rerun skips versions already written with ``target_model_fingerprint``.
     Individual failures are retried and retained in the returned summary so
     operators can monitor progress and safely rerun only unfinished work.
     """
@@ -305,11 +350,14 @@ class TrustScoreBackfillService:
         self,
         refresh_service: TrustScoreRefreshService,
         *,
-        target_model_version: str = TRUST_SCORE_MODEL_VERSION,
+        target_model_fingerprint: str | None = None,
     ) -> None:
         self.refresh_service = refresh_service
         self.producer_repo = refresh_service.producer_repo
-        self.target_model_version = target_model_version
+        self.target_model_fingerprint = (
+            target_model_fingerprint or refresh_service.model_fingerprint
+        )
+        self.target_model_version = f"auto-{self.target_model_fingerprint[:12]}"
 
     def run(
         self,
@@ -323,6 +371,7 @@ class TrustScoreBackfillService:
             raise ValueError("max_attempts must be positive")
 
         summary: dict[str, Any] = {
+            "model_fingerprint": self.target_model_fingerprint,
             "model_version": self.target_model_version,
             "scanned": 0,
             "updated": 0,
@@ -354,8 +403,8 @@ class TrustScoreBackfillService:
                 trust_score = version.get("trust_score")
                 if (
                     isinstance(trust_score, dict)
-                    and trust_score.get("model_version")
-                    == self.target_model_version
+                    and trust_score.get("model_fingerprint")
+                    == self.target_model_fingerprint
                 ):
                     summary["skipped"] += 1
                     continue
@@ -393,7 +442,7 @@ class TrustScoreBackfillService:
             logger.info(
                 "trust-score backfill progress model=%s scanned=%s updated=%s "
                 "skipped=%s failed=%s",
-                self.target_model_version,
+                self.target_model_fingerprint,
                 summary["scanned"],
                 summary["updated"],
                 summary["skipped"],

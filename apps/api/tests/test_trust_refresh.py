@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from schema.constants import HASH_SCOPE_SCANNED_SOURCE, TRUST_SCORE_MODEL_VERSION
+import pytest
+
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
 from src.services.trust_refresh import (
     TrustScoreBackfillService,
@@ -153,7 +155,7 @@ def _fake_scorer(**kwargs):
         "package_name": kwargs.get("package_metadata", {}).get("name", "x"),
         "version": "1.0.0",
         "calculated_at": "2026-08-03T00:00:00Z",
-        "model_version": TRUST_SCORE_MODEL_VERSION,
+        "model_version": "fake-legacy-version",
         "dimensions": {},
         "explanations": [],
         "risk_summary": {
@@ -223,6 +225,10 @@ def test_refresh_computes_and_persists_with_signals() -> None:
 
     write = repo.version_writes[-1]
     assert write["trust_score"]["score"] == 88
+    assert write["trust_score"]["model_fingerprint"] == service.model_fingerprint
+    assert write["trust_score"]["model_version"] == (
+        f"auto-{service.model_fingerprint[:12]}"
+    )
     assert "trust_score_refresh" in write
     assert consumer.writes
     assert repo.package_writes[-1] == {
@@ -293,6 +299,30 @@ def test_refresh_force_recomputes_even_when_unchanged() -> None:
     assert len(repo.version_writes) == writes_after_first + 1
 
 
+def test_refresh_rejects_a_scorer_identity_mismatch() -> None:
+    repo = FakeProducerRepository(
+        version=_published_version(),
+        package=_published_package(),
+        scan={"scan_json": {"summary": {"total": 0}}},
+    )
+
+    def mismatched_scorer(**kwargs):
+        result = _fake_scorer(**kwargs)
+        result["model_fingerprint"] = "b" * 64
+        return result
+
+    service = TrustScoreRefreshService(
+        repo,
+        None,
+        scorer=mismatched_scorer,
+        model_fingerprint="a" * 64,
+    )
+
+    with pytest.raises(ValueError, match="model fingerprint"):
+        service.refresh("ver-1")
+    assert repo.version_writes == []
+
+
 def test_refresh_skips_non_published_versions() -> None:
     version = _published_version()
     version["status"] = "pending_review"
@@ -327,7 +357,8 @@ def test_backfill_retries_and_is_idempotent() -> None:
 
     first = backfill.run(batch_size=10, max_attempts=2)
     assert first == {
-        "model_version": TRUST_SCORE_MODEL_VERSION,
+        "model_fingerprint": refresh.model_fingerprint,
+        "model_version": f"auto-{refresh.model_fingerprint[:12]}",
         "scanned": 1,
         "updated": 1,
         "skipped": 0,
@@ -340,3 +371,32 @@ def test_backfill_retries_and_is_idempotent() -> None:
     assert second["skipped"] == 1
     assert second["failed"] == []
     assert attempts == 2
+
+
+def test_backfill_uses_fingerprint_when_legacy_version_looks_current() -> None:
+    version = _published_version()
+    version["trust_score"] = {
+        # This is intentionally the old/manual value.  It must not control
+        # whether this version is considered current.
+        "model_version": "0.4.0",
+        "model_fingerprint": "0" * 64,
+    }
+    repo = FakeProducerRepository(
+        version=version,
+        package=_published_package(),
+        scan={"scan_json": {"summary": {"total": 0}}},
+    )
+    refresh = TrustScoreRefreshService(
+        repo,
+        None,
+        scorer=_fake_scorer,
+        model_fingerprint="1" * 64,
+    )
+
+    summary = TrustScoreBackfillService(refresh).run(
+        batch_size=10,
+        max_attempts=1,
+    )
+
+    assert summary["updated"] == 1
+    assert repo.version["trust_score"]["model_fingerprint"] == "1" * 64

@@ -41,7 +41,7 @@ from .intent import (
 from .community import assess_manual_review, assess_author_history
 from .derived_score import derive_score, get_recommendation
 from .explainer import generate_explanations, extract_top_risks
-from packages.schema.constants import TRUST_SCORE_MODEL_VERSION
+from .model_identity import get_model_fingerprint, get_model_version
 from scanners.risk_scanner.weights import SEVERITY_POINTS, LEVEL_TO_GRADE
 
 # Level ordering for upgrade/downgrade (index 0 = best)
@@ -672,7 +672,8 @@ def rate(
 
     Returns:
         dict with all fields required by trust-score.schema.json:
-        score, package_name, version, calculated_at, model_version,
+        score, package_name, version, calculated_at, model_fingerprint,
+        model_version,
         dimensions, explanations, risk_summary
     """
     # --- Step 1: Layer 1 — Provenance ---
@@ -780,7 +781,8 @@ def rate(
         "package_name": package_metadata.get("name", "unknown"),
         "version": package_metadata.get("version", "0.0.0"),
         "calculated_at": datetime.now(timezone.utc).isoformat(),
-        "model_version": TRUST_SCORE_MODEL_VERSION,
+        "model_fingerprint": get_model_fingerprint(),
+        "model_version": get_model_version(),
         "dimensions": dimensions,
         "explanations": explanations,
         "risk_summary": {
