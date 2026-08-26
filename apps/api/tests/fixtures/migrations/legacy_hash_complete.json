@@ -1,0 +1,47 @@
+{
+  "version_data": {
+    "integrity": {
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hash_complete": true
+    },
+    "acquisition_facts": {
+      "integrity": {
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "hash_complete": null
+      }
+    },
+    "scan_report": {
+      "provenance": {
+        "acquisition_facts": {
+          "integrity": {
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "hash_complete": "unknown"
+          }
+        }
+      }
+    }
+  },
+  "scan_json": {
+    "provenance": {
+      "acquisition_facts": {
+        "integrity": {
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "hash_complete": false
+        }
+      }
+    }
+  },
+  "mixed_integrity": {
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "is_complete": false,
+    "hash_complete": true
+  },
+  "canonical_null_integrity": {
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "is_complete": null,
+    "hash_complete": true
+  },
+  "missing_integrity": {
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  }
+}

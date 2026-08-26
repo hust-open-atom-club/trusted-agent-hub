@@ -162,13 +162,13 @@ def assess_signature_chain(
     checks_total: int = 3
 
     sha256: str = integrity.get("sha256", "")
-    hash_complete = has_complete_scanned_hash(integrity)
+    is_complete = has_complete_scanned_hash(integrity)
     signature_verified = _verification_flag(acquisition_facts, "signature")
     attestation_verified = _verification_flag(acquisition_facts, "attestation")
     sbom_verified = _verification_flag(acquisition_facts, "sbom")
 
     # Check 1: SHA256 hash (64 hex chars)
-    if hash_complete:
+    if is_complete:
         checks_passed += 1
         evidence.append("Complete scanned-source SHA256 integrity hash is present")
     else:

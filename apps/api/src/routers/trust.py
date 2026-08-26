@@ -725,7 +725,7 @@ def _build_acquisition_facts(
     hash_scope = scanner_integrity.get("hash_scope")
     if hash_scope != HASH_SCOPE_SCANNED_SOURCE:
         hash_scope = None
-    hash_complete = (
+    is_complete = (
         bool(acquired_sha256)
         and hash_scope == HASH_SCOPE_SCANNED_SOURCE
         and scanner_integrity.get("is_complete") is True
@@ -736,7 +736,7 @@ def _build_acquisition_facts(
         acquisition_method=method,
         commit_hash=str(acquired_commit),
         content_sha256=str(acquired_sha256),
-        content_hash_complete=hash_complete,
+        is_complete=is_complete,
         server_verification=scanner_verification,
     )
 
@@ -758,7 +758,7 @@ def _build_acquisition_facts(
     integrity = {
         "sha256": acquired_sha256,
         "hash_scope": hash_scope,
-        "is_complete": hash_complete,
+        "is_complete": is_complete,
     }
     return {
         "source": source,
