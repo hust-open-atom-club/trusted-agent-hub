@@ -11,6 +11,8 @@ RUN npm ci
 
 COPY apps/web/ .
 COPY packages/schema/constants.ts /packages/schema/constants.ts
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
