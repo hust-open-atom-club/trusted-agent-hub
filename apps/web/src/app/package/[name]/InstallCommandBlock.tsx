@@ -18,7 +18,12 @@ export default function InstallCommandBlock({ command, packageName, client }: In
     command: 'idle',
     aiPrompt: 'idle',
   });
+  const [origin, setOrigin] = useState('');
   const resetTimers = useRef<Partial<Record<CopyTarget, ReturnType<typeof setTimeout>>>>({});
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
 
   useEffect(() => {
     setCopyState({ command: 'idle', aiPrompt: 'idle' });
@@ -30,13 +35,7 @@ export default function InstallCommandBlock({ command, packageName, client }: In
     }
   }, []);
 
-  const installGuideUrl = useMemo(() => {
-    if (typeof window === 'undefined') {
-      return '/install/tah.md';
-    }
-
-    return `${window.location.origin}/install/tah.md`;
-  }, []);
+  const installGuideUrl = origin ? `${origin}/install/tah.md` : '/install/tah.md';
 
   const aiPrompt = useMemo(
     () => String(t('detail.install.ai_prompt', {
