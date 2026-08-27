@@ -228,12 +228,19 @@ function check(cond: boolean, field: string, msg: string): void {
   if (!cond) fail(field, msg);
 }
 
-/** Allow HTTPS URLs and localhost HTTP (for dev). */
+function allowInsecureHttp(): boolean {
+  return process.env.TAH_ALLOW_INSECURE_HTTP === 'true';
+}
+
+/** Allow HTTPS, localhost HTTP, or public HTTP with explicit opt-in. */
 function isAllowedUrl(value: string): boolean {
   if (value.startsWith('https://')) return true;
   try {
     const u = new URL(value);
-    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+    return u.protocol === 'http:' && (
+      allowInsecureHttp()
+      || ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+    );
   } catch {
     return false;
   }

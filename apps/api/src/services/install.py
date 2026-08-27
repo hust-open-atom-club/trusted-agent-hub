@@ -1,5 +1,6 @@
 """Safe Install Manifest v1.0 construction service."""
 
+import os
 import posixpath
 import re
 
@@ -321,6 +322,10 @@ class InstallManifestService:
     _LOCALHOST_ORIGINS = {"localhost", "127.0.0.1", "[::1]"}
 
     @staticmethod
+    def _allow_insecure_http() -> bool:
+        return os.getenv("TAH_ALLOW_INSECURE_HTTP", "").strip().lower() == "true"
+
+    @staticmethod
     def _canonical_https_url(value: str | None) -> str | None:
         if value is None:
             return None
@@ -341,7 +346,10 @@ class InstallManifestService:
         try:
             from urllib.parse import urlparse
             parsed = urlparse(value)
-            return parsed.scheme == "http" and parsed.hostname in cls._LOCALHOST_ORIGINS
+            return parsed.scheme == "http" and (
+                parsed.hostname in cls._LOCALHOST_ORIGINS
+                or cls._allow_insecure_http()
+            )
         except Exception:
             return False
 
