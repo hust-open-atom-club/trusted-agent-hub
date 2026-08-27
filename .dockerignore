@@ -1,7 +1,13 @@
 # Node
 node_modules/
+**/node_modules/
 .next/
+**/.next/
+**/.next-dev/
+**/.next.stale-*/
 .turbo/
+**/.turbo/
+**/tsconfig.tsbuildinfo
 
 # Python
 __pycache__/
@@ -29,4 +35,5 @@ venv/
 
 # Misc
 *.md
+!apps/web/public/install/tah.md
 LICENSE
