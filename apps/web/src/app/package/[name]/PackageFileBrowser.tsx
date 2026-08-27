@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FileTree } from '@/components/ui/file-tree';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import {
   buildFileTree,
   formatByteSize,
@@ -103,7 +104,7 @@ export default function PackageFileBrowser({ fileContents }: PackageFileBrowserP
   };
 
   const copyText = async (value: string) => {
-    await navigator.clipboard?.writeText(value);
+    await copyTextToClipboard(value);
   };
 
   return (

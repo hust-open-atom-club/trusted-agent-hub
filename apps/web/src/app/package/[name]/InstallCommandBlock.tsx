@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { copyTextToClipboard } from '@/lib/clipboard';
 
 type CopyState = 'idle' | 'copied' | 'failed';
 type CopyTarget = 'command' | 'aiPrompt';
@@ -58,18 +59,13 @@ export default function InstallCommandBlock({ command, packageName, client }: In
   };
 
   const copyText = async (target: CopyTarget, text: string) => {
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
-
-      await navigator.clipboard.writeText(text);
+    const copied = await copyTextToClipboard(text);
+    if (copied) {
       setCopyState((current) => ({ ...current, [target]: 'copied' }));
-    } catch {
+    } else {
       setCopyState((current) => ({ ...current, [target]: 'failed' }));
-    } finally {
-      scheduleReset(target);
     }
+    scheduleReset(target);
   };
 
   const commandButtonLabel =
