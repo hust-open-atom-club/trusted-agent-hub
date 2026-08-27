@@ -70,6 +70,10 @@ const DEFAULT_MAX_EXTRACT_FILES = 10_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;             // 120 seconds
 const LOCALHOST_ORIGINS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+function allowInsecureHttp(): boolean {
+  return process.env.TAH_ALLOW_INSECURE_HTTP === 'true';
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -662,7 +666,11 @@ export class InstallExecutor {
   private async downloadFile(url: string, destPath: string, _expectedSize: number): Promise<void> {
     // HTTPS enforcement — with explicit localhost exception for dev
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' && !LOCALHOST_ORIGINS.has(parsed.hostname)) {
+    if (
+      parsed.protocol !== 'https:'
+      && !LOCALHOST_ORIGINS.has(parsed.hostname)
+      && !allowInsecureHttp()
+    ) {
       throw new InstallError(
         `Download URL must use HTTPS (got: ${url}). Localhost is allowed for development only.`,
         'non_https_download',
@@ -691,7 +699,11 @@ export class InstallExecutor {
       if (response.url) {
         try {
           const finalUrl = new URL(response.url);
-          if (finalUrl.protocol !== 'https:' && !LOCALHOST_ORIGINS.has(finalUrl.hostname)) {
+          if (
+            finalUrl.protocol !== 'https:'
+            && !LOCALHOST_ORIGINS.has(finalUrl.hostname)
+            && !allowInsecureHttp()
+          ) {
             throw new InstallError(
               `Redirected to non-HTTPS URL: ${response.url}. Original: ${url}`,
               'redirect_to_http',

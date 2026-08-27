@@ -1,5 +1,6 @@
 """Strict Install Manifest v1.0 Consumer API models."""
 
+import os
 import re
 from typing import Annotated, Literal
 
@@ -26,11 +27,19 @@ SEMANTIC_VERSION_PATTERN = (
 _LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
 
+def _allow_insecure_http() -> bool:
+    return os.getenv("TAH_ALLOW_INSECURE_HTTP", "").strip().lower() == "true"
+
+
 def _require_https(url: HttpUrl) -> HttpUrl:
     # Allow localhost HTTP for development
-    if url.scheme != "https" and not (
-        url.scheme == "http" and url.host in _LOCALHOST_HOSTS
+    if url.scheme == "https":
+        return url
+    if url.scheme == "http" and (
+        url.host in _LOCALHOST_HOSTS or _allow_insecure_http()
     ):
+        return url
+    if url.scheme != "https":
         raise ValueError("URL must use HTTPS (or localhost HTTP in dev)")
     return url
 

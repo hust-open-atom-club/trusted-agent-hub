@@ -40,6 +40,7 @@ services:
       ARTIFACTS_ROOT: /artifacts
       SOURCE_SNAPSHOT_DIR: /source-snapshots
       CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
+      TAH_ALLOW_INSECURE_HTTP: ${TAH_ALLOW_INSECURE_HTTP:-false}
     ports:
       - "8000:8000"
     depends_on:
