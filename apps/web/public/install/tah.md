@@ -4,6 +4,22 @@ Use this guide when a user asks you to install a TrustedAgentHub capability pack
 
 The safe installation path is the TrustedAgentHub CLI. Do not manually download, extract, copy, or execute package contents. Do not run package-provided scripts unless the `tah` CLI selects an installation method that explicitly requires confirmation.
 
+## Hub Setup
+
+Before using short install commands from this deployment, configure the CLI once:
+
+```bash
+tah use http://140.143.119.142:8000 --allow-http
+```
+
+If `tah` is not installed or not available on PATH, use:
+
+```bash
+npx trusted-agent-hub use http://140.143.119.142:8000 --allow-http
+```
+
+This stores the Hub API address locally. After this step, package installation can use short commands such as `tah install <package> --client <client>`.
+
 ## Required Flow
 
 1. Identify the requested package name exactly as written by the user, such as `code-review-skill` or `@user_741dc82b/dev-expert`.
@@ -16,10 +32,10 @@ The safe installation path is the TrustedAgentHub CLI. Do not manually download,
 
    If `tah` is not installed or not available on PATH, use `npx trusted-agent-hub ...` for the same commands.
 
-4. Preview the install manifest before installing. Use the same API base as the CLI: `TRUSTED_AGENT_HUB_API_URL` when set, otherwise `http://127.0.0.1:8000`.
+4. Preview the install manifest before installing. Use the same API base configured for the CLI. If the current deployment still uses this temporary IP, use `http://140.143.119.142:8000`.
 
    ```bash
-   API_BASE="${TRUSTED_AGENT_HUB_API_URL:-http://127.0.0.1:8000}"
+   API_BASE="${TRUSTED_AGENT_HUB_API_URL:-http://140.143.119.142:8000}"
    ENCODED_PACKAGE=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "<package>")
    curl "$API_BASE/api/v0/packages/$ENCODED_PACKAGE/install-manifest?client=<client>"
    ```
@@ -87,7 +103,7 @@ tah install @user_741dc82b/dev-expert --client claude-code
 The user can ask:
 
 ```text
-Please follow https://trusted-agent-hub.example/install/tah.md and install @user_741dc82b/dev-expert for my current AI client. Show the risk grade, permissions, and target path before installing.
+Please follow http://140.143.119.142:3000/install/tah.md and install @user_741dc82b/dev-expert for my current AI client. Show the risk grade, permissions, and target path before installing.
 ```
 
 If this guide is hosted on a different TrustedAgentHub domain, use that domain's `/install/tah.md` URL.

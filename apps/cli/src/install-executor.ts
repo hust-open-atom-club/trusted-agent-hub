@@ -48,6 +48,7 @@ import {
   type ExecutorResult,
   type RunCommand,
 } from './executors/types';
+import { isAllowedUrl } from './network-policy';
 import {
   describeMcpDiff,
   mcpServersFromManifest,
@@ -68,11 +69,6 @@ const DEFAULT_MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024;   // 100 MB
 const DEFAULT_MAX_EXTRACT_SIZE = 500 * 1024 * 1024;     // 500 MB
 const DEFAULT_MAX_EXTRACT_FILES = 10_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;             // 120 seconds
-const LOCALHOST_ORIGINS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
-function allowInsecureHttp(): boolean {
-  return process.env.TAH_ALLOW_INSECURE_HTTP === 'true';
-}
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -664,15 +660,10 @@ export class InstallExecutor {
   // -----------------------------------------------------------------------
 
   private async downloadFile(url: string, destPath: string, _expectedSize: number): Promise<void> {
-    // HTTPS enforcement — with explicit localhost exception for dev
-    const parsed = new URL(url);
-    if (
-      parsed.protocol !== 'https:'
-      && !LOCALHOST_ORIGINS.has(parsed.hostname)
-      && !allowInsecureHttp()
-    ) {
+    // HTTPS enforcement, with localhost and the configured public API origin allowed.
+    if (!isAllowedUrl(url)) {
       throw new InstallError(
-        `Download URL must use HTTPS (got: ${url}). Localhost is allowed for development only.`,
+        `Download URL must use HTTPS or a trusted HTTP origin (got: ${url}).`,
         'non_https_download',
       );
     }
@@ -698,14 +689,9 @@ export class InstallExecutor {
       //      Fail safe: unparseable final URL → reject the download
       if (response.url) {
         try {
-          const finalUrl = new URL(response.url);
-          if (
-            finalUrl.protocol !== 'https:'
-            && !LOCALHOST_ORIGINS.has(finalUrl.hostname)
-            && !allowInsecureHttp()
-          ) {
+          if (!isAllowedUrl(response.url)) {
             throw new InstallError(
-              `Redirected to non-HTTPS URL: ${response.url}. Original: ${url}`,
+              `Redirected to an untrusted URL: ${response.url}. Original: ${url}`,
               'redirect_to_http',
             );
           }

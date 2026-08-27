@@ -5,6 +5,8 @@
  * Used by the install executor for runtime validation of manifest responses.
  */
 
+import { isAllowedUrl } from './network-policy';
+
 // ---------------------------------------------------------------------------
 // Manifest Source
 // ---------------------------------------------------------------------------
@@ -228,24 +230,6 @@ function check(cond: boolean, field: string, msg: string): void {
   if (!cond) fail(field, msg);
 }
 
-function allowInsecureHttp(): boolean {
-  return process.env.TAH_ALLOW_INSECURE_HTTP === 'true';
-}
-
-/** Allow HTTPS, localhost HTTP, or public HTTP with explicit opt-in. */
-function isAllowedUrl(value: string): boolean {
-  if (value.startsWith('https://')) return true;
-  try {
-    const u = new URL(value);
-    return u.protocol === 'http:' && (
-      allowInsecureHttp()
-      || ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
-    );
-  } catch {
-    return false;
-  }
-}
-
 function isSafeSourceSubdirectory(value: string): boolean {
   if (value === '.') return true;
   if (
@@ -288,7 +272,7 @@ export function validateManifest(raw: unknown): InstallManifest {
   check(src != null && typeof src === 'object', 'source', 'must be an object');
   const validSourceTypes = ['github', 'npm', 'pypi', 'docker', 'local_upload'];
   check(validSourceTypes.includes(src!.type as string), 'source.type', 'invalid source type');
-  check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL');
+  check(typeof src!.repository_url === 'string' && isAllowedUrl(src!.repository_url), 'source.repository_url', 'must be an HTTPS URL or trusted HTTP origin');
   check(typeof src!.ref === 'string' && src!.ref.length > 0, 'source.ref', 'must be a non-empty string');
   if (src!.subdirectory !== undefined && src!.subdirectory !== null) {
     check(
@@ -317,7 +301,7 @@ export function validateManifest(raw: unknown): InstallManifest {
   // Method-specific step sequence validation
   if (inst!.method === 'copy_directory') {
     // copy_directory 必须携带可下载制品与完整性摘要
-    check(typeof src!.download_url === 'string' && isAllowedUrl(src!.download_url), 'source.download_url', 'must be an HTTPS URL (or localhost HTTP in dev)');
+    check(typeof src!.download_url === 'string' && isAllowedUrl(src!.download_url), 'source.download_url', 'must be an HTTPS URL or trusted HTTP origin');
     check(typeof src!.commit_hash === 'string' && COMMIT_RE.test(src!.commit_hash), 'source.commit_hash', 'must be a 40-char hex string');
     const integ = m.integrity as Record<string, unknown> | undefined;
     check(integ != null && typeof integ === 'object', 'integrity', 'must be an object');
@@ -389,7 +373,7 @@ function validateStep(step: Record<string, unknown>, index: number): InstallStep
   switch (action) {
     case 'download': {
       const url = step.url;
-      check(typeof url === 'string' && isAllowedUrl(url), `steps[${index}].url`, 'must be an HTTPS URL');
+      check(typeof url === 'string' && isAllowedUrl(url), `steps[${index}].url`, 'must be an HTTPS URL or trusted HTTP origin');
       return { action: 'download', url: url as string };
     }
     case 'verify': {
@@ -421,7 +405,7 @@ function validateStep(step: Record<string, unknown>, index: number): InstallStep
       check(typeof pkg === 'string' && NPM_PACKAGE_RE.test(pkg), `steps[${index}].package`, 'must be a valid npm package name');
       check(typeof version === 'string' && SEMVER_RE.test(version), `steps[${index}].version`, 'must be a valid semver version');
       if (step.registry !== undefined && step.registry !== null) {
-        check(typeof step.registry === 'string' && isAllowedUrl(step.registry), `steps[${index}].registry`, 'must be an HTTPS URL');
+        check(typeof step.registry === 'string' && isAllowedUrl(step.registry), `steps[${index}].registry`, 'must be an HTTPS URL or trusted HTTP origin');
       }
       const allowed = new Set(['action', 'package', 'version', 'registry']);
       for (const key of Object.keys(step)) {
@@ -436,7 +420,7 @@ function validateStep(step: Record<string, unknown>, index: number): InstallStep
         check(typeof step.version === 'string' && step.version.length > 0, `steps[${index}].version`, 'must be a non-empty string');
       }
       if (step.index_url !== undefined && step.index_url !== null) {
-        check(typeof step.index_url === 'string' && isAllowedUrl(step.index_url), `steps[${index}].index_url`, 'must be an HTTPS URL');
+        check(typeof step.index_url === 'string' && isAllowedUrl(step.index_url), `steps[${index}].index_url`, 'must be an HTTPS URL or trusted HTTP origin');
       }
       const allowed = new Set(['action', 'package', 'version', 'index_url']);
       for (const key of Object.keys(step)) {
