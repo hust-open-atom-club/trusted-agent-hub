@@ -2887,13 +2887,21 @@ h3 {
 
 .install-command-block {
   position: relative;
-  padding-top: 3.1rem;
+  padding-top: 4.8rem;
 }
 
-.install-copy-btn {
+.install-copy-actions {
   position: absolute;
   top: 0.65rem;
   right: 0.65rem;
+  left: 0.65rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.install-copy-btn {
   min-height: 32px;
   padding: 0.3rem 0.75rem;
   border: 1px solid color-mix(in oklch, var(--color-paper) 28%, transparent);
@@ -2928,6 +2936,13 @@ h3 {
 }
 
 .install-command-text {
+  overflow-wrap: anywhere;
+}
+
+.install-ai-prompt-text {
+  display: block;
+  max-width: 100%;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
