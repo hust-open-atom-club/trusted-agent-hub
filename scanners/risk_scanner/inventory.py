@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from scanners.risk_scanner.common import (
     GENERAL_RULE_EXCLUDED_FILES,
@@ -64,7 +65,49 @@ def _read_priority(relative_path: str) -> tuple[int, str]:
     return (3, relative_path)
 
 
-def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
+def _normalize_relative_path(value: object) -> str | None:
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        return None
+    if value.startswith("/") or (
+        len(value) >= 2 and value[0].isalpha() and value[1] == ":"
+    ):
+        return None
+    if any(part in {"", ".", ".."} for part in value.split("/")):
+        return None
+    return PurePosixPath(value).as_posix()
+
+
+def _normalize_relative_paths(paths: Iterable[str] | None) -> set[str]:
+    """Normalize safe POSIX paths used for metadata-priority reads."""
+    return {
+        normalized
+        for value in paths or set()
+        if (normalized := _normalize_relative_path(value)) is not None
+    }
+
+
+def _normalize_relative_path_order(paths: Iterable[str] | None) -> list[str]:
+    """Normalize an ordered list of safe POSIX paths without duplicates."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in paths or []:
+        relative_path = _normalize_relative_path(value)
+        if relative_path is None:
+            continue
+        if relative_path not in seen:
+            seen.add(relative_path)
+            normalized.append(relative_path)
+    return normalized
+
+
+def build_inventory(
+    target_dir: Path,
+    policy: ScanPolicy,
+    *,
+    priority_paths: Iterable[str] | None = None,
+    priority_order: Iterable[str] | None = None,
+) -> ScanInventory:
+    """Build a bounded inventory, admitting selected metadata paths first."""
     records: list[FileRecord] = []
     violations: list[str] = []
     skipped: dict[str, int] = {}
@@ -74,9 +117,52 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
     discovered_files = 0
     discovered_at_least = False
     total_budget = 0
-
     if not target_dir.is_dir():
         return ScanInventory([], 0, 0, ["invalid_root"], 0, {}, [], policy=policy)
+
+    raw_priority_paths = list(priority_paths or [])
+    priority_paths = _normalize_relative_paths(raw_priority_paths)
+    priority_path_order = [
+        path
+        for path in _normalize_relative_path_order(priority_order)
+        if path in priority_paths
+    ]
+    ordered_paths = set(priority_path_order)
+    priority_path_order.extend(sorted(priority_paths - ordered_paths))
+
+    def resolve_priority_candidate(
+        relative_path: str,
+    ) -> Path | None:
+        parts = PurePosixPath(relative_path).parts
+        if len(parts) - 1 > policy.max_depth or ".git" in parts[:-1]:
+            return None
+
+        current = target_dir
+        for part in parts[:-1]:
+            current /= part
+            try:
+                if current.is_symlink() or not current.is_dir():
+                    return None
+            except (OSError, ValueError):
+                return None
+
+        candidate = current / parts[-1]
+        try:
+            candidate.lstat()
+            is_symlink = candidate.is_symlink()
+            if (is_symlink and candidate.is_dir()) or (
+                not is_symlink and not candidate.is_file()
+            ):
+                return None
+        except (OSError, ValueError):
+            return None
+        return candidate
+
+    priority_candidates: dict[str, Path] = {}
+    for relative_path in priority_path_order:
+        candidate = resolve_priority_candidate(relative_path)
+        if candidate is not None:
+            priority_candidates[relative_path] = candidate
 
     def add_violation(reason: str) -> None:
         if reason not in violations:
@@ -150,7 +236,23 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
         except OSError:
             return
 
-    for rel, path in iter_files(target_dir, Path(".")):
+    def iter_inventory_files():
+        yielded_priority_candidates: set[str] = set()
+        for relative_path in priority_path_order:
+            candidate = priority_candidates.get(relative_path)
+            if candidate is not None:
+                yielded_priority_candidates.add(
+                    os.path.normcase(os.path.abspath(candidate))
+                )
+                yield relative_path, candidate
+        for relative_path, candidate in iter_files(target_dir, Path(".")):
+            if (
+                os.path.normcase(os.path.abspath(candidate))
+                not in yielded_priority_candidates
+            ):
+                yield relative_path, candidate
+
+    for rel, path in iter_inventory_files():
         # The limit is exclusive: reaching max_files is valid.  Only a
         # further candidate proves that the tree contains more files than
         # the configured bound.  Keep the extra candidate out of the
@@ -232,7 +334,6 @@ def build_inventory(target_dir: Path, policy: ScanPolicy) -> ScanInventory:
             # Lock/manifests are parsed by dedicated analyzers, never generic regex rules.
             total_budget += size
             analyzed_bytes += size
-
     records.sort(key=lambda record: record.relative_path)
     return ScanInventory(records, discovered_bytes, analyzed_bytes, violations,
                          discovered_files, skipped, samples,
@@ -258,17 +359,56 @@ def load_text_files(
     encoding: str = "utf-8-sig",
     *,
     policy: ScanPolicy | None = None,
+    priority_paths: Iterable[str] | None = None,
+    priority_order: Iterable[str] | None = None,
+    only_paths: Iterable[str] | None = None,
+    existing_contents: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Read inventory files with the same byte budgets used during discovery.
 
     Files are read in bounded binary chunks so a file that grows after lstat()
-    cannot bypass either the per-file or aggregate read budget.
+    cannot bypass either the per-file or aggregate read budget.  ``only_paths``
+    supports a small first pass (for example, reading only the root manifest),
+    while ``priority_paths`` makes selected metadata files win the next pass.
+    ``priority_order`` preserves an explicit order among those files when the
+    aggregate budget cannot accommodate all of them.  ``existing_contents``
+    lets those passes share one bounded snapshot.
     """
-    contents: dict[str, str] = {}
+    priority_paths = _normalize_relative_paths(priority_paths)
+    priority_order = [
+        path
+        for path in _normalize_relative_path_order(priority_order)
+        if path in priority_paths
+    ]
+    priority_ranks = {path: index for index, path in enumerate(priority_order)}
+    only_paths = (
+        _normalize_relative_paths(only_paths)
+        if only_paths is not None
+        else None
+    )
+    contents: dict[str, str] = dict(existing_contents or {})
     policy = policy or inventory.policy or ScanPolicy()
-    total_read = 0
-    for record in sorted(inventory.files, key=lambda item: _read_priority(item.relative_path)):
-        if record.read_status not in {"pending", "special_pending"}:
+    total_read = sum(record.bytes_read for record in inventory.files)
+
+    def read_priority(record: FileRecord) -> tuple[int, tuple[int, str]]:
+        if record.relative_path in priority_paths:
+            if record.relative_path in priority_ranks:
+                return (0, (priority_ranks[record.relative_path], record.relative_path))
+            return (0, _read_priority(record.relative_path))
+        return (1, _read_priority(record.relative_path))
+
+    for record in sorted(inventory.files, key=read_priority):
+        if only_paths is not None and record.relative_path not in only_paths:
+            continue
+        if record.relative_path in contents:
+            continue
+        is_priority = record.relative_path in priority_paths
+        loadable_status = record.read_status in {"pending", "special_pending"}
+        recoverable_total_skip = (
+            is_priority and record.read_status == "skipped"
+            and record.skip_reason == "total_budget_exceeded"
+        )
+        if not loadable_status and not recoverable_total_skip:
             continue
         remaining = max(policy.max_total_bytes - total_read, 0)
         byte_budget = min(max(policy.max_file_bytes, 0), remaining)
