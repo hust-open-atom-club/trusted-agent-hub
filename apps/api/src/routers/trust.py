@@ -667,7 +667,13 @@ def _safe_extract_zip(
     destination: str | Path,
     policy: ScanPolicy = _SOURCE_POLICY,
 ) -> None:
-    """Extract a ZIP under the scanner's file/count/depth/byte budgets."""
+    """Extract regular ZIP entries safely and ignore symbolic links.
+
+    GitHub zipballs preserve repository symlinks as Unix-mode ZIP entries. The
+    scanner must never materialize or follow those links, but an unrelated
+    symlink should not make every regular file in an otherwise valid repository
+    unscannable. Other special files remain unsupported.
+    """
     destination_path = Path(destination).resolve()
     infos = archive.infolist()
     if len(infos) > policy.max_files:
@@ -677,7 +683,7 @@ def _safe_extract_zip(
 
     declared_total = 0
     normalized_targets: set[str] = set()
-    validated: list[tuple[zipfile.ZipInfo, Path, bool]] = []
+    validated: list[tuple[zipfile.ZipInfo, Path, bool, bool]] = []
     for info in infos:
         name = info.filename
         if not name or "\x00" in name or "\\" in name:
@@ -703,8 +709,14 @@ def _safe_extract_zip(
         unix_mode = info.external_attr >> 16
         unix_file_type = stat.S_IFMT(unix_mode)
         is_directory = info.is_dir()
+        is_symlink = bool(unix_file_type and stat.S_ISLNK(unix_mode))
         if unix_file_type and not (
-            stat.S_ISDIR(unix_mode) if is_directory else stat.S_ISREG(unix_mode)
+            is_symlink
+            or (
+                stat.S_ISDIR(unix_mode)
+                if is_directory
+                else stat.S_ISREG(unix_mode)
+            )
         ):
             raise _DeterministicAcquisitionError(
                 f"ZIP contains a special file: {name!r}"
@@ -726,16 +738,19 @@ def _safe_extract_zip(
             )
         normalized_targets.add(target_key)
 
-        if not is_directory:
+        if not is_directory and not is_symlink:
             declared_total += info.file_size
             if declared_total > policy.max_total_bytes:
                 raise _DeterministicAcquisitionError(
                     f"ZIP expands beyond {policy.max_total_bytes} byte limit"
                 )
-        validated.append((info, resolved_target, is_directory))
+        validated.append((info, resolved_target, is_directory, is_symlink))
 
     actual_total = 0
-    for info, target, is_directory in validated:
+    for info, target, is_directory, is_symlink in validated:
+        if is_symlink:
+            logging.info("Skipping symbolic-link ZIP entry: %s", info.filename)
+            continue
         if is_directory:
             target.mkdir(parents=True, exist_ok=True)
             continue
@@ -797,7 +812,7 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
             return True
         except _DeterministicAcquisitionError as exc:
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
-            return False
+            raise
         except urllib.error.HTTPError as exc:
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
             if exc.code not in {408, 429, 500, 502, 503, 504}:
@@ -837,7 +852,12 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
 
     print(f"[TAH-trust] === Budgeted ZIP acquisition: {commit_hash[:8]} ===")
     pinned = {**parsed, "ref": commit_hash}
-    if _download_zipball(pinned, tmp_dir):
+    try:
+        downloaded = _download_zipball(pinned, tmp_dir)
+    except _DeterministicAcquisitionError:
+        force_rmtree(tmp_dir)
+        raise
+    if downloaded:
         # ZIP 解压后内容在一层子目录中 {owner}-{repo}-{hash}/
         entries = os.listdir(tmp_dir)
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
@@ -1270,12 +1290,16 @@ def _run_scan_task(
         token = os.environ.get("GITHUB_TOKEN", "")
         if token and token in err_msg:
             err_msg = err_msg.replace(token, "***")
-        _scans[scan_id]["error"] = f"Scan failed: {type(exc).__name__}: {err_msg}"
+        if isinstance(exc, _DeterministicAcquisitionError):
+            public_error = f"仓库快照未通过安全校验：{err_msg}"
+        else:
+            public_error = f"Scan failed: {type(exc).__name__}: {err_msg}"
+        _scans[scan_id]["error"] = public_error
         print(f"[TAH-trust] *** 扫描异常: {type(exc).__name__}: {err_msg}", flush=True)
         if "tmp_dir" in locals():
             force_rmtree(tmp_dir)
         if on_complete:
-            on_complete(scan_id, None, err_msg)
+            on_complete(scan_id, None, public_error)
 
 
 def _is_missing_fallback_author(value: Any) -> bool:

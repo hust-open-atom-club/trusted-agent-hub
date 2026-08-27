@@ -25,6 +25,12 @@ class _ChunkedResponse:
         )
         self.requested_sizes: list[int] = []
 
+    def __enter__(self) -> "_ChunkedResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
     def read(self, size: int) -> bytes:
         self.requested_sizes.append(size)
         chunk, self._payload = self._payload[:size], self._payload[size:]
@@ -74,14 +80,119 @@ def test_safe_zip_extraction_rejects_unsafe_paths(
             trust._safe_extract_zip(archive, tmp_path)
 
     assert list(tmp_path.iterdir()) == []
-def test_safe_zip_extraction_rejects_symlinks(tmp_path: Path) -> None:
-    link = zipfile.ZipInfo("root/link")
+
+
+def test_safe_zip_extraction_skips_symlinks_without_following_them(
+    tmp_path: Path,
+) -> None:
+    link = zipfile.ZipInfo("root/AGENTS.md")
     link.create_system = 3
     link.external_attr = (stat.S_IFLNK | 0o777) << 16
 
-    with _archive([(link, b"../outside")]) as archive:
+    with _archive(
+        [
+            (link, b"CLAUDE.md"),
+            ("root/CLAUDE.md", b"# Repository guidance\n"),
+            ("root/skills/receiving-code-review/SKILL.md", b"# Skill\n"),
+        ]
+    ) as archive:
+        trust._safe_extract_zip(archive, tmp_path)
+
+    assert not (tmp_path / "root" / "AGENTS.md").exists()
+    assert (tmp_path / "root" / "CLAUDE.md").read_bytes() == (
+        b"# Repository guidance\n"
+    )
+    assert (
+        tmp_path / "root" / "skills" / "receiving-code-review" / "SKILL.md"
+    ).read_bytes() == b"# Skill\n"
+
+
+def test_safe_zip_extraction_still_rejects_other_special_files(
+    tmp_path: Path,
+) -> None:
+    fifo = zipfile.ZipInfo("root/named-pipe")
+    fifo.create_system = 3
+    fifo.external_attr = (stat.S_IFIFO | 0o600) << 16
+
+    with _archive([(fifo, b"")]) as archive:
         with pytest.raises(ValueError, match="special file"):
             trust._safe_extract_zip(archive, tmp_path)
+
+
+def test_zipball_does_not_misreport_a_policy_failure_as_network_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = zipfile.ZipInfo("root/named-pipe")
+    fifo.create_system = 3
+    fifo.external_attr = (stat.S_IFIFO | 0o600) << 16
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr(fifo, b"")
+
+    requests: list[str] = []
+
+    def fake_urlopen(request, timeout: int) -> _ChunkedResponse:
+        requests.append(request.full_url)
+        assert timeout == 120
+        return _ChunkedResponse(buffer.getvalue())
+
+    monkeypatch.setattr(trust.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(
+        trust._DeterministicAcquisitionError,
+        match="special file",
+    ):
+        trust._download_zipball(
+            {"owner": "acme", "repo": "demo", "ref": "a" * 40},
+            str(tmp_path),
+        )
+
+    assert len(requests) == 1
+
+
+def test_scan_task_reports_a_policy_failure_as_a_security_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan_id = "scan-policy-failure"
+    trust._scans[scan_id] = {
+        "status": "pending",
+        "error": None,
+    }
+    callbacks: list[tuple[str, dict[str, object] | None, str | None]] = []
+
+    def fail_acquisition(_parsed: dict[str, object]) -> tuple[None, str, str]:
+        raise trust._DeterministicAcquisitionError(
+            "ZIP contains a special file: 'root/named-pipe'"
+        )
+
+    monkeypatch.setattr(trust, "_acquire_repo_source", fail_acquisition)
+
+    try:
+        trust._run_scan_task(
+            scan_id,
+            "https://github.com/acme/demo",
+            resolved_source={
+                "base_url": "https://github.com/acme/demo",
+                "owner": "acme",
+                "repo": "demo",
+                "ref": "main",
+                "subdir": None,
+            },
+            on_complete=lambda completed_id, report, error: callbacks.append(
+                (completed_id, report, error)
+            ),
+        )
+
+        expected_error = (
+            "仓库快照未通过安全校验："
+            "ZIP contains a special file: 'root/named-pipe'"
+        )
+        assert trust._scans[scan_id]["status"] == "error"
+        assert trust._scans[scan_id]["error"] == expected_error
+        assert callbacks == [(scan_id, None, expected_error)]
+    finally:
+        trust._scans.pop(scan_id, None)
 
 
 def test_safe_zip_extraction_enforces_count_depth_and_expanded_bytes(
