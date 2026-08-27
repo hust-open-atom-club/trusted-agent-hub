@@ -27,7 +27,7 @@ import uuid
 import zipfile
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
@@ -56,7 +56,11 @@ from scanners.risk_scanner.redaction import (
     redact_value,
 )
 from scanners.risk_scanner.provenance import build_verification_facts
-from scanners.risk_scanner.inventory import ScanInventory
+from scanners.risk_scanner.inventory import (
+    ScanInventory,
+    build_inventory,
+    load_text_files,
+)
 from scanners.risk_scanner.policy import ScanPolicy
 from packages.schema.frontmatter import parse_frontmatter
 from schema.constants import HASH_SCOPE_SCANNED_SOURCE
@@ -71,6 +75,7 @@ _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 _SCAN_TTL_SECONDS = 3600  # 临时扫描结果保留 1 小时
 _SOURCE_POLICY = ScanPolicy()
 _ZIP_READ_CHUNK_BYTES = 64 * 1024
+_MAX_MANIFEST_JSON_NESTING = 128
 
 
 class _DeterministicAcquisitionError(ValueError):
@@ -482,13 +487,160 @@ def _preflight_zip_entry_count(archive_file: Any, max_entries: int) -> None:
         )
 
 
-def _read_text_file_bounded(path: Path, max_bytes: int) -> str:
-    """Read a UTF-8 file with an explicit byte ceiling."""
-    with path.open("rb") as handle:
-        data = handle.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise ValueError(f"file exceeds {max_bytes} byte limit: {path.name}")
-    return data.decode("utf-8")
+def _parent_package_json_candidates(subdirectory: str | None) -> list[str]:
+    """Return enclosing package.json paths from nearest parent to repo root."""
+    if not subdirectory or subdirectory == ".":
+        return []
+
+    parts = PurePosixPath(subdirectory).parts
+    candidates = [
+        (PurePosixPath(*parts[:depth]) / "package.json").as_posix()
+        for depth in range(len(parts) - 1, 0, -1)
+    ]
+    candidates.append("package.json")
+    return candidates
+
+
+_AUTHOR_PLACEHOLDER_NAMES = frozenset({
+    "unknown",
+    "unknown@unknown.org",
+    "unknown@unknown.com",
+})
+
+
+def _normalized_author_name(value: Any) -> str | None:
+    """Return a usable package author name, or None for invalid metadata."""
+    if isinstance(value, str):
+        name = value.strip()
+    elif isinstance(value, dict):
+        name = value.get("name")
+        if isinstance(name, str):
+            name = name.strip()
+        else:
+            return None
+    else:
+        return None
+    if not name or name.casefold() in _AUTHOR_PLACEHOLDER_NAMES:
+        return None
+    return name
+
+
+def _validate_manifest_json_nesting(text: str) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > _MAX_MANIFEST_JSON_NESTING:
+                raise ValueError(
+                    "无法扫描：manifest.json 的 JSON 嵌套层级超过支持上限"
+                )
+        elif char in "]}" and depth:
+            depth -= 1
+
+
+def _root_manifest_subdirectory(text: str) -> str | None:
+    _validate_manifest_json_nesting(text)
+    try:
+        root_data = json.loads(text)
+    except RecursionError as exc:
+        raise ValueError(
+            "无法扫描：manifest.json 的 JSON 嵌套层级超过支持上限"
+        ) from exc
+    except ValueError as exc:
+        logging.warning("Ignoring invalid root manifest source: %s", exc)
+        return None
+
+    if not isinstance(root_data, dict):
+        logging.warning("Ignoring invalid root manifest source: root must be an object")
+        return None
+    source_data = root_data.get("source") or {}
+    if not isinstance(source_data, dict):
+        logging.warning("Ignoring invalid root manifest source: source must be an object")
+        return None
+    declared = source_data.get("subdirectory")
+    if declared is None:
+        return None
+    try:
+        return require_safe_source_subdirectory(declared)
+    except ValueError as exc:
+        logging.warning("Ignoring invalid root manifest source: %s", exc)
+        return None
+
+
+def _select_parent_package_json(
+    subdirectory: str | None,
+    repository_file_contents: dict[str, str],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Select inherited author metadata only from a bounded repo snapshot."""
+    for relative_path in _parent_package_json_candidates(subdirectory):
+        text = repository_file_contents.get(relative_path)
+        if text is None:
+            continue
+        try:
+            value = json.loads(text)
+        except (ValueError, RecursionError) as exc:
+            logging.warning(
+                "Ignoring invalid parent package metadata %s: %s",
+                relative_path,
+                exc,
+            )
+            continue
+        if not isinstance(value, dict):
+            logging.warning(
+                "Ignoring non-object parent package metadata: %s",
+                relative_path,
+            )
+            continue
+        author = value.get("author")
+        if _normalized_author_name(author) is not None:
+            return value, relative_path
+        if author:
+            logging.warning(
+                "Ignoring invalid parent package author in %s",
+                relative_path,
+            )
+    return None, None
+
+
+def _build_repository_snapshot(
+    repo_path: Path,
+    subdirectory: str | None,
+    *,
+    policy: ScanPolicy = _SOURCE_POLICY,
+    only_manifest: bool = False,
+) -> tuple[ScanInventory, dict[str, str]]:
+    priority_order = _parent_package_json_candidates(subdirectory)
+    priority_paths = set(priority_order)
+    priority_paths.add("manifest.json")
+    priority_order.append("manifest.json")
+    inventory = build_inventory(
+        repo_path,
+        policy,
+        priority_paths=priority_paths,
+        priority_order=priority_order,
+    )
+    contents = load_text_files(
+        inventory,
+        policy=policy,
+        priority_paths=priority_paths,
+        priority_order=priority_order,
+        only_paths={"manifest.json"} if only_manifest else None,
+    )
+    return inventory, contents
 
 
 def _safe_extract_zip(
@@ -844,33 +996,24 @@ def _run_scan_task(
         tmp_dir = repo_root
         print(f"[TAH-trust]     仓库获取方式: {method}")
 
-        # ── 确定扫描目标目录（子目录优先） ──
+        repo_path = Path(repo_root).resolve()
         subdir = parsed.get("subdir") if parsed else None
+        repo_inventory: ScanInventory | None = None
+        repo_file_contents: dict[str, str] = {}
         if not subdir:
-            root_manifest = Path(repo_root) / "manifest.json"
-            if root_manifest.is_file():
-                try:
-                    root_data = json.loads(_read_text_file_bounded(
-                        root_manifest,
-                        _SOURCE_POLICY.max_file_bytes,
-                    ))
-                    if not isinstance(root_data, dict):
-                        raise ValueError("manifest root must be an object")
-                    source_data = root_data.get("source") or {}
-                    if not isinstance(source_data, dict):
-                        raise ValueError("manifest source must be an object")
-                    declared = source_data.get("subdirectory")
-                    if declared is not None:
-                        subdir = require_safe_source_subdirectory(declared)
-                        print(
-                            f"[TAH-trust]     manifest 声明子目录: {subdir}"
-                        )
-                except (json.JSONDecodeError, OSError, ValueError) as exc:
-                    logging.warning("Ignoring invalid root manifest source: %s", exc)
-                    pass
+            repo_inventory, repo_file_contents = _build_repository_snapshot(
+                repo_path,
+                None,
+                only_manifest=True,
+            )
+            root_manifest_text = repo_file_contents.get("manifest.json")
+            if root_manifest_text is not None:
+                declared = _root_manifest_subdirectory(root_manifest_text)
+                if declared is not None:
+                    subdir = declared
+                    print(f"[TAH-trust]     manifest 声明子目录: {subdir}")
         if subdir:
             subdir = require_safe_source_subdirectory(subdir)
-            repo_path = Path(repo_root).resolve()
             candidate = (repo_path / subdir).resolve()
             if candidate != repo_path and repo_path not in candidate.parents:
                 raise ValueError(f"source subdirectory escapes repository root: {subdir}")
@@ -882,25 +1025,30 @@ def _run_scan_task(
         else:
             scan_dir = repo_root
 
-        parent_package_json: dict[str, Any] | None = None
-        if subdir:
-            root_package = Path(repo_root) / "package.json"
-            if root_package.is_file():
-                try:
-                    root_package_data = json.loads(_read_text_file_bounded(
-                        root_package,
-                        _SOURCE_POLICY.max_file_bytes,
-                    ))
-                    if (
-                        isinstance(root_package_data, dict)
-                        and root_package_data.get("author")
-                    ):
-                        parent_package_json = root_package_data
-                except (json.JSONDecodeError, OSError, ValueError) as exc:
-                    logging.warning(
-                        "Ignoring invalid bounded parent package metadata: %s",
-                        exc,
-                    )
+        parent_priority_order = _parent_package_json_candidates(subdir)
+        if repo_inventory is None or parent_priority_order:
+            repo_file_contents.clear()
+            repo_inventory, repo_file_contents = _build_repository_snapshot(
+                repo_path,
+                subdir,
+            )
+        else:
+            repo_file_contents = load_text_files(
+                repo_inventory,
+                policy=_SOURCE_POLICY,
+                priority_paths={"manifest.json"},
+                priority_order=["manifest.json"],
+                existing_contents=repo_file_contents,
+            )
+        parent_package_json, parent_package_path = _select_parent_package_json(
+            subdir,
+            repo_file_contents,
+        )
+        if parent_package_path:
+            print(
+                "[TAH-trust]     继承 package.json author: "
+                f"{parent_package_path}"
+            )
 
         # ── 多能力发现（供提交页选择子目录） ──
         capabilities: list[dict[str, str]] = []
@@ -919,6 +1067,8 @@ def _run_scan_task(
             capabilities = sys.modules["extract_skills"].discover_capabilities(
                 repo_root,
                 policy=_SOURCE_POLICY,
+                inventory=repo_inventory,
+                file_contents=repo_file_contents,
             )
             if subdir:
                 prefix = str(subdir).rstrip("/")
@@ -936,6 +1086,11 @@ def _run_scan_task(
         print(
             f"[TAH-trust]     发现能力包: {len(capabilities)} 个"
         )
+
+        # Release discovery data before the scanner builds the target snapshot.
+        repo_file_contents.clear()
+        del repo_file_contents
+        del repo_inventory
 
         # Step 2: 运行扫描器
         _scans[scan_id]["status"] = "scanning"
@@ -1103,6 +1258,49 @@ def _run_scan_task(
         if on_complete:
             on_complete(scan_id, None, err_msg)
 
+
+def _is_missing_fallback_author(value: Any) -> bool:
+    """Identify empty or placeholder authors in fallback metadata."""
+    return _normalized_author_name(value) is None
+
+
+def _normalize_fallback_author(value: Any) -> dict[str, str] | None:
+    """Normalize a package.json author value for fallback metadata."""
+    name = _normalized_author_name(value)
+    if name is None:
+        return None
+    if isinstance(value, str):
+        return {"name": name, "email": "unknown@unknown.org"}
+    if isinstance(value, dict):
+        author = {
+            "name": name,
+            "email": str(value.get("email") or "unknown@unknown.org"),
+        }
+        if value.get("url"):
+            author["url"] = str(value["url"])
+        return author
+    return None
+
+
+def _apply_fallback_author(
+    metadata: dict[str, Any],
+    local_package_author: Any,
+    parent_package_json: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Apply local package or inherited author without overriding metadata."""
+    if not _is_missing_fallback_author(metadata.get("author")):
+        return metadata
+
+    author = _normalize_fallback_author(local_package_author)
+    if author is None and isinstance(parent_package_json, dict):
+        author = _normalize_fallback_author(parent_package_json.get("author"))
+    if author is None:
+        return metadata
+
+    metadata["author"] = author
+    return metadata
+
+
 def _build_package_metadata(
     scan_report: Dict[str, Any],
     target_dir: str,
@@ -1154,14 +1352,28 @@ def _build_package_metadata(
     # ── 回退：原始简易提取逻辑 ──
     # 尝试 manifest.json
     bounded_contents = file_contents or {}
+    local_package_author: Any = None
+    package_text = bounded_contents.get("package.json")
+    if package_text is not None:
+        try:
+            package_value = json.loads(package_text)
+            if isinstance(package_value, dict):
+                local_package_author = package_value.get("author")
+        except (ValueError, RecursionError) as exc:
+            logging.warning("package.json fallback failed for %s: %s", target, exc)
+
     manifest_text = bounded_contents.get("manifest.json")
     if manifest_text is not None:
         try:
             value = json.loads(manifest_text)
             if isinstance(value, dict):
-                return value
+                return _apply_fallback_author(
+                    value,
+                    local_package_author,
+                    parent_package_json,
+                )
             logging.warning("manifest.json root is not an object for %s", target)
-        except (json.JSONDecodeError, OSError) as e:
+        except (ValueError, RecursionError, OSError) as e:
             logging.warning("manifest.json fallback failed for %s: %s", target, e)
 
     # 尝试 plugin.json
@@ -1170,9 +1382,13 @@ def _build_package_metadata(
         try:
             value = json.loads(plugin_text)
             if isinstance(value, dict):
-                return value
+                return _apply_fallback_author(
+                    value,
+                    local_package_author,
+                    parent_package_json,
+                )
             logging.warning("plugin.json root is not an object for %s", target)
-        except (json.JSONDecodeError, OSError) as e:
+        except (ValueError, RecursionError, OSError) as e:
             logging.warning("plugin.json fallback failed for %s: %s", target, e)
 
     # 尝试解析 SKILL.md frontmatter
@@ -1181,13 +1397,17 @@ def _build_package_metadata(
         try:
             result = parse_frontmatter(skill_text)
             if result.data:
-                return result.data
+                return _apply_fallback_author(
+                    result.data,
+                    local_package_author,
+                    parent_package_json,
+                )
         except (OSError, UnicodeDecodeError) as e:
             logging.warning("SKILL.md fallback failed for %s: %s", target, e)
 
     # 从 scan_report 构建最简 metadata
     logging.warning("All metadata fallbacks failed for %s, returning stub metadata", target)
-    return {
+    fallback_metadata = {
         "name": scan_report.get("package_name", "unknown"),
         "version": scan_report.get("version", "0.0.0"),
         "type": "unknown",
@@ -1200,6 +1420,11 @@ def _build_package_metadata(
         "permissions": {},
         "installation": {"method": "unknown", "targets": []},
     }
+    return _apply_fallback_author(
+        fallback_metadata,
+        local_package_author,
+        parent_package_json,
+    )
 
 
 # ---------------------------------------------------------------------------

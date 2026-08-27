@@ -18,8 +18,12 @@ Skills Schema 提取器 (v2.0)
   - constants.py (枚举值 / 标签映射)
 
 公共 API:
-  extract_single_skill(source_dir, repo_url, subdirectory) -> dict
+  extract_single_skill(
+      source_dir, repo_url, subdirectory, parent_package_json=None
+  ) -> dict
     由 API 扫描管道 (trust.py) 动态加载调用，返回符合 agent-package.schema.json 的元数据字典。
+    父级 package.json 必须由调用方从受限仓库快照中选择并传入；提取器不会
+    自行读取 source_dir 之外的目录。
 
 Python >= 3.10，仅依赖标准库 + PyYAML。
 """
@@ -180,13 +184,37 @@ def to_kebab_case(name: str) -> str:
 def _parse_json_object(text: str, source: str | Path) -> dict[str, Any]:
     try:
         value = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         log.warning("无法解析 JSON 对象 %s: %s", source, exc)
         return {}
     if not isinstance(value, dict):
         log.warning("JSON 根节点必须是对象: %s", source)
         return {}
     return value
+
+
+_AUTHOR_PLACEHOLDER_NAMES = frozenset({
+    "unknown",
+    "unknown@unknown.org",
+    "unknown@unknown.com",
+})
+
+
+def _normalized_author_name(value: Any) -> str | None:
+    """Return a usable package author name, or None for invalid metadata."""
+    if isinstance(value, str):
+        name = value.strip()
+    elif isinstance(value, dict):
+        name = value.get("name")
+        if isinstance(name, str):
+            name = name.strip()
+        else:
+            return None
+    else:
+        return None
+    if not name or name.casefold() in _AUTHOR_PLACEHOLDER_NAMES:
+        return None
+    return name
 
 
 def _require_safe_source_subdirectory(value: str) -> str:
@@ -749,44 +777,6 @@ def _find_git_root(start_dir: Path) -> Path | None:
         if parent == d:
             return None
         d = parent
-    return None
-
-
-def _load_parent_package_json(
-    source_path: Path,
-    policy: ScanPolicy,
-) -> dict[str, Any] | None:
-    """Read ancestor package metadata through a bounded snapshot."""
-    max_bytes = max(policy.max_file_bytes, 0)
-    candidates: list[Path] = []
-    git_root = _find_git_root(source_path)
-    if git_root is not None:
-        candidates.append(git_root / "package.json")
-
-    current = source_path.resolve().parent
-    for _ in range(10):
-        candidates.append(current / "package.json")
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        candidate = candidate.resolve()
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            with candidate.open("rb") as handle:
-                raw = handle.read(max_bytes + 1)
-            if len(raw) > max_bytes:
-                continue
-            value = json.loads(raw.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if isinstance(value, dict) and value.get("author"):
-            return value
     return None
 
 
@@ -1543,6 +1533,8 @@ def extract_single_skill(
     Args:
         source_dir: Skill 目录路径（可以是仓库子目录）
         repo_url: GitHub 仓库 HTTPS URL（如已知可传入；否则自动从 .git remote 提取）
+        parent_package_json: 调用方从同一受限仓库快照中选出的最近父级
+            package.json；None 表示不继承。提取器不会自行遍历父目录。
 
     Returns:
         符合 agent-package.schema.json 的完整 dict
@@ -1570,12 +1562,6 @@ def extract_single_skill(
         )
 
     git_root = _find_git_root(source_path)
-    effective_policy = (
-        policy or (inventory.policy if inventory else None) or ScanPolicy()
-    )
-    if parent_package_json is None and not result.frontmatter.get("author"):
-        parent_package_json = _load_parent_package_json(source_path, effective_policy)
-
     data = build_metadata_json(
         result,
         repo_url=repo_url,
@@ -1604,6 +1590,8 @@ def build_metadata_json(
         result: 目录扫描结果
         repo_url: 外部传入的 GitHub 仓库 URL（git clone 场景有值）
         git_root: Git 仓库根目录（用于提取 commit_hash/ref）
+        parent_package_json: 调用方从受限仓库快照中选择的父级 package.json
+            metadata；不会从 source_dir 外部读取文件。
     """
     if subdirectory is not None:
         subdirectory = _require_safe_source_subdirectory(subdirectory)
@@ -1622,21 +1610,29 @@ def build_metadata_json(
         description = "No description available — manual review required"
 
     # author
-    fm_author = result.frontmatter.get("author")
+    fm_author_value = result.frontmatter.get("author")
+    fm_author = _normalized_author_name(fm_author_value)
     fm_email = result.frontmatter.get("email")
     fm_url = result.frontmatter.get("url")
+    if isinstance(fm_author_value, dict):
+        if not fm_email and fm_author_value.get("email"):
+            fm_email = fm_author_value["email"]
+        if not fm_url and fm_author_value.get("url"):
+            fm_url = fm_author_value["url"]
 
     # ── 回退：从受限快照中的当前或父级 package.json 提取 author ──
-    if not fm_author:
+    if fm_author is None:
         pkg = result.json_object("package.json")
         pkg_author = pkg.get("author")
-        if not pkg_author and isinstance(parent_package_json, dict):
+        if (
+            _normalized_author_name(pkg_author) is None
+            and isinstance(parent_package_json, dict)
+        ):
             pkg_author = parent_package_json.get("author")
-        if pkg_author:
-            if isinstance(pkg_author, str):
-                fm_author = pkg_author
-            elif isinstance(pkg_author, dict):
-                fm_author = pkg_author.get("name", str(pkg_author))
+        author_name = _normalized_author_name(pkg_author)
+        if author_name is not None:
+            fm_author = author_name
+            if isinstance(pkg_author, dict):
                 if not fm_email and pkg_author.get("email"):
                     fm_email = pkg_author["email"]
                 if not fm_url and pkg_author.get("url"):
