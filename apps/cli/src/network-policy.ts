@@ -1,3 +1,4 @@
+import './load-root-env';
 import { loadConfig, normalizeApiUrl } from './config-store';
 
 export const DEFAULT_API_BASE = 'http://127.0.0.1:8000';

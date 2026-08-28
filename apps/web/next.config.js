@@ -1,3 +1,9 @@
+const path = require('path');
+const { loadEnvConfig } = require('@next/env');
+
+// Next normally searches apps/web. Load the repository-root .env instead.
+loadEnvConfig(path.resolve(__dirname, '../..'));
+
 /** @type {import('next').NextConfig} */
 const isDevelopment = process.env.NODE_ENV === 'development';
 

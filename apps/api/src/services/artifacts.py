@@ -14,10 +14,11 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from src.models.common import require_safe_source_subdirectory
+from src.settings import get_settings
 
 
 # Persisted artifacts directory (mounted as a Docker volume)
-ARTIFACTS_ROOT = Path(os.environ.get("ARTIFACTS_ROOT", "/artifacts"))
+ARTIFACTS_ROOT = Path(get_settings().artifacts_root)
 
 
 class ArtifactError(Exception):

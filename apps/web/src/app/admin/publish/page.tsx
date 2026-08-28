@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE } from '@/lib/runtime-config';
 
 interface PublishItem {
   version_id: string;

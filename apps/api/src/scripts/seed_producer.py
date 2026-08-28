@@ -1,9 +1,8 @@
 """一次性种子脚本：将 mock JSON 数据导入 PostgreSQL。
 
-用法：
-    cd apps/api
-    $env:DATABASE_URL="postgresql://postgres:password@localhost:5432/trusted_agent_hub"
-    python -m src.scripts.seed_producer
+Usage:
+    Configure the repository-root .env file, then run:
+    cd apps/api && python -m src.scripts.seed_producer
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from src.services.file_contents import (
     is_public_file_content_path,
     is_safe_public_file_content,
 )
-from src.settings import get_settings
+from src.settings import Settings, get_settings
 
 MOCK_DIR = _PROJECT / "packages" / "schema" / "mock"
 REPORTS_DIR = _PROJECT / "packages" / "schema" / "reports"
@@ -304,20 +303,52 @@ def _upsert_seed_scan_report(
         session.commit()
 
 
+def _configured_seed_users(
+    settings: Settings,
+) -> list[tuple[str, str, str, str]]:
+    """Validate opt-in seed credential pairs before opening the database."""
+
+    configured_users = [
+        (settings.seed_admin_email, settings.seed_admin_password, "admin", "admin"),
+        (
+            settings.seed_reviewer_email,
+            settings.seed_reviewer_password,
+            "reviewer",
+            "reviewer",
+        ),
+        (
+            settings.seed_submitter_email,
+            settings.seed_submitter_password,
+            "submitter",
+            "submitter",
+        ),
+    ]
+    users: list[tuple[str, str, str, str]] = []
+    for email, password, role, display_name in configured_users:
+        if not email and not password:
+            continue
+        if not email or not password:
+            raise RuntimeError(
+                f"SEED_{role.upper()}_EMAIL and SEED_{role.upper()}_PASSWORD "
+                "must be set together"
+            )
+        users.append((email.lower().strip(), password, role, display_name))
+    return users
+
+
 def seed_users() -> int:
-    """预置测试账号到 users 表。"""
+    """Create only the development accounts explicitly configured in .env."""
     from src.repositories.orm_producer import UserRow
     from sqlalchemy import select
     import uuid
 
-    engine = create_engine_from_url(get_settings().database_url)
-    session = create_session_factory(engine)()
+    settings = get_settings()
+    users = _configured_seed_users(settings)
+    if not settings.database_url:
+        raise RuntimeError("Database configuration is required to seed users")
 
-    users = [
-        ("admin@local.dev", "admin123", "admin", "admin"),
-        ("reviewer@local.dev", "review123", "reviewer", "reviewer"),
-        ("submitter@local.dev", "submit123", "submitter", "submitter"),
-    ]
+    engine = create_engine_from_url(settings.database_url)
+    session = create_session_factory(engine)()
 
     count = 0
     try:

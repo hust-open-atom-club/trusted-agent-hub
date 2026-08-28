@@ -121,7 +121,7 @@
     "password_placeholder": "Enter password",
     "submit": "Login",
     "submitting": "Logging in...",
-    "test_hint": "Test account: submitter@local.dev / submit123",
+    "test_hint": "Demo account: {{email}} / {{password}}",
     "register_link": "No account? Register"
   },
   "register": {

@@ -18,10 +18,13 @@ if __name__ == "__main__":
     sys.path.insert(0, str(_repo_root))
     sys.path.insert(0, str(_packages))
 
+    from src.settings import get_settings
+
+    settings = get_settings()
     uvicorn.run(
         "src.main:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,
+        host=settings.api_host,
+        port=settings.api_port,
+        reload=settings.api_reload,
         reload_dirs=[str(_repo_root / "apps" / "api" / "src")],
     )

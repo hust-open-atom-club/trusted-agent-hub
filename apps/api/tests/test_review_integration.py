@@ -359,10 +359,10 @@ def _cleanup_test_ids():
 
 
 def _needs_db():
-    """Skip test if DATABASE_URL not configured."""
+    """Skip test unless TEST_DATABASE_URL was mapped by conftest."""
     settings = get_settings()
     if not settings.database_url:
-        pytest.skip("DATABASE_URL not configured")
+        pytest.skip("TEST_DATABASE_URL not configured")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -372,6 +372,7 @@ def _needs_db():
 class TestIntegrationAuditFlow:
     def test_create_version_with_author_license(self):
         """创建版本时提交 author/license → 落库并可读回（断点①修复）。"""
+        _needs_db()
         client = _get_client()
         email = _random_email("vermeta")
         login = _register_and_login_as(client, email, "submitter")

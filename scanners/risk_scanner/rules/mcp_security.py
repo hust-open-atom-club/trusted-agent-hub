@@ -22,6 +22,7 @@ Supports both manifest structures:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -275,7 +276,11 @@ def _load_semantic_model() -> Any | None:
     try:
         from fastembed import TextEmbedding
 
-        _SEMANTIC_MODEL = TextEmbedding(_SEMANTIC_MODEL_NAME)
+        cache_dir = os.environ.get("FASTEMBED_CACHE_PATH") or None
+        _SEMANTIC_MODEL = TextEmbedding(
+            _SEMANTIC_MODEL_NAME,
+            cache_dir=cache_dir,
+        )
         logger.info("SR-017 semantic model loaded: %s", _SEMANTIC_MODEL_NAME)
         return _SEMANTIC_MODEL
     except ImportError:

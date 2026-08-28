@@ -121,7 +121,7 @@
     "password_placeholder": "输入密码",
     "submit": "登录",
     "submitting": "登录中...",
-    "test_hint": "测试账号：submitter@local.dev / submit123",
+    "test_hint": "演示账号：{{email}} / {{password}}",
     "register_link": "没有账号？注册"
   },
   "register": {

@@ -1,11 +1,10 @@
 """Upgrade a configured database to the latest packaged schema."""
 
-import src.settings  # noqa: F401 - loads .env into os.environ
-import os
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from src.settings import Settings
 
 
 def main() -> None:
@@ -14,7 +13,7 @@ def main() -> None:
     config.set_main_option("script_location", str(Path(__file__).parent))
     config.set_main_option(
         "sqlalchemy.url",
-        os.getenv("DATABASE_URL", "").strip()
+        Settings.from_environment().database_url
         or "sqlite+pysqlite:///./trusted-agent-hub.db",
     )
     command.upgrade(config, "head")

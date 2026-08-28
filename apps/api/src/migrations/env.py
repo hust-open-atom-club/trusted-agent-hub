@@ -1,14 +1,13 @@
 """Alembic migration environment."""
 
-import src.settings  # noqa: F401 - loads .env into os.environ
 from logging.config import fileConfig
-import os
 
 from alembic import context
 
 from src.database import Base, create_engine_from_url, normalize_database_url
 from src.repositories import orm  # noqa: F401 - registers ORM metadata
 from src.repositories import orm_producer  # noqa: F401 - registers producer ORM metadata
+from src.settings import Settings
 
 
 config = context.config
@@ -22,7 +21,7 @@ def configured_database_url() -> str:
     """Resolve and normalize the migration database URL."""
     database_url = config.get_main_option("sqlalchemy.url", "").strip()
     if not database_url:
-        database_url = os.getenv("DATABASE_URL", "").strip()
+        database_url = Settings.from_environment().database_url or ""
     if not database_url:
         database_url = "sqlite+pysqlite:///./trusted-agent-hub.db"
     return normalize_database_url(database_url).render_as_string(

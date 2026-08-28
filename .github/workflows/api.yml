@@ -40,6 +40,9 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/trusted_agent_hub
+      # Integration tests opt in through TEST_DATABASE_URL only; conftest
+      # blanks DATABASE_URL/POSTGRES_* so dev/prod config can never leak in.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/trusted_agent_hub
       PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/packages
     defaults:
       run:

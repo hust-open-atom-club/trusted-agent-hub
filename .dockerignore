@@ -27,13 +27,12 @@ venv/
 .gitattributes
 
 # Env
-.env
-.env.local
+**/.env*
 
 # Claude
 .claude/
 
 # Misc
 *.md
-!apps/web/public/install/tah.md
+!apps/web/templates/install-guide.md
 LICENSE

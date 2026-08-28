@@ -38,6 +38,7 @@ from src.dependencies import CurrentUser
 from src.models.common import require_safe_source_subdirectory
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
+from src.settings import get_settings
 
 router = APIRouter(tags=["trust-scan"])
 
@@ -314,7 +315,7 @@ def _github_api_headers() -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = os.environ.get("GITHUB_TOKEN", "")
+    token = get_settings().github_token or ""
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -780,7 +781,7 @@ def _safe_extract_zip(
 
 def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 3) -> bool:
     """下载固定 ref 的 ZIP 包，并在资源预算内解压到 tmp_dir。"""
-    token = os.environ.get("GITHUB_TOKEN", "")
+    token = get_settings().github_token or ""
     api_url = (
         f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
         f"/zipball/{parsed['ref']}"
@@ -1287,7 +1288,7 @@ def _run_scan_task(
     except Exception as exc:
         _scans[scan_id]["status"] = "error"
         err_msg = str(exc)
-        token = os.environ.get("GITHUB_TOKEN", "")
+        token = get_settings().github_token or ""
         if token and token in err_msg:
             err_msg = err_msg.replace(token, "***")
         if isinstance(exc, _DeterministicAcquisitionError):

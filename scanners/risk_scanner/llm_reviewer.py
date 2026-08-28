@@ -29,6 +29,8 @@ from typing import Any
 # 只对高/严重级发现做 LLM 复核，低/中危发现不消耗调用
 REVIEWED_SEVERITIES: frozenset[str] = frozenset({"critical", "high"})
 REVIEW_BATCH_SIZE = 8
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 
 
 LLM_REVIEW_PROMPT = """\
@@ -88,6 +90,42 @@ def _has_llm_config() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def _environment_value(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _provider_configuration() -> tuple[str, str, str, str]:
+    """Return provider, key, base URL, and model from an unambiguous config."""
+
+    openai_key = _environment_value("OPENAI_API_KEY")
+    anthropic_key = _environment_value("ANTHROPIC_API_KEY")
+    if openai_key and anthropic_key:
+        raise LLMReviewCallError(
+            "Configure OPENAI_API_KEY or ANTHROPIC_API_KEY, not both"
+        )
+
+    model_override = _environment_value("SKILLSPECTOR_MODEL")
+    if openai_key:
+        return (
+            "openai",
+            openai_key,
+            _environment_value("OPENAI_BASE_URL") or "https://api.openai.com",
+            model_override or OPENAI_DEFAULT_MODEL,
+        )
+    if anthropic_key:
+        return (
+            "anthropic",
+            anthropic_key,
+            _environment_value("ANTHROPIC_BASE_URL") or "https://api.anthropic.com",
+            model_override or ANTHROPIC_DEFAULT_MODEL,
+        )
+    raise LLMReviewCallError("LLM provider is not configured")
+
+
 def _build_metadata_text(manifest: dict[str, Any]) -> str:
     parts = []
     if manifest.get("name"):
@@ -105,35 +143,26 @@ def _build_metadata_text(manifest: dict[str, Any]) -> str:
 
 
 def _call_llm(prompt: str) -> dict[str, Any]:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    base_url = os.environ.get("OPENAI_BASE_URL")
-
-    if not api_key:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if api_key:
-            base_url = base_url or "https://api.anthropic.com"
-
-    if not api_key:
-        raise LLMReviewCallError("LLM provider is not configured")
+    provider, api_key, base_url, model = _provider_configuration()
 
     try:
         import httpx
 
         headers = {"Content-Type": "application/json"}
-        if api_key.startswith("sk-ant"):
+        if provider == "anthropic":
             headers["x-api-key"] = api_key
             headers["anthropic-version"] = "2023-06-01"
-            api_url = f"{base_url or 'https://api.anthropic.com'}/v1/messages"
+            api_url = f"{base_url.rstrip('/')}/v1/messages"
             body = {
-                "model": os.environ.get("SKILLSPECTOR_MODEL", "claude-sonnet-4-20250514"),
+                "model": model,
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}],
             }
         else:
             headers["Authorization"] = f"Bearer {api_key}"
-            api_url = f"{base_url or 'https://api.openai.com'}/v1/chat/completions"
+            api_url = f"{base_url.rstrip('/')}/v1/chat/completions"
             body = {
-                "model": os.environ.get("SKILLSPECTOR_MODEL", "gpt-4o-mini"),
+                "model": model,
                 "max_tokens": 1024,
                 "temperature": 0.0,
                 "messages": [{"role": "user", "content": prompt}],
