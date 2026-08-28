@@ -1,6 +1,6 @@
 # TrustedAgentHub — API 后端 Dockerfile
 # 构建上下文 = 项目根目录: docker compose build api
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 

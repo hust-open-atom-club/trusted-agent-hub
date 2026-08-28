@@ -6,7 +6,7 @@
 
 **Architecture:** FastAPI routers translate HTTP requests, focused services enforce public visibility and query semantics, and a `PackageRepository` protocol isolates the current JSON mock store from future PostgreSQL work. Pydantic/FastAPI are the runtime contract source; an export script commits a deterministic Consumer-only OpenAPI snapshot.
 
-**Tech Stack:** Python 3.11+, FastAPI 0.115+, Pydantic 2, pytest, FastAPI TestClient, standard-library JSON/path/typing utilities.
+**Tech Stack:** Python 3.12+, FastAPI 0.115+, Pydantic 2, pytest, FastAPI TestClient, standard-library JSON/path/typing utilities.
 
 ---
 
