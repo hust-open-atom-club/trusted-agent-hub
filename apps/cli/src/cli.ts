@@ -17,6 +17,7 @@ import type { InstallManifest } from './manifest-types';
 import type { McpWriteSummary } from './config-writer';
 import { client, ApiError } from './api-client';
 import type { PackageSummary, VersionDetail } from './api-client';
+import { ConfigStoreError, getConfigPath, saveConfig } from './config-store';
 import {
   PACKAGE_TYPE_LABELS,
   GRADE_LABELS,
@@ -58,6 +59,33 @@ program
     chalk.bold('TrustedAgentHub CLI — AI agent capability package registry'),
   )
   .version('0.1.0');
+
+// ── use ─────────────────────────────────────────────────────────────────
+
+program
+  .command('use <api-url>')
+  .description('Persist the TrustedAgentHub API endpoint for future commands')
+  .option('--allow-http', 'Trust this HTTP API origin for artifact downloads')
+  .action((apiUrl: string, options: { allowHttp?: boolean }) => {
+    try {
+      const config = saveConfig({
+        apiUrl,
+        allowInsecureHttp: Boolean(options.allowHttp),
+      });
+      console.log('');
+      console.log(`  ${chalk.green('✓')} TrustedAgentHub API set to ${chalk.cyan(config.apiUrl)}`);
+      if (config.allowInsecureHttp) {
+        console.log(`  ${chalk.yellow('HTTP allowed for this configured Hub origin only.')}`);
+      }
+      console.log(`  ${chalk.dim('Config:')} ${getConfigPath()}`);
+      console.log('');
+    } catch (err: unknown) {
+      if (err instanceof ConfigStoreError) {
+        fatal(err.message);
+      }
+      fatal(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
 
 // ── search ──────────────────────────────────────────────────────────────
 
