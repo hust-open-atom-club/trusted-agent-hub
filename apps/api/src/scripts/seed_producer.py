@@ -14,8 +14,11 @@ from pathlib import Path
 
 _API_DIR = Path(__file__).resolve().parents[2]  # apps/api
 _PROJECT = _API_DIR.parent.parent  # repo root
+_PACKAGES_DIR = _PROJECT / "packages"
 sys.path.insert(0, str(_API_DIR))
+sys.path.insert(0, str(_PACKAGES_DIR))
 
+from src.auth import hash_password
 from src.database import create_engine_from_url, create_session_factory
 from src.repositories.sqlalchemy import (
     SqlAlchemyPackageRepository,
