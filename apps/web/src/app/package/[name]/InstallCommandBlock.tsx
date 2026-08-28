@@ -9,6 +9,7 @@ type CopyTarget = 'command' | 'aiPrompt';
 
 const COMMAND_DISPLAY_LIMIT = 96;
 const AI_PROMPT_DISPLAY_LIMIT = 220;
+const AI_PROMPT_SETUP_MARKERS = ['。如果本机', '. If the tah command'];
 
 interface InstallCommandBlockProps {
   command: string;
@@ -22,6 +23,19 @@ function truncateDisplayText(value: string, limit: number): string {
   }
 
   return `${value.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function previewAiPrompt(value: string): string {
+  const setupMarkerIndex = AI_PROMPT_SETUP_MARKERS
+    .map((marker) => value.indexOf(marker))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+
+  if (setupMarkerIndex !== undefined) {
+    return `${value.slice(0, setupMarkerIndex).trimEnd()}...`;
+  }
+
+  return truncateDisplayText(value, AI_PROMPT_DISPLAY_LIMIT);
 }
 
 export default function InstallCommandBlock({ command, packageName, client }: InstallCommandBlockProps) {
@@ -58,7 +72,7 @@ export default function InstallCommandBlock({ command, packageName, client }: In
     [client, installGuideUrl, packageName, t],
   );
   const displayCommand = useMemo(() => truncateDisplayText(command, COMMAND_DISPLAY_LIMIT), [command]);
-  const displayAiPrompt = useMemo(() => truncateDisplayText(aiPrompt, AI_PROMPT_DISPLAY_LIMIT), [aiPrompt]);
+  const displayAiPrompt = useMemo(() => previewAiPrompt(aiPrompt), [aiPrompt]);
 
   const scheduleReset = (target: CopyTarget) => {
     if (resetTimers.current[target]) {
