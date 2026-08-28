@@ -3,15 +3,8 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from typing import Any
-
-try:
-    import tomllib  # type: ignore[import-not-found]
-except ImportError:  # Python < 3.11: use tomli when an application provides it.
-    try:
-        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
-    except ImportError:
-        tomllib = None  # type: ignore[assignment]
 
 from .models import StructuredDocument
 
@@ -33,8 +26,6 @@ def parse_structured_document(path: str, content: str) -> StructuredDocument:
         if format_name == "json":
             return StructuredDocument(path, format_name, "json", json.loads(content))
         if format_name == "toml":
-            if tomllib is None:
-                return StructuredDocument(path, format_name, "unavailable", None, "toml parser unavailable")
             return StructuredDocument(path, format_name, "tomllib", tomllib.loads(content))
         try:
             import yaml  # type: ignore[import-not-found]

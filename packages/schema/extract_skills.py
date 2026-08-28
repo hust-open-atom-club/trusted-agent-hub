@@ -25,7 +25,7 @@ Skills Schema 提取器 (v2.0)
     父级 package.json 必须由调用方从受限仓库快照中选择并传入；提取器不会
     自行读取 source_dir 之外的目录。
 
-Python >= 3.10，仅依赖标准库 + PyYAML。
+Python >= 3.12，仅依赖标准库 + PyYAML。
 """
 
 from __future__ import annotations

@@ -35,10 +35,13 @@ services:
       - ./examples:/examples:ro
       - artifacts:/artifacts
       - source_snapshots:/source-snapshots
+      # 从宿主机挂载已上传的 fastembed 模型缓存，避免构建时访问 Hugging Face
+      - ./data/fastembed-cache:/fastembed-cache:ro
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/trusted_agent_hub
       ARTIFACTS_ROOT: /artifacts
       SOURCE_SNAPSHOT_DIR: /source-snapshots
+      FASTEMBED_CACHE_PATH: /fastembed-cache
       CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
     ports:
       - "8000:8000"
