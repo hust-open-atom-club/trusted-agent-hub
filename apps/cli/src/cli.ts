@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import packageJson from '../package.json';
 import { formatPackageCard, formatPackageDetail } from './format';
 import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
 import { VerifyExecutor } from './verify-executor';
@@ -58,7 +59,7 @@ program
   .description(
     chalk.bold('TrustedAgentHub CLI — AI agent capability package registry'),
   )
-  .version('0.1.0');
+  .version(packageJson.version);
 
 // ── use ─────────────────────────────────────────────────────────────────
 

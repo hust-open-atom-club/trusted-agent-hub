@@ -4,7 +4,7 @@
  * Run: npx tsx tests/cli-parsing.test.ts
  *
  * Verifies that Commander correctly routes options to subcommands:
- *   - Root --version outputs CLI version (0.1.0)
+ *   - Root --version outputs the package version
  *   - install --version <version> triggers the install action,
  *     NOT the root version command
  */
@@ -15,6 +15,7 @@ import * as path from 'path';
 
 // Path to the compiled CLI entry point
 const CLI_ENTRY = path.resolve(__dirname, '..', 'dist', 'apps', 'cli', 'src', 'cli.js');
+const PACKAGE_VERSION = require('../package.json').version;
 
 // Use a guaranteed-unreachable API URL so the install command fails fast
 // with a network error rather than hanging or succeeding.
@@ -61,19 +62,19 @@ function runCliSync(args: string[], env?: Record<string, string>): string {
 function test_rootVersionOutputsCliVersion() {
   const { stdout, status } = runCli(['--version']);
   assert.strictEqual(status, 0, `expected exit 0, got ${status}`);
-  assert.ok(stdout.includes('0.1.0'), `expected "0.1.0" in output, got: "${stdout}"`);
+  assert.ok(stdout.includes(PACKAGE_VERSION), `expected "${PACKAGE_VERSION}" in output, got: "${stdout}"`);
   console.log('  ✓ root --version outputs CLI version');
 }
 
 function test_rootVersionShortFlag() {
   const { stdout, status } = runCli(['-V']);
   assert.strictEqual(status, 0, `expected exit 0, got ${status}`);
-  assert.ok(stdout.includes('0.1.0'), `expected "0.1.0" in output, got: "${stdout}"`);
+  assert.ok(stdout.includes(PACKAGE_VERSION), `expected "${PACKAGE_VERSION}" in output, got: "${stdout}"`);
   console.log('  ✓ root -V (short flag) outputs CLI version');
 }
 
 function test_installVersionOptionDoesNotPrintCliVersion() {
-  // install --version 1.0.0 must NOT output "0.1.0" — it should trigger
+  // install --version 1.0.0 must NOT output the package version — it should trigger
   // the install action (which fails with a network error since no API).
   const { stdout, stderr, status } = runCli(
     ['install', 'test-pkg', '--version', '1.0.0', '--client', 'claude-code'],
@@ -81,8 +82,8 @@ function test_installVersionOptionDoesNotPrintCliVersion() {
   );
   assert.notStrictEqual(status, 0, 'install should fail (no API), not exit 0');
   const combined = stdout + stderr;
-  assert.ok(!combined.includes('0.1.0'),
-    `install --version 1.0.0 must NOT print CLI version 0.1.0. Got: "${combined.slice(0, 200)}"`);
+  assert.ok(!combined.includes(PACKAGE_VERSION),
+    `install --version 1.0.0 must NOT print CLI version ${PACKAGE_VERSION}. Got: "${combined.slice(0, 200)}"`);
   // Should show it's trying to install (the spinner or error message)
   assert.ok(
     combined.includes('install') || combined.includes('Install') ||
@@ -102,7 +103,7 @@ function test_installVersionOptionOrderSwapped() {
   );
   assert.notStrictEqual(status, 0, 'install should fail (no API)');
   const combined = stdout + stderr;
-  assert.ok(!combined.includes('0.1.0'),
+  assert.ok(!combined.includes(PACKAGE_VERSION),
     `version after other options must not print CLI version. Got: "${combined.slice(0, 200)}"`);
   console.log('  ✓ install with --version after --client also works');
 }
@@ -114,7 +115,7 @@ function test_installWithoutVersionStillWorks() {
   );
   assert.notStrictEqual(status, 0, 'install should fail (no API)');
   const combined = stdout + stderr;
-  assert.ok(!combined.includes('0.1.0'),
+  assert.ok(!combined.includes(PACKAGE_VERSION),
     `install without --version must not print CLI version. Got: "${combined.slice(0, 200)}"`);
   console.log('  ✓ install without --version still enters install action');
 }
@@ -150,7 +151,7 @@ function test_uninstallClientOptionWorks() {
   const { stdout, status } = runCli(['uninstall', 'pkg', '--client', 'cursor', '--yes']);
   // Should fail with not_installed (not a real package) but NOT print CLI version
   assert.notStrictEqual(status, 0, 'uninstall should fail (no record)');
-  assert.ok(!stdout.includes('0.1.0'),
+  assert.ok(!stdout.includes(PACKAGE_VERSION),
     'uninstall --client must NOT print CLI version');
   assert.ok(stdout.includes('cursor'), 'must show cursor client');
   console.log('  ✓ uninstall --client cursor works');
@@ -159,7 +160,7 @@ function test_uninstallClientOptionWorks() {
 function test_uninstallForceOptionWorks() {
   const { stdout, status } = runCli(['uninstall', 'pkg', '--force', '--yes']);
   assert.notStrictEqual(status, 0, 'uninstall should fail (no record)');
-  assert.ok(!stdout.includes('0.1.0'),
+  assert.ok(!stdout.includes(PACKAGE_VERSION),
     'uninstall --force must NOT print CLI version');
   console.log('  ✓ uninstall --force works');
 }
@@ -172,7 +173,7 @@ function test_installOptionsStillWorkAfterUninstallRegistered() {
   );
   assert.notStrictEqual(status, 0, 'install should fail (no API)');
   const combined = stdout + stderr;
-  assert.ok(!combined.includes('0.1.0'),
+  assert.ok(!combined.includes(PACKAGE_VERSION),
     `install --version after uninstall registration must not print CLI version. Got: "${combined.slice(0, 200)}"`);
   console.log('  ✓ install --version still works after uninstall registered');
 }
