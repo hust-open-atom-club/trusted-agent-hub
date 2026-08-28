@@ -37,7 +37,10 @@ for _database_key in (
 ):
     os.environ[_database_key] = ""
 if _TEST_DATABASE_URL:
+    os.environ["TEST_DATABASE_URL"] = _TEST_DATABASE_URL
     os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+else:
+    os.environ.pop("TEST_DATABASE_URL", None)
 
 from src.dependencies import get_package_repository
 from src.main import create_app
