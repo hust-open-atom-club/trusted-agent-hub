@@ -492,6 +492,42 @@ def test_install_manifest_accepts_canonically_equal_download_urls(
     assert manifest["installation"]["steps"][0]["url"] == f"{download_url}/"
 
 
+def test_install_manifest_absolutizes_relative_artifact_urls(
+    client: TestClient,
+    repository: JsonPackageRepository,
+) -> None:
+    relative_url = "/api/v0/artifacts/code-review-skill-1.0.0-a1b2c3d4-v2.zip"
+    record = repository.get_version("code-review-skill", "1.0.0")
+    assert record is not None
+    assert record.source is not None
+    assert record.installation is not None
+    source = record.source.model_copy(update={"download_url": relative_url})
+    installation = record.installation.model_copy(
+        update={
+            "steps": [
+                InstallationStep.model_validate(step)
+                for step in _identity_steps(download_url=relative_url)
+            ]
+        }
+    )
+    replacement = record.model_copy(
+        update={"source": source, "installation": installation}
+    )
+    repository._versions_by_key[("code-review-skill", "1.0.0")] = replacement
+    repository._versions_by_id[record.id] = replacement
+
+    response = client.get(
+        "https://hub.example.test/api/v0/packages/code-review-skill/install-manifest",
+        params={"client": "claude-code"},
+    )
+
+    assert response.status_code == 200
+    manifest = response.json()
+    absolute_url = f"https://hub.example.test{relative_url}"
+    assert manifest["source"]["download_url"] == absolute_url
+    assert manifest["installation"]["steps"][0]["url"] == absolute_url
+
+
 def test_copy_directory_accepts_exact_install_sequence(
     client: TestClient,
     repository: JsonPackageRepository,

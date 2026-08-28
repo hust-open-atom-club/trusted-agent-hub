@@ -54,8 +54,14 @@ CLIENT_INSTALL_ROOTS = {
 class InstallManifestService:
     """Build manifests only from explicit, published, install-safe records."""
 
-    def __init__(self, repository: PackageRepository) -> None:
+    def __init__(
+        self,
+        repository: PackageRepository,
+        *,
+        public_base_url: str | None = None,
+    ) -> None:
         self.packages = PackageService(repository)
+        self.public_base_url = public_base_url.rstrip("/") if public_base_url else None
 
     def get_manifest(
         self,
@@ -69,6 +75,13 @@ class InstallManifestService:
 
         invalid_fields: list[str] = []
         source = record.source
+        manifest_source = source
+        if source is not None and source.download_url:
+            manifest_source = source.model_copy(
+                update={
+                    "download_url": self._absolute_url(source.download_url),
+                }
+            )
         installation = record.installation
         method = installation.method if installation is not None else None
 
@@ -107,7 +120,9 @@ class InstallManifestService:
         else:
             try:
                 validated_steps = [
-                    ManifestInstallationStep.model_validate(step.model_dump())
+                    ManifestInstallationStep.model_validate(
+                        self._step_with_absolute_urls(step.model_dump())
+                    )
                     for step in installation.steps
                 ]
             except ValidationError:
@@ -120,7 +135,7 @@ class InstallManifestService:
                 if not self._validate_steps_for_method(
                     method,
                     validated_steps,
-                    source,
+                    manifest_source,
                     integrity,
                     steps_client,
                 ):
@@ -138,7 +153,9 @@ class InstallManifestService:
         # 目录复制必须携带可下载制品与完整性摘要；npm/pip/docker/manual
         # 由各自 step 内容承载，不强制 ZIP 制品字段。
         if method == "copy_directory":
-            if source is None or not self._is_https_url(source.download_url):
+            if manifest_source is None or not self._is_https_url(
+                manifest_source.download_url
+            ):
                 invalid_fields.append("source.download_url")
             if source is None or not COMMIT_PATTERN.fullmatch(
                 source.commit_hash or ""
@@ -189,6 +206,7 @@ class InstallManifestService:
             )
 
         assert source is not None
+        assert manifest_source is not None
         assert installation is not None
         assert validated_steps is not None
         assert record.permissions is not None
@@ -226,12 +244,12 @@ class InstallManifestService:
             type=package.type,
             description=package.description,
             source=ManifestSource(
-                type=source.type,
-                repository_url=source.repository_url,
-                download_url=source.download_url,
-                ref=source.ref,
-                subdirectory=source.subdirectory,
-                commit_hash=source.commit_hash,
+                type=manifest_source.type,
+                repository_url=manifest_source.repository_url,
+                download_url=manifest_source.download_url,
+                ref=manifest_source.ref,
+                subdirectory=manifest_source.subdirectory,
+                commit_hash=manifest_source.commit_hash,
             ),
             integrity=(
                 ManifestIntegrity(
@@ -318,6 +336,19 @@ class InstallManifestService:
             )
 
         return False
+
+    def _absolute_url(self, value: str) -> str:
+        if value.startswith("/") and self.public_base_url is not None:
+            return f"{self.public_base_url}/{value.lstrip('/')}"
+        return value
+
+    def _step_with_absolute_urls(
+        self,
+        step: dict[str, object],
+    ) -> dict[str, object]:
+        if step.get("action") == "download" and isinstance(step.get("url"), str):
+            return {**step, "url": self._absolute_url(str(step["url"]))}
+        return step
 
     _LOCALHOST_ORIGINS = {"localhost", "127.0.0.1", "[::1]"}
 
