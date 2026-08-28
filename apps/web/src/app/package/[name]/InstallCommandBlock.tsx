@@ -7,10 +7,35 @@ import { copyTextToClipboard } from '@/lib/clipboard';
 type CopyState = 'idle' | 'copied' | 'failed';
 type CopyTarget = 'command' | 'aiPrompt';
 
+const COMMAND_DISPLAY_LIMIT = 96;
+const AI_PROMPT_DISPLAY_LIMIT = 220;
+const AI_PROMPT_SETUP_MARKERS = ['。如果本机', '. If the tah command'];
+
 interface InstallCommandBlockProps {
   command: string;
   packageName: string;
   client: string;
+}
+
+function truncateDisplayText(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function previewAiPrompt(value: string): string {
+  const setupMarkerIndex = AI_PROMPT_SETUP_MARKERS
+    .map((marker) => value.indexOf(marker))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+
+  if (setupMarkerIndex !== undefined) {
+    return `${value.slice(0, setupMarkerIndex).trimEnd()}...`;
+  }
+
+  return truncateDisplayText(value, AI_PROMPT_DISPLAY_LIMIT);
 }
 
 export default function InstallCommandBlock({ command, packageName, client }: InstallCommandBlockProps) {
@@ -46,6 +71,8 @@ export default function InstallCommandBlock({ command, packageName, client }: In
     })),
     [client, installGuideUrl, packageName, t],
   );
+  const displayCommand = useMemo(() => truncateDisplayText(command, COMMAND_DISPLAY_LIMIT), [command]);
+  const displayAiPrompt = useMemo(() => previewAiPrompt(aiPrompt), [aiPrompt]);
 
   const scheduleReset = (target: CopyTarget) => {
     if (resetTimers.current[target]) {
@@ -103,11 +130,11 @@ export default function InstallCommandBlock({ command, packageName, client }: In
       </div>
       <span className="comment"># {String(t('detail.install.command_comment', { name: packageName }))}</span>
       {'\n'}
-      <span className="install-command-text">{command}</span>
+      <span className="install-command-text" title={command}>{displayCommand}</span>
       {'\n\n'}
       <span className="comment"># {String(t('detail.install.ai_prompt_comment'))}</span>
       {'\n'}
-      <span className="install-ai-prompt-text">{aiPrompt}</span>
+      <span className="install-ai-prompt-text" title={aiPrompt}>{displayAiPrompt}</span>
     </div>
   );
 }
