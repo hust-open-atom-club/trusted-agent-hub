@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from src.dependencies import RepositoryDependency
@@ -25,15 +25,11 @@ router = APIRouter(tags=["install"])
     },
 )
 def get_install_manifest(
-    request: Request,
     name: str,
     query: Annotated[InstallManifestQuery, Query()],
     repository: RepositoryDependency,
 ) -> InstallManifest:
-    return InstallManifestService(
-        repository,
-        public_base_url=str(request.base_url),
-    ).get_manifest(
+    return InstallManifestService(repository).get_manifest(
         name=name,
         client=query.client,
         version=query.version,

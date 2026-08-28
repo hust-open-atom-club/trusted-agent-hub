@@ -109,6 +109,7 @@ def test_public_and_security_settings_are_parsed(
     )
     monkeypatch.setenv("TAH_ALLOW_INSECURE_HTTP", "true")
     monkeypatch.setenv("API_PORT", "9000")
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://hub.example.com/")
 
     settings = Settings.from_environment()
 
@@ -118,6 +119,47 @@ def test_public_and_security_settings_are_parsed(
     )
     assert settings.allow_insecure_http is True
     assert settings.api_port == 9000
+    assert settings.public_api_base_url == "https://hub.example.com"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "hub.example.com",
+        "ftp://hub.example.com",
+        "https://hub.example.com/api",
+        "https://hub.example.com?api=1",
+        "https://hub.example.com#api",
+    ],
+)
+def test_public_api_base_url_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", value)
+
+    with pytest.raises(ValueError, match="PUBLIC_API_BASE_URL"):
+        Settings.from_environment()
+
+
+def test_public_api_base_url_rejects_non_local_http_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "http://hub.example.com")
+
+    with pytest.raises(ValueError, match="TAH_ALLOW_INSECURE_HTTP"):
+        Settings.from_environment()
+
+
+def test_public_api_base_url_allows_non_local_http_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TAH_ALLOW_INSECURE_HTTP", "true")
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "http://140.143.119.142:8000/")
+
+    settings = Settings.from_environment()
+
+    assert settings.public_api_base_url == "http://140.143.119.142:8000"
 
 
 def test_blank_container_overrides_use_safe_local_defaults(
