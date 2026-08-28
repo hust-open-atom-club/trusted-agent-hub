@@ -1,10 +1,16 @@
 """SR-017: MCP Server security rule unit tests."""
 
+import sys
+from types import ModuleType
+
 import pytest
 
 from scanners.risk_scanner.rules import mcp_security
 from scanners.risk_scanner.rules.mcp_security import run
 from tests.scanner_mock import MockScanner
+
+
+_REAL_LOAD_SEMANTIC_MODEL = mcp_security._load_semantic_model
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +32,30 @@ class FakeModel:
         import numpy as np
 
         return [np.array([1.0, 0.0]), np.array([self._sim, self._sin_theta])]
+
+
+def test_semantic_model_uses_configured_cache_directory(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    fake_fastembed = ModuleType("fastembed")
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name, *, cache_dir=None):
+            captured["model_name"] = model_name
+            captured["cache_dir"] = cache_dir
+
+    fake_fastembed.TextEmbedding = FakeTextEmbedding
+    cache_dir = tmp_path / "fastembed-cache"
+    monkeypatch.setitem(sys.modules, "fastembed", fake_fastembed)
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", str(cache_dir))
+    monkeypatch.setattr(mcp_security, "_SEMANTIC_MODEL", None)
+
+    model = _REAL_LOAD_SEMANTIC_MODEL()
+
+    assert isinstance(model, FakeTextEmbedding)
+    assert captured == {
+        "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "cache_dir": str(cache_dir),
+    }
 
 
 class TestSR017MCPSecurity:

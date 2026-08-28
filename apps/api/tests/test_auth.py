@@ -103,7 +103,7 @@ def _cleanup_test_users():
 
 def _needs_db() -> None:
     if not get_settings().database_url:
-        pytest.skip("DATABASE_URL not configured")
+        pytest.skip("TEST_DATABASE_URL not configured")
 
 
 # ═══════════════════════════════════════════════════════════

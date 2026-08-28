@@ -109,21 +109,60 @@ npx tah verify <name>
 git clone <repo-url>
 cd TrustedAgentHub
 
+# 创建本地私有配置（.env 已被 Git 和 Docker 构建上下文忽略）
+cp .env.example .env
+# 编辑 .env，至少填写 POSTGRES_PASSWORD 和 JWT_SECRET
+# 若同一份配置还要用于 Compose，请保持 DATABASE_URL、DATABASE_HOST 为空
+
 # Python 依赖 (pyproject.toml 位于 apps/api)
 cd apps/api
 pip install -e ".[dev]"
 cd ../..
 
-# 配置数据库连接 (apps/api/.env)
-    echo "DATABASE_URL=postgresql://postgres:password@127.0.0.1:5432/trusted_agent_hub" > apps/api/.env
-
-# 数据库迁移
+# 数据库迁移（自动读取仓库根目录 .env）
 cd apps/api
 alembic upgrade head
 
 # 导入种子数据
 python -m src.scripts.seed_producer
 ```
+
+### 统一环境配置与重复部署
+
+仓库根目录 `.env` 是本地开发和服务器部署的唯一私有配置文件；它不会被 Git
+跟踪，也不会进入 Docker 构建上下文。`.env.example` 只保存变量名、说明和安全的
+默认值，必须提交到仓库，但不得填写真实密码、Token 或私有地址。
+
+- 数据库配置有两种模式。推荐填写 `POSTGRES_USER`、`POSTGRES_PASSWORD` 和
+  `POSTGRES_DB`，并保持 `DATABASE_URL`、`DATABASE_HOST` 为空：本机 API 使用
+  `127.0.0.1`，Compose 中的 API 使用 `db`，同一份 `.env` 无需切换。仅本地开发也可
+  直接设置指向 `localhost` 的 `DATABASE_URL`；它会覆盖分项配置，但运行 Compose 前
+  必须清空，否则容器会把 `localhost` 当作自身而无法连接 `db` 服务。
+- `API_HOST`、`ARTIFACTS_ROOT`、`SOURCE_SNAPSHOT_DIR` 和 `FASTEMBED_CACHE_PATH`
+  保持为空时，本机使用开发默认值，Compose 注入容器值。`API_RELOAD` 只供
+  `python apps/api/run.py` 使用；Docker 镜像始终以不启用 reload 的方式启动。
+- Docker 首次启动会创建 PostgreSQL 数据库、执行全部 Alembic 迁移，并按
+  `INITIAL_ADMIN_*` 幂等创建首个管理员；邮箱与密码必须成对配置，密码至少 12
+  位。管理员创建后建议清空 `INITIAL_ADMIN_PASSWORD`。
+- `SEED_ADMIN_*`、`SEED_REVIEWER_*`、`SEED_SUBMITTER_*` 均为可选开发账号，
+  每组邮箱与密码必须同时配置；项目不再内置固定测试账号或默认密码。
+- `NEXT_PUBLIC_*` 会进入浏览器包，不能存放私密信息；修改这些值后必须重新构建
+  Web 镜像。
+- 从本仓库运行 CLI 时会自动加载根目录 `.env`，但显式 Shell/CI 环境变量仍然优先；
+  已发布的 CLI 也可以使用 `tah use <api-url>` 保存服务地址。
+- 服务器首次部署只需创建并填写一次 `.env`。以后执行 `git pull` 时该文件会保留，
+  再运行 `deploy/deploy.sh`（Linux）或 `deploy/build.ps1`（Windows）即可更新。
+- 从旧版 Compose（项目名 `tah-dev`）升级时，数据卷会随项目名变为
+  `trusted-agent-hub_*` 而新建。旧数据仍在 `tah-dev_pgdata` 等卷中；如需沿用，
+  在 `.env` 中设置 `COMPOSE_PROJECT_NAME=tah-dev`，或手动迁移卷数据。
+
+新增配置项时，应同步更新 `.env.example`、读取该变量的统一配置模块、必要的
+Compose/Docker build 参数、测试和文档，不要在业务代码、Compose 文件或部署脚本中
+写入真实值。
+
+API 测试只会从根目录 `.env` 读取专用的 `TEST_DATABASE_URL`，不会继承
+`DATABASE_URL` 或 `POSTGRES_*`。该项未设置时 PostgreSQL 集成测试会跳过，避免误写
+开发或生产数据库；Shell/CI 中显式设置的 `TEST_DATABASE_URL` 优先。
 
 ### 数据库迁移策略
 
@@ -177,13 +216,13 @@ python run.py
 cd apps/web
 npm install && npm run dev
 
-# Docker Compose 一键启动
-docker compose up -d
+# Docker Compose 一键构建、迁移并启动
+docker compose --env-file .env up -d --build
 ```
 
 启动后访问：
-- **Web 前端**：http://localhost:3000
-- **Swagger API 文档**：http://127.0.0.1:8000/docs
+- **Web 前端**：由 `.env` 中的 `NEXT_PUBLIC_SITE_URL` 配置
+- **Swagger API 文档**：`${NEXT_PUBLIC_API_URL}/docs`
 
 ## 真实能力包
 

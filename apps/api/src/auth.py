@@ -22,6 +22,7 @@ from src.dependencies import (
     CurrentUser,
     get_current_user,
 )
+from src.settings import get_settings
 
 # ── 密码哈希（Argon2id）───────────────────────────────────
 
@@ -60,7 +61,7 @@ def _get_jwt_secret() -> str:
     global _JWT_SECRET
     if _JWT_SECRET is not None:
         return _JWT_SECRET
-    _JWT_SECRET = os.getenv("JWT_SECRET", "").strip()
+    _JWT_SECRET = get_settings().jwt_secret
     if not _JWT_SECRET:
         # 开发环境自动生成随机密钥（进程重启后所有 token 失效）
         import base64

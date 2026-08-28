@@ -1,24 +1,22 @@
-# TrustedAgentHub — Docker Compose 编排
-# 启动：docker compose up -d
-# 停止：docker compose down
-# 重建：docker compose up -d --build
+# TrustedAgentHub Docker Compose stack
+# The repository-root .env file supplies deployment-specific values.
 
-name: tah-dev
+name: ${COMPOSE_PROJECT_NAME:-trusted-agent-hub}
 
 services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: trusted_agent_hub
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d trusted_agent_hub"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -28,24 +26,50 @@ services:
       context: .
       dockerfile: ./apps/api/Dockerfile
       args:
-        # 语义模型开关: 用 deploy/build.ps1 交互选择, 或设环境变量 ENABLE_SEMANTIC_MODEL=true
         ENABLE_SEMANTIC_MODEL: ${ENABLE_SEMANTIC_MODEL:-false}
+        FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/fastembed-cache}
     restart: unless-stopped
     volumes:
       - ./examples:/examples:ro
-      - artifacts:/artifacts
-      - source_snapshots:/source-snapshots
-      # 从宿主机挂载已上传的 fastembed 模型缓存，避免构建时访问 Hugging Face
-      - ./data/fastembed-cache:/fastembed-cache:ro
+      - artifacts:${ARTIFACTS_ROOT:-/artifacts}
+      - source_snapshots:${SOURCE_SNAPSHOT_DIR:-/source-snapshots}
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/trusted_agent_hub
-      ARTIFACTS_ROOT: /artifacts
-      SOURCE_SNAPSHOT_DIR: /source-snapshots
-      FASTEMBED_CACHE_PATH: /fastembed-cache
-      CONSUMER_ALLOW_INSECURE_USER_HEADER: "false"
+      # Keep this empty for the Compose-managed database. A localhost URL points
+      # back to the api container, not to the db service.
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_DRIVER: ${DATABASE_DRIVER:-postgresql}
+      DATABASE_HOST: ${DATABASE_HOST:-db}
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      INITIAL_ADMIN_DISPLAY_NAME: ${INITIAL_ADMIN_DISPLAY_NAME:-Administrator}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_REVIEWER_EMAIL: ${SEED_REVIEWER_EMAIL:-}
+      SEED_REVIEWER_PASSWORD: ${SEED_REVIEWER_PASSWORD:-}
+      SEED_SUBMITTER_EMAIL: ${SEED_SUBMITTER_EMAIL:-}
+      SEED_SUBMITTER_PASSWORD: ${SEED_SUBMITTER_PASSWORD:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      SKILLSPECTOR_MODEL: ${SKILLSPECTOR_MODEL:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CONSUMER_ALLOW_INSECURE_USER_HEADER: ${CONSUMER_ALLOW_INSECURE_USER_HEADER:-false}
       TAH_ALLOW_INSECURE_HTTP: ${TAH_ALLOW_INSECURE_HTTP:-false}
+      ARTIFACTS_ROOT: ${ARTIFACTS_ROOT:-/artifacts}
+      SOURCE_SNAPSHOT_DIR: ${SOURCE_SNAPSHOT_DIR:-/source-snapshots}
+      SOURCE_SNAPSHOT_TTL_SECONDS: ${SOURCE_SNAPSHOT_TTL_SECONDS:-604800}
+      FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/fastembed-cache}
+      API_HOST: ${API_HOST:-0.0.0.0}
+      API_PORT: ${API_PORT:-8000}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
       db:
         condition: service_healthy
@@ -56,11 +80,19 @@ services:
       dockerfile: ./apps/web/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-support@example.com}
+        NEXT_PUBLIC_DEMO_ACCOUNT_EMAIL: ${NEXT_PUBLIC_DEMO_ACCOUNT_EMAIL:-}
+        NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD: ${NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD:-}
     restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-support@example.com}
+      NEXT_PUBLIC_DEMO_ACCOUNT_EMAIL: ${NEXT_PUBLIC_DEMO_ACCOUNT_EMAIL:-}
+      NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD: ${NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD:-}
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - api
 

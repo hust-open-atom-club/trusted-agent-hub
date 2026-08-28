@@ -7,8 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trustedagenthub.com';
+import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
 const POLL_INTERVAL_MS = 10_000;
 const MAX_SCAN_POLLS = 18; // 18 × 10s = 3 分钟超时

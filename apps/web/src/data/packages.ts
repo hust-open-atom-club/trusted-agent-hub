@@ -2,7 +2,7 @@ import type { Package, PackageListResponse } from '@/types';
 
 export type { Owner, Package, PackageListResponse } from '@/types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE } from '@/lib/runtime-config';
 
 /* ── 查询参数 ── */
 

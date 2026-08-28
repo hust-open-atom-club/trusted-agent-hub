@@ -2,17 +2,21 @@
 用法: python scripts/reseed_test_data.py
 """
 import json
-import os
 import uuid
 import sys
+from pathlib import Path
 from typing import Set
 from datetime import datetime, timezone, timedelta
 
-from dotenv import load_dotenv
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "apps" / "api"))
+sys.path.insert(0, str(REPO))
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(REPO, "apps", "api", ".env"))
-DB_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/trusted_agent_hub")
+from src.settings import get_settings  # noqa: E402
+
+DB_URL = get_settings().database_url
+if not DB_URL:
+    raise SystemExit("Database configuration is required; configure the root .env file")
 
 # ============================================================
 # 固定参数

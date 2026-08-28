@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import { ClientProviders } from './client-providers';
 import Navbar from '@/components/Navbar';
+import { SITE_URL } from '@/lib/runtime-config';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,8 +10,8 @@ export const metadata: Metadata = {
   description: 'Discover and install trusted AI agent capability packages',
   alternates: {
     languages: {
-      en: 'https://PLACEHOLDER_DOMAIN/en',
-      zh: 'https://PLACEHOLDER_DOMAIN/zh',
+      en: `${SITE_URL}/en`,
+      zh: `${SITE_URL}/zh`,
     },
   },
 };

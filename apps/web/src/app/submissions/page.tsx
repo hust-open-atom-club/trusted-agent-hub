@@ -7,8 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const SUPPORT_EMAIL = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@trustedagenthub.com';
+import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
 interface VersionItem {
   version_id: string;

@@ -25,10 +25,12 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -e ".[
 # 启用后：构建时预下载模型 (~241MB) 到镜像内缓存，镜像约增大 300MB，语义检测完全离线可用
 # 未启用：镜像更小，SR-017 语义检测自动降级为纯规则模式（默认）
 ARG ENABLE_SEMANTIC_MODEL=false
-RUN if [ "$ENABLE_SEMANTIC_MODEL" = "true" ]; then \
+ARG FASTEMBED_CACHE_PATH=/fastembed-cache
+ENV FASTEMBED_CACHE_PATH=$FASTEMBED_CACHE_PATH
+RUN mkdir -p "$FASTEMBED_CACHE_PATH" && if [ "$ENABLE_SEMANTIC_MODEL" = "true" ]; then \
         apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/* && \
         pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ fastembed && \
-        HF_ENDPOINT=https://hf-mirror.com python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')" && \
+        HF_ENDPOINT=https://hf-mirror.com python -c "import os; from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', cache_dir=os.environ['FASTEMBED_CACHE_PATH'])" && \
         echo "[semantic-model] enabled: fastembed installed + MiniLM-L12 model cached" ; \
     else \
         echo "[semantic-model] disabled: SR-017 semantic check falls back to rule-only mode" ; \
@@ -47,5 +49,5 @@ ENV PYTHONPATH=/packages:/
 # 暴露端口
 EXPOSE 8000
 
-# 启动：迁移失败时阻断；评分回填失败仅告警，避免影响 API 可用性
-CMD ["sh", "-c", "alembic upgrade head && (python -m src.scripts.backfill_trust_scores || echo '[startup] backfill failed, rerun manually') && exec uvicorn src.main:app --host 0.0.0.0 --port 8000"]
+# Migrate, optionally create the initial administrator, then start the API.
+CMD ["sh", "-c", "alembic upgrade head && python -m src.scripts.bootstrap_admin && (python -m src.scripts.backfill_trust_scores || echo '[startup] backfill failed, rerun manually') && exec uvicorn src.main:app --host \"${API_HOST:-0.0.0.0}\" --port \"${API_PORT:-8000}\""]

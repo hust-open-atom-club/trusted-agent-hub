@@ -7,7 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
 import type { FileContext } from '@/types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE } from '@/lib/runtime-config';
 
 export default function FileViewerPage() {
   const router = useRouter();

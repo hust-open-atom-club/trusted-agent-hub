@@ -17,7 +17,7 @@ npm install -g trusted-agent-hub@latest
 Then configure this Hub once:
 
 ```bash
-tah use http://140.143.119.142:8000 --allow-http
+tah use {{TAH_API_URL}}{{TAH_ALLOW_HTTP_FLAG}}
 ```
 
 If global npm install is unavailable, use `npx trusted-agent-hub@latest ...` for the same commands.
@@ -36,10 +36,10 @@ This stores the Hub API address locally. After this step, package installation c
 
    If `tah` is not installed or not available on PATH, install it with `npm install -g trusted-agent-hub@latest`, or use `npx trusted-agent-hub@latest ...` for the same commands.
 
-4. Preview the install manifest before installing. Use the same API base configured for the CLI. If the current deployment still uses this temporary IP, use `http://140.143.119.142:8000`.
+4. Preview the install manifest before installing. Use the same API base configured for the CLI. This deployment uses `{{TAH_API_URL}}`.
 
    ```bash
-   API_BASE="${TRUSTED_AGENT_HUB_API_URL:-http://140.143.119.142:8000}"
+   API_BASE="${TRUSTED_AGENT_HUB_API_URL:-{{TAH_API_URL}}}"
    ENCODED_PACKAGE=$(node -e "console.log(encodeURIComponent(process.argv[1]))" "<package>")
    curl "$API_BASE/api/v0/packages/$ENCODED_PACKAGE/install-manifest?client=<client>"
    ```
@@ -107,7 +107,7 @@ tah install @user_741dc82b/dev-expert --client claude-code
 The user can ask:
 
 ```text
-Please follow http://140.143.119.142:3000/install/tah.md and install @user_741dc82b/dev-expert for my current AI client. If `tah` is not available, install the TrustedAgentHub CLI globally first. Configure this Hub, show the risk grade, permissions, and target path before installing, and install only through the CLI.
+Please follow {{TAH_WEB_URL}}/install/tah.md and install @user_741dc82b/dev-expert for my current AI client. If `tah` is not available, install the TrustedAgentHub CLI globally first. Configure this Hub, show the risk grade, permissions, and target path before installing, and install only through the CLI.
 ```
 
 If this guide is hosted on a different TrustedAgentHub domain, use that domain's `/install/tah.md` URL.

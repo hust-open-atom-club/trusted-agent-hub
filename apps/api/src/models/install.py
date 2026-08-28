@@ -1,6 +1,5 @@
 """Strict Install Manifest v1.0 Consumer API models."""
 
-import os
 import re
 from typing import Annotated, Literal
 
@@ -12,6 +11,7 @@ from .packages import (
     Permissions,
     RiskSummary,
 )
+from src.settings import get_settings
 
 
 SEMANTIC_VERSION_PATTERN = (
@@ -28,7 +28,7 @@ _LOCALHOST_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
 
 def _allow_insecure_http() -> bool:
-    return os.getenv("TAH_ALLOW_INSECURE_HTTP", "").strip().lower() == "true"
+    return get_settings().allow_insecure_http
 
 
 def _require_https(url: HttpUrl) -> HttpUrl:

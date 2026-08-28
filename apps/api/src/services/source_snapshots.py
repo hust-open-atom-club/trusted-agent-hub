@@ -14,6 +14,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from scanners.risk_scanner.redaction import redact_text
+from src.settings import get_settings
 
 
 _SNAPSHOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -31,13 +32,11 @@ class SourceSnapshotStore:
     """
 
     def __init__(self, root: str | Path | None = None, ttl_seconds: int | None = None) -> None:
-        configured_root = os.environ.get("SOURCE_SNAPSHOT_DIR", "").strip()
+        settings = get_settings()
+        configured_root = settings.source_snapshot_dir
         self.root = Path(root or configured_root or _DEFAULT_ROOT)
         if ttl_seconds is None:
-            try:
-                ttl_seconds = int(os.environ.get("SOURCE_SNAPSHOT_TTL_SECONDS", _DEFAULT_TTL_SECONDS))
-            except ValueError:
-                ttl_seconds = _DEFAULT_TTL_SECONDS
+            ttl_seconds = settings.source_snapshot_ttl_seconds
         self.ttl_seconds = max(int(ttl_seconds), 1)
         self.root.mkdir(parents=True, exist_ok=True)
         try:

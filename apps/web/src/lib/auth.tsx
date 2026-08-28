@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { setOnUnauthorized } from './api-fetch';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE } from '@/lib/runtime-config';
 
 interface AuthUser {
   id: string;

@@ -1,6 +1,5 @@
 """Safe Install Manifest v1.0 construction service."""
 
-import os
 import posixpath
 import re
 
@@ -26,6 +25,7 @@ from src.models.install import (
 )
 from src.models.packages import Dependencies, Grade, RiskSummary
 from src.repositories.base import PackageRepository
+from src.settings import get_settings
 
 from .packages import PackageService
 
@@ -323,7 +323,7 @@ class InstallManifestService:
 
     @staticmethod
     def _allow_insecure_http() -> bool:
-        return os.getenv("TAH_ALLOW_INSECURE_HTTP", "").strip().lower() == "true"
+        return get_settings().allow_insecure_http
 
     @staticmethod
     def _canonical_https_url(value: str | None) -> str | None:

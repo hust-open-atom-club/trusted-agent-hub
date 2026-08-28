@@ -23,6 +23,7 @@ from .routers.stats import router as stats_router
 from .routers.admin import router as admin_router
 from .routers.trust import router as trust_router
 from .routers.trust_scores import router as trust_scores_router
+from .settings import get_settings
 
 
 @asynccontextmanager
@@ -38,6 +39,7 @@ async def lifespan(_application: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the TrustedAgentHub API application."""
+    settings = get_settings()
     application = FastAPI(
         title="Trusted Agent Hub API",
         version="0.1.0",
@@ -48,7 +50,7 @@ def create_app() -> FastAPI:
 
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=list(settings.cors_allowed_origins),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

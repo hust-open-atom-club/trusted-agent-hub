@@ -1,10 +1,43 @@
 """Shared API contract-test fixtures backed by test-owned JSON data."""
 
 from collections.abc import Iterator
+import os
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 from fastapi.testclient import TestClient
+
+
+def _configured_test_database_url() -> str:
+    """Read only the dedicated test URL, never the normal DATABASE_URL."""
+    explicit_value = os.environ.get("TEST_DATABASE_URL", "").strip()
+    if explicit_value:
+        return explicit_value
+
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".env.example").is_file():
+            value = dotenv_values(parent / ".env").get("TEST_DATABASE_URL")
+            return str(value or "").strip()
+    return ""
+
+
+# Tests must never inherit development or production database configuration.
+# PostgreSQL integration tests opt in only through TEST_DATABASE_URL.
+_TEST_DATABASE_URL = _configured_test_database_url()
+os.environ["TRUSTED_AGENT_HUB_SKIP_DOTENV"] = "true"
+for _database_key in (
+    "DATABASE_URL",
+    "DATABASE_DRIVER",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_DB",
+):
+    os.environ[_database_key] = ""
+if _TEST_DATABASE_URL:
+    os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
 
 from src.dependencies import get_package_repository
 from src.main import create_app
