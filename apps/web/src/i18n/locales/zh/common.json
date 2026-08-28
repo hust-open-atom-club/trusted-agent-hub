@@ -339,7 +339,7 @@
       "copy_command": "复制命令",
       "copy_ai_prompt": "复制给 AI",
       "ai_prompt_comment": "发给 AI 的安装提示词",
-      "ai_prompt": "请根据 {{guideUrl}}，安装 {{name}} 到 {{client}}。安装前请展示包名、版本、类型、风险等级、权限摘要和目标路径；如果需要确认，请先询问我。",
+      "ai_prompt": "请根据 {{guideUrl}} 安装 {{name}} 到 {{client}}。如果本机没有 tah 命令，请先执行 npm install -g trusted-agent-hub@latest 安装 TrustedAgentHub CLI；然后执行 tah use http://140.143.119.142:8000 --allow-http 配置 Hub。安装前请展示包名、版本、类型、风险等级、权限摘要和目标路径；如果需要确认，请先询问我。确认后只使用 tah install {{name}} --client {{client}} 安装，不要手动下载、解压或复制文件。",
       "copied": "已复制",
       "copy_failed": "复制失败"
     },
