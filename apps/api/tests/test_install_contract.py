@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 from src.models.install import ManifestInstallationStep
 from src.models.packages import Dependencies, InstallationStep
 from src.repositories.mock import JsonPackageRepository
+from src.settings import clear_settings_cache
 
 
 MANIFEST_PATH = "/api/v0/packages/code-review-skill/install-manifest"
@@ -494,9 +495,12 @@ def test_install_manifest_accepts_canonically_equal_download_urls(
 
 def test_install_manifest_absolutizes_relative_artifact_urls(
     client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
     repository: JsonPackageRepository,
 ) -> None:
     relative_url = "/api/v0/artifacts/code-review-skill-1.0.0-a1b2c3d4-v2.zip"
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://hub.example.test")
+    clear_settings_cache()
     record = repository.get_version("code-review-skill", "1.0.0")
     assert record is not None
     assert record.source is not None
@@ -516,14 +520,59 @@ def test_install_manifest_absolutizes_relative_artifact_urls(
     repository._versions_by_key[("code-review-skill", "1.0.0")] = replacement
     repository._versions_by_id[record.id] = replacement
 
-    response = client.get(
-        "https://hub.example.test/api/v0/packages/code-review-skill/install-manifest",
-        params={"client": "claude-code"},
-    )
+    try:
+        response = client.get(
+            MANIFEST_PATH,
+            params={"client": "claude-code"},
+        )
+    finally:
+        clear_settings_cache()
 
     assert response.status_code == 200
     manifest = response.json()
     absolute_url = f"https://hub.example.test{relative_url}"
+    assert manifest["source"]["download_url"] == absolute_url
+    assert manifest["installation"]["steps"][0]["url"] == absolute_url
+
+
+def test_install_manifest_uses_configured_public_api_base_url(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    repository: JsonPackageRepository,
+) -> None:
+    relative_url = "/api/v0/artifacts/code-review-skill-1.0.0-a1b2c3d4-v2.zip"
+    monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://trusted.example/")
+    clear_settings_cache()
+    record = repository.get_version("code-review-skill", "1.0.0")
+    assert record is not None
+    assert record.source is not None
+    assert record.installation is not None
+    source = record.source.model_copy(update={"download_url": relative_url})
+    installation = record.installation.model_copy(
+        update={
+            "steps": [
+                InstallationStep.model_validate(step)
+                for step in _identity_steps(download_url=relative_url)
+            ]
+        }
+    )
+    replacement = record.model_copy(
+        update={"source": source, "installation": installation}
+    )
+    repository._versions_by_key[("code-review-skill", "1.0.0")] = replacement
+    repository._versions_by_id[record.id] = replacement
+
+    try:
+        response = client.get(
+            "https://attacker.example/api/v0/packages/code-review-skill/install-manifest",
+            params={"client": "claude-code"},
+        )
+    finally:
+        clear_settings_cache()
+
+    assert response.status_code == 200
+    manifest = response.json()
+    absolute_url = f"https://trusted.example{relative_url}"
     assert manifest["source"]["download_url"] == absolute_url
     assert manifest["installation"]["steps"][0]["url"] == absolute_url
 

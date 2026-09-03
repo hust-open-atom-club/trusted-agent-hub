@@ -61,7 +61,10 @@ class InstallManifestService:
         public_base_url: str | None = None,
     ) -> None:
         self.packages = PackageService(repository)
-        self.public_base_url = public_base_url.rstrip("/") if public_base_url else None
+        configured_base_url = public_base_url or get_settings().public_api_base_url
+        self.public_base_url = (
+            configured_base_url.rstrip("/") if configured_base_url else None
+        )
 
     def get_manifest(
         self,

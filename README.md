@@ -141,6 +141,8 @@ python -m src.scripts.seed_producer
 - `API_HOST`、`ARTIFACTS_ROOT`、`SOURCE_SNAPSHOT_DIR` 和 `FASTEMBED_CACHE_PATH`
   保持为空时，本机使用开发默认值，Compose 注入容器值。`API_RELOAD` 只供
   `python apps/api/run.py` 使用；Docker 镜像始终以不启用 reload 的方式启动。
+- `PUBLIC_API_BASE_URL` 是后端生成 install-manifest 制品下载地址时使用的固定
+  公开 API 基址，必须填写为用户和 CLI 可访问的真实地址；公网部署应使用 HTTPS。
 - Docker 首次启动会创建 PostgreSQL 数据库、执行全部 Alembic 迁移，并按
   `INITIAL_ADMIN_*` 幂等创建首个管理员；邮箱与密码必须成对配置，密码至少 12
   位。管理员创建后建议清空 `INITIAL_ADMIN_PASSWORD`。

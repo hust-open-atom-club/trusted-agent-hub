@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 import os
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -43,6 +44,7 @@ ENV_FILE = REPOSITORY_ROOT / ".env"
 DEFAULT_ARTIFACTS_ROOT = (
     Path(__file__).resolve().parents[1] / "data" / "artifacts"
 )
+_LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 # Load once at import time. Docker/CI-provided values are never overwritten.
 if os.getenv("TRUSTED_AGENT_HUB_SKIP_DOTENV", "").strip().lower() != "true":
@@ -116,6 +118,26 @@ def _origins() -> tuple[str, ...]:
     return origins or ("*",)
 
 
+def _base_url(name: str, *, allow_insecure_http: bool = False) -> str | None:
+    value = _optional(name)
+    if value is None:
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{name} must be an absolute HTTP(S) URL")
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname not in _LOCAL_HTTP_HOSTS
+        and not allow_insecure_http
+    ):
+        raise ValueError(
+            f"{name} must use HTTPS unless TAH_ALLOW_INSECURE_HTTP=true"
+        )
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must not include a path, query, or fragment")
+    return value.rstrip("/")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Immutable application configuration."""
@@ -126,6 +148,7 @@ class Settings:
     jwt_secret: str | None = None
     github_token: str | None = None
     cors_allowed_origins: tuple[str, ...] = ("*",)
+    public_api_base_url: str | None = None
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     api_reload: bool = True
@@ -144,15 +167,20 @@ class Settings:
 
     @classmethod
     def from_environment(cls) -> "Settings":
+        allow_insecure_http = _literal_true("TAH_ALLOW_INSECURE_HTTP")
         return cls(
             database_url=_database_url_from_environment(),
             allow_insecure_user_header=_literal_true(
                 "CONSUMER_ALLOW_INSECURE_USER_HEADER"
             ),
-            allow_insecure_http=_literal_true("TAH_ALLOW_INSECURE_HTTP"),
+            allow_insecure_http=allow_insecure_http,
             jwt_secret=_optional("JWT_SECRET"),
             github_token=_optional("GITHUB_TOKEN"),
             cors_allowed_origins=_origins(),
+            public_api_base_url=_base_url(
+                "PUBLIC_API_BASE_URL",
+                allow_insecure_http=allow_insecure_http,
+            ),
             api_host=_optional("API_HOST") or "127.0.0.1",
             api_port=_integer("API_PORT", 8000),
             api_reload=_boolean("API_RELOAD", True),
