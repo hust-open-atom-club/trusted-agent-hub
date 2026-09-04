@@ -8,6 +8,16 @@ if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
     throw "Missing $envFile. Copy .env.example to .env and fill required values."
 }
 
+$apiDockerfilePath = Join-Path $repoRoot "apps/api/Dockerfile"
+$apiDockerfileTemplate = Join-Path $repoRoot "apps/api/Dockerfile.example"
+if (-not (Test-Path -LiteralPath $apiDockerfilePath -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $apiDockerfileTemplate -PathType Leaf)) {
+        throw "Missing $apiDockerfileTemplate."
+    }
+    Copy-Item -LiteralPath $apiDockerfileTemplate -Destination $apiDockerfilePath
+    Write-Host "Created local API Dockerfile from Dockerfile.example." -ForegroundColor Yellow
+}
+
 Push-Location $repoRoot
 try {
     Write-Host "Validating Docker Compose configuration..." -ForegroundColor Cyan

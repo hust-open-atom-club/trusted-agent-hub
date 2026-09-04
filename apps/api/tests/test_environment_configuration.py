@@ -34,6 +34,15 @@ _DATABASE_KEYS = (
 )
 
 
+def _materialize_api_dockerfile(tmp_path: Path) -> Path:
+    """Create the local runtime Dockerfile from the tracked public template."""
+
+    template = REPOSITORY_ROOT / "apps" / "api" / "Dockerfile.example"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    return dockerfile
+
+
 def _clear_database_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in _DATABASE_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -210,7 +219,9 @@ def test_environment_template_keeps_context_specific_values_blank() -> None:
         assert values[sensitive_key] == ""
 
 
-def test_all_user_facing_environment_variables_are_in_the_root_template() -> None:
+def test_all_user_facing_environment_variables_are_in_the_root_template(
+    tmp_path: Path,
+) -> None:
     template_keys = {
         line.split("=", 1)[0]
         for line in (REPOSITORY_ROOT / ".env.example").read_text(
@@ -220,7 +231,7 @@ def test_all_user_facing_environment_variables_are_in_the_root_template() -> Non
     }
     configuration_sources = (
         REPOSITORY_ROOT / "docker-compose.yml",
-        REPOSITORY_ROOT / "apps" / "api" / "Dockerfile",
+        _materialize_api_dockerfile(tmp_path),
         REPOSITORY_ROOT / "apps" / "api" / "src" / "settings.py",
         REPOSITORY_ROOT / "apps" / "api" / "tests" / "conftest.py",
         REPOSITORY_ROOT / "apps" / "cli" / "src" / "api-client.ts",
@@ -257,9 +268,11 @@ def test_all_user_facing_environment_variables_are_in_the_root_template() -> Non
     assert template_keys - referenced_keys == set()
 
 
-def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned() -> None:
+def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned(
+    tmp_path: Path,
+) -> None:
     compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    api_dockerfile = (REPOSITORY_ROOT / "apps" / "api" / "Dockerfile").read_text(
+    api_dockerfile = _materialize_api_dockerfile(tmp_path).read_text(
         encoding="utf-8"
     )
     web_dockerfile = (REPOSITORY_ROOT / "apps" / "web" / "Dockerfile").read_text(
@@ -267,6 +280,7 @@ def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned() -
     )
 
     assert "DATABASE_HOST: ${DATABASE_HOST:-db}" in compose
+    assert "dockerfile: ./apps/api/Dockerfile" in compose
     assert "ARTIFACTS_ROOT: ${ARTIFACTS_ROOT:-/artifacts}" in compose
     assert "SOURCE_SNAPSHOT_DIR: ${SOURCE_SNAPSHOT_DIR:-/source-snapshots}" in compose
     assert "FASTEMBED_CACHE_HOST_PATH" not in compose

@@ -209,6 +209,24 @@ python -m src.scripts.backfill_trust_scores --batch-size 100 --max-attempts 3
 
 ### 启动服务
 
+不使用 Docker 部署时可以跳过下面的 Docker Compose 步骤。使用 Docker 时，先从
+仓库中的模板生成本地 API Dockerfile：
+
+`deploy/deploy.sh`（Linux/macOS）和 `deploy/build.ps1`（Windows）在发现本地
+Dockerfile 不存在时会自动执行这一步；已有的本地 Dockerfile 不会被覆盖。
+
+Linux/macOS：
+
+```bash
+cp apps/api/Dockerfile.example apps/api/Dockerfile
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item apps/api/Dockerfile.example apps/api/Dockerfile
+```
+
 ```bash
 # 启动后端 (端口 8000)
 cd apps/api
@@ -218,7 +236,7 @@ python run.py
 cd apps/web
 npm install && npm run dev
 
-# Docker Compose 一键构建、迁移并启动
+# Docker Compose 一键构建、迁移并启动（仅 Docker 部署需要）
 docker compose --env-file .env up -d --build
 ```
 
