@@ -27,6 +27,56 @@
         "title": "AcquisitionFacts",
         "type": "object"
       },
+      "AdvisorySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "deduction_total": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Deduction Total",
+            "type": "integer"
+          },
+          "grade_downgrade_steps": {
+            "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Grade Downgrade Steps",
+            "type": "integer"
+          },
+          "high": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "High",
+            "type": "integer"
+          },
+          "info": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Info",
+            "type": "integer"
+          },
+          "manual_review_required": {
+            "default": false,
+            "title": "Manual Review Required",
+            "type": "boolean"
+          },
+          "total": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "warning": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Warning",
+            "type": "integer"
+          }
+        },
+        "title": "AdvisorySummary",
+        "type": "object"
+      },
       "Author": {
         "additionalProperties": false,
         "properties": {
@@ -1120,10 +1170,24 @@
       "LLMReview": {
         "additionalProperties": false,
         "properties": {
+          "arbitrated": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Arbitrated",
+            "type": "integer"
+          },
           "attempts": {
             "default": 0,
             "title": "Attempts",
             "type": "integer"
+          },
+          "decisions": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Decisions",
+            "type": "object"
           },
           "error": {
             "anyOf": [
@@ -1185,6 +1249,13 @@
                 "type": "null"
               }
             ]
+          },
+          "review_rounds": {
+            "default": 0,
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Review Rounds",
+            "type": "integer"
           },
           "status": {
             "anyOf": [
@@ -2429,9 +2500,117 @@
         "title": "ProvenanceVerification",
         "type": "object"
       },
+      "ReviewAdvisory": {
+        "additionalProperties": false,
+        "properties": {
+          "affects_grade": {
+            "default": false,
+            "title": "Affects Grade",
+            "type": "boolean"
+          },
+          "category": {
+            "enum": [
+              "metadata_quality",
+              "provenance",
+              "permission_consistency"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "deduction": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Deduction",
+            "type": "integer"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "grade_downgrade_steps": {
+            "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Grade Downgrade Steps",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "high",
+              "warning",
+              "info"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "requires_manual_review": {
+            "default": false,
+            "title": "Requires Manual Review",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "category",
+          "level",
+          "title",
+          "description"
+        ],
+        "title": "ReviewAdvisory",
+        "type": "object"
+      },
       "RiskSummary": {
         "additionalProperties": false,
         "properties": {
+          "advisory_grade_downgrade_applied": {
+            "default": false,
+            "title": "Advisory Grade Downgrade Applied",
+            "type": "boolean"
+          },
+          "advisory_grade_downgrade_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Advisory Grade Downgrade Reasons",
+            "type": "array"
+          },
           "auto_grade": {
             "anyOf": [
               {
@@ -2480,10 +2659,25 @@
               }
             ]
           },
+          "manual_security_review_required": {
+            "default": false,
+            "title": "Manual Security Review Required",
+            "type": "boolean"
+          },
           "requires_confirmation": {
             "default": false,
             "title": "Requires Confirmation",
             "type": "boolean"
+          },
+          "review_priority": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "manual",
+              "high"
+            ],
+            "title": "Review Priority",
+            "type": "string"
           },
           "top_risks": {
             "items": {
@@ -2588,6 +2782,17 @@
       "ScanFinding": {
         "additionalProperties": false,
         "properties": {
+          "candidate_severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Severity"
+          },
           "category": {
             "title": "Category",
             "type": "string"
@@ -2633,6 +2838,49 @@
             "title": "Id",
             "type": "string"
           },
+          "llm_confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Confidence"
+          },
+          "llm_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Explanation"
+          },
+          "llm_impact": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "critical",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Impact"
+          },
           "llm_label": {
             "anyOf": [
               {
@@ -2650,6 +2898,38 @@
               }
             ],
             "title": "Llm Label"
+          },
+          "llm_review_rounds": {
+            "anyOf": [
+              {
+                "maximum": 3.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Review Rounds"
+          },
+          "llm_review_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "confirmed_harmful",
+                  "confirmed_risky",
+                  "likely_benign",
+                  "uncertain",
+                  "unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Review State"
           },
           "location": {
             "anyOf": [
@@ -2694,6 +2974,28 @@
               }
             ],
             "title": "Requires Confirmation"
+          },
+          "requires_llm_validation": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Llm Validation"
+          },
+          "requires_manual_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Manual Review"
           },
           "rule_id": {
             "anyOf": [
@@ -2973,6 +3275,16 @@
         "additionalProperties": false,
         "description": "Consumer-facing projection of the scanner report.\n\nScanner-internal source contents and implementation details are not part\nof this model; completeness, limits, rule execution and structural\nanalysis are explicitly declared so extra=forbid catches contract drift.",
         "properties": {
+          "advisory_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdvisorySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "dependency_check": {
             "anyOf": [
               {
@@ -3071,6 +3383,13 @@
                 "type": "null"
               }
             ]
+          },
+          "review_advisories": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewAdvisory"
+            },
+            "title": "Review Advisories",
+            "type": "array"
           },
           "rule_execution": {
             "anyOf": [

@@ -29,7 +29,7 @@ def _findings() -> list[dict[str, object]]:
 def test_llm_reviewer_load_failure_marks_reviewable_findings_unavailable(
     monkeypatch,
 ) -> None:
-    """A failed dynamic import must preserve the scorer's fail-closed signal."""
+    """A failed dynamic import must route reviewable findings to manual review."""
     findings = _findings()
     monkeypatch.setattr(
         trust.importlib.util,
@@ -40,15 +40,17 @@ def test_llm_reviewer_load_failure_marks_reviewable_findings_unavailable(
     result = trust._run_llm_review_with_fallback(findings, SimpleNamespace())
 
     assert result["status"] == "call_failed"
-    assert result["fallback"] == "fail_closed_after_outer_exception"
+    assert result["fallback"] == "manual_review_required"
     assert result["labels"] == {
         "critical-dangerous": "llm:unavailable",
         "high-non-dangerous": "llm:unavailable",
     }
     assert result["labels_summary"]["unavailable"] == 2
+    assert result["findings_pending"] == 2
     assert findings[0]["llm_label"] == "llm:unavailable"
     assert findings[1]["llm_label"] == "llm:unavailable"
     assert "llm_label" not in findings[2]
+    assert findings[0]["requires_manual_review"] is True
     assert LLMReview.model_validate(result).status == "call_failed"
 
 

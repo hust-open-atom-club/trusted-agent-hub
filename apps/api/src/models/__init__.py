@@ -42,6 +42,7 @@ from .feedback import (
 from .packages import (
     Author,
     AcquisitionFacts,
+    AdvisorySummary,
     CapabilityGraphSummary,
     CredentialsPermissions,
     Dependencies,
@@ -67,6 +68,7 @@ from .packages import (
     PermissionEvidence,
     Permissions,
     RiskSummary,
+    ReviewAdvisory,
     ScanFinding,
     ScanLimits,
     ScanLimitsConfigured,
@@ -96,6 +98,7 @@ from .packages import (
 __all__ = [
     "Author",
     "AcquisitionFacts",
+    "AdvisorySummary",
     "CapabilityGraphSummary",
     "CopyInstallationStep",
     "CredentialsPermissions",
@@ -148,6 +151,7 @@ __all__ = [
     "Permissions",
     "PipInstallationStep",
     "RiskSummary",
+    "ReviewAdvisory",
     "ScanFinding",
     "ScanLimits",
     "ScanLimitsConfigured",

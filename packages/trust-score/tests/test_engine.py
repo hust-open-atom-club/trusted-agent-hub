@@ -130,6 +130,149 @@ def test_b3_dev_toolkit_plugin_all_green_pending() -> None:
     _assert_valid_output(result, fx["expected_level"])
 
 
+def test_provenance_advisories_apply_exact_points_without_grade_change() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    baseline = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["review_advisories"] = [
+        {
+            "code": code,
+            "category": "provenance",
+            "level": "warning",
+            "title": code,
+            "description": code,
+            "deduction": 2,
+            "affects_grade": False,
+            "grade_downgrade_steps": 0,
+            "requires_manual_review": False,
+        }
+        for code in ("missing_signature", "missing_attestation", "missing_sbom")
+    ]
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == baseline["risk_summary"]["grade"]
+    assert result["score_breakdown"]["advisory_deduction"] == 6
+    assert result["score"] == result["score_breakdown"]["base_score"] - 6
+
+
+def test_documented_permission_mismatch_is_five_points_without_grade_change() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["review_advisories"] = [{
+        "code": "documented_permission_not_declared",
+        "category": "permission_consistency",
+        "level": "warning",
+        "title": "Documentation mismatch",
+        "description": "Documentation mismatch",
+        "deduction": 5,
+        "affects_grade": False,
+        "grade_downgrade_steps": 0,
+        "requires_manual_review": False,
+    }]
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == "B"
+    assert result["score_breakdown"]["advisory_deduction"] == 5
+
+
+def test_undeclared_executable_capability_downgrades_exactly_one_grade() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["review_advisories"] = [{
+        "code": "undeclared_executable_capability",
+        "category": "permission_consistency",
+        "level": "high",
+        "title": "Undeclared executable capability",
+        "description": "Undeclared executable capability",
+        "deduction": 0,
+        "affects_grade": True,
+        "grade_downgrade_steps": 1,
+        "requires_manual_review": True,
+    }]
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == "C"
+    assert result["risk_summary"]["review_priority"] == "high"
+    assert result["risk_summary"]["manual_security_review_required"] is True
+    assert result["risk_summary"]["requires_confirmation"] is True
+
+
+def test_undeclared_capability_downgrades_trusted_package_only_to_b() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["review_advisories"] = [{
+        "code": "undeclared_executable_capability",
+        "category": "permission_consistency",
+        "level": "high",
+        "title": "Undeclared executable capability",
+        "description": "Undeclared executable capability",
+        "deduction": 0,
+        "affects_grade": True,
+        "grade_downgrade_steps": 1,
+        "requires_manual_review": True,
+    }]
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == "B"
+    assert result["risk_summary"]["level"] == "low_risk"
+    assert result["risk_summary"]["manual_security_review_required"] is True
+
+
+def test_undeclared_capability_alone_cannot_escalate_d_to_e() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    scan = _scan_with_critical_prompt_injection(None)
+    scan["review_advisories"] = [{
+        "code": "undeclared_executable_capability",
+        "category": "permission_consistency",
+        "level": "high",
+        "title": "Undeclared executable capability",
+        "description": "Undeclared executable capability",
+        "deduction": 0,
+        "affects_grade": True,
+        "grade_downgrade_steps": 1,
+        "requires_manual_review": True,
+    }]
+
+    result = rate(
+        package_metadata=_excessive_permission_metadata(),
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == "D"
+    assert result["risk_summary"]["level"] == "high_risk"
+
+
 def test_b4_docker_deploy_command_excessive_permissions() -> None:
     """B4: Excessive permissions → medium_risk."""
     fx = _load_fixture("b4_docker_deploy_command")
@@ -239,8 +382,7 @@ def test_veto_requires_llm_confirmed_malicious() -> None:
 
 
 def test_veto_when_llm_unavailable_on_dangerous_findings() -> None:
-    """fail-closed:LLM 审查不可用(llm:unavailable)时,dangerous finding
-    无法排除恶意 → 触发 V2 否决,判 E。"""
+    """LLM 不可用时保留高风险，但不能自动判恶意或触发 E。"""
     meta = _excessive_permission_metadata()
     fx = _load_fixture("b1_code_review_skill")
 
@@ -250,13 +392,12 @@ def test_veto_when_llm_unavailable_on_dangerous_findings() -> None:
         author_history=fx["author_history"],
         review_records=fx["review_records"],
     )
-    assert result["risk_summary"]["level"] == "untrusted", \
-        "LLM 不可用时 dangerous finding 应 fail-closed 判 E"
-    assert 0 <= result["score"] <= 24
+    assert result["risk_summary"]["level"] == "high_risk"
+    assert result["risk_summary"]["grade"] == "D"
     veto_msgs = [e["message"] for e in result["explanations"]
                  if "Veto" in e.get("message", "")]
-    assert len(veto_msgs) > 0, "Expected a veto explanation in output"
-    _assert_valid_output(result, "untrusted")
+    assert veto_msgs == []
+    _assert_valid_output(result, "high_risk")
 
 
 def test_no_veto_when_llm_unavailable_on_non_dangerous_findings() -> None:

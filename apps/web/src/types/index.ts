@@ -80,6 +80,15 @@ export interface Finding {
   remediation?: string;
   cwe_id?: string;
   requires_confirmation?: boolean;
+  candidate_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  requires_llm_validation?: boolean;
+  llm_label?: string;
+  llm_review_state?: 'pending' | 'confirmed_harmful' | 'confirmed_risky' | 'likely_benign' | 'uncertain' | 'unavailable';
+  llm_impact?: 'none' | 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+  llm_confidence?: number;
+  llm_explanation?: string;
+  llm_review_rounds?: number;
+  requires_manual_review?: boolean;
   occurrences?: FindingOccurrences;
 }
 
@@ -122,6 +131,10 @@ export interface TrustScore {
     top_risks?: string[];
     install_recommendation?: string;
     requires_confirmation?: boolean;
+    manual_security_review_required?: boolean;
+    review_priority?: 'normal' | 'manual' | 'high';
+    advisory_grade_downgrade_applied?: boolean;
+    advisory_grade_downgrade_reasons?: string[];
   };
   dimensions?: Record<string, TrustScoreDimension>;
   explanations?: TrustScoreExplanation[];
@@ -275,6 +288,8 @@ export interface ScanReport {
   duration_ms?: number | null;
   summary?: Record<string, unknown> | null;
   findings?: Finding[] | null;
+  review_advisories?: ReviewAdvisory[];
+  advisory_summary?: AdvisorySummary | null;
   permission_evidence?: PermissionEvidence[];
   scan_status?: ScanStatus | null;
   scan_limits?: ScanLimits | null;
@@ -342,6 +357,31 @@ export interface PermissionEvidence {
   source: 'code' | 'manifest' | 'frontmatter' | 'docs';
   file?: string | null;
   evidence: string;
+}
+
+export interface ReviewAdvisory {
+  id: string;
+  code: string;
+  category: 'metadata_quality' | 'provenance' | 'permission_consistency';
+  level: 'high' | 'warning' | 'info';
+  title: string;
+  description: string;
+  deduction: number;
+  affects_grade: boolean;
+  grade_downgrade_steps: number;
+  requires_manual_review: boolean;
+  evidence?: string | null;
+  location?: { file?: string; line?: number } | null;
+}
+
+export interface AdvisorySummary {
+  total: number;
+  high: number;
+  warning: number;
+  info: number;
+  deduction_total: number;
+  grade_downgrade_steps: number;
+  manual_review_required: boolean;
 }
 
 export interface ScanStatus {

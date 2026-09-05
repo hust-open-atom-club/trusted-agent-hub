@@ -20,6 +20,22 @@ def test_redaction_removes_secrets_from_report_and_context():
     assert len(contexts["f1"].encode()) <= 4096
 
 
+def test_semantic_candidate_uses_original_severity_for_context():
+    contexts = build_finding_contexts(
+        [{
+            "id": "semantic-1",
+            "severity": "info",
+            "candidate_severity": "high",
+            "requires_llm_validation": True,
+            "location": {"file": "SKILL.md", "line": 2},
+        }],
+        {"SKILL.md": "# Safe example\nDo not run the quoted destructive command\n"},
+    )
+
+    assert "semantic-1" in contexts
+    assert "Do not run" in contexts["semantic-1"]
+
+
 def test_source_snapshot_store_is_independent_and_expiring(tmp_path: Path):
     store = SourceSnapshotStore(tmp_path, ttl_seconds=60)
     files = {"main.py": "print('hello')\npassword=supersecret\n"}

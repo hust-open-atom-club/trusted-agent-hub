@@ -367,8 +367,8 @@ def assess_prompt_safety(
             for f in findings
             if _is_veto_eligible_finding(f)
         )
-        # 已配置 LLM 但重试后调用失败 → 无法排除恶意(fail-closed 信号)。
-        # 未配置时 finding 没有 llm_label，由上层进入人工复核，不触发此信号。
+        # 保留 LLM 不可用信号供报告与审计使用；评分引擎会要求人工复核，
+        # 但不会再仅凭调用失败自动判为恶意或 E 级。
         llm_unavailable = any(
             f.get("llm_label") == "llm:unavailable"
             for f in findings

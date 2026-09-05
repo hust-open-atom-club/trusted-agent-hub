@@ -556,6 +556,13 @@ export default function ReviewDetailPage() {
         </div>
       </div>
 
+      {isPending && (
+        <section className="review-pending-notice" role="status">
+          <strong>{t('review.detail.pending_notice_title')}</strong>
+          <span>{t('review.detail.pending_notice_description')}</span>
+        </section>
+      )}
+
       {version?.manual_grade && version.auto_grade && version.manual_grade !== version.auto_grade && (
         <div style={{
           marginBottom: '1rem', padding: '0.85rem 1.25rem',
@@ -784,6 +791,59 @@ export default function ReviewDetailPage() {
             manualGrade={version.manual_grade}
             manualGradeReason={version.manual_grade_reason}
           />
+        </section>
+      )}
+
+      {scanReport?.review_advisories && scanReport.review_advisories.length > 0 && (
+        <section className="review-detail-section" data-testid="review-advisories">
+          <div className="review-advisory-heading">
+            <div>
+              <h2 className="review-detail-section-title">
+                {t('review.detail.advisories_title', { count: scanReport.review_advisories.length })}
+              </h2>
+              <p>{t('review.detail.advisories_description')}</p>
+            </div>
+            {(scanReport.advisory_summary?.deduction_total ?? 0) > 0 && (
+              <span className="review-advisory-deduction-total">
+                {t('review.detail.advisory_total_deduction', {
+                  score: scanReport.advisory_summary?.deduction_total ?? 0,
+                })}
+              </span>
+            )}
+          </div>
+          <div className="review-advisory-list">
+            {scanReport.review_advisories.map((advisory) => (
+              <article
+                className={`review-advisory-card ${advisory.level}`}
+                key={advisory.id}
+              >
+                <div className="review-advisory-card-header">
+                  <span className={`review-advisory-level ${advisory.level}`}>
+                    {t(`review.detail.advisory_level_${advisory.level}`)}
+                  </span>
+                  <strong>{advisory.title}</strong>
+                </div>
+                <p>{advisory.description}</p>
+                <div className="review-advisory-tags">
+                  <span>
+                    {advisory.deduction > 0
+                      ? t('review.detail.advisory_deduction', { score: advisory.deduction })
+                      : t('review.detail.advisory_no_deduction')}
+                  </span>
+                  {advisory.grade_downgrade_steps > 0 && (
+                    <span>{t('review.detail.advisory_grade_downgrade')}</span>
+                  )}
+                  {advisory.requires_manual_review && (
+                    <span>{t('review.detail.advisory_manual_required')}</span>
+                  )}
+                  {advisory.location?.file && <code>{advisory.location.file}</code>}
+                </div>
+                {advisory.evidence && (
+                  <div className="review-advisory-evidence">{advisory.evidence}</div>
+                )}
+              </article>
+            ))}
+          </div>
         </section>
       )}
 
@@ -1083,6 +1143,32 @@ export default function ReviewDetailPage() {
 
                             {finding.evidence && (
                               <div className="finding-evidence-line">{finding.evidence}</div>
+                            )}
+
+                            {finding.requires_llm_validation && (
+                              <div className={`finding-llm-review ${finding.llm_review_state || 'pending'}`}>
+                                <strong>
+                                  {t('review.finding.llm_review_state', {
+                                    state: t(
+                                      `review.finding.llm_state_${finding.llm_review_state || 'pending'}`,
+                                    ),
+                                  })}
+                                </strong>
+                                {finding.llm_impact && (
+                                  <span>{t('review.finding.llm_impact', { impact: finding.llm_impact })}</span>
+                                )}
+                                {typeof finding.llm_confidence === 'number' && (
+                                  <span>
+                                    {t('review.finding.llm_confidence', {
+                                      confidence: Math.round(finding.llm_confidence * 100),
+                                    })}
+                                  </span>
+                                )}
+                                {finding.llm_review_rounds ? (
+                                  <span>{t('review.finding.llm_rounds', { rounds: finding.llm_review_rounds })}</span>
+                                ) : null}
+                                {finding.llm_explanation && <p>{finding.llm_explanation}</p>}
+                              </div>
                             )}
 
                             {finding.occurrences && finding.occurrences.count > 1 && (

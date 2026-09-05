@@ -63,6 +63,10 @@ from scanners.risk_scanner.inventory import (
     load_text_files,
 )
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.permission_consistency import (
+    reconcile_permission_advisories,
+)
+from scanners.risk_scanner.reporting import refresh_report_summaries
 from packages.schema.frontmatter import parse_frontmatter
 from schema.constants import HASH_SCOPE_SCANNED_SOURCE
 
@@ -147,6 +151,17 @@ def _load_scanner():
 
 
 _LLM_REVIEWED_SEVERITIES = frozenset({"critical", "high"})
+_LLM_SEMANTIC_REVIEWED_SEVERITIES = frozenset({"critical", "high", "medium"})
+
+
+def _is_llm_reviewable_finding(finding: dict[str, Any]) -> bool:
+    severity = str(
+        finding.get("candidate_severity") or finding.get("severity", "")
+    ).lower()
+    return severity in _LLM_REVIEWED_SEVERITIES or (
+        finding.get("requires_llm_validation") is True
+        and severity in _LLM_SEMANTIC_REVIEWED_SEVERITIES
+    )
 
 
 def _load_llm_reviewer() -> Any:
@@ -166,14 +181,9 @@ def _mark_llm_review_unavailable(
     findings: list[dict[str, Any]],
     error: Exception,
 ) -> dict[str, Any]:
-    """Fail closed when the outer LLM-review orchestration cannot complete.
-
-    The reviewer normally labels every critical/high finding. If loading the
-    reviewer, building context, or invoking it raises before labels are
-    returned, attach the same unavailable label directly so scoring retains
-    its per-finding fail-closed signal.
-    """
+    """Keep unresolved semantic candidates non-scoring and require review."""
     labels: dict[str, str] = {}
+    decisions: dict[str, dict[str, object]] = {}
     reviewed_count = 0
     skipped_count = 0
 
@@ -182,25 +192,43 @@ def _mark_llm_review_unavailable(
             skipped_count += 1
             continue
 
-        severity = str(finding.get("severity", "")).lower()
-        if severity not in _LLM_REVIEWED_SEVERITIES:
+        if not _is_llm_reviewable_finding(finding):
             skipped_count += 1
             continue
 
         finding["llm_label"] = "llm:unavailable"
+        finding["llm_review_state"] = "unavailable"
+        finding["llm_impact"] = "unknown"
+        finding["llm_confidence"] = 0.0
+        finding["llm_explanation"] = "LLM semantic review unavailable"
+        finding["llm_review_rounds"] = 0
+        finding["requires_manual_review"] = True
+        if finding.get("requires_llm_validation") is True:
+            finding["severity"] = "info"
         finding_id = str(finding.get("id", ""))
         if finding_id:
             labels[finding_id] = "llm:unavailable"
+            decisions[finding_id] = {
+                "verdict": "unavailable",
+                "impact": "unknown",
+                "intent": "benign",
+                "confidence": 0.0,
+                "explanation": "LLM semantic review unavailable",
+                "rounds": 0,
+            }
         reviewed_count += 1
 
     return {
         "triggered": True,
         "findings_reviewed": reviewed_count,
         "findings_skipped": skipped_count,
-        "findings_pending": 0,
+        "findings_pending": reviewed_count,
         "status": "call_failed",
         "attempts": 0,
+        "review_rounds": 0,
+        "arbitrated": 0,
         "labels": labels,
+        "decisions": decisions,
         "labels_summary": {
             "suspected_malicious": 0,
             "suspected_negligent": 0,
@@ -209,31 +237,82 @@ def _mark_llm_review_unavailable(
             "unavailable": reviewed_count,
         },
         "error": f"{type(error).__name__}: {error}",
-        "fallback": "fail_closed_after_outer_exception",
+        "fallback": "manual_review_required",
     }
+
+
+def _apply_llm_decisions(
+    findings: list[dict[str, Any]],
+    result: dict[str, Any],
+) -> None:
+    """Apply semantic verdicts while preserving deterministic code findings."""
+    labels = result.get("labels", {})
+    decisions = result.get("decisions", {})
+    if not isinstance(labels, dict) or not isinstance(decisions, dict):
+        raise ValueError("LLM review labels and decisions must be objects")
+
+    for finding in findings:
+        finding_id = str(finding.get("id", ""))
+        if finding_id in labels:
+            finding["llm_label"] = labels[finding_id]
+        decision = decisions.get(finding_id)
+        if not isinstance(decision, dict):
+            continue
+
+        verdict = str(decision.get("verdict", "uncertain"))
+        impact = str(decision.get("impact", "unknown"))
+        try:
+            confidence = max(0.0, min(1.0, float(decision.get("confidence", 0))))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        try:
+            rounds = min(3, max(0, int(decision.get("rounds", 0))))
+        except (TypeError, ValueError):
+            rounds = 0
+
+        finding["llm_review_state"] = verdict
+        finding["llm_impact"] = impact if impact in {
+            "none", "low", "medium", "high", "critical", "unknown"
+        } else "unknown"
+        finding["llm_confidence"] = confidence
+        finding["llm_explanation"] = str(decision.get("explanation", ""))[:1000]
+        finding["llm_review_rounds"] = rounds
+
+        if finding.get("requires_llm_validation") is not True:
+            continue
+        finding["requires_manual_review"] = verdict in {"uncertain", "unavailable"}
+        if verdict == "confirmed_harmful":
+            finding["severity"] = "critical" if impact == "critical" else "high"
+        elif verdict == "confirmed_risky":
+            finding["severity"] = "medium"
+        else:
+            # Benign and unresolved semantic candidates do not participate in
+            # automatic security scoring. Unresolved items remain visible and
+            # explicitly require manual review.
+            finding["severity"] = "info"
 
 
 def _run_llm_review_with_fallback(
     findings: list[dict[str, Any]],
     scanner: Any,
+    manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run LLM review and preserve fail-closed labels on outer failures."""
+    """Run multi-judge review and attach structured verdicts to findings."""
     try:
         reviewer = _load_llm_reviewer()
         finding_contexts = build_finding_contexts(findings, scanner._file_contents)
         result = reviewer.run_llm_review(
             findings=findings,
             finding_contexts=finding_contexts,
-            manifest=scanner._package_metadata,
+            manifest=manifest if manifest is not None else scanner._package_metadata,
         )
         labels = result.get("labels", {})
         if not isinstance(labels, dict):
             raise ValueError("LLM review labels must be an object")
-
-        for finding in findings:
-            finding_id = finding.get("id", "")
-            if finding_id in labels:
-                finding["llm_label"] = labels[finding_id]
+        decisions = result.get("decisions", {})
+        if not isinstance(decisions, dict):
+            raise ValueError("LLM review decisions must be an object")
+        _apply_llm_decisions(findings, result)
 
         labels_summary = result.get("labels_summary")
         if not isinstance(labels_summary, dict):
@@ -1148,7 +1227,30 @@ def _run_scan_task(
         _scans[scan_id]["package_name"] = pkg_name
         print(f"[TAH-trust]     扫描完成: {pkg_name} v{pkg_version}, findings={scan_report['summary']['total']}")
 
-        # Step 2.5: LLM 深度审查（当有 findings 时触发）
+        # Extract the complete package metadata before semantic review so the
+        # LLM sees declared permissions and the report can reconcile them with
+        # code/documentation evidence.
+        repo_url = parsed["base_url"] if parsed else source
+        package_metadata = _build_package_metadata(
+            scan_report,
+            scan_dir,
+            repo_url=repo_url,
+            subdirectory=subdir,
+            policy=scanner.policy,
+            inventory=scanner.inventory,
+            file_contents=scanner._file_contents,
+            parent_package_json=parent_package_json,
+        )
+        permission_evidence = package_metadata.get("permission_evidence", [])
+        scan_report["permission_evidence"] = (
+            permission_evidence if isinstance(permission_evidence, list) else []
+        )
+        reconcile_permission_advisories(
+            scan_report,
+            scan_report["permission_evidence"],
+        )
+
+        # Step 2.5: LLM 语义复核。上下文候选通常双审，冲突时第三审仲裁。
         findings = scan_report.get("findings", [])
         if findings:
             _scans[scan_id]["status"] = "llm_review"
@@ -1156,9 +1258,22 @@ def _run_scan_task(
             scan_report["llm_review"] = _run_llm_review_with_fallback(
                 findings,
                 scanner,
+                manifest=package_metadata,
             )
         else:
-            scan_report["llm_review"] = {"triggered": False}
+            scan_report["llm_review"] = {
+                "triggered": False,
+                "findings_reviewed": 0,
+                "findings_skipped": 0,
+                "findings_pending": 0,
+                "status": "not_triggered",
+                "attempts": 0,
+                "review_rounds": 0,
+                "arbitrated": 0,
+                "labels": {},
+                "decisions": {},
+            }
+        refresh_report_summaries(scan_report)
 
         snapshot_metadata = _SOURCE_SNAPSHOT_STORE.save(
             scanner._file_contents,
@@ -1179,17 +1294,6 @@ def _run_scan_task(
         print(f"[TAH-trust]     加载评分引擎...")
         calculate_trust_score = _load_scorer()
 
-        repo_url = parsed["base_url"] if parsed else source
-        package_metadata = _build_package_metadata(
-            scan_report,
-            scan_dir,
-            repo_url=repo_url,
-            subdirectory=subdir,
-            policy=scanner.policy,
-            inventory=scanner.inventory,
-            file_contents=scanner._file_contents,
-            parent_package_json=parent_package_json,
-        )
         acquisition_facts = _build_acquisition_facts(
             parsed,
             repo_url,
@@ -1209,12 +1313,6 @@ def _run_scan_task(
             "acquisition_facts": deepcopy(acquisition_facts),
             "package_claims": deepcopy(package_claims),
         }
-        # Keep permission provenance in the persisted audit report.  The
-        # score uses the same evidence to avoid treating documentation-only
-        # mentions as observed capabilities.
-        scan_report["permission_evidence"] = package_metadata.get(
-            "permission_evidence", []
-        )
         # Provenance claims are untrusted package input.  Redact once more at
         # the report boundary so future additions cannot bypass the scanner's
         # earlier redaction pass.

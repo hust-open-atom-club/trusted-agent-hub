@@ -44,25 +44,41 @@ def run(scanner: Any) -> None:
     rule_id = "SR-010"
     meta = scanner._package_metadata
 
+    manifest_file = (
+        "manifest.json"
+        if (scanner.target_dir / "manifest.json").is_file()
+        else "plugin.json"
+        if (scanner.target_dir / "plugin.json").is_file()
+        else "SKILL.md"
+        if (scanner.target_dir / "SKILL.md").is_file()
+        else "."
+    )
+
     if meta:
         required_fields = ["name", "version", "description", "author", "license"]
         missing = [f for f in required_fields if not meta.get(f)]
+        license_value = str(meta.get("license") or "").upper()
+        if (
+            license_value in {"NONE", "UNLICENSED"}
+            and "license" not in missing
+        ):
+            missing.append("license")
         # 与「缺少有效许可证」规则对齐：包内或父目录存在 LICENSE 文件
         # → license 视为已声明，不再列入缺失字段
         if "license" in missing and _find_license_file(scanner.target_dir) is not None:
             missing.remove("license")
 
         if missing:
-            manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
-            scanner._add_finding(
-                rule_id=rule_id,
-                severity="low",
+            scanner._add_advisory(
+                code="metadata_incomplete",
                 category="metadata_quality",
+                level="warning",
                 title=f"元数据不完整: 缺少 {', '.join(missing)}",
                 description=f"包元数据缺少以下必填字段: {', '.join(missing)}",
                 location={"file": manifest_file},
                 evidence=f"Required fields missing: {missing}",
-                remediation=f"在元数据中补充 {', '.join(missing)} 字段。",
+                deduction=0,
+                affects_grade=False,
             )
 
         file_contents = getattr(scanner, "_file_contents", None)
@@ -80,10 +96,10 @@ def run(scanner: Any) -> None:
             package_name = package_data.get("name") if isinstance(package_data, dict) else None
             skill_name = meta.get("name")
             if package_name and skill_name and package_name != skill_name:
-                scanner._add_finding(
-                    rule_id=rule_id,
-                    severity="info",
+                scanner._add_advisory(
+                    code="distribution_name_mismatch",
                     category="metadata_quality",
+                    level="info",
                     title="技能名与分发包名不一致",
                     description=(
                         f"技能名称为 '{skill_name}'，package.json 分发包名为 '{package_name}'；"
@@ -91,37 +107,36 @@ def run(scanner: Any) -> None:
                     ),
                     location={"file": "package.json"},
                     evidence=f"skill={skill_name}; distribution={package_name}",
-                    remediation="分别保存 skill name 和 distribution package name，不要互相覆盖。",
+                    deduction=0,
+                    affects_grade=False,
                 )
 
         description = meta.get("description", "")
         if description and len(description) < 10:
-            manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
-            scanner._add_finding(
-                rule_id=rule_id,
-                severity="info",
+            scanner._add_advisory(
+                code="metadata_description_short",
                 category="metadata_quality",
+                level="info",
                 title="描述过短",
                 description=f"包描述仅 {len(description)} 个字符，不足 10 个字符。",
                 location={"file": manifest_file},
-                remediation="提供更详细的包描述（建议 10-200 字符）。",
+                deduction=0,
+                affects_grade=False,
             )
-
-        license_val = meta.get("license", "")
-        if not license_val or license_val.upper() in ("NONE", "UNLICENSED"):
-            # 包内或父目录存在标准 LICENSE 文件 → 视为已声明许可证（与提取器对齐）
-            if _find_license_file(scanner.target_dir) is None:
-                manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
-                scanner._add_finding(
-                    rule_id=rule_id,
-                    severity="low",
-                    category="metadata_quality",
-                    title="缺少有效许可证",
-                    description=f"包未声明有效许可证 (当前值: '{license_val or '空'}')。",
-                    location={"file": manifest_file},
-                    evidence=f"License value: '{license_val}'",
-                    remediation="选择并声明合适的开源许可证（如 MIT、Apache-2.0）。",
-                )
+    else:
+        scanner._add_advisory(
+            code="metadata_missing",
+            category="metadata_quality",
+            level="warning",
+            title="缺少包元数据",
+            description=(
+                "没有找到 manifest.json、plugin.json 或有效的 SKILL.md "
+                "frontmatter。该问题需要在审核页提示，但不参与安全扣分或降级。"
+            ),
+            location={"file": manifest_file},
+            deduction=0,
+            affects_grade=False,
+        )
 
     _check_structure(scanner)
 

@@ -54,7 +54,7 @@ class TestSR009SourceIntegrity:
         }
 
     def test_scanner_injects_acquired_commit_and_content_hash(self, tmp_path):
-        """Acquisition facts make an ordinary GitHub package low, not medium."""
+        """Ordinary missing proof items are advisories, not security findings."""
         (tmp_path / "SKILL.md").write_text(
             "---\nname: demo\nversion: 1.0.0\ndescription: demo\n"
             "author: demo\nlicense: MIT\ntype: skill\n---\n# Demo\n",
@@ -63,10 +63,11 @@ class TestSR009SourceIntegrity:
         scanner = RiskScanner(tmp_path, source_commit_hash="b" * 40)
         report = scanner.scan()
 
-        finding = next(f for f in report["findings"] if f["rule_id"] == "SR-009")
-        assert finding["severity"] == "low"
-        assert "SHA256" not in finding["description"]
-        assert "commit hash" not in finding["description"]
+        assert not any(f["rule_id"] == "SR-009" for f in report["findings"])
+        assert {item["code"] for item in report["review_advisories"]} >= {
+            "missing_signature", "missing_attestation", "missing_sbom",
+        }
+        assert report["advisory_summary"]["deduction_total"] == 6
         assert scanner.acquisition_facts["integrity"]["sha256"]
         assert scanner.acquisition_facts["integrity"]["hash_scope"] == "scanned_source"
         assert scanner.acquisition_facts["integrity"]["is_complete"] is True
@@ -105,10 +106,16 @@ class TestSR009SourceIntegrity:
 
         scanner = RiskScanner(tmp_path, source_commit_hash="b" * 40)
         report = scanner.scan()
-        finding = next(f for f in report["findings"] if f["rule_id"] == "SR-009")
-
-        assert finding["severity"] == "low"
-        assert "未经独立验证" in finding["description"]
+        assert not any(f["rule_id"] == "SR-009" for f in report["findings"])
+        proof_warnings = [
+            item for item in report["review_advisories"]
+            if item["category"] == "provenance"
+        ]
+        assert len(proof_warnings) == 3
+        assert all(
+            "未" in item["description"] and "验证" in item["description"]
+            for item in proof_warnings
+        )
         assert scanner._package_metadata["source"]["verified_owner"] is True
         assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
         assert "signature" not in scanner.acquisition_facts["integrity"]
@@ -147,7 +154,8 @@ class TestSR009SourceIntegrity:
         assert f["rule_id"] == "SR-009"
         assert f["severity"] == "medium"
         assert f["category"] == "source_integrity"
-        assert "缺少包元数据" in f["title"]
+        assert "核心来源完整性不足" in f["title"]
+        assert len(s.review_advisories) == 3
 
     def test_incomplete_integrity_medium(self, tmp_path):
         """Metadata without sha256/signature/sbom/commit_hash → medium finding."""
@@ -163,7 +171,7 @@ class TestSR009SourceIntegrity:
         assert "来源完整性不足" in f["title"]
 
     def test_missing_signature_only_is_low(self, tmp_path):
-        """sha256/commit 齐全但无签名/SBOM（生态常态）→ low。"""
+        """sha256/commit 齐全但缺证明 → 分项 advisory，不生成 finding。"""
         meta = _full_meta()
         del meta["integrity"]["signature"]
         del meta["integrity"]["sbom_url"]
@@ -174,8 +182,11 @@ class TestSR009SourceIntegrity:
             target_dir=tmp_path,
         )
         source_integrity.run(s)
-        assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "low"
+        assert s.findings == []
+        assert {item["code"] for item in s.review_advisories} == {
+            "missing_signature", "missing_attestation", "missing_sbom",
+        }
+        assert sum(item["deduction"] for item in s.review_advisories) == 6
 
     def test_invalid_sha256_is_medium(self, tmp_path):
         """sha256 非法（核心完整性缺失）→ medium。"""
@@ -204,6 +215,9 @@ class TestSR009SourceIntegrity:
         )
         source_integrity.run(s)
         assert s.findings == []
+        assert [item["code"] for item in s.review_advisories] == [
+            "missing_attestation"
+        ]
 
     def test_manifest_integrity_does_not_fallback_without_acquisition_facts(
         self,

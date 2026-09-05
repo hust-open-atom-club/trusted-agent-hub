@@ -21,6 +21,7 @@ from packages.schema.extract_skills import (
     scan_directory,
 )
 from scanners.risk_scanner.scanner import RiskScanner
+from scanners.risk_scanner.permission_consistency import build_permission_advisories
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -66,9 +67,9 @@ def test_scanner_downgrades_documentation_findings() -> None:
             if f.get("rule_id") == "SR-001"
         ]
         assert injection, "SKILL.md 应命中提示注入规则"
-        assert injection[0]["severity"] == "critical", (
-            "SKILL.md 的提示注入不应被文档降级"
-        )
+        assert injection[0]["severity"] == "info"
+        assert injection[0]["candidate_severity"] == "critical"
+        assert injection[0]["requires_llm_validation"] is True
 
 
 @pytest.mark.parametrize(
@@ -118,12 +119,17 @@ def test_scanner_preserves_findings_in_instruction_and_policy_files(
         injection = [finding for finding in findings if finding["rule_id"] == "SR-001"]
 
         assert injection, f"{relative_path} 应命中提示注入规则"
-        assert any(finding["severity"] in ("critical", "high") for finding in injection)
-        assert not any(
-            finding.get("downgraded") == "documentation" for finding in findings
+        assert all(finding["severity"] == "info" for finding in injection)
+        assert all(
+            finding.get("candidate_severity") in ("critical", "high")
+            for finding in injection
         )
         assert all(
-            finding["severity"] not in ("low", "info") for finding in injection
+            finding.get("requires_llm_validation") is True
+            for finding in injection
+        )
+        assert not any(
+            finding.get("downgraded") == "documentation" for finding in findings
         )
 
 
@@ -166,7 +172,11 @@ def test_scanner_applies_documentation_allowlist(
                 finding.get("downgraded") == "documentation" for finding in injection
             )
         else:
-            assert any(finding["severity"] == "critical" for finding in injection)
+            assert any(finding["severity"] == "info" for finding in injection)
+            assert any(
+                finding.get("candidate_severity") == "critical"
+                for finding in injection
+            )
             assert not any(
                 finding.get("downgraded") == "documentation" for finding in findings
             )
@@ -190,7 +200,11 @@ def test_scanner_does_not_treat_arbitrary_markdown_as_documentation() -> None:
         injection = [finding for finding in findings if finding["rule_id"] == "SR-001"]
 
         assert injection
-        assert any(finding["severity"] == "critical" for finding in injection)
+        assert any(finding["severity"] == "info" for finding in injection)
+        assert any(
+            finding.get("candidate_severity") == "critical"
+            for finding in injection
+        )
         assert not any(
             finding.get("downgraded") == "documentation" for finding in findings
         )
@@ -371,6 +385,50 @@ def test_extractor_does_not_promote_documentation_to_runtime_permissions() -> No
         assert statuses["database"] == "conditional"
 
 
+def test_extractor_keeps_explicit_permission_actions_granular(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: granular-permissions\n"
+        "description: Granular permission declarations\n"
+        "permissions:\n"
+        "  filesystem:\n"
+        "    read: ['./']\n"
+        "    write: []\n"
+        "    delete: false\n"
+        "  shell:\n"
+        "    allowed: false\n"
+        "  network:\n"
+        "    allowed: false\n"
+        "  environment:\n"
+        "    read: []\n"
+        "    write: []\n"
+        "---\n"
+        "Read project files.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text(
+        "import pathlib\npathlib.Path('result.txt').write_text('done')\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+    evidence = metadata["permission_evidence"]
+
+    assert any(
+        item["capability"] == "filesystem.read"
+        and item["status"] == "declared"
+        for item in evidence
+    )
+    assert not any(
+        item["capability"] == "filesystem.write"
+        and item["status"] == "declared"
+        for item in evidence
+    )
+    assert [item["code"] for item in build_permission_advisories(evidence)] == [
+        "undeclared_executable_capability"
+    ]
+
+
 def test_discover_capabilities_finds_multiple_packages() -> None:
     """真实能力包目录应能发现多个 skill/mcp/plugin 能力。"""
     caps = discover_capabilities(EXAMPLES / "real-world")
@@ -446,8 +504,8 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
     result = llm_reviewer.run_llm_review(findings, {}, {})
     assert result["findings_reviewed"] == 2
     assert result["findings_skipped"] == 2
-    # High/critical findings are reviewed in one bounded batch request.
-    assert len(calls) == 1
+    # High/critical findings receive two independent bounded batch reviews.
+    assert len(calls) == 2
     assert 'f-crit' in calls[0] and 'f-high' in calls[0]
     assert result["labels"]["f-crit"] == "llm:suspected-malicious"
     assert result["labels"]["f-high"] == "llm:suspected-malicious"
@@ -471,7 +529,7 @@ def test_llm_review_batches_large_finding_sets(monkeypatch) -> None:
         for i in range(17)
     ]
     result = llm_reviewer.run_llm_review(findings, {}, {})
-    assert len(calls) == 3
+    assert len(calls) == 6
     assert result["findings_reviewed"] == 17
     assert result["labels_summary"]["likely_benign"] == 17
 
