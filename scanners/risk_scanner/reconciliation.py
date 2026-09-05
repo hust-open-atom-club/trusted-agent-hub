@@ -148,11 +148,12 @@ def _root_material(finding: dict[str, Any]) -> str:
     file_name, line_start, line_end = _location_parts(finding)
     sink_kind = _infer_sink_kind(finding)
     source_kind = _infer_source_kind(finding)
-    sink_symbol = _normalized_text(finding.get("sink_symbol"), limit=120).lower()
-    source_symbol = _normalized_text(finding.get("source_symbol"), limit=120).lower()
 
     # A precise source span plus semantic sink/source identity is the safest
-    # cross-rule grouping boundary.  Findings without a line retain a compact
+    # cross-rule grouping boundary. Concrete symbols remain report evidence,
+    # but are intentionally absent from the key because older detectors may
+    # not know them; treating a missing symbol as different would reintroduce
+    # cross-detector double counting. Findings without a line retain a compact
     # evidence discriminator so unrelated manifest advisories do not collapse.
     discriminator = ""
     if line_start == 0:
@@ -164,8 +165,6 @@ def _root_material(finding: dict[str, Any]) -> str:
             str(line_end),
             sink_kind,
             source_kind,
-            sink_symbol,
-            source_symbol,
             discriminator,
         )
     )

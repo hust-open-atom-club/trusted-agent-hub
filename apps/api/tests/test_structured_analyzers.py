@@ -29,7 +29,7 @@ def test_python_ast_facts_are_shared_with_capability_graph(tmp_path: Path) -> No
     event = snapshot.python_ast["main.py"].calls[0]
     assert event.kind == "dangerous"
     assert event.resolved == "os.system"
-    assert "process" in snapshot.capability_graph.as_report()["observed"]
+    assert "shell.execute" in snapshot.capability_graph.as_report()["observed"]
 
 
 def test_javascript_and_shell_analysis_extract_commands() -> None:
@@ -56,6 +56,15 @@ def test_javascript_process_analysis_marks_environment_driven_shell() -> None:
     assert event.dynamic is True
     assert event.input_source == "environment"
     assert event.shell_capable is True
+
+
+def test_javascript_regexp_exec_is_not_a_process_capability() -> None:
+    javascript = analyze_javascript(
+        "matcher.js",
+        "const matcher = /safe/; matcher.exec(value);\n",
+    )
+
+    assert javascript.calls == []
 
 
 def test_javascript_process_analysis_marks_variable_command_dynamic() -> None:

@@ -157,17 +157,8 @@ def test_v2_root_matching_and_metric_calculation():
                 "id": "one",
                 "root_cause_id": "remote-script",
                 "rule_id": "SR-002",
+                "detector_ids": ["SR-002", "SR-008"],
                 "severity": "critical",
-                "kind": "vulnerability",
-                "disposition": "confirmed_vulnerability",
-                "location": {"file": "install.sh", "line": 1},
-            },
-            {
-                "id": "two",
-                "root_cause_id": "remote-script",
-                "rule_id": "SR-008",
-                "severity": "high",
-                "effective_severity": "critical",
                 "kind": "vulnerability",
                 "disposition": "confirmed_vulnerability",
                 "location": {"file": "install.sh", "line": 1},
@@ -233,7 +224,7 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
             "malicious": 9,
             "needs_context": 4,
         },
-        "enforcement_distribution": {"blocking": 3, "observe": 22},
+        "enforcement_distribution": {"blocking": 19, "observe": 6},
     }
     assert first["coverage"]["complete_scan_ratio"] == 1.0
     assert first["coverage"]["rule_exception_ratio"] == 0.0

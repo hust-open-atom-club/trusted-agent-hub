@@ -26,13 +26,14 @@ class TestSR008SupplyChain:
         assert f["rule_id"] == "SR-008"
         assert f["category"] == "supply_chain"
 
-    def test_whitelisted_domain_skipped(self):
-        """URLs on the domain whitelist (github.com) are skipped."""
+    def test_whitelisted_download_is_not_trusted_when_piped_to_shell(self):
+        """A trusted host does not make download-and-execute safe."""
         s = MockScanner(files={
             "install.py": 'import os\nos.system("curl https://github.com/foo/bar | sh")\n',
         })
         supply_chain.run(s)
-        assert s.findings == []
+        assert any(f["severity"] == "critical" for f in s.findings)
+        assert s.findings[0]["disposition"] == "confirmed_vulnerability"
 
     def test_whitelisted_url_with_trailing_punctuation_is_skipped(self):
         """句尾逗号/句号不应破坏白名单 hostname 解析。"""

@@ -47,7 +47,23 @@ def run(scanner: Any) -> None:
 
                 severity = _classify_severity(matched_text, default_severity)
                 if scanner._is_code_example(fname, line_no):
-                    severity = "medium" if severity == "critical" else "low"
+                    # Fenced examples in ordinary documentation are not part
+                    # of the package's executable surface.
+                    continue
+
+                semantic: dict[str, Any] = {}
+                if "|" in matched_text and re.search(r"\b(?:ba)?sh\b", matched_text, re.I):
+                    semantic = {
+                        "kind": "vulnerability",
+                        "disposition": "confirmed_vulnerability",
+                        "sink_kind": "download_execute",
+                        "sink_symbol": "shell",
+                        "source_kind": "remote_script",
+                        "source_control": "remote_publisher",
+                        "reachability": "install_or_script_execution",
+                        "activation": "direct",
+                        "trust_boundary_crossed": True,
+                    }
 
                 scanner._add_finding(
                     rule_id=rule_id,
@@ -59,4 +75,5 @@ def run(scanner: Any) -> None:
                     evidence=f"匹配模式: {matched_text[:120]}",
                     remediation="避免在 Skill 中使用危险 Shell 命令。如需执行 Shell，请使用命令白名单限制。",
                     cwe_id="CWE-78",
+                    **semantic,
                 )

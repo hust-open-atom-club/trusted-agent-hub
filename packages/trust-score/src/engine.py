@@ -655,6 +655,7 @@ def _advisory_policy(scan_report: dict[str, Any] | None) -> dict[str, Any]:
     manual_required = False
     high_priority = False
     semantic_review_pending = False
+    finding_review_pending = False
     downgrade_reasons: list[str] = []
     for advisory in advisories:
         try:
@@ -677,19 +678,25 @@ def _advisory_policy(scan_report: dict[str, Any] | None) -> dict[str, Any]:
         else []
     )
     if isinstance(findings, list):
+        finding_review_pending = any(
+            isinstance(finding, dict)
+            and finding.get("requires_manual_review") is True
+            for finding in findings
+        )
         semantic_review_pending = any(
             isinstance(finding, dict)
             and finding.get("requires_manual_review") is True
             and finding.get("requires_llm_validation") is True
             for finding in findings
         )
-        manual_required = manual_required or semantic_review_pending
+        manual_required = manual_required or finding_review_pending
 
     return {
         "deduction": min(100, deduction),
         "downgrade_steps": min(1, downgrade_steps),
         "manual_required": manual_required,
         "semantic_review_pending": semantic_review_pending,
+        "finding_review_pending": finding_review_pending,
         "high_priority": high_priority,
         "downgrade_reasons": downgrade_reasons,
         "advisories": advisories,
@@ -779,10 +786,12 @@ def rate(
     if not i2.get("scan_complete", True) and final_level in ("trusted", "low_risk"):
         final_level = "medium_risk"
 
-    # Unresolved semantic validation is review-required, not malicious. Cap
-    # the automatic result at C while avoiding the former fail-closed E veto.
+    # Any unresolved finding routed to a human is review-required, not
+    # malicious. Cap the automatic result at C while avoiding a fail-closed E
+    # veto. This also covers context-dependent code/network capabilities that
+    # do not require an LLM pass.
     if (
-        advisory_policy["semantic_review_pending"]
+        advisory_policy["finding_review_pending"]
         and final_level in ("trusted", "low_risk")
     ):
         final_level = "medium_risk"

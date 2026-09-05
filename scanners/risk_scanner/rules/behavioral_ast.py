@@ -10,6 +10,7 @@ Detects code execution patterns that regex cannot catch:
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any
 
 from scanners.risk_scanner.analyzers.python_ast import analyze_python
@@ -74,12 +75,19 @@ def _report_analysis(scanner: Any, fname: str, result: Any) -> None:
     content = scanner._read_file_content(fname)
     lines = content.split("\n") if content else []
     seen: set[tuple[str, int, str]] = set()
+    safe_spawn_lines = _safe_fixed_spawn_lines(content)
     for event in result.calls:
         key = (event.kind, event.line, event.calling)
         if key in seen:
             continue
         seen.add(key)
         snippet = "\n".join(lines[max(0, event.line - 1):event.line])[:200]
+        if scanner._is_code_example(fname, event.line):
+            continue
+        resolved = event.resolved or event.calling
+        if resolved.startswith("subprocess.") and event.line in safe_spawn_lines:
+            # Fixed argv with shell disabled is a process capability, not RCE.
+            continue
         if event.kind == "dynamic_import":
             title = f"动态导入: {event.calling}()"
             description = f"在 {fname} 中发现 importlib.import_module() 动态加载模块"
@@ -89,13 +97,16 @@ def _report_analysis(scanner: Any, fname: str, result: Any) -> None:
             description = f"在 {fname} 中发现反射调用 {event.calling}() 可能用于动态访问危险模块"
             evidence = f"Reflective call: {event.calling}"
         else:
-            resolved = event.resolved or event.calling
             title = f"AST 代码执行检测: {event.calling} 通过别名引用到危险函数 {resolved}"
             description = f"在 {fname} 中发现通过别名/变量间接调用危险函数：{event.calling} -> {resolved}"
             evidence = f"Resolved call: {event.calling}"
+        source_semantics = _execution_source_semantics(snippet)
+        severity = (
+            "high" if source_semantics["kind"] == "vulnerability" else "medium"
+        )
         scanner._add_finding(
             rule_id="SR-005",
-            severity="high",
+            severity=severity,
             category="remote_code_execution",
             title=title,
             description=description,
@@ -103,7 +114,68 @@ def _report_analysis(scanner: Any, fname: str, result: Any) -> None:
             evidence=evidence,
             remediation="避免使用 import 别名隐藏危险调用。显式使用危险函数并使用参数校验和命令白名单。",
             cwe_id="CWE-94",
+            **source_semantics,
         )
+
+
+def _safe_fixed_spawn_lines(content: str) -> set[int]:
+    """Return subprocess call lines using constant argv and no shell."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return set()
+    safe: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        called = _resolve_name(node.func) or ""
+        if called.rsplit(".", 1)[-1] not in {
+            "call", "run", "Popen", "check_call", "check_output",
+        }:
+            continue
+        shell_value = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "shell"),
+            None,
+        )
+        if isinstance(shell_value, ast.Constant) and shell_value.value is True:
+            continue
+        if not node.args:
+            continue
+        argv = node.args[0]
+        if isinstance(argv, (ast.List, ast.Tuple)) and all(
+            isinstance(item, ast.Constant) and isinstance(item.value, (str, bytes))
+            for item in argv.elts
+        ):
+            safe.add(int(getattr(node, "lineno", 1)))
+    return safe
+
+
+def _execution_source_semantics(snippet: str) -> dict[str, Any]:
+    if re.search(
+        r"\b(?:request|req)\s*\.|\buser[_-]?input\b",
+        snippet,
+        re.IGNORECASE,
+    ):
+        return {
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "sink_kind": "shell_exec",
+            "source_kind": "request",
+            "source_control": "remote_attacker",
+            "reachability": "request_reachable",
+            "activation": "direct",
+            "trust_boundary_crossed": True,
+        }
+    return {
+        "kind": "context_dependent",
+        "disposition": "needs_context",
+        "sink_kind": "shell_exec",
+        "source_kind": "unknown",
+        "source_control": "unknown",
+        "reachability": "unknown",
+        "activation": "conditional",
+        "requires_manual_review": True,
+    }
 
 
 class _ASTAnalyser(ast.NodeVisitor):

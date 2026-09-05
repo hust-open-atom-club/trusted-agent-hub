@@ -130,6 +130,40 @@ def test_b3_dev_toolkit_plugin_all_green_pending() -> None:
     _assert_valid_output(result, fx["expected_level"])
 
 
+def test_context_dependent_finding_caps_automatic_grade_at_c() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["findings"] = [{
+        "id": "context-listener",
+        "rule_id": "SR-007",
+        "severity": "medium",
+        "effective_severity": "medium",
+        "category": "network_access",
+        "title": "Public listener",
+        "kind": "context_dependent",
+        "disposition": "needs_context",
+        "requires_manual_review": True,
+    }]
+    scan["summary"] = {
+        "total": 1,
+        "critical": 0,
+        "high": 0,
+        "medium": 1,
+        "low": 0,
+        "info": 0,
+    }
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["grade"] == "C"
+    assert result["risk_summary"]["manual_security_review_required"] is True
+
+
 def test_provenance_advisories_apply_exact_points_without_grade_change() -> None:
     fx = _load_fixture("b2_postgres_explorer")
     baseline = rate(

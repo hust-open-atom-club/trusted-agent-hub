@@ -62,6 +62,7 @@ def analyze_snapshot(
         snapshot.python_ast,
         snapshot.javascript_ast,
         snapshot.shell,
+        contents,
     )
     if target_dir is not None and inventory is not None:
         snapshot.source_integrity = capture_source_state(target_dir, inventory)

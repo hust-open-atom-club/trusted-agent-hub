@@ -30,6 +30,32 @@ _CHAIN_CALLS = {
     "fs.writeFile": "filesystem",
     "fs.rm": "filesystem",
 }
+_PROCESS_CALLS = frozenset({"exec", "execFile", "spawn", "fork"})
+
+
+def _child_process_bindings(content: str) -> tuple[set[str], set[str]]:
+    objects = {"child_process", "cp"}
+    functions: set[str] = set()
+    module = r"(?:node:)?child_process"
+    for match in re.finditer(
+        rf"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*[\"']{module}[\"']\s*\)",
+        content,
+    ):
+        objects.add(match.group(1))
+    for match in re.finditer(
+        rf"\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+[\"']{module}[\"']",
+        content,
+    ):
+        objects.add(match.group(1))
+    for match in re.finditer(
+        rf"\b(?:const|let|var)\s*\{{([^}}]+)\}}\s*=\s*require\s*\(\s*[\"']{module}[\"']\s*\)",
+        content,
+    ):
+        for item in match.group(1).split(","):
+            name = item.strip().split(":")[-1].strip()
+            if name:
+                functions.add(name)
+    return objects, functions
 
 
 def _tokens(content: str) -> list[tuple[str, int, int, int]]:
@@ -67,6 +93,7 @@ def analyze_javascript(path: str, content: str) -> JavaScriptAstAnalysis:
     result = JavaScriptAstAnalysis(path=path)
     try:
         tokens = _tokens(content)
+        process_objects, process_functions = _child_process_bindings(content)
         for index, (token, line, token_start, _token_end) in enumerate(tokens):
             if token in {"import", "require", "from"} and index + 1 < len(tokens):
                 result.imports.append(tokens[index + 1][0])
@@ -77,6 +104,13 @@ def analyze_javascript(path: str, content: str) -> JavaScriptAstAnalysis:
             if index >= 2 and tokens[index - 1][0] == ".":
                 calling = f"{tokens[index - 2][0]}.{token}"
                 kind = _CHAIN_CALLS.get(calling, kind)
+            if token in _PROCESS_CALLS:
+                if "." in calling:
+                    receiver = calling.rsplit(".", 1)[0]
+                    if receiver not in process_objects:
+                        kind = None
+                elif token not in process_functions:
+                    kind = None
             if kind:
                 open_paren_end = tokens[index + 1][3]
                 close_paren = _closing_paren_start(
