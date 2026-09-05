@@ -44,6 +44,8 @@ class MockScanner:
         finding = {
             "rule_id": rule_id,
             "severity": severity,
+            "static_severity": severity,
+            "effective_severity": severity,
             "category": category,
             "title": title,
             "description": description,

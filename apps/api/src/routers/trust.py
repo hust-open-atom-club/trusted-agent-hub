@@ -205,6 +205,7 @@ def _mark_llm_review_unavailable(
         finding["requires_manual_review"] = True
         if finding.get("requires_llm_validation") is True:
             finding["severity"] = "info"
+            finding["effective_severity"] = "info"
         finding_id = str(finding.get("id", ""))
         if finding_id:
             labels[finding_id] = "llm:unavailable"
@@ -290,6 +291,7 @@ def _apply_llm_decisions(
             # automatic security scoring. Unresolved items remain visible and
             # explicitly require manual review.
             finding["severity"] = "info"
+        finding["effective_severity"] = finding["severity"]
 
 
 def _run_llm_review_with_fallback(

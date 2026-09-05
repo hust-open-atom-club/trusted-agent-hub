@@ -70,7 +70,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.8.0"
+SCANNER_VERSION = "0.9.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -532,6 +532,7 @@ class RiskScanner:
                 and severity in ("critical", "high", "medium")
             ):
                 finding["severity"] = "low"
+                finding["effective_severity"] = "low"
                 finding["downgraded"] = "documentation"
                 finding["title"] = f"{finding.get('title', '')} [文档示例/说明文本]"
 
@@ -559,6 +560,7 @@ class RiskScanner:
                 continue
             finding["candidate_severity"] = severity
             finding["severity"] = "info"
+            finding["effective_severity"] = "info"
             finding["requires_llm_validation"] = True
             finding["llm_review_state"] = "pending"
             finding["requires_manual_review"] = True
@@ -585,6 +587,8 @@ class RiskScanner:
             "id": f"finding-{uuid.uuid4().hex[:8]}",
             "rule_id": rule_id,
             "severity": severity,
+            "static_severity": severity,
+            "effective_severity": severity,
             "category": category,
             "title": title,
             "description": description,

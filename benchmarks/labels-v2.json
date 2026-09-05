@@ -299,8 +299,8 @@
       },
       "enforcement": "observe",
       "known_gap": {
-        "reason": "Overlapping shell, URL, and supply-chain matches lack a shared root_cause_id and v2 classification fields.",
-        "planned_pr": "PR-2"
+        "reason": "The shared root cause is now available; PR-3 will classify it as a vulnerability and emit its download/shell capabilities.",
+        "planned_pr": "PR-3"
       }
     },
     {
@@ -401,8 +401,8 @@
       },
       "enforcement": "observe",
       "known_gap": {
-        "reason": "The raw severity is correct, but root cause, kind, disposition, and semantic capability fields are still absent.",
-        "planned_pr": "PR-2"
+        "reason": "The root cause is now stable; PR-3 will add vulnerability disposition and metadata-network capability semantics.",
+        "planned_pr": "PR-3"
       }
     },
     {

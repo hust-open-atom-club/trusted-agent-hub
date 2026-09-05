@@ -203,10 +203,50 @@ class FindingOccurrences(StrictContractModel):
     truncated: bool = False
 
 
+class DetectorHit(StrictContractModel):
+    id: str
+    rule_id: str
+    static_severity: str
+    effective_severity: str
+    category: str
+    sink_kind: str
+    source_kind: str
+    location: dict[str, object] = Field(default_factory=dict)
+    evidence: str | None = None
+    remediation: str | None = None
+    cwe_id: str | None = None
+    requires_confirmation: bool | None = None
+
+
 class ScanFinding(StrictContractModel):
     id: str
     rule_id: str | None = None
     severity: str
+    static_severity: str | None = None
+    effective_severity: str | None = None
+    root_cause_id: str | None = None
+    detector_ids: list[str] = Field(default_factory=list)
+    detector_hits: list[DetectorHit] = Field(default_factory=list)
+    sink_kind: str | None = None
+    sink_symbol: str | None = None
+    source_kind: str | None = None
+    source_symbol: str | None = None
+    kind: Literal[
+        "unclassified",
+        "vulnerability",
+        "capability",
+        "context_dependent",
+        "policy",
+        "informational",
+    ] | None = None
+    disposition: Literal[
+        "pending",
+        "confirmed",
+        "confirmed_vulnerability",
+        "intentional_capability",
+        "false_positive",
+        "needs_context",
+    ] | None = None
     category: str
     title: str
     description: str
@@ -369,6 +409,8 @@ class ScannerError(StrictContractModel):
 
 class ScanSummary(StrictContractModel):
     total: int = 0
+    root_cause_total: int = 0
+    detector_hit_total: int = 0
     effective_total: int = 0
     occurrences_total: int = 0
     critical: int = 0

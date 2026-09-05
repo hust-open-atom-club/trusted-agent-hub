@@ -278,7 +278,78 @@
           "severity": {
             "type": "string",
             "enum": ["critical", "high", "medium", "low", "info"],
-            "description": "严重程度"
+            "description": "兼容字段；Scanner v2 中镜像 effective_severity"
+          },
+          "static_severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "不可变的原始检测器严重程度"
+          },
+          "effective_severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "根因聚合和语义裁决后用于评分的严重程度"
+          },
+          "root_cause_id": {
+            "type": "string",
+            "pattern": "^root-[a-f0-9]{20}$",
+            "description": "由位置、sink 和 source 语义生成的稳定根因 ID"
+          },
+          "detector_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true,
+            "description": "合并到此根因的原始规则 ID"
+          },
+          "detector_hits": {
+            "type": "array",
+            "description": "不可变的原始规则命中审计记录",
+            "items": {
+              "type": "object",
+              "required": [
+                "id", "rule_id", "static_severity", "effective_severity",
+                "category", "sink_kind", "source_kind", "location"
+              ],
+              "properties": {
+                "id": { "type": "string" },
+                "rule_id": { "type": "string" },
+                "static_severity": {
+                  "type": "string",
+                  "enum": ["critical", "high", "medium", "low", "info"]
+                },
+                "effective_severity": {
+                  "type": "string",
+                  "enum": ["critical", "high", "medium", "low", "info"]
+                },
+                "category": { "type": "string" },
+                "sink_kind": { "type": "string" },
+                "source_kind": { "type": "string" },
+                "location": { "type": "object" },
+                "evidence": { "type": "string" },
+                "remediation": { "type": "string" },
+                "cwe_id": { "type": "string" },
+                "requires_confirmation": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "sink_kind": { "type": "string" },
+          "sink_symbol": { "type": "string" },
+          "source_kind": { "type": "string" },
+          "source_symbol": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "unclassified", "vulnerability", "capability", "context_dependent",
+              "policy", "informational"
+            ]
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "pending", "confirmed", "confirmed_vulnerability",
+              "intentional_capability", "false_positive", "needs_context"
+            ]
           },
           "category": {
             "type": "string",
@@ -418,6 +489,16 @@
       "required": ["total", "critical", "high", "medium", "low", "info"],
       "properties": {
         "total": { "type": "integer", "minimum": 0 },
+        "root_cause_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "用于评分的独立根因数量"
+        },
+        "detector_hit_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "聚合前的原始规则命中数量"
+        },
         "effective_total": {
           "type": "integer",
           "minimum": 0,

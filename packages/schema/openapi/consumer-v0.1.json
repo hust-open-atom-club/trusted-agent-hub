@@ -279,6 +279,99 @@
         "title": "Dependencies",
         "type": "object"
       },
+      "DetectorHit": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "cwe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwe Id"
+          },
+          "effective_severity": {
+            "title": "Effective Severity",
+            "type": "string"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "additionalProperties": true,
+            "title": "Location",
+            "type": "object"
+          },
+          "remediation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remediation"
+          },
+          "requires_confirmation": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Confirmation"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "sink_kind": {
+            "title": "Sink Kind",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "static_severity": {
+            "title": "Static Severity",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "rule_id",
+          "static_severity",
+          "effective_severity",
+          "category",
+          "sink_kind",
+          "source_kind"
+        ],
+        "title": "DetectorHit",
+        "type": "object"
+      },
       "DockerRunInstallationStep": {
         "additionalProperties": false,
         "properties": {
@@ -2812,6 +2905,39 @@
             "title": "Description",
             "type": "string"
           },
+          "detector_hits": {
+            "items": {
+              "$ref": "#/components/schemas/DetectorHit"
+            },
+            "title": "Detector Hits",
+            "type": "array"
+          },
+          "detector_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Detector Ids",
+            "type": "array"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "confirmed",
+                  "confirmed_vulnerability",
+                  "intentional_capability",
+                  "false_positive",
+                  "needs_context"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition"
+          },
           "downgraded": {
             "anyOf": [
               {
@@ -2822,6 +2948,17 @@
               }
             ],
             "title": "Downgraded"
+          },
+          "effective_severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Severity"
           },
           "evidence": {
             "anyOf": [
@@ -2837,6 +2974,25 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unclassified",
+                  "vulnerability",
+                  "capability",
+                  "context_dependent",
+                  "policy",
+                  "informational"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           },
           "llm_confidence": {
             "anyOf": [
@@ -2997,6 +3153,17 @@
             ],
             "title": "Requires Manual Review"
           },
+          "root_cause_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Cause Id"
+          },
           "rule_id": {
             "anyOf": [
               {
@@ -3011,6 +3178,61 @@
           "severity": {
             "title": "Severity",
             "type": "string"
+          },
+          "sink_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sink Kind"
+          },
+          "sink_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sink Symbol"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Symbol"
+          },
+          "static_severity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Static Severity"
           },
           "title": {
             "title": "Title",
@@ -3591,6 +3813,11 @@
             "title": "Critical",
             "type": "integer"
           },
+          "detector_hit_total": {
+            "default": 0,
+            "title": "Detector Hit Total",
+            "type": "integer"
+          },
           "effective_total": {
             "default": 0,
             "title": "Effective Total",
@@ -3631,6 +3858,11 @@
               }
             ],
             "title": "Pass Rate"
+          },
+          "root_cause_total": {
+            "default": 0,
+            "title": "Root Cause Total",
+            "type": "integer"
           },
           "total": {
             "default": 0,
