@@ -2,6 +2,17 @@
   "$schema": "./schema-v2.json",
   "schema_version": "2.0",
   "scanner_source_commit_hash": "8104785e13d6a1e418e144a2da64fd12291dcb5f",
+  "quality_gates": {
+    "minimum_cases": 25,
+    "minimum_benign_cases": 12,
+    "minimum_malicious_cases": 9,
+    "minimum_raw_precision": 0.95,
+    "minimum_raw_recall": 0.95,
+    "minimum_root_precision": 0.95,
+    "minimum_root_recall": 0.95,
+    "maximum_benign_high_critical_false_positive_rate": 0.05,
+    "minimum_malicious_high_critical_recall": 0.9
+  },
   "scoring_context": {
     "source": {
       "type": "git",

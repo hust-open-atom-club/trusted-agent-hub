@@ -121,6 +121,27 @@ def test_trust_score_model_drops_legacy_numeric_scores_from_public_output() -> N
                     "details": {},
                 }
             },
+            "security_assessment": {
+                "score": 92,
+                "level": "low_risk",
+                "grade": "B",
+                "status": "conclusive",
+                "input_dimensions": ["permission_minimization", "scan_results"],
+                "unresolved_findings": 0,
+            },
+            "evidence_assessment": {
+                "score": 74,
+                "coverage": 0.6,
+                "level": "moderate",
+                "assessed_dimensions": ["metadata_completeness"],
+                "unavailable_dimensions": ["signature_verifiability"],
+                "verification_statuses": {"signature": "not_available"},
+                "author_reputation": {
+                    "status": "unavailable",
+                    "level": "unavailable",
+                    "score": None,
+                },
+            },
             "risk_summary": {
                 "level": "low_risk",
                 "grade": "A",
@@ -133,6 +154,8 @@ def test_trust_score_model_drops_legacy_numeric_scores_from_public_output() -> N
     public_document = document.model_dump(mode="json")
     assert "score" not in public_document
     assert "score" not in public_document["dimensions"]["provenance"]
+    assert public_document["security_assessment"]["score"] == 92
+    assert public_document["evidence_assessment"]["coverage"] == 0.6
     assert public_document["risk_summary"]["grade"] == "A"
 
 

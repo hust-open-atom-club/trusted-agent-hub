@@ -11,6 +11,8 @@
     "calculated_at",
     "model_fingerprint",
     "model_version",
+    "security_assessment",
+    "evidence_assessment",
     "dimensions",
     "explanations"
   ],
@@ -19,19 +21,91 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100,
-      "description": "综合信任评分（0-100）"
+      "description": "安全风险评分（0-100）；证据完整度与作者信誉见 evidence_assessment"
     },
     "score_breakdown": {
       "type": "object",
-      "required": ["base_score", "advisory_deduction", "final_score", "grade_is_security_policy"],
+      "required": [
+        "base_score",
+        "advisory_deduction",
+        "final_score",
+        "grade_is_security_policy",
+        "evidence_score",
+        "evidence_coverage",
+        "unapplied_advisory_points"
+      ],
       "properties": {
         "base_score": { "type": "integer", "minimum": 0, "maximum": 100 },
         "advisory_deduction": { "type": "integer", "minimum": 0, "maximum": 100 },
         "final_score": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "grade_is_security_policy": { "type": "boolean" }
+        "grade_is_security_policy": { "type": "boolean" },
+        "evidence_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "evidence_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "unapplied_advisory_points": { "type": "integer", "minimum": 0, "maximum": 100 }
       },
       "additionalProperties": false,
-      "description": "审核分扣分明细；安全等级与非降级 advisory 扣分相互独立"
+      "description": "安全评分与独立证据指标；advisory 点数仅审计展示，不从安全分扣除"
+    },
+    "security_assessment": {
+      "type": "object",
+      "required": ["score", "level", "grade", "status", "input_dimensions", "unresolved_findings"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "level": { "enum": ["trusted", "low_risk", "medium_risk", "high_risk", "untrusted"] },
+        "grade": { "enum": ["A", "B", "C", "D", "E"] },
+        "status": { "enum": ["conclusive", "review_required", "inconclusive"] },
+        "input_dimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["permission_minimization", "scan_results"] }
+        },
+        "unresolved_findings": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false,
+      "description": "仅由权限、扫描结果及安全复核状态驱动的安全结论"
+    },
+    "evidence_assessment": {
+      "type": "object",
+      "required": [
+        "score",
+        "coverage",
+        "level",
+        "assessed_dimensions",
+        "unavailable_dimensions",
+        "verification_statuses",
+        "author_reputation"
+      ],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "enum": ["strong", "moderate", "limited", "unavailable"] },
+        "assessed_dimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "unavailable_dimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" }
+        },
+        "verification_statuses": {
+          "type": "object",
+          "additionalProperties": { "enum": ["verified", "not_verified", "not_available"] }
+        },
+        "author_reputation": {
+          "type": "object",
+          "required": ["status", "level", "score"],
+          "properties": {
+            "status": { "enum": ["assessed", "unavailable"] },
+            "level": { "enum": ["consistent_good", "newcomer", "inconsistent", "tainted", "unavailable"] },
+            "score": { "type": ["integer", "null"], "minimum": 0, "maximum": 100 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "来源、供应链证明、元数据、作者信誉和社区信号的独立证据指标"
     },
     "package_name": {
       "type": "string",
@@ -79,6 +153,7 @@
               "type": "object",
               "properties": {
                 "is_verified_owner": { "type": "boolean" },
+                "available": { "type": "boolean" },
                 "source_type": { "type": "string" },
                 "repo_age_days": { "type": "integer", "minimum": 0 },
                 "has_commit_hash": { "type": "boolean" },
@@ -169,7 +244,15 @@
                 "high_findings": { "type": "integer", "minimum": 0 },
                 "medium_findings": { "type": "integer", "minimum": 0 },
                 "low_findings": { "type": "integer", "minimum": 0 },
-                "scan_pass_rate": { "type": "number", "minimum": 0, "maximum": 100 }
+                "scan_pass_rate": { "type": "number", "minimum": 0, "maximum": 100 },
+                "scan_state": { "type": "string" },
+                "scan_conclusion": { "type": "string" },
+                "scan_complete": { "type": "boolean" },
+                "failed_rules": {
+                  "type": "array",
+                  "items": { "type": ["string", "null"] }
+                },
+                "skipped_files": { "type": "integer", "minimum": 0 }
               },
               "additionalProperties": false
             }
@@ -260,7 +343,13 @@
               "properties": {
                 "has_signature": { "type": "boolean" },
                 "has_attestation": { "type": "boolean" },
-                "has_sbom": { "type": "boolean" }
+                "has_sbom": { "type": "boolean" },
+                "available": { "type": "boolean" },
+                "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+                "verification_statuses": {
+                  "type": "object",
+                  "additionalProperties": { "enum": ["verified", "not_verified", "not_available"] }
+                }
               },
               "additionalProperties": false
             }

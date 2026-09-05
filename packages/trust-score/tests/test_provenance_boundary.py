@@ -75,12 +75,15 @@ def test_manifest_claims_are_ignored_without_acquisition_facts() -> None:
     assert p1["level"] == "opaque"
     assert p1["score"] == 10
     assert p2["level"] == "none"
-    assert p2["score"] == 10
+    assert p2["score"] == 50
+    assert p2["available"] is False
+    assert set(p2["verification_statuses"].values()) == {"not_available"}
 
     result = rate(package_metadata=metadata)
     assert result["model_version"] == get_model_version()
     assert len(result["model_fingerprint"]) == 64
     assert result["dimensions"]["source_trust"]["details"] == {
+        "available": False,
         "is_verified_owner": False,
         "source_type": "unknown",
         "repo_age_days": 0,
@@ -88,9 +91,17 @@ def test_manifest_claims_are_ignored_without_acquisition_facts() -> None:
         "has_integrity_hash": False,
     }
     assert result["dimensions"]["signature_verifiability"]["details"] == {
+        "available": False,
+        "coverage": 0.0,
         "has_signature": False,
         "has_attestation": False,
         "has_sbom": False,
+        "verification_statuses": {
+            "scanned_source_hash": "not_available",
+            "signature": "not_available",
+            "attestation": "not_available",
+            "sbom": "not_available",
+        },
     }
 
 
@@ -109,11 +120,35 @@ def test_acquisition_facts_control_provenance_scores() -> None:
     result = rate(package_metadata=metadata, acquisition_facts=facts)
     assert result["dimensions"]["source_trust"]["details"]["is_verified_owner"] is False
     assert result["dimensions"]["source_trust"]["details"]["has_commit_hash"] is True
-    assert result["dimensions"]["signature_verifiability"]["details"] == {
-        "has_signature": False,
-        "has_attestation": False,
-        "has_sbom": False,
+    signature_details = result["dimensions"]["signature_verifiability"]["details"]
+    assert signature_details["coverage"] == 1.0
+    assert signature_details["verification_statuses"] == {
+        "scanned_source_hash": "verified",
+        "signature": "not_verified",
+        "attestation": "not_verified",
+        "sbom": "not_verified",
     }
+
+
+def test_unavailable_artifact_verifiers_reduce_coverage_not_score() -> None:
+    metadata = _forged_metadata()
+    facts = _acquisition_facts()
+    facts["verification_capabilities"] = {
+        "repository": True,
+        "owner": False,
+        "signature": False,
+        "attestation": False,
+        "sbom": False,
+    }
+
+    p2 = assess_signature_chain(metadata, facts)
+    result = rate(package_metadata=metadata, acquisition_facts=facts)
+
+    assert p2["score"] == 100
+    assert p2["coverage"] == 0.333
+    assert p2["verification_statuses"]["signature"] == "not_available"
+    assert result["score_breakdown"]["advisory_deduction"] == 0
+    assert "signature_verifiability" in result["evidence_assessment"]["assessed_dimensions"]
 
 
 def test_only_independently_verified_artifacts_complete_p2() -> None:

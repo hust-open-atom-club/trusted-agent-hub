@@ -119,12 +119,37 @@ export interface TrustScoreExplanation {
   evidence?: string;
 }
 
+export interface SecurityAssessment {
+  score: number;
+  level: 'trusted' | 'low_risk' | 'medium_risk' | 'high_risk' | 'untrusted';
+  grade: 'A' | 'B' | 'C' | 'D' | 'E';
+  status: 'conclusive' | 'review_required' | 'inconclusive';
+  input_dimensions: Array<'permission_minimization' | 'scan_results'>;
+  unresolved_findings: number;
+}
+
+export interface EvidenceAssessment {
+  score: number;
+  coverage: number;
+  level: 'strong' | 'moderate' | 'limited' | 'unavailable';
+  assessed_dimensions: string[];
+  unavailable_dimensions: string[];
+  verification_statuses: Record<string, 'verified' | 'not_verified' | 'not_available'>;
+  author_reputation: {
+    status: 'assessed' | 'unavailable';
+    level: 'consistent_good' | 'newcomer' | 'inconsistent' | 'tainted' | 'unavailable';
+    score: number | null;
+  };
+}
+
 export interface TrustScore {
-  /** 数值评分（0–100），仅内部/审核使用，消费者页面不应展示 */
+  /** 兼容字段；与 security_assessment.score 一致。 */
   score?: number;
   level?: string;
   grade?: string;
   recommendation?: string;
+  security_assessment?: SecurityAssessment;
+  evidence_assessment?: EvidenceAssessment;
   risk_summary?: {
     grade?: string;
     level?: string;

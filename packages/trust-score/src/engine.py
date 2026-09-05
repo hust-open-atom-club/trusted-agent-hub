@@ -1,24 +1,22 @@
 """
-Decision Engine: orchestrates the three-layer trust assessment funnel.
+Decision Engine: produces independent security and evidence assessments.
 
 Pipeline (9 steps):
   1. Calculate P1, P2 (Layer 1 — Provenance)
   2. Calculate I1, I2, I3 (Layer 2 — Intent)
-  3. Apply provenance confidence only to claimed permission signals (I1)
+  3. Keep provenance independent from permission and scanner risk
   4. Calculate C1, C2 (Layer 3 — Community)
-  5. Apply layer discounts to Layer 3
-  6. Veto check (V1–V6)
+  5. Keep community reputation independent from security risk
+  6. Security veto check
   7. Determine baseline level (three-color: red / yellow / green)
   8. Apply upgrade / downgrade rules
   9. Derive 0–100 score from final level
 
-Six veto rules:
+Security veto rules:
   V1: C1 = rejected        → untrusted
   V2: I2 = dangerous AND LLM 确认恶意 → untrusted
   V3: I3 = deceptive AND LLM 确认恶意 → untrusted
   V4: I3 = malicious AND LLM 确认恶意 → untrusted
-  V5: P1 = opaque & I2 = dangerous AND LLM 确认恶意 → untrusted
-  V6: P1 = opaque & C2 = tainted   → untrusted
 
 All functions operate on plain dicts. Uses only the Python standard library.
 """
@@ -83,10 +81,11 @@ def _apply_layer1_discount(
     p1_result: dict[str, Any],
     p2_result: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Step 3: Apply provenance confidence to declared permission signals only.
+    """Step 3: Preserve security signals independently of provenance.
 
-    I2 static findings are observed scanner facts. They must never be weakened
-    because the package source is opaque or unsigned.
+    Provenance measures evidence completeness, not whether a declared or
+    observed capability is dangerous.  Both intent results therefore keep
+    their original score and counts.
 
     Args:
         i1_result: I1 assessment result dict
@@ -97,37 +96,10 @@ def _apply_layer1_discount(
     Returns:
         (discounted_i1, discounted_i2) — new dicts with adjusted scores and counts
     """
-    p1_level = p1_result.get("level", "opaque")
-    # Discount factors. Missing signature/SBOM/attestation are review
-    # advisories with fixed deductions; they must not also weaken permission
-    # scoring here.
-    factor = 1.0
-    if p1_level == "opaque":
-        factor *= 0.7
-    elif p1_level == "traceable":
-        factor *= 0.85
-
     i1_discounted = dict(i1_result)
     i2_discounted = dict(i2_result)
-    i1_discounted["score"] = max(5, round(i1_result.get("score", 50) * factor))
-    i1_discounted["discount_applied"] = factor < 1.0
+    i1_discounted["discount_applied"] = False
     i2_discounted["discount_applied"] = False
-
-    # Only declared-permission signals are confidence-discounted.
-    if factor < 1.0:
-        i1_discounted["danger_count"] = max(0, round(i1_result.get("danger_count", 0) * factor))
-        # Re-evaluate I1 level from discounted danger_count so baseline uses
-        # the discounted severity consistently.
-        dc = i1_discounted["danger_count"]
-        if dc == 0:
-            i1_discounted["level"] = "minimal"
-        elif dc <= 2:
-            i1_discounted["level"] = "acceptable"
-        elif dc <= 7:
-            i1_discounted["level"] = "excessive"
-        else:
-            i1_discounted["level"] = "dangerous"
-
     return i1_discounted, i2_discounted
 
 
@@ -135,9 +107,7 @@ def _apply_layer_discount_c2(
     c2_result: dict[str, Any],
     p1_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Step 5: Apply Layer 1 discount to C2 (author history).
-
-    An opaque source weakens the reliability of author history claims.
+    """Step 5: Preserve author history as an independent evidence signal.
 
     Args:
         c2_result: C2 assessment result dict
@@ -146,12 +116,8 @@ def _apply_layer_discount_c2(
     Returns:
         discounted C2 result dict
     """
-    p1_level = p1_result.get("level", "opaque")
-    factor = 0.7 if p1_level == "opaque" else 0.9 if p1_level == "traceable" else 1.0
-
     c2_discounted = dict(c2_result)
-    c2_discounted["score"] = max(5, round(c2_result.get("score", 50) * factor))
-    c2_discounted["discount_applied"] = factor < 1.0
+    c2_discounted["discount_applied"] = False
     return c2_discounted
 
 
@@ -162,22 +128,19 @@ def _check_veto(
     c1: dict[str, Any],
     c2: dict[str, Any],
 ) -> str | None:
-    """Step 6: Check all six veto rules.  Returns the triggered veto name or None.
+    """Step 6: Check security veto rules.
 
     V1: C1 = rejected        → untrusted
     V2: I2 = dangerous AND LLM 确认恶意 → untrusted
     V3: I3 = deceptive AND LLM 确认恶意 → untrusted
     V4: I3 = malicious AND LLM 确认恶意 → untrusted
-    V5: P1 = opaque & I2 = dangerous AND LLM 确认恶意 → untrusted
-    V6: P1 = opaque & C2 = tainted   → untrusted
+    Source transparency and author reputation are deliberately not vetoes.
 
     LLM 不可用或结论不确定时进入人工安全审核，不自动触发 E 级否决。
     """
-    p1_level = p1.get("level", "")
     i2_level = i2.get("level", "")
     i3_level = i3.get("level", "")
     c1_level = c1.get("level", "")
-    c2_level = c2.get("level", "")
 
     if c1_level == "rejected":
         return "V1: manual review rejected"
@@ -187,15 +150,6 @@ def _check_veto(
         return "V3: deceptive behavior detected"
     if i3_level == "malicious" and i2.get("confirmed_malicious"):
         return "V4: malicious behavior detected"
-    if (
-        p1_level == "opaque"
-        and i2_level == "dangerous"
-        and i2.get("confirmed_malicious")
-    ):
-        return "V5: opaque source with LLM-confirmed malicious findings"
-    if p1_level == "opaque" and c2_level == "tainted":
-        return "V6: opaque source with tainted author history"
-
     return None
 
 
@@ -209,31 +163,23 @@ def _determine_baseline(
 ) -> str:
     """Step 7: Determine the three-color baseline level.
 
-    Counts risk factors from all layers and maps to a baseline:
+    Counts security risk factors and maps to a baseline:
       green  (0 risk factors)  → low_risk baseline
       yellow (1-2 factors)     → medium_risk baseline
       red    (3+ factors)      → high_risk baseline
 
     Risk factors (each adds 1 unless noted):
-      - P1 = opaque
-      - P2 is reported separately as fixed review-score advisories and never
-        changes the security grade
       - I1 = excessive  (+1), I1 = dangerous (+2)
       - I2 = suspicious (+1)   [only for actual findings, not missing-scan default]
       - I2 = dangerous (+3)    [when not already caught by a confirmed-malicious veto]
       - I3 = overreaching (+1) [I3=deceptive/malicious caught by veto]
-      - C2 = inconsistent (+1), C2 = tainted (+2)
+      P1/P2 provenance and C2 author reputation are evidence indicators only.
     """
     risk: int = 0
 
-    p1_level = p1.get("level", "")
     i1_level = i1.get("level", "")
     i2_level = i2.get("level", "")
     i3_level = i3.get("level", "")
-    c2_level = c2.get("level", "")
-
-    if p1_level == "opaque":
-        risk += 1
     if i1_level == "excessive":
         risk += 1
     elif i1_level == "dangerous":
@@ -248,11 +194,7 @@ def _determine_baseline(
         risk += 3
     if i3_level == "overreaching":
         risk += 1
-    # I3=gap is "no data" — does not count as a risk factor
-    if c2_level == "inconsistent":
-        risk += 1
-    elif c2_level == "tainted":
-        risk += 2
+    # I3=gap is "no data" — scan completeness is handled separately.
 
     if risk == 0:
         return "low_risk"  # green
@@ -275,8 +217,7 @@ def _apply_upgrade_downgrade(
     Upgrade rule:
       C1 = approved AND I2 = safe AND I3 = consistent → +1 level (better)
 
-    Downgrade rule:
-      P1 = opaque AND C2 = newcomer → -1 level (worse)
+    Provenance and author reputation do not upgrade or downgrade security.
 
     Args:
         baseline: the baseline level from Step 7
@@ -289,28 +230,15 @@ def _apply_upgrade_downgrade(
     upgrade_applied = False
     downgrade_applied = False
 
-    p1_level = p1.get("level", "")
     i2_level = i2.get("level", "")
     i3_level = i3.get("level", "")
     c1_level = c1.get("level", "")
-    c2_level = c2.get("level", "")
 
-    # Upgrade: approved + safe + consistent + verifiable provenance
-    # P1=opaque blocks the upgrade — an unverifiable source cannot be
-    # "washed clean" by a human review alone.
-    if c1_level == "approved" and i2_level == "safe" and i3_level == "consistent" \
-            and p1_level != "opaque":
+    # A completed safe scan plus an approved security review can upgrade the
+    # security conclusion regardless of evidence/reputation coverage.
+    if c1_level == "approved" and i2_level == "safe" and i3_level == "consistent":
         upgrade_applied = True
         level = _shift_level(level, -1)  # move up (better)
-
-    # Downgrade: opaque + newcomer — only applies when source concern
-    # is not already priced into the baseline (i.e., baseline is low_risk
-    # or trusted).  If baseline is already medium_risk or worse, the opaque
-    # source risk is already accounted for.
-    if p1_level == "opaque" and c2_level == "newcomer" \
-            and baseline in ("low_risk", "trusted"):
-        downgrade_applied = True
-        level = _shift_level(level, 1)  # move down (worse)
 
     return level, upgrade_applied, downgrade_applied
 
@@ -376,8 +304,9 @@ def _build_dimensions(
     # source_trust (P1)
     source_trust = {
         "score": p1.get("score", 50),
-        "weight": 0.15,
+        "weight": 0.25,
         "details": {
+            "available": p1.get("available") is True,
             "is_verified_owner": verification.get("owner") is True,
             "source_type": source.get("type", "unknown"),
             "repo_age_days": 0,
@@ -409,9 +338,7 @@ def _build_dimensions(
                                      "author", "license", "source"] if f in missing]
     metadata_completeness = {
         "score": max(30, 100 - len(missing) * 20),
-        # Descriptive metadata quality is reviewer context, not evidence that
-        # code or instructions are unsafe.
-        "weight": 0.0,
+        "weight": 0.20,
         "details": {
             "missing_required_fields": missing_required if missing_required else [],
             "has_description": bool(description),
@@ -423,7 +350,7 @@ def _build_dimensions(
     # permission_minimization (I1)
     permission_minimization = {
         "score": i1_disc.get("score", 50),
-        "weight": 0.15,
+        "weight": 0.35,
         "details": {
             "total_permissions": _count_permission_categories(permissions, permission_evidence),
             "high_risk_permissions": i1_disc.get("danger_count", 0),
@@ -436,7 +363,7 @@ def _build_dimensions(
     # scan_results (I2)
     scan_results = {
         "score": i2_disc.get("score", 50),
-        "weight": 0.20,
+        "weight": 0.65,
         "details": {
             "critical_findings": i2_disc.get("critical_count", 0),
             "high_findings": i2_disc.get("high_count", 0),
@@ -540,13 +467,14 @@ def _build_dimensions(
     # signature_verifiability (P2)
     signature_verifiability = {
         "score": p2.get("score", 50),
-        # Missing proof items receive explicit -2 review-score advisories.
-        # A zero weight prevents a second hidden deduction or grade change.
-        "weight": 0.0,
+        "weight": 0.20,
         "details": {
+            "available": p2.get("available") is True,
+            "coverage": p2.get("coverage", 0.0),
             "has_signature": verification.get("signature") is True,
             "has_attestation": verification.get("attestation") is True,
             "has_sbom": verification.get("sbom") is True,
+            "verification_statuses": p2.get("verification_statuses", {}),
         },
     }
 
@@ -616,29 +544,116 @@ def _compute_pass_rate(i2_disc: dict[str, Any]) -> float:
     return max(0.0, round(100.0 - penalty, 1))
 
 
-def _compute_provenance_factor(
+def _build_evidence_assessment(
+    dimensions: dict[str, Any],
     p1: dict[str, Any],
     p2: dict[str, Any],
-) -> float:
-    """Compute a provenance multiplier (0.0–1.0) applied to the final score.
+    c2: dict[str, Any],
+    package_metadata: dict[str, Any],
+    author_history: dict[str, Any] | None,
+    review_records: dict[str, Any] | None,
+    feedback: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Score available evidence without treating missing signals as failures."""
+    feedback_data = feedback if isinstance(feedback, dict) else {}
+    feedback_available = any(
+        bool(feedback_data.get(key))
+        for key in (
+            "avg_rating",
+            "total_ratings",
+            "total_installs",
+            "reports_count",
+            "level_counts",
+        )
+    )
+    availability = {
+        "source_trust": p1.get("available") is True,
+        "signature_verifiability": p2.get("available") is True,
+        "metadata_completeness": bool(package_metadata),
+        "manual_review": bool(review_records),
+        "version_stability": bool(package_metadata.get("version")),
+        "author_reputation": bool(author_history),
+        "user_feedback": feedback_available,
+    }
+    weights = {
+        name: float(dimensions[name]["weight"])
+        for name in availability
+    }
+    total_weight = sum(weights.values())
+    effective_weights = {
+        name: (
+            weight * float(p2.get("coverage", 0.0))
+            if name == "signature_verifiability" and availability[name]
+            else weight if availability[name]
+            else 0.0
+        )
+        for name, weight in weights.items()
+    }
+    available_weight = sum(effective_weights.values())
+    weighted_score = sum(
+        dimensions[name]["score"] * effective_weights[name]
+        for name in availability
+        if effective_weights[name] > 0
+    )
+    score = round(weighted_score / available_weight) if available_weight else 50
+    coverage = round(available_weight / total_weight, 3) if total_weight else 0.0
 
-    When source provenance is weak, the entire trust score is penalised
-    because the package's origin cannot be independently verified.
-    The factor is multiplicative so it scales proportionally with the score.
+    if not available_weight:
+        level = "unavailable"
+    elif coverage < 0.6:
+        level = "limited"
+    elif score >= 80 and coverage >= 0.8:
+        level = "strong"
+    elif score >= 60:
+        level = "moderate"
+    else:
+        level = "limited"
 
-    Returns:
-        float between 0.0 and 1.0 representing the provenance confidence.
-    """
-    factor = 1.0
+    return {
+        "score": score,
+        "coverage": coverage,
+        "level": level,
+        "assessed_dimensions": [name for name in availability if availability[name]],
+        "unavailable_dimensions": [
+            name for name in availability if not availability[name]
+        ],
+        "verification_statuses": p2.get("verification_statuses", {}),
+        "author_reputation": {
+            "status": "assessed" if author_history else "unavailable",
+            "level": c2.get("level", "newcomer") if author_history else "unavailable",
+            "score": c2.get("score", 50) if author_history else None,
+        },
+    }
 
-    p1_level = p1.get("level", "opaque")
-    if p1_level == "opaque":
-        factor *= 0.85
-    elif p1_level == "traceable":
-        factor *= 0.95
-    # verified → no penalty
 
-    return factor
+def _build_security_assessment(
+    *,
+    level: str,
+    score: int,
+    grade: str,
+    i2: dict[str, Any],
+    advisory_policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the security-only result consumed by policy decisions."""
+    if not i2.get("scan_complete", True):
+        status = "inconclusive"
+    elif advisory_policy["manual_required"]:
+        status = "review_required"
+    else:
+        status = "conclusive"
+    return {
+        "score": score,
+        "level": level,
+        "grade": grade,
+        "status": status,
+        "input_dimensions": ["permission_minimization", "scan_results"],
+        "unresolved_findings": sum(
+            1
+            for finding in advisory_policy.get("findings", [])
+            if isinstance(finding, dict)
+            and finding.get("requires_manual_review") is True
+        ),
+    }
 
 
 def _review_advisories(scan_report: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -658,6 +673,10 @@ def _advisory_policy(scan_report: dict[str, Any] | None) -> dict[str, Any]:
     finding_review_pending = False
     downgrade_reasons: list[str] = []
     for advisory in advisories:
+        security_advisory = advisory.get("category") not in {
+            "provenance",
+            "metadata_quality",
+        }
         try:
             deduction += max(0, int(advisory.get("deduction", 0)))
         except (TypeError, ValueError):
@@ -669,8 +688,13 @@ def _advisory_policy(scan_report: dict[str, Any] | None) -> dict[str, Any]:
         if advisory.get("affects_grade") is True and steps:
             downgrade_steps = max(downgrade_steps, steps)
             downgrade_reasons.append(str(advisory.get("title", advisory.get("code", ""))))
-        manual_required = manual_required or advisory.get("requires_manual_review") is True
-        high_priority = high_priority or advisory.get("level") == "high"
+        manual_required = manual_required or (
+            security_advisory
+            and advisory.get("requires_manual_review") is True
+        )
+        high_priority = high_priority or (
+            security_advisory and advisory.get("level") == "high"
+        )
 
     findings = (
         scan_report.get("findings", [])
@@ -700,6 +724,7 @@ def _advisory_policy(scan_report: dict[str, Any] | None) -> dict[str, Any]:
         "high_priority": high_priority,
         "downgrade_reasons": downgrade_reasons,
         "advisories": advisories,
+        "findings": findings if isinstance(findings, list) else [],
     }
 
 
@@ -764,23 +789,14 @@ def rate(
         final_level = "untrusted"
         applied_upgrade = False
         applied_downgrade = False
-        advisory_grade_downgrade_applied = False
     else:
-        # --- Step 7: Baseline level (uses discounted I1/I2/I3/C2) ---
+        # --- Step 7: security-only baseline level ---
         baseline = _determine_baseline(p1, p2, i1_disc, i2_disc, i3_disc, c2_disc)
 
         # --- Step 8: Upgrade / downgrade ---
         final_level, applied_upgrade, applied_downgrade = _apply_upgrade_downgrade(
             baseline, p1, i2, i3, c1, c2
         )
-        advisory_grade_downgrade_applied = False
-        if advisory_policy["downgrade_steps"]:
-            shifted = _shift_level(final_level, advisory_policy["downgrade_steps"])
-            # An undeclared capability is serious, but it cannot by itself
-            # produce the E/blocked grade reserved for confirmed malicious or
-            # explicitly rejected packages.
-            final_level = "high_risk" if shifted == "untrusted" else shifted
-            advisory_grade_downgrade_applied = True
 
     # An incomplete scan cannot produce an automatic trusted result.
     if not i2.get("scan_complete", True) and final_level in ("trusted", "low_risk"):
@@ -796,7 +812,7 @@ def rate(
     ):
         final_level = "medium_risk"
 
-    # --- Step 9: Derive 0-100 score (weighted by declared dimension weights) ---
+    # --- Step 9: derive independent security and evidence indicators ---
     dimensions = _build_dimensions(
         package_metadata,
         p1,
@@ -810,20 +826,20 @@ def rate(
         acquisition_facts=acquisition_facts,
     )
 
-    dimension_scores: dict[str, int] = {
-        name: dim["score"] for name, dim in dimensions.items()
+    security_dimension_names = ("permission_minimization", "scan_results")
+    dimension_scores = {
+        name: dimensions[name]["score"] for name in security_dimension_names
     }
-    dimension_weights: dict[str, float] = {
-        name: dim["weight"] for name, dim in dimensions.items()
+    dimension_weights = {
+        name: dimensions[name]["weight"] for name in security_dimension_names
     }
     base_score = derive_score(
         final_level,
         dimension_scores,
         dimension_weights,
-        provenance_factor=_compute_provenance_factor(p1, p2),
+        provenance_factor=1.0,
     )
-    advisory_deduction = int(advisory_policy["deduction"])
-    score = max(0, base_score - advisory_deduction)
+    score = base_score
 
     # --- Build trace for explainer ---
     trace: dict[str, Any] = {
@@ -846,15 +862,25 @@ def rate(
             continue
         explanations.append({
             "dimension": "review_advisory",
-            "message": str(advisory.get("title", advisory.get("code", "Review advisory"))),
-            "deduction": -deduction,
+            "message": (
+                str(advisory.get("title", advisory.get("code", "Review advisory")))
+                + " (advisory only; does not change the security score)"
+            ),
+            "deduction": 0,
             "evidence": str(advisory.get("evidence", advisory.get("description", "")))[:1000],
         })
 
     # --- Top risks ---
     top_risks = extract_top_risks(trace)
+    if top_risks == ["No significant risks identified"] and (
+        advisory_policy["manual_required"] or advisory_policy["high_priority"]
+    ):
+        top_risks = []
     for advisory in advisory_policy["advisories"]:
-        if advisory.get("level") == "high":
+        if (
+            advisory.get("level") == "high"
+            and advisory.get("category") not in {"provenance", "metadata_quality"}
+        ):
             title = str(advisory.get("title", "High-priority review advisory"))
             if title not in top_risks:
                 top_risks.insert(0, title)
@@ -876,10 +902,28 @@ def rate(
         for finding in scan_findings
     ) or any(
         advisory.get("level") == "high"
+        and advisory.get("category") not in {"provenance", "metadata_quality"}
         for advisory in advisory_policy["advisories"]
     )
 
     grade = LEVEL_TO_GRADE.get(final_level, "C")
+    evidence_assessment = _build_evidence_assessment(
+        dimensions,
+        p1,
+        p2,
+        c2,
+        package_metadata,
+        author_history,
+        review_records,
+        feedback,
+    )
+    security_assessment = _build_security_assessment(
+        level=final_level,
+        score=score,
+        grade=grade,
+        i2=i2,
+        advisory_policy=advisory_policy,
+    )
     return {
         "score": score,
         "package_name": package_metadata.get("name", "unknown"),
@@ -889,10 +933,15 @@ def rate(
         "model_version": get_model_version(),
         "score_breakdown": {
             "base_score": base_score,
-            "advisory_deduction": advisory_deduction,
+            "advisory_deduction": 0,
             "final_score": score,
             "grade_is_security_policy": True,
+            "evidence_score": evidence_assessment["score"],
+            "evidence_coverage": evidence_assessment["coverage"],
+            "unapplied_advisory_points": int(advisory_policy["deduction"]),
         },
+        "security_assessment": security_assessment,
+        "evidence_assessment": evidence_assessment,
         "dimensions": dimensions,
         "explanations": explanations,
         "risk_summary": {
@@ -905,7 +954,7 @@ def rate(
             "review_priority": "high" if advisory_policy["high_priority"] else (
                 "manual" if advisory_policy["manual_required"] else "normal"
             ),
-            "advisory_grade_downgrade_applied": advisory_grade_downgrade_applied,
-            "advisory_grade_downgrade_reasons": advisory_policy["downgrade_reasons"],
+            "advisory_grade_downgrade_applied": False,
+            "advisory_grade_downgrade_reasons": [],
         },
     }

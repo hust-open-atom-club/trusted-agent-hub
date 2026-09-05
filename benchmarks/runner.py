@@ -103,6 +103,76 @@ def _benchmark_check_failures(result: dict[str, Any]) -> list[str]:
         integrity = result.get("integrity") or {}
         if int(integrity.get("content_hash_mismatches", 0)):
             failures.append("benchmark fixture content hash mismatch")
+
+        gates = result.get("quality_gates") or {}
+        metrics = result.get("metrics") or {}
+        corpus = result.get("corpus") or {}
+        distribution = corpus.get("ground_truth_distribution") or {}
+        benign_cases = int(distribution.get("benign", 0)) + int(
+            distribution.get("benign_capability", 0)
+        )
+        minimum_checks = (
+            ("case count", int(corpus.get("case_count", 0)), "minimum_cases"),
+            ("benign case count", benign_cases, "minimum_benign_cases"),
+            (
+                "malicious case count",
+                int(distribution.get("malicious", 0)),
+                "minimum_malicious_cases",
+            ),
+        )
+        for label, actual, gate_name in minimum_checks:
+            minimum = int(gates.get(gate_name, 0))
+            if actual < minimum:
+                failures.append(
+                    f"{label} below quality gate (actual={actual}, minimum={minimum})"
+                )
+
+        rate_checks = (
+            (
+                "raw rule precision",
+                float(((metrics.get("raw_rules") or {}).get("overall") or {}).get("precision", 0)),
+                "minimum_raw_precision",
+                "minimum",
+            ),
+            (
+                "raw rule recall",
+                float(((metrics.get("raw_rules") or {}).get("overall") or {}).get("recall", 0)),
+                "minimum_raw_recall",
+                "minimum",
+            ),
+            (
+                "root issue precision",
+                float(((metrics.get("root_issues") or {}).get("overall") or {}).get("precision", 0)),
+                "minimum_root_precision",
+                "minimum",
+            ),
+            (
+                "root issue recall",
+                float(((metrics.get("root_issues") or {}).get("overall") or {}).get("recall", 0)),
+                "minimum_root_recall",
+                "minimum",
+            ),
+            (
+                "benign high/critical false-positive rate",
+                float(metrics.get("benign_high_critical_false_positive_rate", 0)),
+                "maximum_benign_high_critical_false_positive_rate",
+                "maximum",
+            ),
+            (
+                "malicious high/critical recall",
+                float(metrics.get("malicious_high_critical_recall", 0)),
+                "minimum_malicious_high_critical_recall",
+                "minimum",
+            ),
+        )
+        for label, actual, gate_name, direction in rate_checks:
+            threshold = float(gates.get(gate_name, 0 if direction == "minimum" else 1))
+            failed = actual < threshold if direction == "minimum" else actual > threshold
+            if failed:
+                failures.append(
+                    f"{label} outside quality gate "
+                    f"(actual={actual:.4f}, {direction}={threshold:.4f})"
+                )
     else:
         overall = result.get("overall") or {}
         if int(overall.get("fp", 0)):
@@ -431,7 +501,10 @@ def _score_case(
     source.update(deepcopy(scoring_context.get("source", {})))
     source["commit_hash"] = source_commit_hash
     verification = acquisition.setdefault("verification", {})
-    verification.update(deepcopy(scoring_context.get("verification", {})))
+    configured_verification = deepcopy(scoring_context.get("verification", {}))
+    verification.update(configured_verification)
+    capabilities = acquisition.setdefault("verification_capabilities", {})
+    capabilities.update({key: True for key in configured_verification})
     acquisition["acquisition_method"] = "benchmark_fixture"
     result = _load_scorer()(
         package_metadata=metadata,
@@ -692,6 +765,7 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     total_fn = sum(item["fn"] for item in raw_metrics.values())
     result: dict[str, Any] = {
         "schema_version": "2.0",
+        "quality_gates": deepcopy(config["quality_gates"]),
         "corpus": {
             "case_count": len(case_results),
             "ground_truth_distribution": {

@@ -16,6 +16,9 @@
           },
           "verification": {
             "$ref": "#/components/schemas/ProvenanceVerification"
+          },
+          "verification_capabilities": {
+            "$ref": "#/components/schemas/ProvenanceVerificationCapabilities"
           }
         },
         "required": [
@@ -550,6 +553,113 @@
           "error"
         ],
         "title": "ErrorEnvelope",
+        "type": "object"
+      },
+      "EvidenceAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "assessed_dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assessed Dimensions",
+            "type": "array"
+          },
+          "author_reputation": {
+            "$ref": "#/components/schemas/EvidenceAuthorReputation"
+          },
+          "coverage": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Coverage",
+            "type": "number"
+          },
+          "level": {
+            "enum": [
+              "strong",
+              "moderate",
+              "limited",
+              "unavailable"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          },
+          "unavailable_dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unavailable Dimensions",
+            "type": "array"
+          },
+          "verification_statuses": {
+            "additionalProperties": {
+              "enum": [
+                "verified",
+                "not_verified",
+                "not_available"
+              ],
+              "type": "string"
+            },
+            "title": "Verification Statuses",
+            "type": "object"
+          }
+        },
+        "required": [
+          "score",
+          "coverage",
+          "level",
+          "author_reputation"
+        ],
+        "title": "EvidenceAssessment",
+        "type": "object"
+      },
+      "EvidenceAuthorReputation": {
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "enum": [
+              "consistent_good",
+              "newcomer",
+              "inconsistent",
+              "tainted",
+              "unavailable"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "status": {
+            "enum": [
+              "assessed",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "level"
+        ],
+        "title": "EvidenceAuthorReputation",
         "type": "object"
       },
       "ExtractInstallationStep": {
@@ -2630,6 +2740,39 @@
         "title": "ProvenanceVerification",
         "type": "object"
       },
+      "ProvenanceVerificationCapabilities": {
+        "additionalProperties": false,
+        "description": "Whether each independent verifier ran for this acquisition.",
+        "properties": {
+          "attestation": {
+            "default": false,
+            "title": "Attestation",
+            "type": "boolean"
+          },
+          "owner": {
+            "default": false,
+            "title": "Owner",
+            "type": "boolean"
+          },
+          "repository": {
+            "default": true,
+            "title": "Repository",
+            "type": "boolean"
+          },
+          "sbom": {
+            "default": false,
+            "title": "Sbom",
+            "type": "boolean"
+          },
+          "signature": {
+            "default": false,
+            "title": "Signature",
+            "type": "boolean"
+          }
+        },
+        "title": "ProvenanceVerificationCapabilities",
+        "type": "object"
+      },
       "ReviewAdvisory": {
         "additionalProperties": false,
         "properties": {
@@ -4121,6 +4264,65 @@
         "title": "ScannerError",
         "type": "object"
       },
+      "SecurityAssessment": {
+        "additionalProperties": false,
+        "properties": {
+          "grade": {
+            "$ref": "#/components/schemas/Grade"
+          },
+          "input_dimensions": {
+            "items": {
+              "enum": [
+                "permission_minimization",
+                "scan_results"
+              ],
+              "type": "string"
+            },
+            "title": "Input Dimensions",
+            "type": "array"
+          },
+          "level": {
+            "enum": [
+              "trusted",
+              "low_risk",
+              "medium_risk",
+              "high_risk",
+              "untrusted"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "conclusive",
+              "review_required",
+              "inconclusive"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unresolved_findings": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unresolved Findings",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "score",
+          "level",
+          "grade",
+          "status"
+        ],
+        "title": "SecurityAssessment",
+        "type": "object"
+      },
       "ShellPermissions": {
         "additionalProperties": false,
         "properties": {
@@ -4473,6 +4675,16 @@
             ],
             "title": "Dimensions"
           },
+          "evidence_assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "explanations": {
             "anyOf": [
               {
@@ -4514,6 +4726,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/RiskSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "security_assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityAssessment"
               },
               {
                 "type": "null"

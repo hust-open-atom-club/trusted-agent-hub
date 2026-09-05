@@ -36,12 +36,17 @@ def generate_explanations(
     """
     explanations: list[dict[str, Any]] = []
 
-    # --- Source verifiability (P1 → source_trust) ---
+    # Source verifiability and author reputation are reported by the
+    # independent evidence assessment. They do not create security-score
+    # deductions here.
     p1: dict[str, Any] = trace.get("p1", {})
-    _explain_dimension(explanations, "source_trust", 100,
-                       p1.get("level", "opaque"),
-                       p1.get("evidence", []),
-                       {"verified": 0, "traceable": -15, "opaque": -30})
+    if p1.get("level") in {"traceable", "opaque"}:
+        explanations.append({
+            "dimension": "source_trust",
+            "message": f"Evidence source is '{p1.get('level')}' (no security deduction)",
+            "deduction": 0,
+            "evidence": "; ".join(p1.get("evidence", [])[:3]),
+        })
 
     # Signature/SBOM/attestation gaps are emitted as explicit -2 review
     # advisories by the scanner. Do not manufacture a second nominal P2
@@ -82,10 +87,16 @@ def generate_explanations(
 
     # --- Author history (C2 → author_reputation) ---
     c2: dict[str, Any] = trace.get("c2", {})
-    _explain_dimension(explanations, "author_reputation", 100,
-                       c2.get("level", "newcomer"),
-                       c2.get("evidence", []),
-                       {"consistent_good": 0, "newcomer": -15, "inconsistent": -30, "tainted": -60})
+    if c2.get("level") in {"newcomer", "inconsistent", "tainted"}:
+        explanations.append({
+            "dimension": "author_reputation",
+            "message": (
+                f"Author reputation is '{c2.get('level')}' "
+                "(independent from security score)"
+            ),
+            "deduction": 0,
+            "evidence": "; ".join(c2.get("evidence", [])[:3]),
+        })
 
     # --- Veto ---
     if applied_veto:
@@ -157,15 +168,8 @@ def extract_top_risks(trace: dict[str, Any]) -> list[str]:
     """
     risks: list[str] = []
 
-    # Check each layer for concerning signals
-    p1 = trace.get("p1", {})
-    if p1.get("level") == "opaque":
-        risks.append("Source provenance is opaque — origin cannot be verified")
-
-    p2 = trace.get("p2", {})
-    if p2.get("level") == "none":
-        risks.append("No content integrity hash or signature")
-
+    # Security risks only. Provenance gaps and author reputation are exposed
+    # by evidence_assessment and must not be presented as vulnerabilities.
     i1 = trace.get("i1", {})
     i1_level = i1.get("level", "")
     if i1_level == "dangerous":
@@ -191,13 +195,6 @@ def extract_top_risks(trace: dict[str, Any]) -> list[str]:
     c1_level = c1.get("level", "")
     if c1_level == "rejected":
         risks.append("Package was rejected during manual review")
-
-    c2 = trace.get("c2", {})
-    c2_level = c2.get("level", "")
-    if c2_level == "tainted":
-        risks.append("Author has a tainted history with serious violations")
-    elif c2_level == "inconsistent":
-        risks.append("Author has an inconsistent publishing record")
 
     # If no risks found, add a positive note
     if not risks:

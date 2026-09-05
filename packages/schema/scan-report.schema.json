@@ -173,6 +173,19 @@
               },
               "additionalProperties": false
             },
+            "verification_capabilities": {
+              "type": "object",
+              "description": "本次采集实际可用的独立验证能力；false 表示未运行，不能解释为验证失败",
+              "required": ["repository", "owner", "signature", "attestation", "sbom"],
+              "properties": {
+                "repository": { "type": "boolean" },
+                "owner": { "type": "boolean" },
+                "signature": { "type": "boolean" },
+                "attestation": { "type": "boolean" },
+                "sbom": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            },
             "acquisition_method": { "type": "string" }
           },
           "additionalProperties": false
