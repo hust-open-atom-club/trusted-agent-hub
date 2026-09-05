@@ -20,10 +20,10 @@ def aggregate_findings(
 def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
     """Build the score-facing summary from the current effective severities.
 
-    Semantic findings awaiting LLM validation use ``severity=info``.  Calling
-    this helper after the review therefore keeps the report summary aligned
-    with the reviewed finding state instead of retaining the static
-    candidate's original high/critical severity.
+    Semantic findings keep their static severity until a guarded LLM decision
+    changes ``effective_severity``. Calling this helper after review keeps the
+    score-facing summary aligned with that effective state while preserving
+    the immutable static evidence on each finding.
     """
     severity_counts = {
         "critical": 0,

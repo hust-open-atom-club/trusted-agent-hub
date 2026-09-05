@@ -2,7 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from scanners.risk_scanner.redaction import build_finding_contexts, redact_report
+from scanners.risk_scanner.redaction import (
+    build_finding_context_bundle,
+    build_finding_contexts,
+    redact_report,
+)
 from src.services.source_snapshots import SourceSnapshotStore
 
 
@@ -34,6 +38,62 @@ def test_semantic_candidate_uses_original_severity_for_context():
 
     assert "semantic-1" in contexts
     assert "Do not run" in contexts["semantic-1"]
+
+
+def test_context_bundle_audits_all_referenced_locations_and_actual_ranges():
+    contexts, audit = build_finding_context_bundle(
+        [{
+            "id": "f1",
+            "severity": "high",
+            "location": {"file": "main.py", "line": 2},
+            "occurrences": {
+                "count": 2,
+                "items": [
+                    {"file": "main.py", "line": 2},
+                    {"file": "helper.py", "line": 3},
+                ],
+            },
+        }],
+        {
+            "main.py": "one\ntwo\nthree\n",
+            "helper.py": "alpha\nbeta\ngamma\ndelta\n",
+        },
+        max_lines=3,
+    )
+
+    finding_audit = audit["findings"]["f1"]
+    assert "[SOURCE file=main.py" in contexts["f1"]
+    assert "[SOURCE file=helper.py" in contexts["f1"]
+    assert finding_audit["delivery_status"] == "complete"
+    assert finding_audit["requested_locations"] == 2
+    assert finding_audit["included_locations"] == 2
+    assert finding_audit["files"] == ["helper.py", "main.py"]
+    assert finding_audit["transport_truncated"] is False
+    assert audit["summary"]["complete"] == 1
+
+
+def test_context_bundle_marks_byte_truncation_partial_without_overstating_lines():
+    contexts, audit = build_finding_context_bundle(
+        [{
+            "id": "f1",
+            "severity": "high",
+            "location": {"file": "main.py", "line": 3},
+        }],
+        {"main.py": "one\ntwo\nthree\nfour\nfive\n"},
+        max_lines=5,
+        max_bytes_per_finding=60,
+    )
+
+    finding_audit = audit["findings"]["f1"]
+    delivered_numbers = [
+        int(line.split(":", 1)[0])
+        for line in contexts["f1"].splitlines()
+        if line.split(":", 1)[0].isdigit()
+    ]
+    assert finding_audit["delivery_status"] == "partial"
+    assert finding_audit["transport_truncated"] is True
+    assert finding_audit["included_line_count"] == len(set(delivered_numbers))
+    assert finding_audit["line_ranges"][0]["end_line"] == max(delivered_numbers)
 
 
 def test_source_snapshot_store_is_independent_and_expiring(tmp_path: Path):

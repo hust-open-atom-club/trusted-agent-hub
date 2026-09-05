@@ -261,6 +261,8 @@ class ScanFinding(StrictContractModel):
     llm_label: LLM_LABEL | None = None
     candidate_severity: str | None = None
     requires_llm_validation: bool | None = None
+    llm_adjudication_eligible: bool | None = None
+    llm_adjudication_reason: str | None = None
     llm_review_state: Literal[
         "pending",
         "confirmed_harmful",
@@ -275,6 +277,23 @@ class ScanFinding(StrictContractModel):
     llm_confidence: float | None = Field(default=None, ge=0, le=1)
     llm_explanation: str | None = None
     llm_review_rounds: int | None = Field(default=None, ge=0, le=3)
+    llm_evidence_sufficient: bool | None = None
+    llm_missing_context: list[str] = Field(default_factory=list)
+    llm_supporting_evidence: list[dict[str, object]] = Field(default_factory=list)
+    llm_context_status: Literal["complete", "partial", "missing"] | None = None
+    llm_policy_version: str | None = None
+    llm_effective_severity_before: Literal[
+        "critical", "high", "medium", "low", "info"
+    ] | None = None
+    llm_adjudication_action: Literal[
+        "downgraded",
+        "escalated",
+        "preserved",
+        "blocked_confirmed_vulnerability",
+        "blocked_insufficient_evidence",
+        "not_eligible",
+        "manual_review",
+    ] | None = None
     requires_manual_review: bool | None = None
     downgraded: str | None = None
     remediation: str | None = None
@@ -332,12 +351,14 @@ class LLMReview(StrictContractModel):
     findings_reviewed: int = 0
     findings_skipped: int = 0
     findings_pending: int = 0
+    findings_context_incomplete: int = 0
     status: Literal[
         "not_triggered",
         "not_required",
         "not_configured",
         "completed",
         "call_failed",
+        "context_incomplete",
     ] | None = None
     attempts: int = 0
     review_rounds: int = Field(default=0, ge=0, le=3)
@@ -345,6 +366,11 @@ class LLMReview(StrictContractModel):
     labels: dict[str, LLM_LABEL] = Field(default_factory=dict)
     decisions: dict[str, dict[str, object]] = Field(default_factory=dict)
     labels_summary: LLMReviewLabelsSummary | None = None
+    policy_version: str | None = None
+    decision_policy: dict[str, object] = Field(default_factory=dict)
+    prompt_audit: dict[str, object] = Field(default_factory=dict)
+    review_configuration: dict[str, object] = Field(default_factory=dict)
+    context_coverage: dict[str, object] = Field(default_factory=dict)
     error: str | None = None
     fallback: str | None = None
 

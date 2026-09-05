@@ -45,36 +45,222 @@ def build_finding_contexts(
     findings: list[dict[str, Any]],
     file_cache: dict[str, str],
     *,
-    max_lines: int = 20,
-    max_bytes_per_finding: int = 4096,
-    max_total_bytes: int = 32 * 1024,
+    max_lines: int = 60,
+    max_bytes_per_finding: int = 8192,
+    max_total_bytes: int = 64 * 1024,
 ) -> dict[str, str]:
+    """Return redacted source excerpts for backward-compatible callers."""
+    contexts, _ = build_finding_context_bundle(
+        findings,
+        file_cache,
+        max_lines=max_lines,
+        max_bytes_per_finding=max_bytes_per_finding,
+        max_total_bytes=max_total_bytes,
+    )
+    return contexts
+
+
+def _reviewable_finding(finding: dict[str, Any]) -> bool:
+    review_severity = str(
+        finding.get("candidate_severity")
+        or finding.get("static_severity")
+        or finding.get("severity", "")
+    ).lower()
+    semantic_candidate = finding.get("requires_llm_validation") is True
+    adjudication_candidate = finding.get("llm_adjudication_eligible") is True
+    return review_severity in {"critical", "high"} or (
+        (semantic_candidate or adjudication_candidate)
+        and review_severity == "medium"
+    )
+
+
+def _finding_locations(finding: dict[str, Any]) -> list[tuple[str, int]]:
+    candidates: list[dict[str, Any]] = []
+    location = finding.get("location")
+    if isinstance(location, dict):
+        candidates.append(location)
+    for hit in finding.get("detector_hits") or []:
+        if isinstance(hit, dict) and isinstance(hit.get("location"), dict):
+            candidates.append(hit["location"])
+    occurrences = finding.get("occurrences") or {}
+    if isinstance(occurrences, dict):
+        candidates.extend(
+            item
+            for item in occurrences.get("items") or []
+            if isinstance(item, dict)
+        )
+
+    locations: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in candidates:
+        file_path = str(item.get("file") or "")
+        try:
+            line = max(1, int(item.get("line", 1) or 1))
+        except (TypeError, ValueError):
+            line = 1
+        key = (file_path, line)
+        if file_path and key not in seen:
+            seen.add(key)
+            locations.append(key)
+    return locations
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> tuple[str, bool]:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value, False
+    return encoded[:max_bytes].decode("utf-8", errors="ignore"), True
+
+
+def build_finding_context_bundle(
+    findings: list[dict[str, Any]],
+    file_cache: dict[str, str],
+    *,
+    max_lines: int = 60,
+    max_locations_per_finding: int = 4,
+    max_bytes_per_finding: int = 8192,
+    max_total_bytes: int = 64 * 1024,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Build review excerpts plus an explicit, non-secret coverage audit.
+
+    ``delivery_status=complete`` means every scanner-referenced location was
+    delivered without transport truncation. It does not claim that the whole
+    source file was sent; ``source_line_coverage`` and ``full_file_included``
+    make that distinction visible to reviewers and report consumers.
+    """
     contexts: dict[str, str] = {}
+    finding_audits: dict[str, dict[str, Any]] = {}
     total = 0
     for finding in findings:
-        review_severity = str(
-            finding.get("candidate_severity") or finding.get("severity", "")
-        ).lower()
-        is_semantic_candidate = finding.get("requires_llm_validation") is True
-        if review_severity not in {"critical", "high"} and not (
-            is_semantic_candidate and review_severity == "medium"
-        ):
+        if not _reviewable_finding(finding):
             continue
         fid = str(finding.get("id", ""))
-        location = finding.get("location", {}) or {}
-        content = file_cache.get(str(location.get("file", "")), "")
-        if not fid or not content:
+        if not fid:
             continue
-        line = max(1, int(location.get("line", 1) or 1))
-        lines = content.splitlines()
-        half = max_lines // 2
-        start = max(0, line - 1 - half)
-        end = min(len(lines), start + max_lines)
-        context = "\n".join(f"{idx + 1}: {lines[idx]}" for idx in range(start, end))
-        context = redact_text(context)[:max_bytes_per_finding]
+
+        all_locations = _finding_locations(finding)
+        selected_locations = all_locations[:max_locations_per_finding]
+        reasons: list[str] = []
+        if len(all_locations) > len(selected_locations):
+            reasons.append("location_limit")
+
+        excerpts: list[str] = []
+        ranges: list[dict[str, Any]] = []
+        source_line_keys: set[tuple[str, int]] = set()
+        source_file_lines: dict[str, int] = {}
+        transport_truncated = False
+        for file_path, line in selected_locations:
+            content = file_cache.get(file_path)
+            if content is None:
+                reasons.append(f"source_missing:{file_path}")
+                continue
+            lines = content.splitlines()
+            source_file_lines[file_path] = len(lines)
+            if not lines:
+                reasons.append(f"source_empty:{file_path}")
+                continue
+            half = max_lines // 2
+            start = max(0, min(line - 1, len(lines) - 1) - half)
+            end = min(len(lines), start + max_lines)
+            start = max(0, end - max_lines)
+            excerpt = "\n".join(
+                f"{idx + 1}: {lines[idx]}" for idx in range(start, end)
+            )
+            excerpt = redact_text(excerpt)
+            header = (
+                f"[SOURCE file={file_path} lines={start + 1}-{end} "
+                f"total_lines={len(lines)}]"
+            )
+            candidate = f"{header}\n{excerpt}"
+            used = sum(len(item.encode("utf-8")) + 2 for item in excerpts)
+            per_finding_remaining = max(0, max_bytes_per_finding - used)
+            total_remaining = max(0, max_total_bytes - total - used)
+            allowance = min(per_finding_remaining, total_remaining)
+            candidate, truncated = _truncate_utf8(
+                candidate,
+                allowance,
+            )
+            if truncated:
+                transport_truncated = True
+                reasons.append(
+                    "per_finding_byte_limit"
+                    if per_finding_remaining <= total_remaining
+                    else "total_byte_limit"
+                )
+            if not candidate:
+                break
+            delivered_lines = [
+                int(value)
+                for value in re.findall(r"(?m)^(\d+):", candidate)
+            ]
+            if not delivered_lines:
+                transport_truncated = True
+                reasons.append("source_lines_not_delivered")
+                break
+            excerpts.append(candidate)
+            ranges.append({
+                "file": file_path,
+                "start_line": min(delivered_lines),
+                "end_line": max(delivered_lines),
+            })
+            source_line_keys.update(
+                (file_path, source_line) for source_line in delivered_lines
+            )
+            if truncated:
+                break
+
+        context = "\n\n".join(excerpts)
         encoded_size = len(context.encode("utf-8"))
-        if total + encoded_size > max_total_bytes:
-            break
-        contexts[fid] = context
-        total += encoded_size
-    return contexts
+        if context:
+            contexts[fid] = context
+            total += encoded_size
+
+        requested = len(all_locations)
+        included = len(ranges)
+        if not context or included == 0:
+            delivery_status = "missing"
+        elif included < requested or transport_truncated:
+            delivery_status = "partial"
+        else:
+            delivery_status = "complete"
+        total_source_lines = sum(source_file_lines.values())
+        finding_audits[fid] = {
+            "delivery_status": delivery_status,
+            "requested_locations": requested,
+            "included_locations": included,
+            "files": sorted(source_file_lines),
+            "line_ranges": ranges,
+            "included_line_count": len(source_line_keys),
+            "total_source_lines": total_source_lines,
+            "source_line_coverage": (
+                round(len(source_line_keys) / total_source_lines, 4)
+                if total_source_lines
+                else 0.0
+            ),
+            "full_file_included": bool(source_file_lines) and all(
+                any(
+                    item["file"] == file_path
+                    and item["start_line"] == 1
+                    and item["end_line"] == line_count
+                    for item in ranges
+                )
+                for file_path, line_count in source_file_lines.items()
+            ),
+            "context_bytes": encoded_size,
+            "transport_truncated": transport_truncated,
+            "reasons": sorted(set(reasons)),
+        }
+
+    statuses = [item["delivery_status"] for item in finding_audits.values()]
+    audit = {
+        "findings": finding_audits,
+        "summary": {
+            "candidates": len(finding_audits),
+            "complete": statuses.count("complete"),
+            "partial": statuses.count("partial"),
+            "missing": statuses.count("missing"),
+            "total_context_bytes": total,
+            "max_total_bytes": max_total_bytes,
+        },
+    }
+    return contexts, audit

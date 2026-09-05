@@ -70,7 +70,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.11.0"
+SCANNER_VERSION = "0.12.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -537,15 +537,17 @@ class RiskScanner:
                 finding["title"] = f"{finding.get('title', '')} [文档示例/说明文本]"
 
     def _mark_semantic_findings_for_llm_review(self) -> None:
-        """Keep context-sensitive text matches out of scoring until validated.
+        """Mark findings that a guarded semantic review may adjudicate.
 
         A regex match in SKILL.md, a prompt, or a reference document is a
-        semantic review candidate rather than proof of a vulnerability.  The
-        original severity is retained for the LLM reviewer, while ``info`` is
-        the effective pre-review severity used by deterministic scoring.
+        semantic review candidate rather than proof of a vulnerability. Static
+        and effective severities remain unchanged until a sufficiently audited
+        multi-judge decision is applied by the API orchestration layer.
         """
         for finding in self.findings:
-            severity = str(finding.get("severity", "info")).lower()
+            severity = str(
+                finding.get("static_severity") or finding.get("severity", "info")
+            ).lower()
             if severity not in {"critical", "high", "medium"}:
                 continue
             category = str(finding.get("category", ""))
@@ -556,12 +558,36 @@ class RiskScanner:
                 category in _ALWAYS_SEMANTIC_VALIDATION_CATEGORIES
                 or (is_text and category in _SEMANTIC_VALIDATION_CATEGORIES)
             )
-            if not requires_semantic_review:
+            contextual_finding = (
+                finding.get("kind") == "context_dependent"
+                or finding.get("disposition") == "needs_context"
+            )
+            semantic_code_candidate = (
+                category in _SEMANTIC_VALIDATION_CATEGORIES
+                and severity in {"critical", "high"}
+            )
+            confirmed_vulnerability = (
+                finding.get("kind") == "vulnerability"
+                and finding.get("disposition") == "confirmed_vulnerability"
+            )
+            adjudication_eligible = (
+                requires_semantic_review
+                or contextual_finding
+                or semantic_code_candidate
+            ) and not confirmed_vulnerability
+            if not adjudication_eligible:
                 continue
             finding["candidate_severity"] = severity
-            finding["severity"] = "info"
-            finding["effective_severity"] = "info"
-            finding["requires_llm_validation"] = True
+            finding["llm_adjudication_eligible"] = True
+            finding["llm_adjudication_reason"] = (
+                "semantic_text"
+                if requires_semantic_review
+                else "context_dependent_code"
+                if contextual_finding
+                else "semantic_code_candidate"
+            )
+            if requires_semantic_review:
+                finding["requires_llm_validation"] = True
             finding["llm_review_state"] = "pending"
             finding["requires_manual_review"] = True
 

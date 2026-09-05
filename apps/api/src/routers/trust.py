@@ -52,7 +52,7 @@ _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from scanners.risk_scanner.redaction import (
-    build_finding_contexts,
+    build_finding_context_bundle,
     redact_report,
     redact_value,
 )
@@ -152,14 +152,26 @@ def _load_scanner():
 
 _LLM_REVIEWED_SEVERITIES = frozenset({"critical", "high"})
 _LLM_SEMANTIC_REVIEWED_SEVERITIES = frozenset({"critical", "high", "medium"})
+_LLM_SEVERITY_RANK = {
+    "info": 1,
+    "low": 2,
+    "medium": 3,
+    "high": 4,
+    "critical": 5,
+}
 
 
 def _is_llm_reviewable_finding(finding: dict[str, Any]) -> bool:
     severity = str(
-        finding.get("candidate_severity") or finding.get("severity", "")
+        finding.get("candidate_severity")
+        or finding.get("static_severity")
+        or finding.get("severity", "")
     ).lower()
     return severity in _LLM_REVIEWED_SEVERITIES or (
-        finding.get("requires_llm_validation") is True
+        (
+            finding.get("requires_llm_validation") is True
+            or finding.get("llm_adjudication_eligible") is True
+        )
         and severity in _LLM_SEMANTIC_REVIEWED_SEVERITIES
     )
 
@@ -181,7 +193,7 @@ def _mark_llm_review_unavailable(
     findings: list[dict[str, Any]],
     error: Exception,
 ) -> dict[str, Any]:
-    """Keep unresolved semantic candidates non-scoring and require review."""
+    """Preserve unresolved severities and require manual review."""
     labels: dict[str, str] = {}
     decisions: dict[str, dict[str, object]] = {}
     reviewed_count = 0
@@ -202,10 +214,12 @@ def _mark_llm_review_unavailable(
         finding["llm_confidence"] = 0.0
         finding["llm_explanation"] = "LLM semantic review unavailable"
         finding["llm_review_rounds"] = 0
+        finding["llm_evidence_sufficient"] = False
+        finding["llm_missing_context"] = ["LLM semantic review unavailable"]
+        finding["llm_supporting_evidence"] = []
+        finding["llm_context_status"] = "missing"
+        finding["llm_adjudication_action"] = "manual_review"
         finding["requires_manual_review"] = True
-        if finding.get("requires_llm_validation") is True:
-            finding["severity"] = "info"
-            finding["effective_severity"] = "info"
         finding_id = str(finding.get("id", ""))
         if finding_id:
             labels[finding_id] = "llm:unavailable"
@@ -214,6 +228,10 @@ def _mark_llm_review_unavailable(
                 "impact": "unknown",
                 "intent": "benign",
                 "confidence": 0.0,
+                "context_role": "unknown",
+                "evidence_sufficient": False,
+                "missing_context": ["LLM semantic review unavailable"],
+                "supporting_evidence": [],
                 "explanation": "LLM semantic review unavailable",
                 "rounds": 0,
             }
@@ -228,6 +246,7 @@ def _mark_llm_review_unavailable(
         "attempts": 0,
         "review_rounds": 0,
         "arbitrated": 0,
+        "findings_context_incomplete": reviewed_count,
         "labels": labels,
         "decisions": decisions,
         "labels_summary": {
@@ -236,6 +255,36 @@ def _mark_llm_review_unavailable(
             "likely_benign": 0,
             "uncertain": 0,
             "unavailable": reviewed_count,
+        },
+        "policy_version": "llm-adjudication-v2",
+        "decision_policy": {
+            "independent_reviews": 2,
+            "arbitration_on_disagreement": True,
+            "benign_downgrade_confidence": 0.85,
+            "requires_complete_context": True,
+            "requires_cited_evidence": True,
+            "confirmed_vulnerability_downgrade_allowed": False,
+        },
+        "prompt_audit": {
+            "template_version": "unavailable",
+            "response_schema_version": "2.0",
+            "system_prompt_sha256": "unavailable",
+            "payload_sha256s": [],
+            "payload_count": 0,
+        },
+        "review_configuration": {
+            "provider": "unavailable",
+            "model": "unavailable",
+            "batch_size": 0,
+            "temperature": 0.0,
+            "max_output_tokens": 1024,
+        },
+        "context_coverage": {
+            "candidates": reviewed_count,
+            "complete": 0,
+            "partial": 0,
+            "missing": reviewed_count,
+            "total_context_bytes": 0,
         },
         "error": f"{type(error).__name__}: {error}",
         "fallback": "manual_review_required",
@@ -246,11 +295,30 @@ def _apply_llm_decisions(
     findings: list[dict[str, Any]],
     result: dict[str, Any],
 ) -> None:
-    """Apply semantic verdicts while preserving deterministic code findings."""
+    """Apply guarded two-way adjudication without overwriting static evidence."""
     labels = result.get("labels", {})
     decisions = result.get("decisions", {})
     if not isinstance(labels, dict) or not isinstance(decisions, dict):
         raise ValueError("LLM review labels and decisions must be objects")
+    decision_policy = result.get("decision_policy") or {}
+    try:
+        benign_confidence = max(
+            0.0,
+            min(1.0, float(decision_policy.get("benign_downgrade_confidence", 0.85))),
+        )
+    except (TypeError, ValueError):
+        benign_confidence = 0.85
+
+    def severity(value: object, fallback: str = "info") -> str:
+        normalized = str(value or fallback).lower()
+        return normalized if normalized in _LLM_SEVERITY_RANK else fallback
+
+    def higher(left: str, right: str) -> str:
+        return (
+            left
+            if _LLM_SEVERITY_RANK[left] >= _LLM_SEVERITY_RANK[right]
+            else right
+        )
 
     for finding in findings:
         finding_id = str(finding.get("id", ""))
@@ -278,20 +346,95 @@ def _apply_llm_decisions(
         finding["llm_confidence"] = confidence
         finding["llm_explanation"] = str(decision.get("explanation", ""))[:1000]
         finding["llm_review_rounds"] = rounds
+        context_audit = decision.get("context_audit") or {}
+        context_status = str(context_audit.get("delivery_status", "missing"))
+        if context_status not in {"complete", "partial", "missing"}:
+            context_status = "missing"
+        evidence_sufficient = decision.get("evidence_sufficient") is True
+        missing_context = [
+            str(item)[:500]
+            for item in (decision.get("missing_context") or [])[:10]
+            if str(item).strip()
+        ] if isinstance(decision.get("missing_context"), list) else []
+        supporting_evidence = [
+            item
+            for item in (decision.get("supporting_evidence") or [])[:10]
+            if isinstance(item, dict)
+        ] if isinstance(decision.get("supporting_evidence"), list) else []
+        finding["llm_evidence_sufficient"] = evidence_sufficient
+        finding["llm_missing_context"] = missing_context
+        finding["llm_supporting_evidence"] = supporting_evidence
+        finding["llm_context_status"] = context_status
+        finding["llm_policy_version"] = str(
+            result.get("policy_version") or "unknown"
+        )
 
-        if finding.get("requires_llm_validation") is not True:
-            continue
-        finding["requires_manual_review"] = verdict in {"uncertain", "unavailable"}
-        if verdict == "confirmed_harmful":
-            finding["severity"] = "critical" if impact == "critical" else "high"
-        elif verdict == "confirmed_risky":
-            finding["severity"] = "medium"
+        static_severity = severity(
+            finding.get("static_severity")
+            or finding.get("candidate_severity")
+            or finding.get("severity")
+        )
+        effective_before = severity(
+            finding.get("effective_severity") or finding.get("severity"),
+            static_severity,
+        )
+        finding["static_severity"] = static_severity
+        finding["llm_effective_severity_before"] = effective_before
+        effective_after = effective_before
+
+        eligible = (
+            finding.get("llm_adjudication_eligible") is True
+            or finding.get("requires_llm_validation") is True
+        )
+        protected = (
+            finding.get("kind") == "vulnerability"
+            and finding.get("disposition") == "confirmed_vulnerability"
+        )
+        benign_guard_passed = (
+            verdict == "likely_benign"
+            and eligible
+            and not protected
+            and confidence >= benign_confidence
+            and rounds >= 2
+            and evidence_sufficient
+            and context_status == "complete"
+            and bool(supporting_evidence)
+        )
+
+        if benign_guard_passed:
+            effective_after = "info"
+            finding["disposition"] = "false_positive"
+            finding["downgraded"] = "llm_consensus"
+            finding["llm_adjudication_action"] = "downgraded"
+            finding["requires_manual_review"] = False
+        elif verdict in {"confirmed_harmful", "confirmed_risky"}:
+            target = severity(
+                impact,
+                "high" if verdict == "confirmed_harmful" else "medium",
+            )
+            if verdict == "confirmed_harmful" and target in {"info", "low", "medium"}:
+                target = "high"
+            if verdict == "confirmed_risky" and target in {"info", "low"}:
+                target = "medium"
+            effective_after = higher(effective_before, target)
+            finding["llm_adjudication_action"] = (
+                "escalated" if effective_after != effective_before else "preserved"
+            )
+            finding["requires_manual_review"] = False
         else:
-            # Benign and unresolved semantic candidates do not participate in
-            # automatic security scoring. Unresolved items remain visible and
-            # explicitly require manual review.
-            finding["severity"] = "info"
-        finding["effective_severity"] = finding["severity"]
+            if verdict == "likely_benign" and protected:
+                action = "blocked_confirmed_vulnerability"
+            elif verdict == "likely_benign" and not eligible:
+                action = "not_eligible"
+            elif verdict == "likely_benign":
+                action = "blocked_insufficient_evidence"
+            else:
+                action = "manual_review"
+            finding["llm_adjudication_action"] = action
+            finding["requires_manual_review"] = True
+
+        finding["effective_severity"] = effective_after
+        finding["severity"] = effective_after
 
 
 def _run_llm_review_with_fallback(
@@ -302,11 +445,15 @@ def _run_llm_review_with_fallback(
     """Run multi-judge review and attach structured verdicts to findings."""
     try:
         reviewer = _load_llm_reviewer()
-        finding_contexts = build_finding_contexts(findings, scanner._file_contents)
+        finding_contexts, context_audit = build_finding_context_bundle(
+            findings,
+            scanner._file_contents,
+        )
         result = reviewer.run_llm_review(
             findings=findings,
             finding_contexts=finding_contexts,
             manifest=manifest if manifest is not None else scanner._package_metadata,
+            context_audit=context_audit,
         )
         labels = result.get("labels", {})
         if not isinstance(labels, dict):
