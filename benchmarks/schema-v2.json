@@ -7,6 +7,7 @@
     "$schema",
     "schema_version",
     "scanner_source_commit_hash",
+    "quality_gates",
     "scoring_context",
     "cases"
   ],
@@ -16,6 +17,32 @@
     "scanner_source_commit_hash": {
       "type": "string",
       "pattern": "^[a-f0-9]{40}$"
+    },
+    "quality_gates": {
+      "type": "object",
+      "required": [
+        "minimum_cases",
+        "minimum_benign_cases",
+        "minimum_malicious_cases",
+        "minimum_raw_precision",
+        "minimum_raw_recall",
+        "minimum_root_precision",
+        "minimum_root_recall",
+        "maximum_benign_high_critical_false_positive_rate",
+        "minimum_malicious_high_critical_recall"
+      ],
+      "properties": {
+        "minimum_cases": { "type": "integer", "minimum": 1 },
+        "minimum_benign_cases": { "type": "integer", "minimum": 1 },
+        "minimum_malicious_cases": { "type": "integer", "minimum": 1 },
+        "minimum_raw_precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minimum_raw_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minimum_root_precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minimum_root_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maximum_benign_high_critical_false_positive_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "minimum_malicious_high_critical_recall": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
     },
     "scoring_context": {
       "type": "object",

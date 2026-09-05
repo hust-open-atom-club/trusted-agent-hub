@@ -20,12 +20,15 @@ returns a non-zero exit status when:
 - a `blocking` case differs from its target;
 - any fixture content hash has drifted;
 - any scan is incomplete; or
-- any scanner rule raises an exception.
+- any scanner rule raises an exception; or
+- precision, recall, benign high/critical false-positive rate, malicious
+  high/critical recall, or corpus size crosses a configured `quality_gates`
+  threshold.
 
-An `observe` difference is visible but does not fail `--check`. Every observe
-case must include a non-empty `known_gap.reason` and a `planned_pr`. PR-6 must
-either promote remaining cases to `blocking` or retain a specific, reviewed
-explanation for each exception.
+An `observe` difference is visible but does not fail the case-level comparison.
+Every observe case must include a non-empty `known_gap.reason` and a
+`planned_pr`; all cases, including observe cases, still contribute to the
+aggregate quality gates.
 
 The legacy format remains available and is still accepted:
 
@@ -89,7 +92,10 @@ The runner emits:
 - per-case duration, aggregate duration, and peak traced memory.
 
 Both blocking and observe cases contribute to metrics. Enforcement controls CI
-behavior, not measurement.
+behavior, not measurement. `labels-v2.json` also pins minimum corpus sizes,
+minimum raw/root precision and recall, a maximum benign high/critical
+false-positive rate, and a minimum malicious high/critical recall. This makes
+quality regression measurable even when individual detector rules still fire.
 
 ## Human annotation workflow
 
@@ -138,9 +144,9 @@ fixture changes.
 
 ## Interface for follow-up PRs
 
-PR-2 can add `root_cause_id`, `kind`, `disposition`, and `effective_severity`
-directly to scanner findings. The runner will consume those fields without a
-format migration and will group all findings that share a root ID. PR-3 through
-PR-5 can then resolve context, data-flow, and capability gaps and promote the
-associated cases from `observe` to `blocking`. PR-6 can add aggregate metric
-thresholds after the case-level backlog is explicit.
+Scanner findings may provide `root_cause_id`, `kind`, `disposition`, and
+`effective_severity`; the runner groups findings that share a root ID. Semantic
+classification and LLM adjudication changes should update implementation first,
+then change labels only when human ground truth actually changes. Aggregate
+quality gates remain stable unless a reviewed benchmark-policy change explicitly
+updates them.

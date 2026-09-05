@@ -343,7 +343,8 @@ def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -
     )
 
     assert score["risk_summary"]["grade"] not in {"D", "E"}
-    assert score["score_breakdown"]["advisory_deduction"] == 6
+    assert score["score_breakdown"]["advisory_deduction"] == 0
+    assert score["score_breakdown"]["unapplied_advisory_points"] == 0
 
 
 def test_router_applies_benign_and_harmful_candidate_states() -> None:

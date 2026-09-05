@@ -56,7 +56,10 @@ from scanners.risk_scanner.redaction import (
     redact_report,
     redact_value,
 )
-from scanners.risk_scanner.provenance import build_verification_facts
+from scanners.risk_scanner.provenance import (
+    build_verification_capabilities,
+    build_verification_facts,
+)
 from scanners.risk_scanner.inventory import (
     ScanInventory,
     build_inventory,
@@ -1159,6 +1162,9 @@ def _build_acquisition_facts(
         is_complete=is_complete,
         server_verification=scanner_verification,
     )
+    verification_capabilities = build_verification_capabilities(
+        scanner_verification
+    )
 
     source: dict[str, Any] = {
         "type": "github" if parsed else "unknown",
@@ -1184,6 +1190,7 @@ def _build_acquisition_facts(
         "source": source,
         "integrity": integrity,
         "verification": verification,
+        "verification_capabilities": verification_capabilities,
         "acquisition_method": method,
     }
 

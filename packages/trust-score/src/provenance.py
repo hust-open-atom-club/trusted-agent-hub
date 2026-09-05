@@ -132,7 +132,12 @@ def assess_source_verifiability(
     # Derive score from checks_passed
     score = _checks_to_score(checks_passed, checks_total)
 
-    return {"level": level, "score": score, "evidence": evidence}
+    return {
+        "level": level,
+        "score": score,
+        "evidence": evidence,
+        "available": bool(source),
+    }
 
 
 def assess_signature_chain(
@@ -156,10 +161,24 @@ def assess_signature_chain(
         dict with keys: level (str), score (int 0-100), evidence (list[str])
     """
     integrity = _acquired_section(acquisition_facts, "integrity")
+    verification = _acquired_section(acquisition_facts, "verification")
+    capabilities = _acquired_section(
+        acquisition_facts,
+        "verification_capabilities",
+    )
+    if not capabilities and verification:
+        # Legacy acquisition records did not distinguish "false" from
+        # "verifier unavailable". Preserve their historical interpretation
+        # by treating an explicitly stored result key as an available check.
+        capabilities = {
+            key: key in verification
+            for key in ("owner", "signature", "attestation", "sbom")
+        }
     claimed_integrity = package_metadata.get("integrity", {}) or {}
     evidence: list[str] = []
     checks_passed: int = 0
-    checks_total: int = 3
+    available_checks: list[str] = []
+    unavailable_checks: list[str] = []
 
     sha256: str = integrity.get("sha256", "")
     is_complete = has_complete_scanned_hash(integrity)
@@ -167,36 +186,61 @@ def assess_signature_chain(
     attestation_verified = _verification_flag(acquisition_facts, "attestation")
     sbom_verified = _verification_flag(acquisition_facts, "sbom")
 
+    hash_check_available = bool(integrity)
+
     # Check 1: SHA256 hash (64 hex chars)
+    if hash_check_available:
+        available_checks.append("scanned_source_hash")
+    else:
+        unavailable_checks.append("scanned_source_hash")
     if is_complete:
         checks_passed += 1
         evidence.append("Complete scanned-source SHA256 integrity hash is present")
-    else:
+    elif hash_check_available:
         evidence.append("Missing, incomplete, or improperly scoped SHA256 integrity hash")
+    else:
+        evidence.append("Scanned-source hash verification was not available")
 
     # Check 2: Signature or attestation
+    proof_check_available = (
+        capabilities.get("signature") is True
+        or capabilities.get("attestation") is True
+    )
+    if proof_check_available:
+        available_checks.append("signature_or_attestation")
+    else:
+        unavailable_checks.append("signature_or_attestation")
     if signature_verified or attestation_verified:
         checks_passed += 1
         if signature_verified:
             evidence.append("Cryptographic signature is independently verified")
         if attestation_verified:
             evidence.append("Build attestation is independently verified")
-    else:
+    elif proof_check_available:
         evidence.append("No independently verified cryptographic signature or attestation")
         if isinstance(claimed_integrity, dict) and (
             claimed_integrity.get("signature")
             or claimed_integrity.get("attestation_url")
         ):
             evidence.append("Package-authored signature/attestation claim was ignored")
+    else:
+        evidence.append("Signature and attestation verifiers were not available")
 
     # Check 3: SBOM
+    sbom_check_available = capabilities.get("sbom") is True
+    if sbom_check_available:
+        available_checks.append("sbom")
+    else:
+        unavailable_checks.append("sbom")
     if sbom_verified:
         checks_passed += 1
         evidence.append("SBOM is independently verified")
-    else:
+    elif sbom_check_available:
         evidence.append("No independently verified SBOM")
         if isinstance(claimed_integrity, dict) and claimed_integrity.get("sbom_url"):
             evidence.append("Package-authored SBOM claim was ignored")
+    else:
+        evidence.append("SBOM verifier was not available")
 
     # Determine level
     if checks_passed == 3:
@@ -206,9 +250,45 @@ def assess_signature_chain(
     else:
         level = "none"
 
-    score = _checks_to_score(checks_passed, checks_total)
+    available_total = len(available_checks)
+    score = (
+        _checks_to_score(checks_passed, available_total)
+        if available_total
+        else 50
+    )
+    statuses = {
+        "scanned_source_hash": (
+            "verified" if is_complete
+            else "not_verified" if hash_check_available
+            else "not_available"
+        ),
+        "signature": (
+            "verified" if signature_verified
+            else "not_verified" if capabilities.get("signature") is True
+            else "not_available"
+        ),
+        "attestation": (
+            "verified" if attestation_verified
+            else "not_verified" if capabilities.get("attestation") is True
+            else "not_available"
+        ),
+        "sbom": (
+            "verified" if sbom_verified
+            else "not_verified" if sbom_check_available
+            else "not_available"
+        ),
+    }
 
-    return {"level": level, "score": score, "evidence": evidence}
+    return {
+        "level": level,
+        "score": score,
+        "evidence": evidence,
+        "available": bool(available_checks),
+        "coverage": round(available_total / 3, 3),
+        "available_checks": available_checks,
+        "unavailable_checks": unavailable_checks,
+        "verification_statuses": statuses,
+    }
 
 
 def _checks_to_score(passed: float, total: int) -> int:

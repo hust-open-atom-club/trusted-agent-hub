@@ -86,6 +86,31 @@ def test_v2_incomplete_scans_rule_errors_and_fixture_drift_always_fail():
     ]
 
 
+def test_v2_quality_gates_fail_on_aggregate_metric_regression():
+    result = _v2_result(enforcement="blocking")
+    result["quality_gates"] = {"minimum_raw_precision": 0.95}
+    result["metrics"] = {
+        "raw_rules": {"overall": {"precision": 0.9, "recall": 1.0}},
+    }
+
+    assert _benchmark_check_failures(result) == [
+        "raw rule precision outside quality gate (actual=0.9000, minimum=0.9500)"
+    ]
+
+
+def test_v2_quality_gates_prevent_silently_shrinking_the_corpus():
+    result = _v2_result(enforcement="blocking")
+    result["quality_gates"] = {"minimum_cases": 2}
+    result["corpus"] = {
+        "case_count": 1,
+        "ground_truth_distribution": {},
+    }
+
+    assert _benchmark_check_failures(result) == [
+        "case count below quality gate (actual=1, minimum=2)"
+    ]
+
+
 def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
     config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
     invalid_case = deepcopy(config)
@@ -235,6 +260,17 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         "llm_mode": "not_invoked",
     }
     assert _benchmark_check_failures(first) == []
+    assert first["quality_gates"] == {
+        "minimum_cases": 25,
+        "minimum_benign_cases": 12,
+        "minimum_malicious_cases": 9,
+        "minimum_raw_precision": 0.95,
+        "minimum_raw_recall": 0.95,
+        "minimum_root_precision": 0.95,
+        "minimum_root_recall": 0.95,
+        "maximum_benign_high_critical_false_positive_rate": 0.05,
+        "minimum_malicious_high_critical_recall": 0.9,
+    }
     assert all(
         case.get("known_gap", {}).get("planned_pr")
         for case in first["cases"]

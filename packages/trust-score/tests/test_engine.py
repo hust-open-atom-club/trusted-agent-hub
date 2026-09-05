@@ -54,6 +54,13 @@ def _trusted_acquisition_facts(package_metadata: dict[str, Any]) -> dict[str, An
             "attestation": bool(integrity.get("attestation_url")),
             "sbom": bool(integrity.get("sbom_url")),
         },
+        "verification_capabilities": {
+            "repository": True,
+            "owner": True,
+            "signature": True,
+            "attestation": True,
+            "sbom": True,
+        },
     }
 
 
@@ -196,8 +203,9 @@ def test_provenance_advisories_apply_exact_points_without_grade_change() -> None
     )
 
     assert result["risk_summary"]["grade"] == baseline["risk_summary"]["grade"]
-    assert result["score_breakdown"]["advisory_deduction"] == 6
-    assert result["score"] == result["score_breakdown"]["base_score"] - 6
+    assert result["score_breakdown"]["advisory_deduction"] == 0
+    assert result["score_breakdown"]["unapplied_advisory_points"] == 6
+    assert result["score"] == result["score_breakdown"]["base_score"]
 
 
 def test_documented_permission_mismatch_is_five_points_without_grade_change() -> None:
@@ -223,10 +231,68 @@ def test_documented_permission_mismatch_is_five_points_without_grade_change() ->
     )
 
     assert result["risk_summary"]["grade"] == "B"
-    assert result["score_breakdown"]["advisory_deduction"] == 5
+    assert result["score_breakdown"]["advisory_deduction"] == 0
+    assert result["score_breakdown"]["unapplied_advisory_points"] == 5
 
 
-def test_undeclared_executable_capability_downgrades_exactly_one_grade() -> None:
+def test_security_result_is_independent_from_provenance_and_author_evidence() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    common = {
+        "package_metadata": fx["package_metadata"],
+        "scan_report": fx["scan_report"],
+        "review_records": fx["review_records"],
+    }
+    rich = _engine_rate(
+        **common,
+        author_history=fx["author_history"],
+        acquisition_facts=_trusted_acquisition_facts(fx["package_metadata"]),
+    )
+    sparse = _engine_rate(
+        **common,
+        author_history=None,
+        acquisition_facts={
+            "source": {},
+            "integrity": {},
+            "verification": {},
+            "verification_capabilities": {
+                "repository": True,
+                "owner": False,
+                "signature": False,
+                "attestation": False,
+                "sbom": False,
+            },
+        },
+    )
+
+    assert rich["security_assessment"] == sparse["security_assessment"]
+    assert rich["risk_summary"]["grade"] == sparse["risk_summary"]["grade"]
+    assert rich["evidence_assessment"]["coverage"] > sparse["evidence_assessment"]["coverage"]
+    assert sparse["evidence_assessment"]["author_reputation"] == {
+        "status": "unavailable",
+        "level": "unavailable",
+        "score": None,
+    }
+
+
+def test_security_changes_do_not_rewrite_the_evidence_assessment() -> None:
+    fx = _load_fixture("b1_code_review_skill")
+    common = {
+        "package_metadata": fx["package_metadata"],
+        "author_history": fx["author_history"],
+        "review_records": {"status": "pending"},
+        "acquisition_facts": _trusted_acquisition_facts(fx["package_metadata"]),
+    }
+    clean = _engine_rate(**common, scan_report=fx["scan_report"])
+    malicious = _engine_rate(
+        **common,
+        scan_report=_scan_with_critical_prompt_injection("llm:suspected-malicious"),
+    )
+
+    assert clean["evidence_assessment"] == malicious["evidence_assessment"]
+    assert clean["security_assessment"]["grade"] != malicious["security_assessment"]["grade"]
+
+
+def test_undeclared_executable_capability_requires_review_without_grade_change() -> None:
     fx = _load_fixture("b2_postgres_explorer")
     scan = json.loads(json.dumps(fx["scan_report"]))
     scan["review_advisories"] = [{
@@ -248,13 +314,14 @@ def test_undeclared_executable_capability_downgrades_exactly_one_grade() -> None
         review_records=fx["review_records"],
     )
 
-    assert result["risk_summary"]["grade"] == "C"
+    assert result["risk_summary"]["grade"] == "B"
     assert result["risk_summary"]["review_priority"] == "high"
     assert result["risk_summary"]["manual_security_review_required"] is True
     assert result["risk_summary"]["requires_confirmation"] is True
+    assert result["risk_summary"]["advisory_grade_downgrade_applied"] is False
 
 
-def test_undeclared_capability_downgrades_trusted_package_only_to_b() -> None:
+def test_undeclared_capability_keeps_trusted_grade_while_requiring_review() -> None:
     fx = _load_fixture("b1_code_review_skill")
     scan = json.loads(json.dumps(fx["scan_report"]))
     scan["review_advisories"] = [{
@@ -276,8 +343,8 @@ def test_undeclared_capability_downgrades_trusted_package_only_to_b() -> None:
         review_records=fx["review_records"],
     )
 
-    assert result["risk_summary"]["grade"] == "B"
-    assert result["risk_summary"]["level"] == "low_risk"
+    assert result["risk_summary"]["grade"] == "A"
+    assert result["risk_summary"]["level"] == "trusted"
     assert result["risk_summary"]["manual_security_review_required"] is True
 
 
@@ -666,6 +733,9 @@ def test_edge_output_schema_compliance() -> None:
     assert isinstance(result["calculated_at"], str)  # ISO 8601
     assert isinstance(result["model_fingerprint"], str)
     assert isinstance(result["model_version"], str)
+    assert result["security_assessment"]["score"] == result["score"]
+    assert result["security_assessment"]["grade"] == result["risk_summary"]["grade"]
+    assert 0 <= result["evidence_assessment"]["coverage"] <= 1
 
     # Dimensions: 9 required keys
     dims = result["dimensions"]
@@ -716,8 +786,8 @@ def test_edge_opaque_with_newcomer_not_downgraded_if_already_medium() -> None:
     assert result["risk_summary"]["level"] == "medium_risk"
 
 
-def test_edge_opaque_with_newcomer_downgraded_when_baseline_is_low() -> None:
-    """When everything else is green but P1=opaque + newcomer, downgrade should apply."""
+def test_edge_opaque_with_newcomer_does_not_change_security_baseline() -> None:
+    """Opaque provenance and newcomer status only affect evidence indicators."""
     pkg = {
         "name": "opaque-newcomer",
         "version": "1.0.0",
@@ -766,10 +836,8 @@ def test_edge_opaque_with_newcomer_downgraded_when_baseline_is_low() -> None:
         author_history={"packages_published": 0, "avg_historical_score": 0, "violations_count": 0},
         review_records={"status": "pending"},
     )
-    # P1=opaque → +1 risk → baseline medium_risk
-    # But wait, the downgrade only fires when baseline > medium_risk
-    # This test verifies that case doesn't trigger
-    assert result["risk_summary"]["level"] == "medium_risk"
+    assert result["risk_summary"]["level"] == "low_risk"
+    assert result["evidence_assessment"]["author_reputation"]["level"] == "newcomer"
 
 
 def test_grade_mapping() -> None:
@@ -1300,6 +1368,9 @@ def _assert_valid_output(result: dict[str, Any], expected_level: str | None) -> 
     assert "model_fingerprint" in result
     assert "model_version" in result
     assert "dimensions" in result
+    assert "security_assessment" in result
+    assert result["security_assessment"]["score"] == result["score"]
+    assert "evidence_assessment" in result
     assert "explanations" in result
     assert isinstance(result["explanations"], list)
     assert "risk_summary" in result

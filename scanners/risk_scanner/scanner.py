@@ -283,13 +283,16 @@ class RiskScanner:
                 "is_complete": "content_hash_limited" not in self.inventory.limit_violations,
             },
             "verification": {
+                # Internal marker used to ensure any future verifier result
+                # is bound to this exact scanned content before persistence.
+                "content_sha256": content_hash,
+            },
+            "verification_capabilities": {
+                "repository": False,
                 "owner": False,
                 "signature": False,
                 "attestation": False,
                 "sbom": False,
-                # Internal marker used to ensure any future verifier result
-                # is bound to this exact scanned content before persistence.
-                "content_sha256": content_hash,
             },
         }
 

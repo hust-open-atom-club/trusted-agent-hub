@@ -124,3 +124,35 @@ def build_verification_facts(
         "attestation": supplied.get("attestation") is True and content_bound,
         "sbom": supplied.get("sbom") is True and content_bound,
     }
+
+
+def build_verification_capabilities(
+    server_verification: dict[str, Any] | None,
+) -> dict[str, bool]:
+    """Return which independent verification methods actually ran.
+
+    A false verification result and an unavailable verifier are different
+    states. Presence of a verifier-owned result key means the method was
+    available for this acquisition; package-authored claims never count.
+    Repository identity verification is implemented by the acquisition layer
+    itself and is therefore always available.
+    """
+    supplied = server_verification if isinstance(server_verification, dict) else {}
+    return {
+        "repository": True,
+        "owner": "owner" in supplied,
+        "signature": "signature" in supplied,
+        "attestation": "attestation" in supplied,
+        "sbom": "sbom" in supplied,
+    }
+
+
+def verification_status(
+    verification: dict[str, Any],
+    capabilities: dict[str, Any],
+    key: str,
+) -> str:
+    """Normalize a verification method to a tri-state audit value."""
+    if capabilities.get(key) is not True:
+        return "not_available"
+    return "verified" if verification.get(key) is True else "not_verified"

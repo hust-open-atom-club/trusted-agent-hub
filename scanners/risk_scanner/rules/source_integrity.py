@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
+from scanners.risk_scanner.provenance import verification_status
 
 
 def run(scanner: Any) -> None:
@@ -35,6 +36,17 @@ def run(scanner: Any) -> None:
         else {}
     ) or {}
     verification = raw_verification if isinstance(raw_verification, dict) else {}
+    raw_capabilities = acquisition_facts.get("verification_capabilities", {}) or {}
+    if isinstance(raw_capabilities, dict) and raw_capabilities:
+        verification_capabilities = raw_capabilities
+    else:
+        # Backward compatibility: old acquisition records only wrote result
+        # booleans, so the presence of a key is the best available indication
+        # that a verifier ran.
+        verification_capabilities = {
+            key: key in verification
+            for key in ("owner", "signature", "attestation", "sbom")
+        }
 
     core_issues: list[str] = []
 
@@ -52,9 +64,19 @@ def run(scanner: Any) -> None:
     elif not is_complete:
         core_issues.append("SHA256 仅覆盖部分扫描内容")
 
-    has_verified_signature = sha256_ok and verification.get("signature") is True
-    has_verified_attestation = sha256_ok and verification.get("attestation") is True
-    has_verified_sbom = sha256_ok and verification.get("sbom") is True
+    proof_statuses = {
+        key: verification_status(
+            verification,
+            verification_capabilities,
+            key,
+        )
+        for key in ("signature", "attestation", "sbom")
+    }
+    if not sha256_ok:
+        proof_statuses = {
+            key: "not_verified" if status != "not_available" else status
+            for key, status in proof_statuses.items()
+        }
 
     commit_hash = source.get("commit_hash", "")
     commit_ok = isinstance(commit_hash, str) and bool(
@@ -88,7 +110,7 @@ def run(scanner: Any) -> None:
     proof_advisories = (
         (
             "missing_signature",
-            has_verified_signature,
+            "signature",
             "缺少已验证的包签名",
             "包声明了签名，但尚未由采集层独立验证。"
             if claimed_integrity.get("signature")
@@ -96,7 +118,7 @@ def run(scanner: Any) -> None:
         ),
         (
             "missing_attestation",
-            has_verified_attestation,
+            "attestation",
             "缺少已验证的供应链证明",
             "包声明了构建证明，但尚未由采集层独立验证。"
             if claimed_integrity.get("attestation_url")
@@ -104,15 +126,20 @@ def run(scanner: Any) -> None:
         ),
         (
             "missing_sbom",
-            has_verified_sbom,
+            "sbom",
             "缺少已验证的 SBOM",
             "包声明了 SBOM，但尚未由采集层独立验证。"
             if claimed_integrity.get("sbom_url")
             else "没有发现绑定到本次扫描内容的已验证 SBOM。",
         ),
     )
-    for code, verified, title, description in proof_advisories:
-        if verified:
+    unavailable: list[str] = []
+    for code, proof, title, description in proof_advisories:
+        status = proof_statuses[proof]
+        if status == "verified":
+            continue
+        if status == "not_available":
+            unavailable.append(proof)
             continue
         scanner._add_advisory(
             code=code,
@@ -123,5 +150,21 @@ def run(scanner: Any) -> None:
             location={"file": manifest_file},
             evidence="independent verification flag is false",
             deduction=2,
+            affects_grade=False,
+        )
+
+    if unavailable:
+        scanner._add_advisory(
+            code="artifact_verifiers_unavailable",
+            category="provenance",
+            level="info",
+            title="供应链证据验证器尚未配置",
+            description=(
+                "以下验证能力在本次扫描环境中不可用，因此未将缺少验证结果"
+                f"计为失败或扣分：{', '.join(unavailable)}。"
+            ),
+            location={"file": manifest_file},
+            evidence="verifier capability is unavailable",
+            deduction=0,
             affects_grade=False,
         )

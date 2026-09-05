@@ -170,6 +170,39 @@ class RiskSummary(StrictContractModel):
     effective_grade: Grade | None = None
 
 
+class SecurityAssessment(StrictContractModel):
+    score: int = Field(ge=0, le=100)
+    level: Literal[
+        "trusted", "low_risk", "medium_risk", "high_risk", "untrusted"
+    ]
+    grade: Grade
+    status: Literal["conclusive", "review_required", "inconclusive"]
+    input_dimensions: list[
+        Literal["permission_minimization", "scan_results"]
+    ] = Field(default_factory=list)
+    unresolved_findings: int = Field(default=0, ge=0)
+
+
+class EvidenceAuthorReputation(StrictContractModel):
+    status: Literal["assessed", "unavailable"]
+    level: Literal[
+        "consistent_good", "newcomer", "inconsistent", "tainted", "unavailable"
+    ]
+    score: int | None = Field(default=None, ge=0, le=100)
+
+
+class EvidenceAssessment(StrictContractModel):
+    score: int = Field(ge=0, le=100)
+    coverage: float = Field(ge=0, le=1)
+    level: Literal["strong", "moderate", "limited", "unavailable"]
+    assessed_dimensions: list[str] = Field(default_factory=list)
+    unavailable_dimensions: list[str] = Field(default_factory=list)
+    verification_statuses: dict[
+        str, Literal["verified", "not_verified", "not_available"]
+    ] = Field(default_factory=dict)
+    author_reputation: EvidenceAuthorReputation
+
+
 class TrustScore(StrictContractModel):
     model_config = ConfigDict(extra="allow")  # allow legacy "score" field in DB
     model_fingerprint: str | None = Field(
@@ -178,6 +211,8 @@ class TrustScore(StrictContractModel):
     )
     model_version: str | None = None
     dimensions: dict[str, TrustScoreDimension] | None = None
+    security_assessment: SecurityAssessment | None = None
+    evidence_assessment: EvidenceAssessment | None = None
     explanations: list[TrustScoreExplanation] | None = None
     risk_summary: RiskSummary | None = None
     calculated_at: str | None = None
@@ -507,10 +542,23 @@ class ProvenanceVerification(StrictContractModel):
     sbom: bool
 
 
+class ProvenanceVerificationCapabilities(StrictContractModel):
+    """Whether each independent verifier ran for this acquisition."""
+
+    repository: bool = True
+    owner: bool = False
+    signature: bool = False
+    attestation: bool = False
+    sbom: bool = False
+
+
 class AcquisitionFacts(StrictContractModel):
     source: ProvenanceSource
     integrity: ProvenanceIntegrity
     verification: ProvenanceVerification
+    verification_capabilities: ProvenanceVerificationCapabilities = Field(
+        default_factory=ProvenanceVerificationCapabilities
+    )
     acquisition_method: str
 
 

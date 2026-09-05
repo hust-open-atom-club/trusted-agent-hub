@@ -64,14 +64,24 @@ class TestSR009SourceIntegrity:
         report = scanner.scan()
 
         assert not any(f["rule_id"] == "SR-009" for f in report["findings"])
-        assert {item["code"] for item in report["review_advisories"]} >= {
-            "missing_signature", "missing_attestation", "missing_sbom",
+        assert "artifact_verifiers_unavailable" in {
+            item["code"] for item in report["review_advisories"]
         }
-        assert report["advisory_summary"]["deduction_total"] == 6
+        assert not {
+            "missing_signature", "missing_attestation", "missing_sbom",
+        } & {item["code"] for item in report["review_advisories"]}
+        assert report["advisory_summary"]["deduction_total"] == 0
         assert scanner.acquisition_facts["integrity"]["sha256"]
         assert scanner.acquisition_facts["integrity"]["hash_scope"] == "scanned_source"
         assert scanner.acquisition_facts["integrity"]["is_complete"] is True
         assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
+        assert scanner.acquisition_facts["verification_capabilities"] == {
+            "repository": False,
+            "owner": False,
+            "signature": False,
+            "attestation": False,
+            "sbom": False,
+        }
 
     def test_manifest_provenance_claims_are_not_promoted(self, tmp_path):
         """Manifest claims remain audit data and do not satisfy SR-009."""
@@ -111,11 +121,10 @@ class TestSR009SourceIntegrity:
             item for item in report["review_advisories"]
             if item["category"] == "provenance"
         ]
-        assert len(proof_warnings) == 3
-        assert all(
-            "未" in item["description"] and "验证" in item["description"]
-            for item in proof_warnings
-        )
+        assert [item["code"] for item in proof_warnings] == [
+            "artifact_verifiers_unavailable"
+        ]
+        assert proof_warnings[0]["deduction"] == 0
         assert scanner._package_metadata["source"]["verified_owner"] is True
         assert scanner.acquisition_facts["source"]["commit_hash"] == "b" * 40
         assert "signature" not in scanner.acquisition_facts["integrity"]
@@ -155,7 +164,9 @@ class TestSR009SourceIntegrity:
         assert f["severity"] == "medium"
         assert f["category"] == "source_integrity"
         assert "核心来源完整性不足" in f["title"]
-        assert len(s.review_advisories) == 3
+        assert [item["code"] for item in s.review_advisories] == [
+            "artifact_verifiers_unavailable"
+        ]
 
     def test_incomplete_integrity_medium(self, tmp_path):
         """Metadata without sha256/signature/sbom/commit_hash → medium finding."""

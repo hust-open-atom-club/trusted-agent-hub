@@ -136,6 +136,13 @@ def test_acquisition_facts_ignore_manifest_provenance_claims() -> None:
         "attestation": False,
         "sbom": False,
     }
+    assert facts["verification_capabilities"] == {
+        "repository": True,
+        "owner": False,
+        "signature": False,
+        "attestation": False,
+        "sbom": False,
+    }
 
 
 def test_only_server_verification_facts_are_carried_forward() -> None:
@@ -156,6 +163,13 @@ def test_only_server_verification_facts_are_carried_forward() -> None:
         "attestation": False,
         "sbom": True,
     }
+    assert facts["verification_capabilities"] == {
+        "repository": True,
+        "owner": True,
+        "signature": True,
+        "attestation": True,
+        "sbom": True,
+    }
 
 
 def test_artifact_verification_must_bind_to_acquired_content() -> None:
@@ -174,6 +188,13 @@ def test_artifact_verification_must_bind_to_acquired_content() -> None:
         "signature": False,
         "attestation": False,
         "sbom": False,
+    }
+    assert facts["verification_capabilities"] == {
+        "repository": True,
+        "owner": True,
+        "signature": True,
+        "attestation": True,
+        "sbom": True,
     }
 
 
@@ -397,6 +418,13 @@ def test_provenance_audit_shape_is_declared_in_scan_schema() -> None:
                 "is_complete": True,
             },
             "verification": {
+                "repository": True,
+                "owner": False,
+                "signature": False,
+                "attestation": False,
+                "sbom": False,
+            },
+            "verification_capabilities": {
                 "repository": True,
                 "owner": False,
                 "signature": False,
