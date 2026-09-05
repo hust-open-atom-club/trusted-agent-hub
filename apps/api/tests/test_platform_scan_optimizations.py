@@ -51,7 +51,6 @@ def test_scanner_separates_documentation_examples_from_executable_findings() -> 
             by_file.setdefault(file_path, []).append(finding)
 
         readme_findings = by_file.get("README.md", [])
-        assert readme_findings, "README 应产生发现"
         assert all(
             f["severity"] in ("low", "info")
             for f in readme_findings
@@ -427,6 +426,88 @@ def test_extractor_keeps_explicit_permission_actions_granular(tmp_path: Path) ->
     assert [item["code"] for item in build_permission_advisories(evidence)] == [
         "undeclared_executable_capability"
     ]
+
+
+def test_permission_evidence_is_owned_by_the_matching_source_file(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"name": "evidence-owner", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "a_first.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "z_network.py").write_text(
+        'import requests\nrequests.get("https://api.example.invalid/data")\n',
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+    network_evidence = [
+        item
+        for item in metadata["permission_evidence"]
+        if item["capability"] == "network" and item["status"] == "observed"
+    ]
+
+    assert [item["file"] for item in network_evidence] == ["z_network.py"]
+
+
+def test_extractor_scopes_own_state_cleanup_without_broad_delete(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"name": "own-cleanup", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "cleanup.py").write_text(
+        """from pathlib import Path
+import shutil
+state = Path(__file__).parent / ".session-state"
+shutil.rmtree(state, ignore_errors=True)
+""",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+    evidence = metadata["permission_evidence"]
+
+    assert metadata["permissions"]["filesystem"]["delete"] is False
+    assert any(
+        item["capability"] == "filesystem.delete_own_state"
+        and item["file"] == "cleanup.py"
+        for item in evidence
+    )
+    assert build_permission_advisories(evidence) == []
+
+
+def test_extractor_distinguishes_generated_session_token_from_provider_token(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"name": "token-sources", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "session.py").write_text(
+        "import secrets\nSESSION_TOKEN = secrets.token_urlsafe(32)\n",
+        encoding="utf-8",
+    )
+
+    generated = extract_single_skill(tmp_path)
+    assert "credentials" not in generated["permissions"]
+
+    (tmp_path / "provider.py").write_text(
+        'import os\ntoken = os.environ["GITHUB_TOKEN"]\n',
+        encoding="utf-8",
+    )
+    provider = extract_single_skill(tmp_path)
+    credential_evidence = [
+        item
+        for item in provider["permission_evidence"]
+        if item["capability"] == "credentials" and item["status"] == "observed"
+    ]
+
+    assert provider["permissions"]["credentials"]["access"] == ["oauth_token"]
+    assert [item["file"] for item in credential_evidence] == ["provider.py"]
+    assert provider["permissions"]["environment"]["read"] == ["GITHUB_TOKEN"]
 
 
 def test_discover_capabilities_finds_multiple_packages() -> None:

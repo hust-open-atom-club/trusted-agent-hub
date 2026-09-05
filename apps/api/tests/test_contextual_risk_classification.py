@@ -108,3 +108,44 @@ subprocess.Popen(["python", "-m", "http.server", "4317", "--bind", "127.0.0.1"],
     assert not any(item["rule_id"] == "SR-005" for item in report["findings"])
     capabilities = set(report["structural_analysis"]["capability_graph"]["observed"])
     assert {"network.local_service", "process.spawn"} <= capabilities
+
+
+def test_package_owned_cleanup_is_capability_without_vulnerability(tmp_path: Path) -> None:
+    report = _scan(
+        tmp_path,
+        "cleanup.py",
+        """from pathlib import Path
+import shutil
+state = Path(__file__).parent / ".session-state"
+shutil.rmtree(state, ignore_errors=True)
+""",
+    )
+
+    assert not any(item["rule_id"] == "SR-016" for item in report["findings"])
+    assert "filesystem.delete_own_state" in set(
+        report["structural_analysis"]["capability_graph"]["observed"]
+    )
+
+
+def test_request_controlled_recursive_delete_is_confirmed_vulnerability(
+    tmp_path: Path,
+) -> None:
+    report = _scan(
+        tmp_path,
+        "cleanup.py",
+        """from pathlib import Path
+import shutil
+def cleanup(request):
+    target = Path(request.query["path"])
+    shutil.rmtree(target)
+""",
+    )
+
+    finding = next(item for item in report["findings"] if item["rule_id"] == "SR-016")
+    assert finding["effective_severity"] == "critical"
+    assert finding["kind"] == "vulnerability"
+    assert finding["disposition"] == "confirmed_vulnerability"
+    assert finding["source_control"] == "remote_attacker"
+    assert "filesystem.delete" in set(
+        report["structural_analysis"]["capability_graph"]["observed"]
+    )

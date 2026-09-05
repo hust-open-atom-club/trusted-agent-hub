@@ -7,7 +7,6 @@ from scanners.risk_scanner.permission_consistency import (
     reconcile_permission_advisories,
 )
 from scanners.risk_scanner.redaction import build_finding_contexts
-from scanners.risk_scanner.reporting import refresh_report_summaries
 from scanners.risk_scanner.scanner import RiskScanner
 from src.routers import trust
 
@@ -160,9 +159,7 @@ def test_internally_inconsistent_reviews_cannot_auto_clear_candidate(
     assert result["labels"]["semantic-1"] == "llm:uncertain"
 
 
-def test_real_world_mcp_builder_false_positive_is_removed_after_consensus(
-    monkeypatch,
-) -> None:
+def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -> None:
     root = PROJECT_ROOT / "examples" / "real-world" / "skills" / "mcp-builder"
     scanner = RiskScanner(root, source_commit_hash="a" * 40)
     # Keep this regression focused on semantic false positives. Real OSV
@@ -182,44 +179,9 @@ def test_real_world_mcp_builder_false_positive_is_removed_after_consensus(
         report,
         metadata.get("permission_evidence", []),
     )
-    candidates = [
-        finding
-        for finding in report["findings"]
-        if finding.get("requires_llm_validation") is True
-    ]
-    assert candidates
-
     contexts = build_finding_contexts(report["findings"], scanner._file_contents)
-    assert {
-        str(finding["id"]) for finding in candidates
-    }.issubset(contexts)
-
-    prompts: list[str] = []
-
-    def fake_call(prompt: str) -> dict[str, object]:
-        prompts.append(prompt)
-        return _review(
-            vulnerable=False,
-            harmful=False,
-            impact="none",
-            intent="benign",
-        )
-
-    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
-    result = llm_reviewer.run_llm_review(
-        report["findings"],
-        contexts,
-        {"name": "mcp-builder", "type": "skill"},
-    )
-    trust._apply_llm_decisions(report["findings"], result)
-    refresh_report_summaries(report)
-
-    assert len(prompts) == 2
+    assert contexts == {}
     assert report["summary"]["effective_total"] == 0
-    assert all(
-        finding.get("requires_manual_review") is False
-        for finding in candidates
-    )
 
     acquisition_facts = {
         "source": {

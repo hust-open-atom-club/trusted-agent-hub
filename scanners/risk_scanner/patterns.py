@@ -91,16 +91,16 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
     (r"/etc/passwd", "读取系统用户数据库", "critical"),
     (r"/etc/shadow", "读取系统密码哈希", "critical"),
     # --- New: browser credentials ---
-    (r"(?:Chrome|Firefox|Edge|Chromium|Opera).*(?:password|credential|cookie|login\s+data)", "读取浏览器凭据", "critical"),
+    (r"\b(?:Chrome|Firefox|Edge|Chromium|Opera)\b.*(?:password|credential|cookie|login\s+data)", "读取浏览器凭据", "critical"),
     (r"AppData.*(?:Google|Mozilla|Microsoft).*(?:Chrome|Firefox|Edge)", "Windows 浏览器配置路径", "critical"),
     # --- High: other credential files / env vars ---
     (r"~?\.aws/credentials", "读取 AWS 凭据", "high"),
     (r"~?\.aws/config", "读取 AWS 配置", "high"),
     (r"(?<![.\w])\.env\b", "读取 .env 环境文件", "high"),
     # 仅在读取/展开环境变量时报告。安装文档中的变量名和占位符不是凭据访问。
-    (r"(?:os\.(?:getenv|environ(?:\.get)?)|process\.env|Deno\.env\.get)\s*(?:\(|\[|\.)\s*[\"']?(?:DATABASE_URL|GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET|API_KEY)\b", "读取敏感环境变量", "high"),
-    (r"\$\{?(?:DATABASE_URL|GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET|API_KEY)\}?\b", "展开敏感环境变量", "high"),
-    (r"(?:GITHUB_TOKEN|AWS_ACCESS_KEY|AWS_SECRET)\s*=\s*[^\s#]+", "设置敏感环境变量", "high"),
+    (r"(?:os\.(?:getenv|environ(?:\.get)?)|process\.env|Deno\.env\.get)\s*(?:\(|\[|\.)\s*[\"']?(?:DATABASE_URL|GITHUB_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_ACCESS_KEY(?:_ID)?|AWS_SECRET(?:_ACCESS_KEY)?|[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET))\b", "读取敏感环境变量", "high"),
+    (r"\$\{?(?:DATABASE_URL|GITHUB_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_ACCESS_KEY(?:_ID)?|AWS_SECRET(?:_ACCESS_KEY)?|[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET))\}?\b", "展开敏感环境变量", "high"),
+    (r"(?:GITHUB_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_ACCESS_KEY(?:_ID)?|AWS_SECRET(?:_ACCESS_KEY)?|[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET))\s*=\s*[^\s#]+", "设置敏感环境变量", "high"),
     (r"~?\.git-credentials", "读取 Git 凭据", "high"),
     (r"~?\.netrc", "读取 .netrc 凭据文件", "high"),
     (r"~?\.docker/config\.json", "读取 Docker 凭据", "high"),

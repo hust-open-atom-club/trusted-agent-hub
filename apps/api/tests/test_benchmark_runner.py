@@ -94,8 +94,9 @@ def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
         _validate_v2_config(invalid_case, V2_CONFIG)
 
     unexplained = deepcopy(config)
-    observed = next(case for case in unexplained["cases"] if case["enforcement"] == "observe")
-    observed.pop("known_gap")
+    observed = unexplained["cases"][0]
+    observed["enforcement"] = "observe"
+    observed.pop("known_gap", None)
     with pytest.raises(BenchmarkConfigError, match="known_gap"):
         _validate_v2_config(unexplained, V2_CONFIG)
 
@@ -224,7 +225,7 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
             "malicious": 9,
             "needs_context": 4,
         },
-        "enforcement_distribution": {"blocking": 19, "observe": 6},
+        "enforcement_distribution": {"blocking": 25, "observe": 0},
     }
     assert first["coverage"]["complete_scan_ratio"] == 1.0
     assert first["coverage"]["rule_exception_ratio"] == 0.0

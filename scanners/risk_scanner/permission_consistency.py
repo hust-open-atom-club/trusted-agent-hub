@@ -7,6 +7,13 @@ from typing import Any
 from scanners.risk_scanner.reporting import refresh_report_summaries
 
 
+_SCOPED_NON_AUTHORIZATION_CAPABILITIES = frozenset({
+    # A cleanup statically confined to package-owned disposable state is a
+    # capability worth reporting, but it does not request broad delete rights.
+    "filesystem.delete_own_state",
+})
+
+
 def _authorization_capability(capability: str) -> str:
     parts = [part for part in capability.lower().split(".") if part]
     if not parts:
@@ -54,6 +61,8 @@ def build_permission_advisories(
         capability = _authorization_capability(
             str(item.get("capability", ""))
         )
+        if capability in _SCOPED_NON_AUTHORIZATION_CAPABILITIES:
+            continue
         root = _permission_root(capability)
         # A legacy root declaration still covers all nested actions. New
         # extractor output is granular, so filesystem.read cannot silently
