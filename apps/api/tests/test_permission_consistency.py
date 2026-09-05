@@ -79,6 +79,12 @@ def test_low_confidence_mentions_do_not_create_advisory() -> None:
     ]) == []
 
 
+def test_package_owned_cleanup_does_not_require_broad_delete_declaration() -> None:
+    assert build_permission_advisories([
+        _evidence("filesystem.delete_own_state", "observed", "code"),
+    ]) == []
+
+
 def test_reconciliation_preserves_other_advisories_and_refreshes_summary() -> None:
     report = {
         "findings": [],

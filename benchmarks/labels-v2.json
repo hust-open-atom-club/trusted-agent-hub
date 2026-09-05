@@ -117,11 +117,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The current capability graph does not record scoped recursive deletion even when it is benign package-owned state.",
-        "planned_pr": "PR-5"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "generated-session-token",
@@ -299,11 +295,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Credential-source to outbound-request data flow and root consolidation are not represented end to end.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "user-path-recursive-delete",
@@ -318,11 +310,11 @@
       },
       "content_tree_sha256": "f32665e8403c8d5407c084dbaa701a6b5757c25fb3cd8620d459af2154f724e9",
       "expected_target": {
-        "raw_rules": ["V2-PATH-DELETE"],
+        "raw_rules": ["SR-016"],
         "root_issues": [
           {
             "id": "request-path-recursive-delete",
-            "rule_ids": ["V2-PATH-DELETE"],
+            "rule_ids": ["SR-016"],
             "kind": "vulnerability",
             "disposition": "confirmed_vulnerability",
             "effective_severity": "critical"
@@ -333,11 +325,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Recursive-delete sink analysis and request-path taint tracking are not implemented by current scanner rules.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "cloud-metadata-ssrf",
@@ -613,11 +601,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The capability graph does not yet represent a scoped, package-owned recursive deletion capability.",
-        "planned_pr": "PR-5"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-delete-user-controlled",
@@ -632,14 +616,14 @@
       },
       "content_tree_sha256": "172d1cc95f3e56b673799ee5b04b78df493d8a1c660e1e3bf4c2050a57d29843",
       "expected_target": {
-        "raw_rules": ["V2-PATH-DELETE"],
+        "raw_rules": ["SR-016"],
         "root_issues": [
           {
             "id": "user-controlled-recursive-delete",
-            "rule_ids": ["V2-PATH-DELETE"],
+            "rule_ids": ["SR-016"],
             "kind": "vulnerability",
             "disposition": "confirmed_vulnerability",
-            "effective_severity": "high"
+            "effective_severity": "critical"
           }
         ],
         "forbidden_effective_severities": [],
@@ -647,11 +631,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The current scanner lacks recursive-delete sink detection and user-controlled path provenance.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-token-generated",
@@ -703,11 +683,7 @@
         "security_grade": ["C"],
         "manual_review": "required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Credential access is high severity without a capability disposition, declared-purpose context, or review routing.",
-        "planned_pr": "PR-5"
-      }
+      "enforcement": "blocking"
     }
   ]
 }

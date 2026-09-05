@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from packages.schema.permission_semantics import analyze_delete_operations
+
 from .models import CapabilityEdge, CapabilityGraph, JavaScriptAstAnalysis, PythonAstAnalysis, ShellAnalysis
 
 
@@ -61,10 +63,28 @@ def build_capability_graph(
 
     for path, content in sorted((contents or {}).items()):
         _add_source_capabilities(graph, path, content)
+        for operation in analyze_delete_operations(path, content):
+            capability = (
+                "filesystem.delete_own_state"
+                if operation.scope == "package_owned"
+                else "filesystem.delete"
+            )
+            graph.edges.append(CapabilityEdge(capability, path, operation.line))
     return graph
 
 
 _LOOPBACK = r"(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)"
+_PROVIDER_CREDENTIAL = (
+    r"(?:DATABASE_URL|GITHUB_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|"
+    r"ANTHROPIC_API_KEY|AWS_ACCESS_KEY(?:_ID)?|AWS_SECRET(?:_ACCESS_KEY)?|"
+    r"[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET))"
+)
+_CREDENTIAL_READ = re.compile(
+    rf"(?:process\.env(?:\.|\[['\"])|"
+    rf"os\.(?:getenv|environ(?:\.get)?)[\[(]|Deno\.env\.get\s*\(|\$\{{?)"
+    rf"[^\n]{{0,100}}{_PROVIDER_CREDENTIAL}",
+    re.IGNORECASE,
+)
 
 
 def _line_number(content: str, offset: int) -> int:
@@ -104,7 +124,7 @@ def _add_source_capabilities(graph: CapabilityGraph, path: str, content: str) ->
     if metadata:
         graph.edges.append(CapabilityEdge("network.metadata", path, _line_number(content, metadata.start())))
 
-    if re.search(r"\b(?:GITHUB_TOKEN|OPENAI_API_KEY|AWS_SECRET_ACCESS_KEY)\b", content):
+    if _CREDENTIAL_READ.search(content):
         graph.edges.append(CapabilityEdge("credential.read", path))
         if re.search(r"https?://", content) and re.search(
             r"(?:urlopen|requests?\.|httpx\.|fetch|axios)", content, re.I

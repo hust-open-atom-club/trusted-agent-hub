@@ -40,6 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from packages.schema.permission_semantics import analyze_delete_operations
 from scanners.risk_scanner.inventory import (
     ScanInventory,
     build_inventory,
@@ -997,10 +998,17 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         log.warning("permission inference truncated SKILL.md content")
         docs_text = docs_text[:PERMISSION_INFERENCE_MAX_FILE_BYTES]
     code_text = "\n".join(content for _, content in code_parts)
-    code_file = code_parts[0][0] if code_parts else None
     installer_file_paths = installer_paths()
-    def code_matches(pattern: str) -> bool:
-        return bool(re.search(pattern, code_text, re.IGNORECASE | re.MULTILINE))
+
+    def matching_code_parts(pattern: str) -> list[tuple[str, str]]:
+        return [
+            (filename, content)
+            for filename, content in code_parts
+            if re.search(pattern, content, re.IGNORECASE | re.MULTILINE)
+        ]
+
+    def matching_code_files(pattern: str) -> list[str]:
+        return [filename for filename, _ in matching_code_parts(pattern)]
 
     def docs_matches(pattern: str) -> bool:
         return bool(re.search(pattern, docs_text, re.IGNORECASE | re.MULTILINE))
@@ -1033,20 +1041,22 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     )
     filesystem: dict[str, Any] = {"read": ["./"], "write": [], "delete": False}
     if code_writes:
-        installer_only = bool(installer_file_paths) and all(
+        for filename in write_files:
+            if filename in installer_file_paths:
+                add_evidence(
+                    "installation.filesystem.write", "observed", 0.9, "code",
+                    "安装入口包含文件写入或目录创建 API", filename,
+                )
+            else:
+                filesystem["write"] = ["./"]
+                add_evidence(
+                    "filesystem.write", "observed", 0.95, "code",
+                    "运行时代码包含文件写入或目录创建 API", filename,
+                )
+        if installer_file_paths and all(
             filename in installer_file_paths for filename in write_files
-        )
-        if installer_only:
-            add_evidence(
-                "installation.filesystem.write", "observed", 0.9, "code",
-                "安装入口包含文件写入或目录创建 API", write_files[0],
-            )
-        else:
-            filesystem["write"] = ["./"]
-            add_evidence(
-                "filesystem.write", "observed", 0.95, "code",
-                "运行时代码包含文件写入或目录创建 API", write_files[0],
-            )
+        ):
+            filesystem["write"] = []
     elif docs_writes:
         add_evidence(
             "filesystem.write", "conditional", 0.65, "docs",
@@ -1067,19 +1077,52 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         r"\bdelete\b.{0,60}\b(?:file|directory|folder)\b)"
     )
     if code_deletes:
-        installer_only = bool(installer_file_paths) and all(
-            filename in installer_file_paths for filename in delete_files
-        )
-        if installer_only:
+        classified_files: set[str] = set()
+        for filename, content in code_parts:
+            operations = analyze_delete_operations(filename, content)
+            for operation in operations:
+                classified_files.add(filename)
+                if filename in installer_file_paths:
+                    capability = "installation.filesystem.delete"
+                    description = "安装入口包含文件删除操作"
+                    confidence = 0.9
+                elif operation.scope == "package_owned":
+                    capability = "filesystem.delete_own_state"
+                    description = "运行时代码仅删除包自身的临时状态"
+                    confidence = 0.98
+                else:
+                    capability = "filesystem.delete"
+                    description = "运行时代码删除包状态边界之外或范围未知的路径"
+                    confidence = 0.98
+                    filesystem["delete"] = True
+                add_evidence(
+                    capability,
+                    "observed",
+                    confidence,
+                    "code",
+                    (
+                        f"{description}; sink={operation.sink}; "
+                        f"scope={operation.scope}; controller={operation.source_control}"
+                    ),
+                    filename,
+                )
+
+        # Keep conservative support for languages not covered by the scoped
+        # analyzers. Their evidence remains attached to the actual matching file.
+        for filename in delete_files:
+            if filename in classified_files:
+                continue
+            if filename in installer_file_paths:
+                capability = "installation.filesystem.delete"
+                description = "安装入口包含递归删除、文件删除或 rm 命令"
+                confidence = 0.9
+            else:
+                capability = "filesystem.delete"
+                description = "运行时代码包含范围未知的文件删除操作"
+                confidence = 0.98
+                filesystem["delete"] = True
             add_evidence(
-                "installation.filesystem.delete", "observed", 0.9, "code",
-                "安装入口包含递归删除、文件删除或 rm 命令", delete_files[0],
-            )
-        else:
-            filesystem["delete"] = True
-            add_evidence(
-                "filesystem.delete", "observed", 0.98, "code",
-                "运行时代码包含递归删除、文件删除或 rm 命令", delete_files[0],
+                capability, "observed", confidence, "code", description, filename,
             )
     elif docs_deletes:
         add_evidence(
@@ -1107,11 +1150,13 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         if command.lower() in known_shell_commands:
             shell_commands.add(command.lower())
 
-    shell_process_api = code_matches(
+    shell_process_pattern = (
         r"(?:child_process\.(?:exec|execFile|spawn|fork)|"
         r"subprocess\.(?:run|Popen|call|check_call|check_output)|"
         r"os\.system\s*\(|Runtime\.getRuntime\(\)\.exec)"
     )
+    shell_process_files = matching_code_files(shell_process_pattern)
+    shell_process_api = bool(shell_process_files)
     script_files = [
         filename for filename in result.all_files
         if Path(filename).suffix.lower() in {".sh", ".bash", ".zsh", ".bat", ".ps1"}
@@ -1128,14 +1173,17 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     }
     if shell_observed:
         shell["description"] = "技能包含脚本或流程命令，具体执行需按条件确认"
-        add_evidence(
-            "shell",
-            "observed",
-            0.95 if shell_process_api else 0.85,
-            "code",
-            "代码包含进程执行 API" if shell_process_api else "包内包含 Shell/脚本入口",
-            code_file,
-        )
+        evidence_files = sorted(set(shell_process_files) | set(script_files))
+        for filename in evidence_files:
+            process_api_file = filename in shell_process_files
+            add_evidence(
+                "shell",
+                "observed",
+                0.95 if process_api_file else 0.85,
+                "code",
+                "代码包含进程执行 API" if process_api_file else "包内包含 Shell/脚本入口",
+                filename,
+            )
     elif docs_commands:
         add_evidence(
             "shell", "conditional", 0.6, "docs",
@@ -1143,11 +1191,13 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         )
 
     # ── network ───────────────────────────────────────────────────
-    code_network = code_matches(
+    network_pattern = (
         r"(?:\b(?:fetch|axios|curl|wget|requests?\.(?:get|post|request)|"
         r"urllib\.request|http\.(?:get|request)|https?\.request)\b|"
         r"\b(?:ssh|scp)\s+-)"
     )
+    network_files = matching_code_files(network_pattern)
+    code_network = bool(network_files)
     docs_network = docs_matches(
         r"(?:https?://|\b(?:fetch|download|connect|request|deploy|curl|wget|"
         r"ssh|scp|gh\s+api)\b)"
@@ -1160,10 +1210,10 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     }
     if code_network:
         network["description"] = "代码包含网络调用"
-        add_evidence(
-            "network",
-            "observed", 0.95, "code", "代码包含网络调用", code_file,
-        )
+        for filename in network_files:
+            add_evidence(
+                "network", "observed", 0.95, "code", "代码包含网络调用", filename,
+            )
     elif docs_network:
         add_evidence(
             "network", "conditional", 0.6, "docs",
@@ -1172,35 +1222,45 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
 
     # ── environment ──────────────────────────────────────────────
     env_read: set[str] = set()
-    for match in re.finditer(
+    env_read_by_file: dict[str, set[str]] = {}
+    env_read_pattern = (
         r"(?:process\.env(?:\.([A-Z][A-Z0-9_]*)|\[['\"]([A-Z][A-Z0-9_]*)['\"]\])|"
         r"os\.environ(?:\.get)?\(['\"]([A-Z][A-Z0-9_]*)['\"]\)|"
-        r"os\.getenv\(['\"]([A-Z][A-Z0-9_]*)['\"]\))",
-        code_text,
-    ):
-        env_read.update(item for item in match.groups() if item)
-    env_write = set(
-        re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)\s*=", code_text)
+        r"os\.getenv\(['\"]([A-Z][A-Z0-9_]*)['\"]\)|"
+        r"os\.environ\[['\"]([A-Z][A-Z0-9_]*)['\"]\])"
     )
-    env_write.update(
-        re.findall(
-            r"os\.environ\[['\"]([A-Z][A-Z0-9_]*)['\"]\]\s*=",
-            code_text,
+    env_write_by_file: dict[str, set[str]] = {}
+    for filename, content in code_parts:
+        file_reads: set[str] = set()
+        for match in re.finditer(env_read_pattern, content):
+            file_reads.update(item for item in match.groups() if item)
+        if file_reads:
+            env_read_by_file[filename] = file_reads
+            env_read.update(file_reads)
+
+        file_writes = set(
+            re.findall(r"process\.env\.([A-Z][A-Z0-9_]*)\s*=", content)
         )
-    )
+        file_writes.update(re.findall(
+            r"os\.environ\[['\"]([A-Z][A-Z0-9_]*)['\"]\]\s*=",
+            content,
+        ))
+        if file_writes:
+            env_write_by_file[filename] = file_writes
+    env_write = set().union(*env_write_by_file.values()) if env_write_by_file else set()
     environment: dict[str, Any] = {
         "read": sorted(env_read),
         "write": sorted(env_write),
     }
-    if env_read:
+    for filename, names in env_read_by_file.items():
         add_evidence(
             "environment.read", "observed", 0.95, "code",
-            "代码读取环境变量", code_file,
+            f"代码读取环境变量: {', '.join(sorted(names))}", filename,
         )
-    if env_write:
+    for filename, names in env_write_by_file.items():
         add_evidence(
             "environment.write", "observed", 0.95, "code",
-            "代码写入环境变量", code_file,
+            f"代码写入环境变量: {', '.join(sorted(names))}", filename,
         )
 
     permissions: dict[str, Any] = {
@@ -1211,41 +1271,48 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
     }
 
     # ── credentials ──────────────────────────────────────────────
-    code_credentials = code_matches(
-        r'''(?:process\.env(?:\.[A-Z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|'''
-        r'''AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|SECRET|PASSWORD|'''
-        r'''CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY))|'''
-        r'''process\.env\[['"][^'"]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|'''
-        r'''AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|SECRET|PASSWORD|'''
-        r'''CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY)[^'"]*['"]\]|'''
-        r'''os\.(?:getenv|environ(?:\.get)?)\(['"][^'"]*(?:API[_-]?KEY|'''
-        r'''ACCESS[_-]?TOKEN|AUTH(?:ORIZATION)?[_-]?(?:TOKEN|KEY)|TOKEN|'''
-        r'''SECRET|PASSWORD|CREDENTIAL|PRIVATE[_-]?KEY|SSH[_-]?KEY)[^'"]*['"]\)|'''
-        r'''ssh\s+-i|private[_ -]?key|keytar|secret[_ -]?manager|getpass|'''
-        r'''(?:readFile(?:Sync)?|read_text)\([^\n]{0,100}(?:token|secret|credential|key)'''
-        r''')'''
+    credential_name = (
+        r"(?:GITHUB_TOKEN|GITLAB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|"
+        r"AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AZURE_CLIENT_SECRET|"
+        r"[A-Z][A-Z0-9_]*(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|CLIENT_SECRET|"
+        r"PASSWORD|CREDENTIAL|PRIVATE_KEY|SSH_KEY))"
     )
+    credential_pattern = (
+        rf"(?:process\.env(?:\.{credential_name}|\[['\"]{credential_name}['\"]\])|"
+        rf"os\.(?:getenv|environ\.get)\(['\"]{credential_name}['\"]\)|"
+        rf"os\.environ\[['\"]{credential_name}['\"]\]|"
+        r"ssh\s+-i|private[_ -]?key|keytar|secret[_ -]?manager|getpass|"
+        r"(?:readFile(?:Sync)?|read_text)\([^\n]{0,100}"
+        r"(?:api[_-]?key|access[_-]?token|credential|private[_-]?key))"
+    )
+    credential_parts = matching_code_parts(credential_pattern)
+    code_credentials = bool(credential_parts)
     docs_credentials = docs_matches(
         r"\b(?:set|export|provide|configure|enter|use|confirm|pass)\b.{0,45}"
         r"\b(?:api key|api_key|token|password|ssh key|credential)\b"
     )
     if code_credentials:
-        credential_source = code_text + docs_text
+        credential_source = "\n".join(content for _, content in credential_parts)
         access = (
             ["ssh_key"]
             if re.search(r"ssh\s+key|ssh\s+-i|private[_ -]?key", credential_source, re.I)
             else ["api_key"]
-            if re.search(r"api[_ -]?key|access[_ -]?token|auth(?:entication|orization)?[_ -]?(?:token|key)|openai|anthropic", credential_source, re.I)
-            else ["session_token"]
+            if re.search(r"api[_ -]?key|openai|anthropic", credential_source, re.I)
+            else ["password"]
+            if re.search(r"password|getpass", credential_source, re.I)
+            else ["oauth_token"]
+            if re.search(r"github|gitlab|access[_ -]?token|auth[_ -]?token", credential_source, re.I)
+            else ["token"]
         )
         permissions["credentials"] = {
             "access": access,
             "description": "代码或条件流程需要凭据",
         }
-        add_evidence(
-            "credentials",
-            "observed", 0.9, "code", "代码访问凭据或密钥", code_file,
-        )
+        for filename, _ in credential_parts:
+            add_evidence(
+                "credentials", "observed", 0.9, "code",
+                "代码访问第三方凭据或密钥", filename,
+            )
     elif docs_credentials:
         add_evidence(
             "credentials", "conditional", 0.55, "docs",
@@ -1253,10 +1320,12 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         )
 
     # ── database ──────────────────────────────────────────────────
-    database_matches = code_matches(
+    database_pattern = (
         r"(?:sqlite3|psycopg2?|sqlalchemy|prisma|mongodb|pymongo|mysql|"
         r"postgres(?:ql)?|create_engine\s*\(|(?:sqlite|mongo|mysql|postgres).*connect)"
     )
+    database_parts = matching_code_parts(database_pattern)
+    database_matches = bool(database_parts)
     docs_database = docs_matches(
         r"\b(?:database|sqlite|postgres(?:ql)?|mysql|mongodb|sql)\b"
     )
@@ -1276,10 +1345,11 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             "drivers": sorted(set(drivers)) or ["unknown"],
             "description": "代码包含数据库驱动或连接调用",
         }
-        add_evidence(
-            "database", "observed", 0.95, "code",
-            "代码包含数据库驱动或连接调用", code_file,
-        )
+        for filename, _ in database_parts:
+            add_evidence(
+                "database", "observed", 0.95, "code",
+                "代码包含数据库驱动或连接调用", filename,
+            )
     elif docs_database:
         add_evidence(
             "database", "conditional", 0.55, "docs",
@@ -1287,10 +1357,12 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         )
 
     # ── browser ───────────────────────────────────────────────────
-    code_browser = code_matches(
+    browser_pattern = (
         r"(?:playwright|puppeteer|selenium|webdriver|chromium|page\.goto|"
         r"browser\.(?:open|launch))"
     )
+    browser_files = matching_code_files(browser_pattern)
+    code_browser = bool(browser_files)
     docs_browser = docs_matches(
         r"(?:playwright|puppeteer|selenium|browser automation|"
         r"open (?:a )?browser|visual companion)"
@@ -1300,11 +1372,11 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             "allowed": True,
             "description": "代码包含浏览器控制调用",
         }
-        add_evidence(
-            "browser",
-            "observed", 0.9, "code",
-            "代码包含浏览器自动化调用", code_file,
-        )
+        for filename in browser_files:
+            add_evidence(
+                "browser", "observed", 0.9, "code",
+                "代码包含浏览器自动化调用", filename,
+            )
     elif docs_browser:
         add_evidence(
             "browser", "conditional", 0.55, "docs",

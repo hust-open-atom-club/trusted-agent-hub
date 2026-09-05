@@ -70,7 +70,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.10.0"
+SCANNER_VERSION = "0.11.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
