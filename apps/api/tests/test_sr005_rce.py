@@ -55,8 +55,44 @@ class TestSR005RCE:
 
         run_rce(s)
 
-        assert [finding["severity"] for finding in s.findings] == ["medium", "high"]
-        assert "输入来源=user_input" in s.findings[1]["description"]
+        assert [finding["severity"] for finding in s.findings] == ["critical"]
+        assert s.findings[0]["kind"] == "vulnerability"
+        assert s.findings[0]["disposition"] == "confirmed_vulnerability"
+        assert s.findings[0]["source_control"] == "remote_attacker"
+
+    def test_operator_environment_exec_requires_context(self):
+        content = (
+            'const childProcess = require("child_process");\n'
+            "childProcess.exec(process.env.OPERATOR_COMMAND);\n"
+        )
+        s = MockScanner(files={"hook.js": content})
+        s.analysis = SimpleNamespace(
+            javascript_ast={"hook.js": analyze_javascript("hook.js", content)}
+        )
+
+        run_rce(s)
+
+        assert len(s.findings) == 1
+        finding = s.findings[0]
+        assert finding["severity"] == "medium"
+        assert finding["kind"] == "context_dependent"
+        assert finding["disposition"] == "needs_context"
+        assert finding["source_control"] == "operator"
+        assert finding["requires_manual_review"] is True
+
+    def test_exec_file_with_fixed_binary_is_capability_only(self):
+        content = (
+            'const childProcess = require("child_process");\n'
+            'childProcess.execFile("xdg-open", [url], { shell: false });\n'
+        )
+        s = MockScanner(files={"launcher.js": content})
+        s.analysis = SimpleNamespace(
+            javascript_ast={"launcher.js": analyze_javascript("launcher.js", content)}
+        )
+
+        run_rce(s)
+
+        assert s.findings == []
 
     def test_getattr_reflection(self):
         """Dynamic attribute access to dangerous modules (AST layer)."""

@@ -337,6 +337,32 @@
           "sink_symbol": { "type": "string" },
           "source_kind": { "type": "string" },
           "source_symbol": { "type": "string" },
+          "source_control": {
+            "type": "string",
+            "description": "Who can influence the source value (for example remote_attacker or operator)"
+          },
+          "reachability": {
+            "type": "string",
+            "description": "Observed path by which the sink can be reached"
+          },
+          "activation": {
+            "type": "string",
+            "description": "Whether activation is direct, conditional, or deployment-dependent"
+          },
+          "trust_boundary_crossed": {
+            "type": "boolean",
+            "description": "Whether the observed flow crosses a trust boundary"
+          },
+          "safeguards": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "preconditions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
           "kind": {
             "type": "string",
             "enum": [

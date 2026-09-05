@@ -22,6 +22,9 @@ def test_cross_rule_hits_on_same_sink_form_one_scoring_root_cause():
             "severity": "high",
             "category": "remote_code_execution",
             "title": "dynamic exec",
+            "sink_kind": "shell_exec",
+            "sink_symbol": "cp.exec",
+            "source_kind": "environment",
             "evidence": "match: cp.exec(process.env.OPEN_CMD + url)",
             "location": {
                 "file": "server.cjs",

@@ -70,7 +70,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.9.0"
+SCANNER_VERSION = "0.10.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -577,6 +577,19 @@ class RiskScanner:
         remediation: str = "",
         cwe_id: str | None = None,
         requires_confirmation: bool = False,
+        kind: str | None = None,
+        disposition: str | None = None,
+        sink_kind: str | None = None,
+        sink_symbol: str | None = None,
+        source_kind: str | None = None,
+        source_symbol: str | None = None,
+        source_control: str | None = None,
+        reachability: str | None = None,
+        activation: str | None = None,
+        trust_boundary_crossed: bool | None = None,
+        safeguards: list[str] | None = None,
+        preconditions: list[str] | None = None,
+        requires_manual_review: bool = False,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -603,6 +616,27 @@ class RiskScanner:
             finding["cwe_id"] = cwe_id
         if requires_confirmation:
             finding["requires_confirmation"] = True
+        semantic_values: dict[str, Any] = {
+            "kind": kind,
+            "disposition": disposition,
+            "sink_kind": sink_kind,
+            "sink_symbol": sink_symbol,
+            "source_kind": source_kind,
+            "source_symbol": source_symbol,
+            "source_control": source_control,
+            "reachability": reachability,
+            "activation": activation,
+            "trust_boundary_crossed": trust_boundary_crossed,
+        }
+        for key, value in semantic_values.items():
+            if value is not None:
+                finding[key] = value
+        if safeguards:
+            finding["safeguards"] = list(safeguards)
+        if preconditions:
+            finding["preconditions"] = list(preconditions)
+        if requires_manual_review:
+            finding["requires_manual_review"] = True
 
         self.findings.append(finding)
 

@@ -40,6 +40,19 @@ class MockScanner:
         remediation: str = "",
         cwe_id: str | None = None,
         requires_confirmation: bool = False,
+        kind: str | None = None,
+        disposition: str | None = None,
+        sink_kind: str | None = None,
+        sink_symbol: str | None = None,
+        source_kind: str | None = None,
+        source_symbol: str | None = None,
+        source_control: str | None = None,
+        reachability: str | None = None,
+        activation: str | None = None,
+        trust_boundary_crossed: bool | None = None,
+        safeguards: list[str] | None = None,
+        preconditions: list[str] | None = None,
+        requires_manual_review: bool = False,
     ) -> None:
         finding = {
             "rule_id": rule_id,
@@ -56,6 +69,25 @@ class MockScanner:
         }
         if requires_confirmation:
             finding["requires_confirmation"] = True
+        semantic_values = {
+            "kind": kind,
+            "disposition": disposition,
+            "sink_kind": sink_kind,
+            "sink_symbol": sink_symbol,
+            "source_kind": source_kind,
+            "source_symbol": source_symbol,
+            "source_control": source_control,
+            "reachability": reachability,
+            "activation": activation,
+            "trust_boundary_crossed": trust_boundary_crossed,
+        }
+        finding.update({key: value for key, value in semantic_values.items() if value is not None})
+        if safeguards:
+            finding["safeguards"] = list(safeguards)
+        if preconditions:
+            finding["preconditions"] = list(preconditions)
+        if requires_manual_review:
+            finding["requires_manual_review"] = True
         self.findings.append(finding)
 
     def _add_advisory(

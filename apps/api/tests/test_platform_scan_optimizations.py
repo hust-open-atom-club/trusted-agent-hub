@@ -28,8 +28,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES = PROJECT_ROOT / "examples"
 
 
-def test_scanner_downgrades_documentation_findings() -> None:
-    """README 里的危险命令/token 应降级为 low，SKILL.md 的注入保持 critical。"""
+def test_scanner_separates_documentation_examples_from_executable_findings() -> None:
+    """README 的执行示例不算漏洞；其他文本提示至多为 low。"""
     with tempfile.TemporaryDirectory(prefix="tah-doc-") as tmp:
         root = Path(tmp)
         (root / "README.md").write_text(
@@ -56,10 +56,10 @@ def test_scanner_downgrades_documentation_findings() -> None:
             f["severity"] in ("low", "info")
             for f in readme_findings
         ), "README 中的发现不应存在 critical/high"
-        assert any(
-            f.get("downgraded") == "documentation"
+        assert not any(
+            f.get("rule_id") in {"SR-002", "SR-005"}
             for f in readme_findings
-        ), "README 中至少有一条发现应带 documentation 降级标记"
+        ), "README 中的代码示例不应计为可执行漏洞"
 
         skill_findings = by_file.get("SKILL.md", [])
         injection = [

@@ -21,22 +21,20 @@ class TestSR014SSRF:
         assert f["category"] == "ssrf"
 
     def test_internal_ip(self):
-        """http://192.168.x.x → high finding."""
+        """An internal URL literal alone does not prove a request."""
         s = MockScanner(files={
             "main.py": 'url = "http://192.168.1.1/admin"\n',
         })
         ssrf.run(s)
-        assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "high"
+        assert s.findings == []
 
     def test_localhost(self):
-        """http://localhost → high finding."""
+        """A fixed localhost request is a local capability, not SSRF."""
         s = MockScanner(files={
             "main.py": 'fetch("http://localhost:8080/api")\n',
         })
         ssrf.run(s)
-        assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "high"
+        assert s.findings == []
 
     def test_dynamic_url_concat(self):
         """requests.get(base + user_input) → medium finding."""
@@ -47,7 +45,7 @@ class TestSR014SSRF:
         assert len(s.findings) >= 1
 
     def test_defensive_context_downgraded_to_info(self):
-        """Match near 'forbidden' warning text → severity downgraded to info."""
+        """Defensive prose without a request sink is not a finding."""
         s = MockScanner(files={
             "main.py": (
                 "# WARNING: do not connect to internal IPs\n"
@@ -57,8 +55,7 @@ class TestSR014SSRF:
             ),
         })
         ssrf.run(s)
-        assert len(s.findings) == 1
-        assert s.findings[0]["severity"] == "info"
+        assert s.findings == []
 
     def test_markdown_files_skipped(self):
         """.md files are excluded from this rule."""

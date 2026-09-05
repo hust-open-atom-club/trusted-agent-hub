@@ -25,6 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
+from scanners.risk_scanner.analyzers.url_context import (
+    URL_USAGE_DEPENDENCY,
+    URL_USAGE_DOWNLOAD_EXECUTE,
+    URL_USAGE_NETWORK_REQUEST,
+    classify_url_usage,
+    is_loopback_url,
+)
 from scanners.risk_scanner.patterns import (
     BUILTIN_WELL_KNOWN_PACKAGES,
     DOMAIN_WHITELIST,
@@ -59,12 +66,6 @@ _URL_BASED_DESCS = frozenset({
 _DEPRECATION_BASED_DESCS = frozenset({
     "包声明已废弃/不再维护",
 })
-
-_DEPENDENCY_CONTEXT = re.compile(
-    r"\b(?:pip|npm|pnpm|yarn|cargo|install|registry|dependency|download|curl|wget)\b",
-    re.IGNORECASE,
-)
-
 
 def _is_code_file(fname: str) -> bool:
     ext = Path(fname).suffix.lower()
@@ -303,25 +304,55 @@ def run(scanner: Any) -> None:
 
             for match in re.finditer(pattern, content, re.IGNORECASE):
                 matched_url = match.group()
+                line_no = content[: match.start()].count("\n") + 1
+                url_usage = classify_url_usage(content, line_no, matched_url)
 
                 if is_url_based:
-                    if "://" in matched_url:
+                    if "://" in matched_url and is_loopback_url(matched_url):
+                        continue
+                    if desc == "非官方包源 URL":
+                        # A URL literal is not a package source. Registry and
+                        # installer context is required before SR-008 applies.
+                        if url_usage != URL_USAGE_DEPENDENCY:
+                            continue
                         if _is_whitelisted_url(matched_url):
                             continue
-
-                line_no = content[: match.start()].count("\n") + 1
+                    elif desc == "HTTP 请求指向未知地址":
+                        # Arbitrary outbound requests are network behavior,
+                        # not evidence of dependency compromise.
+                        continue
+                    elif desc in {
+                        "使用 HTTP 明文下载",
+                        "通过 HTTP 明文下载",
+                        "依赖解析地址使用 HTTP 明文",
+                    } and url_usage not in {
+                        URL_USAGE_DEPENDENCY,
+                        URL_USAGE_DOWNLOAD_EXECUTE,
+                        URL_USAGE_NETWORK_REQUEST,
+                    }:
+                        continue
 
                 if is_deprecation and _is_inside_html_comment(lines, line_no):
                     continue
 
                 snippet = "\n".join(lines[max(0, line_no - 1):line_no])
                 finding_severity = severity
-                if desc == "非官方包源 URL" and not _DEPENDENCY_CONTEXT.search(snippet):
-                    # A logo/API/static-resource URL is not evidence of dependency
-                    # compromise. Keep it visible as a low-confidence review hint.
-                    finding_severity = "low"
                 if scanner._is_code_example(fname, line_no):
                     finding_severity = "medium" if finding_severity == "critical" else "low"
+
+                semantic: dict[str, Any] = {}
+                if url_usage == URL_USAGE_DOWNLOAD_EXECUTE:
+                    semantic = {
+                        "kind": "vulnerability",
+                        "disposition": "confirmed_vulnerability",
+                        "sink_kind": "download_execute",
+                        "sink_symbol": "shell",
+                        "source_kind": "remote_script",
+                        "source_control": "remote_publisher",
+                        "reachability": "install_or_script_execution",
+                        "activation": "direct",
+                        "trust_boundary_crossed": True,
+                    }
 
                 scanner._add_finding(
                     rule_id=rule_id,
@@ -332,6 +363,7 @@ def run(scanner: Any) -> None:
                     location={"file": fname, "line": line_no, "snippet": snippet[:200]},
                     evidence=f"匹配: {matched_url[:120]}",
                     remediation="使用锁定的依赖管理器（npm/pip）并验证包完整性。仅使用官方源和 HTTPS。",
+                    **semantic,
                 )
 
     meta = scanner._package_metadata

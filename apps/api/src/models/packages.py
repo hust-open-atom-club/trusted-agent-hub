@@ -231,6 +231,12 @@ class ScanFinding(StrictContractModel):
     sink_symbol: str | None = None
     source_kind: str | None = None
     source_symbol: str | None = None
+    source_control: str | None = None
+    reachability: str | None = None
+    activation: str | None = None
+    trust_boundary_crossed: bool | None = None
+    safeguards: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
     kind: Literal[
         "unclassified",
         "vulnerability",

@@ -461,7 +461,14 @@ def _evaluate_v2_case(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     target = case["expected_target"]
     findings = [item for item in report.get("findings", []) if isinstance(item, dict)]
-    actual_rules = sorted({str(item.get("rule_id")) for item in findings if item.get("rule_id")})
+    actual_rule_set: set[str] = set()
+    for item in findings:
+        detector_ids = item.get("detector_ids")
+        if isinstance(detector_ids, list) and detector_ids:
+            actual_rule_set.update(str(value) for value in detector_ids if value)
+        elif item.get("rule_id"):
+            actual_rule_set.add(str(item["rule_id"]))
+    actual_rules = sorted(actual_rule_set)
     expected_rules = sorted(map(str, target.get("raw_rules", [])))
     actual_roots = _actual_root_issues(findings)
     expected_roots = list(target.get("root_issues", []))

@@ -51,11 +51,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Local URL, browser-launch capability, and URL-use context are not modeled, so benign code is over-severe.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "webapp-testing-local-service",
@@ -77,11 +73,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The AST layer treats every subprocess call as high RCE without considering argv literals or shell=False.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "mcp-builder-doc-example",
@@ -103,11 +95,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Documentation context lowers severity but still emits a vulnerability finding instead of a benign example disposition.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "own-state-cleanup",
@@ -177,11 +165,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The supply-chain URL matcher does not distinguish string comparison from dependency or download use.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "localhost-http-service",
@@ -203,11 +187,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Listener capabilities and loopback scope are not represented by the current structural capability graph.",
-        "planned_pr": "PR-5"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "external-brand-image",
@@ -229,11 +209,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Static external assets are still emitted as low supply-chain findings and are absent from capability output.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "http-param-exec",
@@ -259,15 +235,11 @@
           }
         ],
         "forbidden_effective_severities": [],
-        "capabilities": ["network.listen", "shell.execute"],
+        "capabilities": ["shell.execute"],
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Alias normalization and HTTP-to-exec taint flow do not yet turn childProcess.exec into a critical root issue.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "download-then-execute",
@@ -297,11 +269,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The shared root cause is now available; PR-3 will classify it as a vulnerability and emit its download/shell capabilities.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "environment-credential-exfiltration",
@@ -399,11 +367,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The root cause is now stable; PR-3 will add vulnerability disposition and metadata-network capability semantics.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "unauthenticated-command-service",
@@ -433,11 +397,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Public bind, missing authentication, alias-normalized exec, and request taint are not combined into one issue.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "configured-operator-hook",
@@ -452,11 +412,11 @@
       },
       "content_tree_sha256": "ff43b2e4b92aae2f408a3c08441bb22b7a0ff7e1108245557d2c7e947e32688e",
       "expected_target": {
-        "raw_rules": ["V2-CONFIGURED-EXEC"],
+        "raw_rules": ["SR-005"],
         "root_issues": [
           {
             "id": "configured-command-execution",
-            "rule_ids": ["V2-CONFIGURED-EXEC"],
+            "rule_ids": ["SR-005"],
             "kind": "context_dependent",
             "disposition": "needs_context",
             "effective_severity": "medium"
@@ -467,11 +427,7 @@
         "security_grade": ["C"],
         "manual_review": "required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Operator-controlled configuration is recognized structurally but has no context-aware finding or review disposition.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-bind-localhost",
@@ -493,11 +449,7 @@
         "security_grade": ["B", "C"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The scanner currently omits listener and bind-scope capabilities from structural output.",
-        "planned_pr": "PR-5"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-bind-public",
@@ -512,11 +464,11 @@
       },
       "content_tree_sha256": "56f73c4b4016600cce4d7bf802cfc442141f7a7193bea69317378fc822d3fbf4",
       "expected_target": {
-        "raw_rules": ["V2-PUBLIC-BIND"],
+        "raw_rules": ["SR-007"],
         "root_issues": [
           {
             "id": "public-service-bind",
-            "rule_ids": ["V2-PUBLIC-BIND"],
+            "rule_ids": ["SR-007"],
             "kind": "context_dependent",
             "disposition": "needs_context",
             "effective_severity": "medium"
@@ -527,11 +479,7 @@
         "security_grade": ["C"],
         "manual_review": "required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Public listener exposure is not detected or routed to context-sensitive manual review.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-command-operator-env",
@@ -546,11 +494,11 @@
       },
       "content_tree_sha256": "a6268d01832e64227722ea2b134e1327e30551b2b0a81d5f76ed34b86beb55f4",
       "expected_target": {
-        "raw_rules": ["V2-CONFIGURED-EXEC"],
+        "raw_rules": ["SR-005"],
         "root_issues": [
           {
             "id": "operator-environment-exec",
-            "rule_ids": ["V2-CONFIGURED-EXEC"],
+            "rule_ids": ["SR-005"],
             "kind": "context_dependent",
             "disposition": "needs_context",
             "effective_severity": "medium"
@@ -561,11 +509,7 @@
         "security_grade": ["C"],
         "manual_review": "required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The scanner exposes only a legacy dynamic_process capability and does not classify operator provenance.",
-        "planned_pr": "PR-3"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-command-request-query",
@@ -595,11 +539,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "The alias form is parsed as a capability but is not connected to the request source or emitted as RCE.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-origin-compare",
@@ -651,11 +591,7 @@
         "security_grade": ["D", "E"],
         "manual_review": "not_required"
       },
-      "enforcement": "observe",
-      "known_gap": {
-        "reason": "Dynamic fetch targets are recognized as network capability but header-to-request SSRF taint is not detected.",
-        "planned_pr": "PR-4"
-      }
+      "enforcement": "blocking"
     },
     {
       "id": "pair-delete-own-state",
