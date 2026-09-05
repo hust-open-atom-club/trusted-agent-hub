@@ -1,0 +1,777 @@
+{
+  "$schema": "./schema-v2.json",
+  "schema_version": "2.0",
+  "scanner_source_commit_hash": "8104785e13d6a1e418e144a2da64fd12291dcb5f",
+  "scoring_context": {
+    "source": {
+      "type": "git",
+      "repository_url": "https://example.invalid/TrustedAgentHub.git",
+      "ref_type": "commit"
+    },
+    "verification": {
+      "owner": true,
+      "signature": false,
+      "attestation": false,
+      "sbom": false
+    },
+    "author_history": {
+      "packages_published": 10,
+      "avg_historical_score": 90,
+      "violations_count": 0
+    },
+    "review_records": {
+      "status": "pending",
+      "reviewer_count": 0
+    },
+    "feedback": {
+      "avg_rating": 0,
+      "total_ratings": 0,
+      "total_installs": 0,
+      "reports_count": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "brainstorming-local-launcher",
+      "path": "corpus/benign-code/brainstorming-local-launcher",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "minimized_from",
+        "reference": "examples/real-world/plugins/superpowers/skills/brainstorming/scripts/server.cjs",
+        "revision": "8104785e13d6a1e418e144a2da64fd12291dcb5f",
+        "license": "MIT",
+        "annotation": "A local companion opens an explicitly constructed localhost URL with execFile and no shell."
+      },
+      "content_tree_sha256": "c39cd28c110269cb4522f0238062453ee5097c64266aee83a30b3e1d85cedfa1",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["network.local_service", "shell.execute"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Local URL, browser-launch capability, and URL-use context are not modeled, so benign code is over-severe.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "webapp-testing-local-service",
+      "path": "corpus/benign-code/webapp-testing-local-service",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "minimized_from",
+        "reference": "examples/real-world/skills/webapp-testing/scripts/with_server.py",
+        "revision": "8104785e13d6a1e418e144a2da64fd12291dcb5f",
+        "license": "Apache-2.0",
+        "annotation": "A test harness starts a fixed local server with an argv array and shell explicitly disabled."
+      },
+      "content_tree_sha256": "7245085bb0231c5fe576aa6481ea6149d6801072db9601bae1d9f0979c855530",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["network.local_service", "process.spawn"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The AST layer treats every subprocess call as high RCE without considering argv literals or shell=False.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "mcp-builder-doc-example",
+      "path": "corpus/benign-code/mcp-builder-doc-example",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "minimized_from",
+        "reference": "examples/real-world/skills/mcp-builder/reference/node_mcp_server.md",
+        "revision": "8104785e13d6a1e418e144a2da64fd12291dcb5f",
+        "license": "Apache-2.0",
+        "annotation": "Documentation demonstrates code that package authors must recognize as unsafe; the fixture never executes it."
+      },
+      "content_tree_sha256": "657e6e14f205007ad2143c49239e3ccba680dcbd018d11245f06eda46d3f1367",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Documentation context lowers severity but still emits a vulnerability finding instead of a benign example disposition.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "own-state-cleanup",
+      "path": "corpus/benign-code/own-state-cleanup",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "Cleanup is statically confined beneath the package directory and only removes disposable session state."
+      },
+      "content_tree_sha256": "ddde8bdb39c3fb656851279d319dc51ac04edbf3796a9dce1b97956121913b27",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["filesystem.delete_own_state"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The current capability graph does not record scoped recursive deletion even when it is benign package-owned state.",
+        "planned_pr": "PR-5"
+      }
+    },
+    {
+      "id": "generated-session-token",
+      "path": "corpus/benign-code/generated-session-token",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The token is freshly generated from a cryptographic random source and is not a third-party credential."
+      },
+      "content_tree_sha256": "126bcbdc22c3812b616f729a99e67707e8de9671e109b3c25f5a0427e192d38a",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "origin-string-comparison",
+      "path": "corpus/benign-code/origin-string-comparison",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The URL-shaped string is constructed only for an equality check and is never used as a network destination."
+      },
+      "content_tree_sha256": "c8dc5395cb8e1da9dca06c726c837071243ab5173c87e6a706bcb557383ff32d",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The supply-chain URL matcher does not distinguish string comparison from dependency or download use.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "localhost-http-service",
+      "path": "corpus/benign-code/localhost-http-service",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The server binds only to the loopback interface and exposes no remote network surface."
+      },
+      "content_tree_sha256": "462955ed84f8139bde621a6e62f5dcf132273004934775eac39b9422b93bf789",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["network.listen_local"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Listener capabilities and loopback scope are not represented by the current structural capability graph.",
+        "planned_pr": "PR-5"
+      }
+    },
+    {
+      "id": "external-brand-image",
+      "path": "corpus/benign-code/external-brand-image",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "A fixed HTTPS image URL is presentation content, not a dependency registry or executable download."
+      },
+      "content_tree_sha256": "4f02b057854ee16563ab7e30e4bfa7f65b92c01b751d53a3d3be0c726eb25f98",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["network.external_asset"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Static external assets are still emitted as low supply-chain findings and are absent from capability output.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "http-param-exec",
+      "path": "corpus/malicious-code/http-param-exec",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "An HTTP query parameter reaches a shell-capable child-process call without validation or authentication."
+      },
+      "content_tree_sha256": "778e1d810ae8a2000962d2174df2176003def41f4438d6995bc1fe1aa5ecd7c5",
+      "expected_target": {
+        "raw_rules": ["SR-005"],
+        "root_issues": [
+          {
+            "id": "request-query-to-exec",
+            "rule_ids": ["SR-005"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["network.listen", "shell.execute"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Alias normalization and HTTP-to-exec taint flow do not yet turn childProcess.exec into a critical root issue.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "download-then-execute",
+      "path": "corpus/malicious-code/download-then-execute",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "A remote attacker-controlled script is downloaded and immediately piped into a shell interpreter."
+      },
+      "content_tree_sha256": "e17a9b5b3419fcd5fcdbfef3200ee702b9050c53b10136f5e2cb4b806a4d9e97",
+      "expected_target": {
+        "raw_rules": ["SR-002", "SR-008"],
+        "root_issues": [
+          {
+            "id": "remote-script-execution",
+            "rule_ids": ["SR-002", "SR-008"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["network.download", "shell.execute"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Overlapping shell, URL, and supply-chain matches lack a shared root_cause_id and v2 classification fields.",
+        "planned_pr": "PR-2"
+      }
+    },
+    {
+      "id": "environment-credential-exfiltration",
+      "path": "corpus/malicious-code/environment-credential-exfiltration",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "A GitHub credential is read from the operator environment and sent to an attacker-controlled endpoint."
+      },
+      "content_tree_sha256": "828d5bafbb35caf8374f7faf9796c4988cf52cfa571e173ff4cccb049a996507",
+      "expected_target": {
+        "raw_rules": ["SR-003"],
+        "root_issues": [
+          {
+            "id": "credential-exfiltration",
+            "rule_ids": ["SR-003"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["credential.read", "network.egress"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Credential-source to outbound-request data flow and root consolidation are not represented end to end.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "user-path-recursive-delete",
+      "path": "corpus/malicious-code/user-path-recursive-delete",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "An untrusted request path controls an unbounded recursive filesystem deletion operation."
+      },
+      "content_tree_sha256": "f32665e8403c8d5407c084dbaa701a6b5757c25fb3cd8620d459af2154f724e9",
+      "expected_target": {
+        "raw_rules": ["V2-PATH-DELETE"],
+        "root_issues": [
+          {
+            "id": "request-path-recursive-delete",
+            "rule_ids": ["V2-PATH-DELETE"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["filesystem.delete"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Recursive-delete sink analysis and request-path taint tracking are not implemented by current scanner rules.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "cloud-metadata-ssrf",
+      "path": "corpus/malicious-code/cloud-metadata-ssrf",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The code opens a connection to the link-local cloud metadata address and requests IAM credentials."
+      },
+      "content_tree_sha256": "3cf51c1a6a314385b1ac8237b4fecc6ab818382bbac12c8bdd3dec8fe26a9501",
+      "expected_target": {
+        "raw_rules": ["SR-014"],
+        "root_issues": [
+          {
+            "id": "cloud-metadata-access",
+            "rule_ids": ["SR-014"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["network.metadata"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The raw severity is correct, but root cause, kind, disposition, and semantic capability fields are still absent.",
+        "planned_pr": "PR-2"
+      }
+    },
+    {
+      "id": "unauthenticated-command-service",
+      "path": "corpus/malicious-code/unauthenticated-command-service",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "A publicly bound HTTP service accepts a command parameter and invokes a shell without authentication."
+      },
+      "content_tree_sha256": "26183db9863ce935529a0df85a5c7c37dcf6cf80ac40c6e75c152d04cb2cc6ff",
+      "expected_target": {
+        "raw_rules": ["SR-005"],
+        "root_issues": [
+          {
+            "id": "unauthenticated-remote-command",
+            "rule_ids": ["SR-005"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["network.listen_public", "shell.execute"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Public bind, missing authentication, alias-normalized exec, and request taint are not combined into one issue.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "configured-operator-hook",
+      "path": "corpus/needs-context/configured-operator-hook",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#synthetic-fixtures",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "An operator-supplied hook is shell-capable, but its safety depends on deployment ownership and policy."
+      },
+      "content_tree_sha256": "ff43b2e4b92aae2f408a3c08441bb22b7a0ff7e1108245557d2c7e947e32688e",
+      "expected_target": {
+        "raw_rules": ["V2-CONFIGURED-EXEC"],
+        "root_issues": [
+          {
+            "id": "configured-command-execution",
+            "rule_ids": ["V2-CONFIGURED-EXEC"],
+            "kind": "context_dependent",
+            "disposition": "needs_context",
+            "effective_severity": "medium"
+          }
+        ],
+        "forbidden_effective_severities": ["critical"],
+        "capabilities": ["shell.execute"],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Operator-controlled configuration is recognized structurally but has no context-aware finding or review disposition.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "pair-bind-localhost",
+      "path": "corpus/contrast-pairs/network-bind/localhost",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The pair differs only in bind host; this variant is restricted to the local machine."
+      },
+      "content_tree_sha256": "7091293bdfb55f1c08b7a9f9dcb7e73397269da29cea3fc6d18e545c23727513",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["network.listen_local"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The scanner currently omits listener and bind-scope capabilities from structural output.",
+        "planned_pr": "PR-5"
+      }
+    },
+    {
+      "id": "pair-bind-public",
+      "path": "corpus/contrast-pairs/network-bind/public",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The pair differs only in bind host; this variant exposes the service beyond loopback."
+      },
+      "content_tree_sha256": "56f73c4b4016600cce4d7bf802cfc442141f7a7193bea69317378fc822d3fbf4",
+      "expected_target": {
+        "raw_rules": ["V2-PUBLIC-BIND"],
+        "root_issues": [
+          {
+            "id": "public-service-bind",
+            "rule_ids": ["V2-PUBLIC-BIND"],
+            "kind": "context_dependent",
+            "disposition": "needs_context",
+            "effective_severity": "medium"
+          }
+        ],
+        "forbidden_effective_severities": ["critical"],
+        "capabilities": ["network.listen_public"],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Public listener exposure is not detected or routed to context-sensitive manual review.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "pair-command-operator-env",
+      "path": "corpus/contrast-pairs/command-source/operator-env",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The command comes from operator configuration rather than an unauthenticated request."
+      },
+      "content_tree_sha256": "a6268d01832e64227722ea2b134e1327e30551b2b0a81d5f76ed34b86beb55f4",
+      "expected_target": {
+        "raw_rules": ["V2-CONFIGURED-EXEC"],
+        "root_issues": [
+          {
+            "id": "operator-environment-exec",
+            "rule_ids": ["V2-CONFIGURED-EXEC"],
+            "kind": "context_dependent",
+            "disposition": "needs_context",
+            "effective_severity": "medium"
+          }
+        ],
+        "forbidden_effective_severities": ["critical"],
+        "capabilities": ["shell.execute"],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The scanner exposes only a legacy dynamic_process capability and does not classify operator provenance.",
+        "planned_pr": "PR-3"
+      }
+    },
+    {
+      "id": "pair-command-request-query",
+      "path": "corpus/contrast-pairs/command-source/request-query",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The command comes directly from an HTTP request query with no validation or authentication."
+      },
+      "content_tree_sha256": "30bfd533d4ad2744c525b1d2c33f607c6c038c3bdca4bfd0fd3ec8845f898e21",
+      "expected_target": {
+        "raw_rules": ["SR-005"],
+        "root_issues": [
+          {
+            "id": "request-query-exec",
+            "rule_ids": ["SR-005"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "critical"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["shell.execute"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The alias form is parsed as a capability but is not connected to the request source or emitted as RCE.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "pair-origin-compare",
+      "path": "corpus/contrast-pairs/origin-use/compare",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The Origin value is compared with configuration and never dereferenced as a URL."
+      },
+      "content_tree_sha256": "243518732e451656c2999ab1bb2ba2f0fc207a1201848c0901118a7ff9a382e2",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "pair-origin-fetch",
+      "path": "corpus/contrast-pairs/origin-use/fetch",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The attacker-controlled Origin header is dereferenced as an outbound request destination."
+      },
+      "content_tree_sha256": "fd87bf8f26d26e7125b549ad352ba4ff9201fe8b8a06622103f38ca891c7c2b9",
+      "expected_target": {
+        "raw_rules": ["SR-014"],
+        "root_issues": [
+          {
+            "id": "origin-header-ssrf",
+            "rule_ids": ["SR-014"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "high"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["network.request"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Dynamic fetch targets are recognized as network capability but header-to-request SSRF taint is not detected.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "pair-delete-own-state",
+      "path": "corpus/contrast-pairs/delete-path/own-state",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The recursive deletion target is a fixed cache directory beneath the package itself."
+      },
+      "content_tree_sha256": "8d2b1b09a595f46401e496f5783d2fbc6f70aae6a5478c4d576f05b49e0c0a96",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": ["filesystem.delete_own_state"],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The capability graph does not yet represent a scoped, package-owned recursive deletion capability.",
+        "planned_pr": "PR-5"
+      }
+    },
+    {
+      "id": "pair-delete-user-controlled",
+      "path": "corpus/contrast-pairs/delete-path/user-controlled",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The recursive deletion target is taken directly from an untrusted request parameter."
+      },
+      "content_tree_sha256": "172d1cc95f3e56b673799ee5b04b78df493d8a1c660e1e3bf4c2050a57d29843",
+      "expected_target": {
+        "raw_rules": ["V2-PATH-DELETE"],
+        "root_issues": [
+          {
+            "id": "user-controlled-recursive-delete",
+            "rule_ids": ["V2-PATH-DELETE"],
+            "kind": "vulnerability",
+            "disposition": "confirmed_vulnerability",
+            "effective_severity": "high"
+          }
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": ["filesystem.delete"],
+        "security_grade": ["D", "E"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "The current scanner lacks recursive-delete sink detection and user-controlled path provenance.",
+        "planned_pr": "PR-4"
+      }
+    },
+    {
+      "id": "pair-token-generated",
+      "path": "corpus/contrast-pairs/token-source/generated",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The value is a newly generated local session token and grants no third-party authority."
+      },
+      "content_tree_sha256": "1861eeb76dbb6b135d129cafd5f732b5d76f0b1119688aa64908941f4610f11f",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "pair-token-github",
+      "path": "corpus/contrast-pairs/token-source/github-token",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#contrast-pairs",
+        "revision": "fixture-v1",
+        "license": "Apache-2.0",
+        "annotation": "The value is a third-party GitHub credential whose legitimacy depends on declared purpose and scope."
+      },
+      "content_tree_sha256": "a3cb5312c15d52f5ad4ba3be3233726dfb9649e2b1292a03aea31188d1bf25c5",
+      "expected_target": {
+        "raw_rules": ["SR-003"],
+        "root_issues": [
+          {
+            "id": "third-party-token-access",
+            "rule_ids": ["SR-003"],
+            "kind": "context_dependent",
+            "disposition": "needs_context",
+            "effective_severity": "medium"
+          }
+        ],
+        "forbidden_effective_severities": ["critical"],
+        "capabilities": ["credential.read"],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "observe",
+      "known_gap": {
+        "reason": "Credential access is high severity without a capability disposition, declared-purpose context, or review routing.",
+        "planned_pr": "PR-5"
+      }
+    }
+  ]
+}

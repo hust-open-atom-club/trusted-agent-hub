@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-brainstorming-local-launcher",
+  "version": "1.0.0",
+  "type": "mcp_server",
+  "description": "Deterministic scanner benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "MIT",
+  "permissions": {}
+}

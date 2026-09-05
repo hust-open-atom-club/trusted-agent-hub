@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-http-param-exec",
+  "version": "1.0.0",
+  "type": "mcp_server",
+  "description": "Deterministic scanner benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

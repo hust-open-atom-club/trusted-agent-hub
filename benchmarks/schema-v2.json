@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trusted-agent-hub.dev/schemas/benchmark-labels-v2.schema.json",
+  "title": "TrustedAgentHub scanner benchmark labels v2",
+  "type": "object",
+  "required": [
+    "$schema",
+    "schema_version",
+    "scanner_source_commit_hash",
+    "scoring_context",
+    "cases"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "minLength": 1 },
+    "schema_version": { "const": "2.0" },
+    "scanner_source_commit_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "scoring_context": {
+      "type": "object",
+      "required": ["source", "verification", "author_history", "review_records", "feedback"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "required": ["type", "repository_url", "ref_type"],
+          "properties": {
+            "type": { "type": "string", "minLength": 1 },
+            "repository_url": { "type": "string", "minLength": 1 },
+            "ref_type": { "enum": ["commit", "tag", "release"] }
+          },
+          "additionalProperties": false
+        },
+        "verification": {
+          "type": "object",
+          "required": ["owner", "signature", "attestation", "sbom"],
+          "properties": {
+            "owner": { "type": "boolean" },
+            "signature": { "type": "boolean" },
+            "attestation": { "type": "boolean" },
+            "sbom": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "author_history": {
+          "type": "object",
+          "required": ["packages_published", "avg_historical_score", "violations_count"],
+          "properties": {
+            "packages_published": { "type": "integer", "minimum": 0 },
+            "avg_historical_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "violations_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "review_records": {
+          "type": "object",
+          "required": ["status", "reviewer_count"],
+          "properties": {
+            "status": { "enum": ["approved", "pending", "unreviewed", "changes_requested", "rejected"] },
+            "reviewer_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "feedback": {
+          "type": "object",
+          "required": ["avg_rating", "total_ratings", "total_installs", "reports_count"],
+          "properties": {
+            "avg_rating": { "type": "number", "minimum": 0, "maximum": 5 },
+            "total_ratings": { "type": "integer", "minimum": 0 },
+            "total_installs": { "type": "integer", "minimum": 0 },
+            "reports_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/case" }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["origin", "reference", "revision", "license", "annotation"],
+      "properties": {
+        "origin": { "enum": ["synthetic", "minimized_from"] },
+        "reference": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "license": { "type": "string", "minLength": 1 },
+        "annotation": { "type": "string", "minLength": 20 }
+      },
+      "additionalProperties": false
+    },
+    "rootIssue": {
+      "type": "object",
+      "required": ["id", "rule_ids", "effective_severity"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "rule_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(?:SR-[0-9]{3}b?|V2-[A-Z0-9-]+)$" }
+        },
+        "kind": {
+          "enum": ["vulnerability", "capability", "context_dependent", "review_signal"]
+        },
+        "disposition": {
+          "enum": ["confirmed_vulnerability", "benign_capability", "benign_context", "needs_context"]
+        },
+        "effective_severity": { "$ref": "#/$defs/severity" }
+      },
+      "additionalProperties": false
+    },
+    "severity": {
+      "enum": ["critical", "high", "medium", "low", "info"]
+    },
+    "expectedTarget": {
+      "type": "object",
+      "required": [
+        "raw_rules",
+        "root_issues",
+        "forbidden_effective_severities",
+        "capabilities",
+        "security_grade",
+        "manual_review"
+      ],
+      "properties": {
+        "raw_rules": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^(?:SR-[0-9]{3}b?|V2-[A-Z0-9-]+)$" }
+        },
+        "root_issues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rootIssue" }
+        },
+        "forbidden_effective_severities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/severity" }
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "security_grade": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["A", "B", "C", "D", "E"] }
+        },
+        "manual_review": { "enum": ["required", "not_required", "either"] }
+      },
+      "additionalProperties": false
+    },
+    "knownGap": {
+      "type": "object",
+      "required": ["reason", "planned_pr"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 20 },
+        "planned_pr": { "type": "string", "pattern": "^PR-[0-9]+$" }
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "ground_truth",
+        "source",
+        "content_tree_sha256",
+        "expected_target",
+        "enforcement"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "path": { "type": "string", "pattern": "^corpus/(?:benign-code|malicious-code|needs-context|contrast-pairs)/.+" },
+        "ground_truth": {
+          "enum": ["benign", "benign_capability", "malicious", "needs_context"]
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "content_tree_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "expected_target": { "$ref": "#/$defs/expectedTarget" },
+        "enforcement": { "enum": ["blocking", "observe"] },
+        "known_gap": { "$ref": "#/$defs/knownGap" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "enforcement": { "const": "observe" } },
+            "required": ["enforcement"]
+          },
+          "then": { "required": ["known_gap"] },
+          "else": { "not": { "required": ["known_gap"] } }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
