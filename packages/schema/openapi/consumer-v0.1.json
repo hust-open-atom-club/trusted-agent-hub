@@ -1274,6 +1274,16 @@
             "title": "Attempts",
             "type": "integer"
           },
+          "context_coverage": {
+            "additionalProperties": true,
+            "title": "Context Coverage",
+            "type": "object"
+          },
+          "decision_policy": {
+            "additionalProperties": true,
+            "title": "Decision Policy",
+            "type": "object"
+          },
           "decisions": {
             "additionalProperties": {
               "additionalProperties": true,
@@ -1303,6 +1313,11 @@
               }
             ],
             "title": "Fallback"
+          },
+          "findings_context_incomplete": {
+            "default": 0,
+            "title": "Findings Context Incomplete",
+            "type": "integer"
           },
           "findings_pending": {
             "default": 0,
@@ -1343,6 +1358,27 @@
               }
             ]
           },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "prompt_audit": {
+            "additionalProperties": true,
+            "title": "Prompt Audit",
+            "type": "object"
+          },
+          "review_configuration": {
+            "additionalProperties": true,
+            "title": "Review Configuration",
+            "type": "object"
+          },
           "review_rounds": {
             "default": 0,
             "maximum": 3.0,
@@ -1358,7 +1394,8 @@
                   "not_required",
                   "not_configured",
                   "completed",
-                  "call_failed"
+                  "call_failed",
+                  "context_incomplete"
                 ],
                 "type": "string"
               },
@@ -3005,6 +3042,48 @@
             ],
             "title": "Kind"
           },
+          "llm_adjudication_action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "downgraded",
+                  "escalated",
+                  "preserved",
+                  "blocked_confirmed_vulnerability",
+                  "blocked_insufficient_evidence",
+                  "not_eligible",
+                  "manual_review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Adjudication Action"
+          },
+          "llm_adjudication_eligible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Adjudication Eligible"
+          },
+          "llm_adjudication_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Adjudication Reason"
+          },
           "llm_confidence": {
             "anyOf": [
               {
@@ -3017,6 +3096,51 @@
               }
             ],
             "title": "Llm Confidence"
+          },
+          "llm_context_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "complete",
+                  "partial",
+                  "missing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Context Status"
+          },
+          "llm_effective_severity_before": {
+            "anyOf": [
+              {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low",
+                  "info"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Effective Severity Before"
+          },
+          "llm_evidence_sufficient": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Evidence Sufficient"
           },
           "llm_explanation": {
             "anyOf": [
@@ -3066,6 +3190,24 @@
             ],
             "title": "Llm Label"
           },
+          "llm_missing_context": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Llm Missing Context",
+            "type": "array"
+          },
+          "llm_policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Policy Version"
+          },
           "llm_review_rounds": {
             "anyOf": [
               {
@@ -3097,6 +3239,14 @@
               }
             ],
             "title": "Llm Review State"
+          },
+          "llm_supporting_evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Llm Supporting Evidence",
+            "type": "array"
           },
           "location": {
             "anyOf": [

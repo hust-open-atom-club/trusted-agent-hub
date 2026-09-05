@@ -66,9 +66,13 @@ def test_scanner_separates_documentation_examples_from_executable_findings() -> 
             if f.get("rule_id") == "SR-001"
         ]
         assert injection, "SKILL.md 应命中提示注入规则"
-        assert injection[0]["severity"] == "info"
+        assert injection[0]["severity"] == "critical"
+        assert injection[0]["static_severity"] == "critical"
+        assert injection[0]["effective_severity"] == "critical"
         assert injection[0]["candidate_severity"] == "critical"
         assert injection[0]["requires_llm_validation"] is True
+        assert injection[0]["llm_adjudication_eligible"] is True
+        assert injection[0]["requires_manual_review"] is True
 
 
 @pytest.mark.parametrize(
@@ -118,13 +122,22 @@ def test_scanner_preserves_findings_in_instruction_and_policy_files(
         injection = [finding for finding in findings if finding["rule_id"] == "SR-001"]
 
         assert injection, f"{relative_path} 应命中提示注入规则"
-        assert all(finding["severity"] == "info" for finding in injection)
+        assert all(
+            finding["severity"] == finding["static_severity"]
+            == finding["effective_severity"]
+            for finding in injection
+        )
         assert all(
             finding.get("candidate_severity") in ("critical", "high")
             for finding in injection
         )
         assert all(
             finding.get("requires_llm_validation") is True
+            for finding in injection
+        )
+        assert all(
+            finding.get("llm_adjudication_eligible") is True
+            and finding.get("requires_manual_review") is True
             for finding in injection
         )
         assert not any(
@@ -171,9 +184,17 @@ def test_scanner_applies_documentation_allowlist(
                 finding.get("downgraded") == "documentation" for finding in injection
             )
         else:
-            assert any(finding["severity"] == "info" for finding in injection)
+            assert all(
+                finding["severity"] == finding["static_severity"]
+                == finding["effective_severity"]
+                for finding in injection
+            )
             assert any(
                 finding.get("candidate_severity") == "critical"
+                for finding in injection
+            )
+            assert all(
+                finding.get("llm_adjudication_eligible") is True
                 for finding in injection
             )
             assert not any(
@@ -199,7 +220,11 @@ def test_scanner_does_not_treat_arbitrary_markdown_as_documentation() -> None:
         injection = [finding for finding in findings if finding["rule_id"] == "SR-001"]
 
         assert injection
-        assert any(finding["severity"] == "info" for finding in injection)
+        assert all(
+            finding["severity"] == finding["static_severity"]
+            == finding["effective_severity"]
+            for finding in injection
+        )
         assert any(
             finding.get("candidate_severity") == "critical"
             for finding in injection
@@ -539,10 +564,38 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
     def fake_call(prompt: str) -> dict:
         calls.append(prompt)
         return {
-            "is_vulnerability": True,
-            "intent": "malicious",
-            "confidence": 0.9,
-            "explanation": "confirmed",
+            "reviews": [
+                {
+                    "id": "f-crit",
+                    "is_vulnerability": True,
+                    "harmful": True,
+                    "impact": "critical",
+                    "context_role": "instruction",
+                    "intent": "malicious",
+                    "confidence": 0.9,
+                    "evidence_sufficient": True,
+                    "missing_context": [],
+                    "supporting_evidence": [{
+                        "file": "SKILL.md", "line": 1, "claim": "instruction"
+                    }],
+                    "explanation": "confirmed",
+                },
+                {
+                    "id": "f-high",
+                    "is_vulnerability": True,
+                    "harmful": True,
+                    "impact": "high",
+                    "context_role": "implementation",
+                    "intent": "malicious",
+                    "confidence": 0.9,
+                    "evidence_sufficient": True,
+                    "missing_context": [],
+                    "supporting_evidence": [{
+                        "file": "run.sh", "line": 1, "claim": "shell sink"
+                    }],
+                    "explanation": "confirmed",
+                },
+            ],
         }
 
     monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
@@ -582,7 +635,11 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
         },
     ]
 
-    result = llm_reviewer.run_llm_review(findings, {}, {})
+    result = llm_reviewer.run_llm_review(
+        findings,
+        {"f-crit": "1: unsafe instruction", "f-high": "1: rm -rf /tmp/demo"},
+        {},
+    )
     assert result["findings_reviewed"] == 2
     assert result["findings_skipped"] == 2
     # High/critical findings receive two independent bounded batch reviews.
@@ -602,14 +659,30 @@ def test_llm_review_batches_large_finding_sets(monkeypatch) -> None:
 
     def fake_call(prompt: str) -> dict:
         calls.append(prompt)
-        return {"is_vulnerability": False, "intent": "benign", "confidence": 0.9}
+        return {
+            "is_vulnerability": False,
+            "harmful": False,
+            "impact": "none",
+            "context_role": "example",
+            "intent": "benign",
+            "confidence": 0.9,
+            "evidence_sufficient": True,
+            "missing_context": [],
+            "supporting_evidence": [{
+                "file": "a.py", "line": 1, "claim": "benign example"
+            }],
+        }
 
     monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
     findings = [
         {"id": f"f-{i}", "severity": "high", "location": {"file": "a.py", "line": 1}}
         for i in range(17)
     ]
-    result = llm_reviewer.run_llm_review(findings, {}, {})
+    result = llm_reviewer.run_llm_review(
+        findings,
+        {finding["id"]: "1: print('safe')" for finding in findings},
+        {},
+    )
     assert len(calls) == 6
     assert result["findings_reviewed"] == 17
     assert result["labels_summary"]["likely_benign"] == 17

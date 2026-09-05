@@ -68,7 +68,11 @@ def test_unexpected_reviewer_exception_marks_reviewable_findings_unavailable(
         "_load_llm_reviewer",
         lambda: SimpleNamespace(run_llm_review=raise_from_reviewer),
     )
-    monkeypatch.setattr(trust, "build_finding_contexts", lambda *_args: {})
+    monkeypatch.setattr(
+        trust,
+        "build_finding_context_bundle",
+        lambda *_args: ({}, {"findings": {}, "summary": {}}),
+    )
 
     result = trust._run_llm_review_with_fallback(
         findings,
@@ -109,7 +113,11 @@ def test_not_configured_result_preserves_manual_review_semantics(monkeypatch) ->
         "_load_llm_reviewer",
         lambda: SimpleNamespace(run_llm_review=lambda **_kwargs: expected),
     )
-    monkeypatch.setattr(trust, "build_finding_contexts", lambda *_args: {})
+    monkeypatch.setattr(
+        trust,
+        "build_finding_context_bundle",
+        lambda *_args: ({}, {"findings": {}, "summary": {}}),
+    )
 
     result = trust._run_llm_review_with_fallback(
         findings,
