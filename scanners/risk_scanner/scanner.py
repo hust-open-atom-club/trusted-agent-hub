@@ -1,5 +1,5 @@
 """
-Risk Scanner — 自动风险扫描器 v0.7.0
+Risk Scanner — 自动风险扫描器 v0.8.0
 
 遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
@@ -56,17 +56,21 @@ from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
-from scanners.risk_scanner.reporting import aggregate_findings, determine_scan_status
+from scanners.risk_scanner.reporting import (
+    aggregate_findings,
+    build_advisory_summary,
+    build_findings_summary,
+    determine_scan_status,
+)
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.redaction import redact_report
-from scanners.risk_scanner.weights import SEVERITY_POINTS
 from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
 from packages.schema.frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.7.0"
+SCANNER_VERSION = "0.8.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -76,6 +80,24 @@ _DOCUMENTATION_BASENAME_PREFIXES = (
     "license",
 )
 _DOCUMENTATION_EXTENSIONS = frozenset({"", ".md", ".markdown", ".txt", ".rst"})
+_SEMANTIC_TEXT_EXTENSIONS = frozenset({".md", ".markdown", ".txt", ".rst"})
+_SEMANTIC_VALIDATION_CATEGORIES = frozenset({
+    "prompt_injection",
+    "dangerous_shell",
+    "credential_access",
+    "remote_code_execution",
+    "installation_security",
+    "system_prompt_leakage",
+    "memory_poisoning",
+    "agent_snooping",
+    "tool_misuse",
+})
+_ALWAYS_SEMANTIC_VALIDATION_CATEGORIES = frozenset({
+    "prompt_injection",
+    "system_prompt_leakage",
+    "memory_poisoning",
+    "agent_snooping",
+})
 
 
 class RiskScanner:
@@ -92,6 +114,7 @@ class RiskScanner:
         self.source_commit_hash = source_commit_hash
         self.policy = policy or ScanPolicy()
         self.findings: list[dict[str, Any]] = []
+        self.review_advisories: list[dict[str, Any]] = []
         self.scanned_files: list[str] = []
         self.discovered_files: list[str] = []
         self.analyzed_files: list[str] = []
@@ -111,6 +134,7 @@ class RiskScanner:
 
     def scan(self) -> dict[str, Any]:
         self.findings = []
+        self.review_advisories = []
         self.scanned_files = []
         self.discovered_files = []
         self.analyzed_files = []
@@ -166,6 +190,7 @@ class RiskScanner:
             self.inventory.limit_violations.append("dependency_scan_partial")
 
         self._downgrade_documentation_findings()
+        self._mark_semantic_findings_for_llm_review()
 
         end = datetime.now(timezone.utc)
         duration_ms = int((end - start).total_seconds() * 1000)
@@ -509,6 +534,35 @@ class RiskScanner:
                 finding["severity"] = "low"
                 finding["downgraded"] = "documentation"
                 finding["title"] = f"{finding.get('title', '')} [文档示例/说明文本]"
+
+    def _mark_semantic_findings_for_llm_review(self) -> None:
+        """Keep context-sensitive text matches out of scoring until validated.
+
+        A regex match in SKILL.md, a prompt, or a reference document is a
+        semantic review candidate rather than proof of a vulnerability.  The
+        original severity is retained for the LLM reviewer, while ``info`` is
+        the effective pre-review severity used by deterministic scoring.
+        """
+        for finding in self.findings:
+            severity = str(finding.get("severity", "info")).lower()
+            if severity not in {"critical", "high", "medium"}:
+                continue
+            category = str(finding.get("category", ""))
+            location = finding.get("location") or {}
+            file_path = str(location.get("file") or "")
+            is_text = Path(file_path).suffix.lower() in _SEMANTIC_TEXT_EXTENSIONS
+            requires_semantic_review = (
+                category in _ALWAYS_SEMANTIC_VALIDATION_CATEGORIES
+                or (is_text and category in _SEMANTIC_VALIDATION_CATEGORIES)
+            )
+            if not requires_semantic_review:
+                continue
+            finding["candidate_severity"] = severity
+            finding["severity"] = "info"
+            finding["requires_llm_validation"] = True
+            finding["llm_review_state"] = "pending"
+            finding["requires_manual_review"] = True
+
     def _add_finding(
         self,
         rule_id: str,
@@ -547,6 +601,40 @@ class RiskScanner:
             finding["requires_confirmation"] = True
 
         self.findings.append(finding)
+
+    def _add_advisory(
+        self,
+        *,
+        code: str,
+        category: str,
+        level: str,
+        title: str,
+        description: str,
+        deduction: int = 0,
+        affects_grade: bool = False,
+        grade_downgrade_steps: int = 0,
+        requires_manual_review: bool = False,
+        evidence: str = "",
+        location: dict[str, Any] | None = None,
+    ) -> None:
+        """Add a reviewer-facing warning that is not a security finding."""
+        advisory: dict[str, Any] = {
+            "id": f"advisory-{uuid.uuid4().hex[:8]}",
+            "code": code,
+            "category": category,
+            "level": level,
+            "title": title,
+            "description": description,
+            "deduction": max(0, int(deduction)),
+            "affects_grade": bool(affects_grade),
+            "grade_downgrade_steps": min(1, max(0, int(grade_downgrade_steps))),
+            "requires_manual_review": bool(requires_manual_review),
+        }
+        if evidence:
+            advisory["evidence"] = evidence
+        if location:
+            advisory["location"] = location
+        self.review_advisories.append(advisory)
 
     def _deduplicate_findings(self) -> None:
         _SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
@@ -648,31 +736,8 @@ class RiskScanner:
 
     def _build_report(self, start_time: datetime, duration_ms: int) -> dict[str, Any]:
         report_findings = aggregate_findings(self.findings)
-        severity_counts: dict[str, int] = {
-            "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
-        }
-        for f in report_findings:
-            sev = f.get("severity", "info")
-            if sev in severity_counts:
-                severity_counts[sev] += 1
-
-        total = len(report_findings)
-        occurrences_total = sum(
-            int((f.get("occurrences") or {}).get("count", 1)) for f in report_findings
-        )
-        effective_total = sum(
-            severity_counts[s] for s in ("critical", "high", "medium", "low")
-        )
-
-        # 扫描通过率（0-100）：按严重度罚分，与评分引擎 _compute_pass_rate 同公式
-        penalty = sum(
-            SEVERITY_POINTS.get(sev, 0) * severity_counts[sev]
-            for sev in ("critical", "high", "medium", "low")
-        )
-        pass_rate = (
-            100.0 if effective_total == 0
-            else max(0.0, round(100.0 - penalty, 1))
-        )
+        summary = build_findings_summary(report_findings)
+        effective_total = int(summary["effective_total"])
 
         pkg_name = "unknown"
         pkg_version = "0.0.0"
@@ -780,17 +845,9 @@ class RiskScanner:
             "rule_execution": self.rule_execution,
             "scanner_errors": self.scanner_errors,
             "findings": report_findings,
-            "summary": {
-                "total": total,
-                "occurrences_total": occurrences_total,
-                "effective_total": effective_total,
-                "critical": severity_counts["critical"],
-                "high": severity_counts["high"],
-                "medium": severity_counts["medium"],
-                "low": severity_counts["low"],
-                "info": severity_counts["info"],
-                "pass_rate": pass_rate,
-            },
+            "summary": summary,
+            "review_advisories": self.review_advisories,
+            "advisory_summary": build_advisory_summary(self.review_advisories),
             "metadata_validation": metadata_validation,
             "structure_check": structure_check,
             "dependency_check": dependency_check,

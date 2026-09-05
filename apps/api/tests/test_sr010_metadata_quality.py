@@ -30,24 +30,28 @@ class TestSR010MetadataQuality:
             target_dir=tmp_path,
         )
         metadata_quality.run(s)
-        titles = [f["title"] for f in s.findings]
+        titles = [f["title"] for f in s.review_advisories]
         assert any("元数据不完整" in t for t in titles)
-        missing = [f for f in s.findings if "元数据不完整" in f["title"]][0]
-        assert missing["severity"] == "low"
+        missing = [f for f in s.review_advisories if "元数据不完整" in f["title"]][0]
+        assert missing["level"] == "warning"
+        assert missing["deduction"] == 0
+        assert not any("元数据不完整" in f["title"] for f in s.findings)
 
-    def test_missing_license_low(self, tmp_path):
+    def test_missing_license_low(self, tmp_path, monkeypatch):
         """Empty / NONE license（且无 LICENSE 文件）→ low finding."""
         meta = _full_meta()
         meta["license"] = "NONE"
+        monkeypatch.setattr(metadata_quality, "_find_license_file", lambda *_args: None)
         s = MockScanner(
             files={"SKILL.md": "# hi"},
             _package_metadata=meta,
             target_dir=tmp_path,
         )
         metadata_quality.run(s)
-        findings = [f for f in s.findings if "缺少有效许可证" in f["title"]]
-        assert len(findings) == 1
-        assert findings[0]["severity"] == "low"
+        advisories = [f for f in s.review_advisories if f["code"] == "metadata_incomplete"]
+        assert len(advisories) == 1
+        assert "license" in advisories[0]["description"]
+        assert advisories[0]["deduction"] == 0
 
     def test_license_file_in_package_suppresses_finding(self, tmp_path):
         """包目录内有 LICENSE 文件 → 视为已声明许可证，不报。"""
@@ -60,8 +64,10 @@ class TestSR010MetadataQuality:
             target_dir=tmp_path,
         )
         metadata_quality.run(s)
-        titles = [f["title"] for f in s.findings]
-        assert not any("缺少有效许可证" in t for t in titles)
+        assert not any(
+            f["code"] == "metadata_incomplete" and "license" in f["description"]
+            for f in s.review_advisories
+        )
 
     def test_license_file_in_parent_dir_suppresses_finding(self, tmp_path):
         """LICENSE 在父目录（仓库根）→ 向上遍历同样视为已声明。"""
@@ -77,8 +83,10 @@ class TestSR010MetadataQuality:
             target_dir=pkg_dir,
         )
         metadata_quality.run(s)
-        titles = [f["title"] for f in s.findings]
-        assert not any("缺少有效许可证" in t for t in titles)
+        assert not any(
+            f["code"] == "metadata_incomplete" and "license" in f["description"]
+            for f in s.review_advisories
+        )
 
     def test_license_file_exempts_required_field(self, tmp_path):
         """有 LICENSE 文件时，「元数据不完整」列表不应包含 license。"""
@@ -91,7 +99,7 @@ class TestSR010MetadataQuality:
             target_dir=tmp_path,
         )
         metadata_quality.run(s)
-        missing = [f for f in s.findings if "元数据不完整" in f["title"]]
+        missing = [f for f in s.review_advisories if f["code"] == "metadata_incomplete"]
         assert not any("license" in str(f.get("description", "")) for f in missing)
 
     def test_package_json_backfills_version_and_license(self, tmp_path):
@@ -106,7 +114,7 @@ class TestSR010MetadataQuality:
             encoding="utf-8",
         )
         report = RiskScanner(str(tmp_path)).scan()
-        titles = [f["title"] for f in report["findings"]]
+        titles = [f["title"] for f in report["review_advisories"]]
         assert not any(
             "元数据不完整" in t and ("version" in t or "license" in t)
             for t in titles
@@ -129,7 +137,10 @@ class TestSR010MetadataQuality:
 
         metadata_quality.run(s)
 
-        assert not any("技能名与分发包名不一致" in f["title"] for f in s.findings)
+        assert not any(
+            "技能名与分发包名不一致" in f["title"]
+            for f in s.review_advisories
+        )
 
     def test_package_name_mismatch_is_info_only(self, tmp_path):
         """技能名与真实分发包名不同是可解释元数据差异，不是安全风险。"""
@@ -147,10 +158,11 @@ class TestSR010MetadataQuality:
         metadata_quality.run(s)
 
         mismatch = [
-            f for f in s.findings if "技能名与分发包名不一致" in f["title"]
+            f for f in s.review_advisories
+            if "技能名与分发包名不一致" in f["title"]
         ]
         assert len(mismatch) == 1
-        assert mismatch[0]["severity"] == "info"
+        assert mismatch[0]["level"] == "info"
 
     def test_short_description_info(self, tmp_path):
         """Description shorter than 10 chars → info finding."""
@@ -162,7 +174,7 @@ class TestSR010MetadataQuality:
             target_dir=tmp_path,
         )
         metadata_quality.run(s)
-        titles = [f["title"] for f in s.findings]
+        titles = [f["title"] for f in s.review_advisories]
         assert any("描述过短" in t for t in titles)
 
     def test_dangerous_extension_file(self, tmp_path):

@@ -52,7 +52,13 @@ def build_finding_contexts(
     contexts: dict[str, str] = {}
     total = 0
     for finding in findings:
-        if str(finding.get("severity", "")).lower() not in {"critical", "high"}:
+        review_severity = str(
+            finding.get("candidate_severity") or finding.get("severity", "")
+        ).lower()
+        is_semantic_candidate = finding.get("requires_llm_validation") is True
+        if review_severity not in {"critical", "high"} and not (
+            is_semantic_candidate and review_severity == "medium"
+        ):
             continue
         fid = str(finding.get("id", ""))
         location = finding.get("location", {}) or {}

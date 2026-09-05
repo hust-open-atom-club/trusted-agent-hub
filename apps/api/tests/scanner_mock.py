@@ -13,6 +13,7 @@ class MockScanner:
     files: dict[str, str] = field(default_factory=dict)
     code_example_predicate: Callable[[str, int], bool] = lambda f, ln: False
     findings: list[dict[str, Any]] = field(default_factory=list)
+    review_advisories: list[dict[str, Any]] = field(default_factory=list)
     _package_metadata: dict[str, Any] | None = None
     _acquisition_facts: dict[str, Any] | None = None
     target_dir: Path = field(default_factory=lambda: Path("."))
@@ -54,3 +55,33 @@ class MockScanner:
         if requires_confirmation:
             finding["requires_confirmation"] = True
         self.findings.append(finding)
+
+    def _add_advisory(
+        self,
+        *,
+        code: str,
+        category: str,
+        level: str,
+        title: str,
+        description: str,
+        deduction: int = 0,
+        affects_grade: bool = False,
+        grade_downgrade_steps: int = 0,
+        requires_manual_review: bool = False,
+        evidence: str = "",
+        location: dict[str, Any] | None = None,
+    ) -> None:
+        self.review_advisories.append({
+            "id": f"advisory-{len(self.review_advisories) + 1}",
+            "code": code,
+            "category": category,
+            "level": level,
+            "title": title,
+            "description": description,
+            "deduction": deduction,
+            "affects_grade": affects_grade,
+            "grade_downgrade_steps": grade_downgrade_steps,
+            "requires_manual_review": requires_manual_review,
+            "evidence": evidence,
+            "location": location or {},
+        })

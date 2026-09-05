@@ -14,6 +14,60 @@
     "summary"
   ],
   "properties": {
+    "review_advisories": {
+      "type": "array",
+      "description": "Reviewer-facing quality/provenance/consistency warnings that are not security findings.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id", "code", "category", "level", "title", "description",
+          "deduction", "affects_grade", "grade_downgrade_steps",
+          "requires_manual_review"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "code": { "type": "string" },
+          "category": {
+            "type": "string",
+            "enum": ["metadata_quality", "provenance", "permission_consistency"]
+          },
+          "level": { "type": "string", "enum": ["high", "warning", "info"] },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "deduction": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "affects_grade": { "type": "boolean" },
+          "grade_downgrade_steps": { "type": "integer", "minimum": 0, "maximum": 1 },
+          "requires_manual_review": { "type": "boolean" },
+          "evidence": { "type": "string" },
+          "location": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "advisory_summary": {
+      "type": "object",
+      "required": [
+        "total", "high", "warning", "info", "deduction_total",
+        "grade_downgrade_steps", "manual_review_required"
+      ],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 },
+        "deduction_total": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "grade_downgrade_steps": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "manual_review_required": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "permission_evidence": {
       "type": "array",
       "description": "Capability provenance used to distinguish executable behavior from documentation-only mentions.",
@@ -284,6 +338,33 @@
               "llm:unavailable"
             ],
             "description": "LLM 审查标签"
+          },
+          "candidate_severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"],
+            "description": "需要语义复核时保留的静态候选严重度"
+          },
+          "requires_llm_validation": {
+            "type": "boolean",
+            "description": "该静态文本命中必须通过上下文语义复核后才能参与安全评分"
+          },
+          "llm_review_state": {
+            "type": "string",
+            "enum": [
+              "pending", "confirmed_harmful", "confirmed_risky",
+              "likely_benign", "uncertain", "unavailable"
+            ]
+          },
+          "llm_impact": {
+            "type": "string",
+            "enum": ["none", "low", "medium", "high", "critical", "unknown"]
+          },
+          "llm_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "llm_explanation": { "type": "string" },
+          "llm_review_rounds": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "requires_manual_review": {
+            "type": "boolean",
+            "description": "自动语义判定未能给出可靠结论，需要人工安全审核"
           },
           "downgraded": {
             "type": "string",

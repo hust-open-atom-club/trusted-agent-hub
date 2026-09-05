@@ -43,12 +43,9 @@ def generate_explanations(
                        p1.get("evidence", []),
                        {"verified": 0, "traceable": -15, "opaque": -30})
 
-    # --- Signature verifiability (P2 → signature_verifiability) ---
-    p2: dict[str, Any] = trace.get("p2", {})
-    _explain_dimension(explanations, "signature_verifiability", 100,
-                       p2.get("level", "none"),
-                       p2.get("evidence", []),
-                       {"complete": 0, "partial": -10, "none": -25})
+    # Signature/SBOM/attestation gaps are emitted as explicit -2 review
+    # advisories by the scanner. Do not manufacture a second nominal P2
+    # deduction here.
 
     # --- Permission reasonability (I1 → permission_minimization) ---
     i1: dict[str, Any] = trace.get("i1", {})

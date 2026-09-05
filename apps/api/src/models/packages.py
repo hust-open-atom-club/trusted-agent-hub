@@ -161,6 +161,10 @@ class RiskSummary(StrictContractModel):
     top_risks: list[str] = Field(default_factory=list)
     install_recommendation: str
     requires_confirmation: bool = False
+    manual_security_review_required: bool = False
+    review_priority: Literal["normal", "manual", "high"] = "normal"
+    advisory_grade_downgrade_applied: bool = False
+    advisory_grade_downgrade_reasons: list[str] = Field(default_factory=list)
     auto_grade: Grade | None = None
     manual_grade: Grade | None = None
     effective_grade: Grade | None = None
@@ -184,6 +188,7 @@ class TrustScore(StrictContractModel):
         data = handler(self)
         if isinstance(data, dict):
             data.pop("score", None)
+            data.pop("score_breakdown", None)
         return data
 
 
@@ -208,6 +213,23 @@ class ScanFinding(StrictContractModel):
     location: dict[str, object] | None = None
     evidence: str | None = None
     llm_label: LLM_LABEL | None = None
+    candidate_severity: str | None = None
+    requires_llm_validation: bool | None = None
+    llm_review_state: Literal[
+        "pending",
+        "confirmed_harmful",
+        "confirmed_risky",
+        "likely_benign",
+        "uncertain",
+        "unavailable",
+    ] | None = None
+    llm_impact: Literal[
+        "none", "low", "medium", "high", "critical", "unknown"
+    ] | None = None
+    llm_confidence: float | None = Field(default=None, ge=0, le=1)
+    llm_explanation: str | None = None
+    llm_review_rounds: int | None = Field(default=None, ge=0, le=3)
+    requires_manual_review: bool | None = None
     downgraded: str | None = None
     remediation: str | None = None
     cwe_id: str | None = None
@@ -222,6 +244,33 @@ class PermissionEvidence(StrictContractModel):
     source: Literal["code", "manifest", "frontmatter", "docs"]
     file: str | None = None
     evidence: str = Field(max_length=240)
+
+
+class ReviewAdvisory(StrictContractModel):
+    id: str
+    code: str
+    category: Literal[
+        "metadata_quality", "provenance", "permission_consistency"
+    ]
+    level: Literal["high", "warning", "info"]
+    title: str
+    description: str
+    deduction: int = Field(default=0, ge=0, le=100)
+    affects_grade: bool = False
+    grade_downgrade_steps: int = Field(default=0, ge=0, le=1)
+    requires_manual_review: bool = False
+    evidence: str | None = None
+    location: dict[str, object] | None = None
+
+
+class AdvisorySummary(StrictContractModel):
+    total: int = Field(default=0, ge=0)
+    high: int = Field(default=0, ge=0)
+    warning: int = Field(default=0, ge=0)
+    info: int = Field(default=0, ge=0)
+    deduction_total: int = Field(default=0, ge=0, le=100)
+    grade_downgrade_steps: int = Field(default=0, ge=0, le=1)
+    manual_review_required: bool = False
 
 
 class LLMReviewLabelsSummary(StrictContractModel):
@@ -245,7 +294,10 @@ class LLMReview(StrictContractModel):
         "call_failed",
     ] | None = None
     attempts: int = 0
+    review_rounds: int = Field(default=0, ge=0, le=3)
+    arbitrated: int = Field(default=0, ge=0)
     labels: dict[str, LLM_LABEL] = Field(default_factory=dict)
+    decisions: dict[str, dict[str, object]] = Field(default_factory=dict)
     labels_summary: LLMReviewLabelsSummary | None = None
     error: str | None = None
     fallback: str | None = None
@@ -423,6 +475,8 @@ class ScanReport(StrictContractModel):
     source_snapshot_expires_at: int | None = None
     summary: ScanSummary | None = None
     findings: list[ScanFinding] | None = None
+    review_advisories: list[ReviewAdvisory] = Field(default_factory=list)
+    advisory_summary: AdvisorySummary | None = None
     permission_evidence: list[PermissionEvidence] = Field(default_factory=list)
     metadata_validation: dict[str, object] | None = None
     structure_check: dict[str, object] | None = None

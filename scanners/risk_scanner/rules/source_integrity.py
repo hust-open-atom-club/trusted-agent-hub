@@ -11,18 +11,7 @@ from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
 def run(scanner: Any) -> None:
     rule_id = "SR-009"
 
-    meta = scanner._package_metadata
-    if not meta:
-        scanner._add_finding(
-            rule_id=rule_id,
-            severity="medium",
-            category="source_integrity",
-            title="缺少包元数据",
-            description="无法找到包元数据文件（manifest.json / plugin.json / SKILL.md frontmatter），无法验证来源完整性。",
-            location={"file": str(scanner.target_dir)},
-            remediation="添加 agent-package.schema.json 兼容的元数据文件。",
-        )
-        return
+    meta = scanner._package_metadata or {}
 
     # Acquisition facts are the only authority for this rule.  Missing facts
     # deliberately fail closed; older callers must provide an explicit facts
@@ -47,7 +36,7 @@ def run(scanner: Any) -> None:
     ) or {}
     verification = raw_verification if isinstance(raw_verification, dict) else {}
 
-    issues: list[str] = []
+    core_issues: list[str] = []
 
     sha256 = integrity.get("sha256", "")
     sha256_format_ok = isinstance(sha256, str) and bool(
@@ -57,53 +46,82 @@ def run(scanner: Any) -> None:
     is_complete = integrity.get("is_complete") is True
     sha256_ok = sha256_format_ok and hash_scope_ok and is_complete
     if not sha256_format_ok:
-        issues.append("缺少 SHA256 完整性校验值")
+        core_issues.append("缺少 SHA256 完整性校验值")
     elif not hash_scope_ok:
-        issues.append("SHA256 校验范围未声明为采集源码")
+        core_issues.append("SHA256 校验范围未声明为采集源码")
     elif not is_complete:
-        issues.append("SHA256 仅覆盖部分扫描内容")
+        core_issues.append("SHA256 仅覆盖部分扫描内容")
 
-    has_verified_signature = (
-        sha256_ok
-        and (
-            verification.get("signature") is True
-            or verification.get("attestation") is True
-        )
-    )
+    has_verified_signature = sha256_ok and verification.get("signature") is True
+    has_verified_attestation = sha256_ok and verification.get("attestation") is True
     has_verified_sbom = sha256_ok and verification.get("sbom") is True
-
-    missing_sig = not has_verified_signature
-    if missing_sig:
-        if claimed_integrity.get("signature") or claimed_integrity.get("attestation_url"):
-            issues.append("包声明的签名或构建证明未经独立验证")
-        else:
-            issues.append("缺少加密签名或构建证明")
-
-    if not has_verified_sbom:
-        if claimed_integrity.get("sbom_url"):
-            issues.append("包声明的 SBOM 未经独立验证")
-        else:
-            issues.append("缺少 SBOM 文档 URL")
 
     commit_hash = source.get("commit_hash", "")
     commit_ok = isinstance(commit_hash, str) and bool(
         re.fullmatch(r"^[a-f0-9]{40}$", commit_hash)
     )
     if not commit_ok:
-        issues.append("来源未锁定 commit hash")
+        core_issues.append("来源未锁定 commit hash")
 
-    if issues:
-        # 分级：sha256 或 commit_hash 缺失/非法 → medium；
-        # 仅缺签名/证明/SBOM（生态常态）→ low
-        severity = "medium" if (not sha256_ok or not commit_ok) else "low"
-        manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
+    manifest_file = (
+        "manifest.json"
+        if (scanner.target_dir / "manifest.json").is_file()
+        else "plugin.json"
+        if (scanner.target_dir / "plugin.json").is_file()
+        else "SKILL.md"
+        if (scanner.target_dir / "SKILL.md").is_file()
+        else "."
+    )
+
+    if core_issues:
         scanner._add_finding(
             rule_id=rule_id,
-            severity=severity,
+            severity="medium",
             category="source_integrity",
-            title="来源完整性不足",
-            description="; ".join(issues),
+            title="核心来源完整性不足",
+            description="; ".join(core_issues),
             location={"file": manifest_file},
-            evidence="integrity section is incomplete or missing",
-            remediation="使用采集层计算的 SHA256/commit，并为签名、构建证明和 SBOM 提供绑定到该内容的独立验证结果。",
+            evidence="scanned-source hash or acquired commit is incomplete",
+            remediation="使用采集层计算的完整 SHA256，并将来源锁定到具体 commit。",
+        )
+
+    proof_advisories = (
+        (
+            "missing_signature",
+            has_verified_signature,
+            "缺少已验证的包签名",
+            "包声明了签名，但尚未由采集层独立验证。"
+            if claimed_integrity.get("signature")
+            else "没有发现绑定到本次扫描内容的已验证加密签名。",
+        ),
+        (
+            "missing_attestation",
+            has_verified_attestation,
+            "缺少已验证的供应链证明",
+            "包声明了构建证明，但尚未由采集层独立验证。"
+            if claimed_integrity.get("attestation_url")
+            else "没有发现绑定到本次扫描内容的构建或供应链证明。",
+        ),
+        (
+            "missing_sbom",
+            has_verified_sbom,
+            "缺少已验证的 SBOM",
+            "包声明了 SBOM，但尚未由采集层独立验证。"
+            if claimed_integrity.get("sbom_url")
+            else "没有发现绑定到本次扫描内容的已验证 SBOM。",
+        ),
+    )
+    for code, verified, title, description in proof_advisories:
+        if verified:
+            continue
+        scanner._add_advisory(
+            code=code,
+            category="provenance",
+            level="warning",
+            title=title,
+            description=description,
+            location={"file": manifest_file},
+            evidence="independent verification flag is false",
+            deduction=2,
+            affects_grade=False,
         )

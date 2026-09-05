@@ -21,6 +21,18 @@
       "maximum": 100,
       "description": "综合信任评分（0-100）"
     },
+    "score_breakdown": {
+      "type": "object",
+      "required": ["base_score", "advisory_deduction", "final_score", "grade_is_security_policy"],
+      "properties": {
+        "base_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "advisory_deduction": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "final_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "grade_is_security_policy": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "description": "审核分扣分明细；安全等级与非降级 advisory 扣分相互独立"
+    },
     "package_name": {
       "type": "string",
       "description": "能力包名称"
@@ -316,6 +328,22 @@
           "type": "boolean",
           "default": false,
           "description": "安装前是否必须显式确认"
+        },
+        "manual_security_review_required": {
+          "type": "boolean",
+          "default": false
+        },
+        "review_priority": {
+          "type": "string",
+          "enum": ["normal", "manual", "high"]
+        },
+        "advisory_grade_downgrade_applied": {
+          "type": "boolean",
+          "default": false
+        },
+        "advisory_grade_downgrade_reasons": {
+          "type": "array",
+          "items": { "type": "string" }
         }
       },
       "additionalProperties": false

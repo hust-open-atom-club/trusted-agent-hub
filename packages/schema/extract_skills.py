@@ -1017,7 +1017,10 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         r"(?:fs\.(?:writeFile|appendFile|mkdir|copyFile|rename)|"
         r"writeFile(?:Sync)?|appendFile(?:Sync)?|"
         r"open\s*\([^\n]{0,120}['\"](?:w|a)|"
-        r"os\.(?:makedirs|mkdir)|pathlib\.[A-Za-z]+\.write_text)"
+        r"os\.(?:makedirs|mkdir)|"
+        r"(?:pathlib\.)?Path\s*\([^\n)]{0,200}\)\s*\.\s*"
+        r"(?:write_text|write_bytes|touch)\s*\(|"
+        r"\b[A-Za-z_]\w*\.(?:write_text|write_bytes|touch)\s*\()"
     )
     write_files = [
         filename for filename, content in code_parts
@@ -1308,6 +1311,41 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
             "流程要求打开或控制浏览器", "SKILL.md",
         )
 
+    def declared_capabilities(capability: str, value: Any) -> list[str]:
+        """Expand explicit permission objects into the capabilities they allow.
+
+        Merely including ``filesystem`` or ``environment`` in a complete
+        manifest does not declare every nested action.  Empty lists and false
+        flags are explicit denials and must not hide observed code behavior.
+        """
+        if capability == "filesystem" and isinstance(value, dict):
+            declared = [
+                f"filesystem.{action}"
+                for action in ("read", "write")
+                if value.get(action)
+            ]
+            if value.get("delete") is True:
+                declared.append("filesystem.delete")
+            return declared
+        if capability == "environment" and isinstance(value, dict):
+            return [
+                f"environment.{action}"
+                for action in ("read", "write")
+                if value.get(action)
+            ]
+        if capability in {"shell", "network", "database", "browser"}:
+            return (
+                [capability]
+                if isinstance(value, dict) and value.get("allowed") is True
+                else []
+            )
+        if capability == "credentials" and isinstance(value, dict):
+            return ["credentials"] if value.get("access") else []
+        if capability == "external_services":
+            # Service metadata is not itself authorization for network access.
+            return []
+        return [capability] if value else []
+
     # ── explicit permissions override inferred values ─────────────
     explicit = result.manifest_data.get("permissions")
     explicit_source = "manifest"
@@ -1318,8 +1356,11 @@ def infer_permissions(result: ScanResult) -> dict[str, Any]:
         for capability, value in explicit.items():
             if value:
                 permissions[capability] = value
+            for declared_capability in declared_capabilities(
+                str(capability), value
+            ):
                 add_evidence(
-                    str(capability), "declared", 1.0, explicit_source,
+                    declared_capability, "declared", 1.0, explicit_source,
                     "包元数据明确声明该权限",
                 )
 
