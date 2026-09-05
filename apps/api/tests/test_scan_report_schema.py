@@ -143,8 +143,8 @@ def test_schema_accepts_report_with_new_category_and_fields():
     jsonschema.validate(minimal, SCHEMA)
 
 
-def test_cross_file_occurrences_aggregated(tmp_path):
-    """同规则+同匹配内容跨文件 → 报告层聚合 occurrences，且输出符合 schema。"""
+def test_cross_file_findings_remain_separate_root_causes(tmp_path):
+    """Distinct source locations remain separate score-facing root causes."""
     report = _scan(tmp_path, {
         "SKILL.md": CLEAN_SKILL,
         "a.md": "data = conversation_history\n",
@@ -154,10 +154,9 @@ def test_cross_file_occurrences_aggregated(tmp_path):
         f for f in report["findings"]
         if f["rule_id"] == "SR-013" and "conversation_history" in f.get("evidence", "")
     ]
-    assert len(merged) == 1, "同问题跨文件应合并为一条"
-    occurrences = merged[0].get("occurrences")
-    assert isinstance(occurrences, dict) and occurrences.get("count") == 2
-    files = [item["file"] for item in occurrences["items"]]
-    assert set(files) == {"a.md", "b.md"}
+    assert len(merged) == 2
+    assert all(item["occurrences"]["count"] == 1 for item in merged)
+    assert report["summary"]["root_cause_total"] == report["summary"]["total"]
+    assert report["summary"]["detector_hit_total"] >= 2
     assert report["summary"]["occurrences_total"] >= 2
     jsonschema.validate(report, SCHEMA)

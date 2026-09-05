@@ -4,51 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from scanners.risk_scanner.reconciliation import reconcile_findings
 from scanners.risk_scanner.weights import SEVERITY_POINTS
-
-
-def _matched_text(finding: dict[str, Any]) -> str:
-    evidence = str(finding.get("evidence", ""))
-    for prefix in ("匹配模式:", "匹配:"):
-        if evidence.startswith(prefix):
-            return evidence[len(prefix):].strip()[:120]
-    return evidence.strip()[:120]
 
 
 def aggregate_findings(
     findings: list[dict[str, Any]], *, max_occurrence_items: int = 100
 ) -> list[dict[str, Any]]:
-    """Aggregate only the report view; never mutate or delete raw findings."""
-    severity_rank = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str]] = []
-    for finding in findings:
-        key = (str(finding.get("rule_id", "")), _matched_text(finding))
-        # Findings without a stable match are intentionally not grouped.
-        if not key[1]:
-            key = (key[0], f"__finding__{finding.get('id', len(order))}")
-        occurrence = _occurrence(finding)
-        if key not in groups:
-            groups[key] = dict(finding)
-            groups[key]["occurrences"] = {
-                "count": 1,
-                "items": [occurrence],
-                "truncated": False,
-            }
-            order.append(key)
-            continue
-        group = groups[key]
-        occurrences = group["occurrences"]
-        occurrences["count"] += 1
-        if len(occurrences["items"]) < max_occurrence_items:
-            occurrences["items"].append(occurrence)
-        else:
-            occurrences["truncated"] = True
-        if severity_rank.get(str(finding.get("severity", "info")), 0) > severity_rank.get(str(group.get("severity", "info")), 0):
-            preserved = group["occurrences"]
-            groups[key] = dict(finding)
-            groups[key]["occurrences"] = preserved
-    return [groups[key] for key in order]
+    """Compatibility wrapper for the v2 root-cause reconciliation boundary."""
+    return reconcile_findings(
+        findings, max_occurrence_items=max_occurrence_items
+    )
 
 
 def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -67,7 +33,9 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
         "info": 0,
     }
     for finding in findings:
-        severity = str(finding.get("severity", "info")).lower()
+        severity = str(
+            finding.get("effective_severity") or finding.get("severity", "info")
+        ).lower()
         if severity in severity_counts:
             severity_counts[severity] += 1
 
@@ -85,6 +53,11 @@ def build_findings_summary(findings: list[dict[str, Any]]) -> dict[str, Any]:
     )
     return {
         "total": len(findings),
+        "root_cause_total": len(findings),
+        "detector_hit_total": sum(
+            len(finding.get("detector_hits") or [finding])
+            for finding in findings
+        ),
         "occurrences_total": occurrences_total,
         "effective_total": effective_total,
         **severity_counts,
@@ -143,16 +116,6 @@ def refresh_report_summaries(report: dict[str, Any]) -> None:
     report["advisory_summary"] = build_advisory_summary(
         advisories if isinstance(advisories, list) else []
     )
-
-
-def _occurrence(finding: dict[str, Any]) -> dict[str, Any]:
-    location = finding.get("location", {}) or {}
-    item: dict[str, Any] = {"file": str(location.get("file", "(unknown)"))}
-    if location.get("line"):
-        item["line"] = int(location["line"])
-    return item
-
-
 def determine_scan_status(
     *,
     target_valid: bool,

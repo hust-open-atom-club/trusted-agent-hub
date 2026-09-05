@@ -207,11 +207,13 @@ def _run_v1(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
         peak_memory = max(peak_memory, peak)
 
         expected = {str(rule) for rule in case.get("expected_rules", [])}
-        actual = {
-            str(finding.get("rule_id"))
-            for finding in report.get("findings", [])
-            if finding.get("rule_id")
-        }
+        actual: set[str] = set()
+        for finding in report.get("findings", []):
+            detector_ids = finding.get("detector_ids")
+            if isinstance(detector_ids, list) and detector_ids:
+                actual.update(str(value) for value in detector_ids)
+            elif finding.get("rule_id"):
+                actual.add(str(finding["rule_id"]))
         _evaluate_case(expected, actual, metrics)
         state = (report.get("scan_status") or {}).get("state", "failed")
         incomplete += state != "complete"
@@ -315,7 +317,11 @@ def _actual_root_issues(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "finding_count": 0,
             "stable_key": _stable_finding_key(finding),
         })
-        group["rule_ids"].add(str(finding.get("rule_id") or "legacy_unknown"))
+        detector_ids = finding.get("detector_ids")
+        if isinstance(detector_ids, list) and detector_ids:
+            group["rule_ids"].update(str(value) for value in detector_ids)
+        else:
+            group["rule_ids"].add(str(finding.get("rule_id") or "legacy_unknown"))
         group["effective_severities"].add(_effective_severity(finding))
         group["kinds"].add(str(finding.get("kind") or "legacy_unknown"))
         group["dispositions"].add(str(finding.get("disposition") or "legacy_unknown"))
@@ -393,9 +399,24 @@ def _capabilities(report: dict[str, Any]) -> list[str]:
 
 
 def _content_tree_hash(scanner: Any) -> str:
-    facts = scanner.acquisition_facts if isinstance(scanner.acquisition_facts, dict) else {}
-    integrity = facts.get("integrity") or {}
-    return str(integrity.get("sha256") or "")
+    """Hash fixture content canonically so Git EOL conversion is irrelevant.
+
+    Production acquisition hashes remain byte-exact.  Benchmark labels,
+    however, must describe the same fixture on Windows and Linux checkouts.
+    """
+    digest = hashlib.sha256()
+    for record in sorted(scanner.inventory.files, key=lambda item: item.relative_path):
+        path = record.absolute_path
+        if path.is_symlink() or not path.is_file():
+            continue
+        payload = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        digest.update(record.relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(len(payload)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _score_case(
