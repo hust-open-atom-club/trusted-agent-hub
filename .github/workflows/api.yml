@@ -64,4 +64,4 @@ jobs:
       - name: Run full test suite
         run: pytest tests/ -q
       - name: Run scanner benchmark regression check
-        run: python ../../benchmarks/runner.py --check
+        run: python ../../benchmarks/runner.py --config ../../benchmarks/labels-v2.json --check
