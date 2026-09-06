@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import importlib.util
 import json
 import math
+import subprocess
 import sys
+import tarfile
 import time
 import tracemalloc
 import types
@@ -238,6 +241,79 @@ def _validate_v2_config(config: dict[str, Any], config_path: Path) -> None:
             raise BenchmarkConfigError(
                 f"case {case['id']} path escapes benchmark directory: {case['path']}"
             ) from exc
+
+    fixture_commit = config.get("fixture_source_commit_hash")
+    if fixture_commit is None:
+        fixture_commit = config["scanner_source_commit_hash"]
+    _verify_fixture_revision(str(fixture_commit), config_root)
+
+
+def _tree_fingerprint(entries: list[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    for name, content in sorted(entries):
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(len(content)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def _verify_fixture_revision(commit_hash: str, benchmark_root: Path) -> None:
+    corpus_root = benchmark_root / "corpus"
+    current_entries = [
+        (
+            path.relative_to(ROOT).as_posix(),
+            path.read_bytes(),
+        )
+        for path in corpus_root.rglob("*")
+        if path.is_file()
+    ]
+    try:
+        archive = subprocess.run(
+            ["git", "archive", "--format=tar", commit_hash, "benchmarks/corpus"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise BenchmarkConfigError(
+            f"cannot verify fixture source commit {commit_hash}: {exc}"
+        ) from exc
+    if archive.returncode != 0:
+        detail = archive.stderr.decode("utf-8", errors="replace").strip()
+        raise BenchmarkConfigError(
+            f"fixture source commit {commit_hash} cannot be read: {detail}"
+        )
+
+    committed_entries: list[tuple[str, bytes]] = []
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as bundle:
+            for member in bundle.getmembers():
+                if not member.isfile():
+                    continue
+                source = bundle.extractfile(member)
+                if source is not None:
+                    committed_entries.append((member.name, source.read()))
+    except tarfile.TarError as exc:
+        raise BenchmarkConfigError(
+            f"fixture source commit {commit_hash} produced an invalid archive"
+        ) from exc
+
+    if _tree_fingerprint(current_entries) != _tree_fingerprint(committed_entries):
+        raise BenchmarkConfigError(
+            f"fixture source commit {commit_hash} does not match benchmarks/corpus"
+        )
+
+
+def _scanner_implementation_fingerprint() -> str:
+    source_files = list((ROOT / "scanners" / "risk_scanner").rglob("*.py"))
+    source_files.extend((ROOT / "packages" / "trust-score" / "src").rglob("*.py"))
+    return _tree_fingerprint([
+        (path.relative_to(ROOT).as_posix(), path.read_bytes())
+        for path in source_files
+        if path.is_file()
+    ])
 
 
 def _scan_target(target: Path, source_commit_hash: str = "") -> tuple[Any, dict[str, Any], float, int]:
@@ -696,7 +772,10 @@ def _security_fingerprint(result: dict[str, Any]) -> str:
 
 def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     _validate_v2_config(config, config_path)
-    source_commit_hash = str(config["scanner_source_commit_hash"])
+    source_commit_hash = str(
+        config.get("fixture_source_commit_hash")
+        or config["scanner_source_commit_hash"]
+    )
     scoring_context = config["scoring_context"]
     raw_metrics: dict[str, dict[str, int]] = {}
     root_counts = {"tp": 0, "fp": 0, "fn": 0}
@@ -806,6 +885,9 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
         },
         "integrity": {
             "content_hash_mismatches": content_hash_mismatches,
+            "fixture_source_commit_hash": source_commit_hash,
+            "fixture_revision_verified": True,
+            "scanner_implementation_sha256": _scanner_implementation_fingerprint(),
             "offline_osv": True,
             "llm_mode": "not_invoked",
         },

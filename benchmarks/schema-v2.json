@@ -6,14 +6,21 @@
   "required": [
     "$schema",
     "schema_version",
-    "scanner_source_commit_hash",
     "quality_gates",
     "scoring_context",
     "cases"
   ],
+  "oneOf": [
+    { "required": ["fixture_source_commit_hash"] },
+    { "required": ["scanner_source_commit_hash"] }
+  ],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
     "schema_version": { "const": "2.0" },
+    "fixture_source_commit_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
     "scanner_source_commit_hash": {
       "type": "string",
       "pattern": "^[a-f0-9]{40}$"

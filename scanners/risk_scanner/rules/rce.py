@@ -146,6 +146,18 @@ def _report_javascript_shell_calls(
             requires_manual_review = True
             context = "命令来自部署者环境变量，需核对配置所有权与用途"
             preconditions = ["operator configures the command environment variable"]
+        elif source == "operator_input":
+            severity = "medium"
+            kind = "context_dependent"
+            disposition = "needs_context"
+            source_kind = "runtime_argument"
+            source_control = "operator"
+            reachability = "operator_invocation"
+            activation = "conditional"
+            trust_boundary_crossed = False
+            requires_manual_review = True
+            context = "命令来自启动参数，需核对调用者权限与参数约束"
+            preconditions = ["operator supplies the runtime argument"]
         else:
             severity = "medium"
             kind = "context_dependent"

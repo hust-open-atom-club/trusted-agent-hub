@@ -56,6 +56,7 @@ from scanners.risk_scanner.redaction import (
     redact_report,
     redact_value,
 )
+from scanners.risk_scanner.llm_reviewer import validate_supporting_evidence
 from scanners.risk_scanner.provenance import (
     build_verification_capabilities,
     build_verification_facts,
@@ -270,7 +271,7 @@ def _mark_llm_review_unavailable(
         },
         "prompt_audit": {
             "template_version": "unavailable",
-            "response_schema_version": "2.0",
+            "response_schema_version": "2.1",
             "system_prompt_sha256": "unavailable",
             "payload_sha256s": [],
             "payload_count": 0,
@@ -297,6 +298,7 @@ def _mark_llm_review_unavailable(
 def _apply_llm_decisions(
     findings: list[dict[str, Any]],
     result: dict[str, Any],
+    finding_contexts: dict[str, str] | None = None,
 ) -> None:
     """Apply guarded two-way adjudication without overwriting static evidence."""
     labels = result.get("labels", {})
@@ -359,13 +361,19 @@ def _apply_llm_decisions(
             for item in (decision.get("missing_context") or [])[:10]
             if str(item).strip()
         ] if isinstance(decision.get("missing_context"), list) else []
-        supporting_evidence = [
-            item
-            for item in (decision.get("supporting_evidence") or [])[:10]
-            if isinstance(item, dict)
-        ] if isinstance(decision.get("supporting_evidence"), list) else []
+        supporting_evidence = validate_supporting_evidence(
+            decision.get("supporting_evidence"),
+            context_audit,
+            (finding_contexts or {}).get(finding_id, ""),
+        )
+        if evidence_sufficient and context_status != "complete":
+            evidence_sufficient = False
+            missing_context.append("scanner context delivery was incomplete")
+        if evidence_sufficient and not supporting_evidence:
+            evidence_sufficient = False
+            missing_context.append("no server-verified source citation")
         finding["llm_evidence_sufficient"] = evidence_sufficient
-        finding["llm_missing_context"] = missing_context
+        finding["llm_missing_context"] = list(dict.fromkeys(missing_context))
         finding["llm_supporting_evidence"] = supporting_evidence
         finding["llm_context_status"] = context_status
         finding["llm_policy_version"] = str(
@@ -464,7 +472,7 @@ def _run_llm_review_with_fallback(
         decisions = result.get("decisions", {})
         if not isinstance(decisions, dict):
             raise ValueError("LLM review decisions must be an object")
-        _apply_llm_decisions(findings, result)
+        _apply_llm_decisions(findings, result, finding_contexts)
 
         labels_summary = result.get("labels_summary")
         if not isinstance(labels_summary, dict):

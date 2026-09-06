@@ -126,6 +126,23 @@ def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
         _validate_v2_config(unexplained, V2_CONFIG)
 
 
+def test_v2_fixture_revision_must_contain_the_labeled_corpus():
+    config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
+    config["fixture_source_commit_hash"] = "0" * 40
+
+    with pytest.raises(BenchmarkConfigError, match="fixture source commit"):
+        _validate_v2_config(config, V2_CONFIG)
+
+
+def test_v2_legacy_commit_field_remains_a_valid_alias():
+    config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
+    config["scanner_source_commit_hash"] = config.pop(
+        "fixture_source_commit_hash"
+    )
+
+    _validate_v2_config(config, V2_CONFIG)
+
+
 def test_legacy_finding_fallbacks_are_explicit_and_stable():
     roots = _actual_root_issues([
         {
@@ -256,9 +273,13 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
     assert first["coverage"]["rule_exception_ratio"] == 0.0
     assert first["integrity"] == {
         "content_hash_mismatches": 0,
+        "fixture_source_commit_hash": "f8e59b8aabfdce77eefb531ed1639da8f057bfe4",
+        "fixture_revision_verified": True,
+        "scanner_implementation_sha256": first["integrity"]["scanner_implementation_sha256"],
         "offline_osv": True,
         "llm_mode": "not_invoked",
     }
+    assert len(first["integrity"]["scanner_implementation_sha256"]) == 64
     assert _benchmark_check_failures(first) == []
     assert first["quality_gates"] == {
         "minimum_cases": 25,

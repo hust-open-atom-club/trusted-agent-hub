@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -576,7 +577,7 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
                     "evidence_sufficient": True,
                     "missing_context": [],
                     "supporting_evidence": [{
-                        "file": "SKILL.md", "line": 1, "claim": "instruction"
+                        "file": "SKILL.md", "line": 1, "quote": "unsafe instruction"
                     }],
                     "explanation": "confirmed",
                 },
@@ -591,7 +592,7 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
                     "evidence_sufficient": True,
                     "missing_context": [],
                     "supporting_evidence": [{
-                        "file": "run.sh", "line": 1, "claim": "shell sink"
+                        "file": "run.sh", "line": 1, "quote": "rm -rf /tmp/demo"
                     }],
                     "explanation": "confirmed",
                 },
@@ -659,19 +660,24 @@ def test_llm_review_batches_large_finding_sets(monkeypatch) -> None:
 
     def fake_call(prompt: str) -> dict:
         calls.append(prompt)
-        return {
-            "is_vulnerability": False,
-            "harmful": False,
-            "impact": "none",
-            "context_role": "example",
-            "intent": "benign",
-            "confidence": 0.9,
-            "evidence_sufficient": True,
-            "missing_context": [],
-            "supporting_evidence": [{
-                "file": "a.py", "line": 1, "claim": "benign example"
-            }],
-        }
+        finding_ids = list(dict.fromkeys(re.findall(r'"id": "(f-\d+)"', prompt)))
+        return {"reviews": [
+            {
+                "id": finding_id,
+                "is_vulnerability": False,
+                "harmful": False,
+                "impact": "none",
+                "context_role": "example",
+                "intent": "benign",
+                "confidence": 0.9,
+                "evidence_sufficient": True,
+                "missing_context": [],
+                "supporting_evidence": [{
+                    "file": "a.py", "line": 1, "quote": "print('safe')"
+                }],
+            }
+            for finding_id in finding_ids
+        ]}
 
     monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
     findings = [

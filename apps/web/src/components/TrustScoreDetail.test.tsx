@@ -92,6 +92,58 @@ describe('TrustScoreDetail', () => {
     expect(screen.getByText('— Prompt injection risk')).toBeInTheDocument();
   });
 
+  it('shows separate security and evidence assessments', () => {
+    render(
+      <TrustScoreDetail
+        trustScore={makeTrustScore({
+          security_assessment: {
+            score: 81,
+            level: 'low_risk',
+            grade: 'B',
+            status: 'review_required',
+            input_dimensions: ['permission_minimization', 'scan_results'],
+            unresolved_findings: 2,
+          },
+          evidence_assessment: {
+            score: 70,
+            coverage: 0.75,
+            level: 'moderate',
+            assessed_dimensions: ['source_trust'],
+            unavailable_dimensions: ['author_reputation'],
+            verification_statuses: { signature: 'not_available' },
+            author_reputation: {
+              status: 'unavailable',
+              level: 'unavailable',
+              score: null,
+            },
+          },
+        })}
+      />,
+    );
+
+    const assessments = screen.getByTestId('trust-assessments');
+    expect(assessments).toHaveTextContent('安全结论');
+    expect(assessments).toHaveTextContent('2 个未决发现');
+    expect(assessments).toHaveTextContent('证据质量');
+    expect(assessments).toHaveTextContent('覆盖率 75%');
+    expect(assessments).not.toHaveTextContent('signature');
+  });
+
+  it('can hide duplicate grade summaries in the review page', () => {
+    render(
+      <TrustScoreDetail
+        trustScore={makeTrustScore()}
+        effectiveGrade="B"
+        autoGrade="B"
+        showGradeSummary={false}
+        showGradeSource={false}
+      />,
+    );
+
+    expect(screen.queryByText('B · 低风险')).not.toBeInTheDocument();
+    expect(screen.queryByText(/自动评级/)).not.toBeInTheDocument();
+  });
+
   it('shows the empty state when there is nothing to display', () => {
     render(
       <TrustScoreDetail

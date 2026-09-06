@@ -130,7 +130,13 @@ def analyze_javascript(path: str, content: str) -> JavaScriptAstAnalysis:
                 ))
                 if re.search(r"\b(?:process\.env|os\.environ)\b", argument):
                     input_source = "environment"
-                elif re.search(r"\b(?:req\.|request\.|argv|user[_-]?input|input)\b", argument, re.I):
+                elif re.search(
+                    r"\b(?:process\.argv|Deno\.args|Bun\.argv|argv)\b",
+                    argument,
+                    re.I,
+                ):
+                    input_source = "operator_input"
+                elif re.search(r"\b(?:req\.|request\.|user[_-]?input|input)\b", argument, re.I):
                     input_source = "user_input"
                 elif literal_argument:
                     input_source = "literal"

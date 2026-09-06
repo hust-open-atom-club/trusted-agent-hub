@@ -3,8 +3,6 @@
 import { useTranslation } from 'react-i18next';
 import type { TrustScore } from '@/types';
 
-/* ── Grade → visual helpers ─────────────────────────────────────────── */
-
 const GRADE_COLORS: Record<string, { bg: string; fg: string; border: string }> = {
   A: { bg: 'oklch(92% 0.04 140)', fg: 'oklch(35% 0.08 140)', border: 'oklch(75% 0.06 140)' },
   B: { bg: 'oklch(94% 0.03 220)', fg: 'oklch(35% 0.06 220)', border: 'oklch(78% 0.05 220)' },
@@ -28,7 +26,6 @@ const TOP_RISK_KEYS: Record<string, string> = {
   'No significant risks identified': 'none',
 };
 
-/** effective_grade → risk_level */
 function gradeToRiskLevel(grade: string | null | undefined): string {
   if (!grade) return '';
   const map: Record<string, string> = {
@@ -37,7 +34,6 @@ function gradeToRiskLevel(grade: string | null | undefined): string {
   return map[grade] ?? '';
 }
 
-/** effective_grade → install_recommendation */
 function gradeToRecommendation(grade: string | null | undefined): string {
   if (!grade) return '';
   const map: Record<string, string> = {
@@ -48,14 +44,12 @@ function gradeToRecommendation(grade: string | null | undefined): string {
 
 export interface TrustScoreDetailProps {
   trustScore: TrustScore | null | undefined;
-  /** Effective grade (manual_grade ?? auto_grade) from version detail */
   effectiveGrade?: string | null;
-  /** Auto grade from scan result */
   autoGrade?: string | null;
-  /** Manual grade set by reviewer */
   manualGrade?: string | null;
-  /** Reason for manual grade override */
   manualGradeReason?: string | null;
+  showGradeSummary?: boolean;
+  showGradeSource?: boolean;
 }
 
 export default function TrustScoreDetail({
@@ -64,6 +58,8 @@ export default function TrustScoreDetail({
   autoGrade,
   manualGrade,
   manualGradeReason,
+  showGradeSummary = true,
+  showGradeSource = true,
 }: TrustScoreDetailProps) {
   const { t } = useTranslation();
 
@@ -72,13 +68,19 @@ export default function TrustScoreDetail({
   const summary = trustScore.risk_summary;
   const topRisks = summary?.top_risks ?? [];
   const explanations = trustScore.explanations;
+  const securityAssessment = trustScore.security_assessment;
+  const evidenceAssessment = trustScore.evidence_assessment;
   const modelFingerprint = trustScore.model_fingerprint;
   const fingerprintPreview = modelFingerprint && modelFingerprint.length > 12
     ? `${modelFingerprint.slice(0, 12)}…`
     : modelFingerprint;
   const hasModelMetadata = Boolean(trustScore.model_version || modelFingerprint);
+  const hasAssessments = Boolean(securityAssessment || evidenceAssessment);
+  const hasBodyContent = hasAssessments
+    || topRisks.length > 0
+    || Boolean(explanations?.length)
+    || hasModelMetadata;
 
-  // Use effective_grade from props first, fall back to risk_summary.grade
   const grade = effectiveGrade ?? summary?.grade;
   const riskLevel = gradeToRiskLevel(grade);
   const recommendation = gradeToRecommendation(grade);
@@ -112,6 +114,8 @@ export default function TrustScoreDetail({
     return fixed[message] ? t(`trust_score.explanation.${fixed[message]}`) : message;
   };
 
+  if (!showGradeSummary && !showGradeSource && !hasBodyContent) return null;
+
   return (
     <div style={{
       background: 'var(--color-paper-2)',
@@ -119,17 +123,16 @@ export default function TrustScoreDetail({
       border: '1px solid var(--color-rule)',
       overflow: 'hidden',
     }}>
-      {/* ── Header: grade badge + risk level + recommendation ── */}
-      <div style={{
-        padding: '1rem 1.25rem',
-        borderBottom: '1px solid var(--color-rule)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        flexWrap: 'wrap',
-      }}>
-        {/* Grade badge */}
-        {grade && gradeColor && (
+      {showGradeSummary && (
+        <div style={{
+          padding: '1rem 1.25rem',
+          borderBottom: '1px solid var(--color-rule)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}>
+          {grade && gradeColor && (
           <span style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -144,10 +147,9 @@ export default function TrustScoreDetail({
           }}>
             {gradeLabel(grade)}
           </span>
-        )}
+          )}
 
-        {/* Risk level */}
-        {riskLevel && (
+          {riskLevel && (
           <span style={{
             fontSize: '0.78rem',
             fontWeight: 600,
@@ -155,10 +157,9 @@ export default function TrustScoreDetail({
           }}>
             {t(`trust_score.level.${riskLevel}`, riskLevel)}
           </span>
-        )}
+          )}
 
-        {/* Recommendation */}
-        {recommendation && (
+          {recommendation && (
           <span style={{
             fontSize: '0.75rem',
             color: 'var(--color-ink-2)',
@@ -166,11 +167,11 @@ export default function TrustScoreDetail({
           }}>
             {t(`trust_score.recommendation.${recommendation}`, recommendation)}
           </span>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* ── Grade source: auto vs manual ── */}
-      {(autoGrade || manualGrade) && (
+      {showGradeSource && (autoGrade || manualGrade) && (
         <div style={{
           padding: '0.6rem 1.25rem',
           borderBottom: '1px solid var(--color-rule)',
@@ -207,7 +208,76 @@ export default function TrustScoreDetail({
         </div>
       )}
 
-      {/* ── Top risks ── */}
+      {hasAssessments && (
+        <div
+          data-testid="trust-assessments"
+          style={{
+            padding: '0.75rem 1.25rem',
+            borderBottom: '1px solid var(--color-rule)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: '0.75rem',
+          }}
+        >
+          {securityAssessment && (
+            <div>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-muted)', marginBottom: '0.3rem' }}>
+                {t('trust_score.security_assessment')}
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--color-ink-2)', lineHeight: 1.55 }}>
+                <span>{securityAssessment.score}/100</span>
+                {' · '}
+                <span>{t(`trust_score.level.${securityAssessment.level}`, securityAssessment.level)}</span>
+                {' · '}
+                <span>{t(`trust_score.security_status.${securityAssessment.status}`, securityAssessment.status)}</span>
+                <div>
+                  {t('trust_score.unresolved_findings', { count: securityAssessment.unresolved_findings })}
+                </div>
+              </div>
+            </div>
+          )}
+          {evidenceAssessment && (
+            <div>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-muted)', marginBottom: '0.3rem' }}>
+                {t('trust_score.evidence_assessment')}
+              </div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--color-ink-2)', lineHeight: 1.55 }}>
+                <span>{evidenceAssessment.score}/100</span>
+                {' · '}
+                <span>{t(`trust_score.evidence_level.${evidenceAssessment.level}`, evidenceAssessment.level)}</span>
+                {' · '}
+                <span>{t('trust_score.evidence_coverage', { coverage: Math.round(evidenceAssessment.coverage * 100) })}</span>
+                <div>
+                  {t('trust_score.author_reputation')}: {t(
+                    `trust_score.assessment.${evidenceAssessment.author_reputation.level}`,
+                    evidenceAssessment.author_reputation.level,
+                  )}
+                </div>
+              </div>
+              {(evidenceAssessment.assessed_dimensions.length > 0 || evidenceAssessment.unavailable_dimensions.length > 0) && (
+                <details style={{ marginTop: '0.35rem', fontSize: '0.74rem', color: 'var(--color-muted)' }}>
+                  <summary>{t('trust_score.evidence_dimensions')}</summary>
+                  {evidenceAssessment.assessed_dimensions.length > 0 && (
+                    <div>
+                      {t('trust_score.assessed_dimensions')}: {evidenceAssessment.assessed_dimensions
+                        .map((dimension) => t(`trust_score.dim.${dimension}`, dimension))
+                        .join(', ')}
+                    </div>
+                  )}
+                  {evidenceAssessment.unavailable_dimensions.length > 0 && (
+                    <div>
+                      {t('trust_score.unavailable_dimensions')}: {evidenceAssessment.unavailable_dimensions
+                        .map((dimension) => t(`trust_score.dim.${dimension}`, dimension))
+                        .join(', ')}
+                    </div>
+                  )}
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {topRisks.length > 0 && (
         <div style={{
           padding: '0.75rem 1.25rem',
@@ -236,7 +306,6 @@ export default function TrustScoreDetail({
         </div>
       )}
 
-      {/* ── Explanations (messages only, no deduction scores) ── */}
       {explanations && explanations.length > 0 && (
         <div style={{ padding: '0.75rem 1.25rem' }}>
           <div style={{
@@ -262,7 +331,6 @@ export default function TrustScoreDetail({
         </div>
       )}
 
-      {/* ── Trust-score model identity ── */}
       {hasModelMetadata && (
         <div style={{
           padding: '0.6rem 1.25rem',
@@ -294,8 +362,7 @@ export default function TrustScoreDetail({
         </div>
       )}
 
-      {/* ── Empty state ── */}
-      {!grade && topRisks.length === 0 && (!explanations || explanations.length === 0) && !hasModelMetadata && (
+      {!grade && topRisks.length === 0 && (!explanations || explanations.length === 0) && !hasModelMetadata && !hasAssessments && (
         <div style={{
           padding: '1.5rem 1.25rem',
           textAlign: 'center',

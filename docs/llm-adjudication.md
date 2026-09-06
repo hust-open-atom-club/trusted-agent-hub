@@ -30,9 +30,12 @@ detector/occurrence locations. The default limits are 60 lines per location,
 
 The prompt instructs each judge to trace the source, sink, activation path,
 trust boundary, safeguards, and preconditions using only the supplied text.
-The response must state whether evidence is sufficient and cite exact supplied
-file/line locations. Package text is treated as untrusted data and is never
-executed or followed as an instruction.
+The response must state whether evidence is sufficient and cite one complete
+source line, limited to 160 characters, from a supplied file/line. The server
+matches the complete line against the delivered source and records a
+server-generated SHA-256 for it; a partial or unmatched line is insufficient
+evidence. Package text is treated as untrusted data and is never executed or
+followed as an instruction.
 
 Reports expose enough metadata to reproduce and audit the review boundary:
 
@@ -63,7 +66,7 @@ A benign downgrade requires all of the following:
 2. confidence at or above `0.85`;
 3. `evidence_sufficient=true`;
 4. complete, non-truncated scanner context;
-5. at least one file/line citation inside the delivered ranges;
+5. at least one file/line citation containing a complete delivered source line;
 6. an eligible, non-protected finding.
 
 The applied outcome is recorded in `llm_adjudication_action`, while

@@ -17,9 +17,10 @@ import type {
 
 import { API_BASE } from '@/lib/runtime-config';
 
-interface FileGroup {
-  file: string;
+interface RuleGroup {
+  ruleId: string;
   items: Finding[];
+  locationCount: number;
 }
 
 
@@ -32,6 +33,32 @@ const SEVERITY_ORDER: Record<string, number> = {
 };
 
 const CODE_CONTEXT_RANGE = 50;
+
+function findingRuleId(finding: Finding): string {
+  return finding.rule_id || finding.detector_ids?.[0] || 'UNKNOWN';
+}
+
+function findingLocationCount(finding: Finding): number {
+  return findingLocations(finding).count;
+}
+
+function findingLocations(finding: Finding): {
+  count: number;
+  items: FindingLocation[];
+  truncated: boolean;
+} {
+  if (finding.occurrences?.count) {
+    return {
+      count: finding.occurrences.count,
+      items: finding.occurrences.items,
+      truncated: finding.occurrences.truncated,
+    };
+  }
+  if (finding.location?.file) {
+    return { count: 1, items: [finding.location], truncated: false };
+  }
+  return { count: 0, items: [], truncated: false };
+}
 
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -273,10 +300,10 @@ export default function ReviewDetailPage() {
         const initCollapsed: Record<string, boolean> = {};
         const seen = new Set<string>();
         for (const f of findings) {
-          const file = f.location?.file || '(unknown)';
-          if (!seen.has(file)) {
-            initCollapsed[file] = false;
-            seen.add(file);
+          const ruleId = findingRuleId(f);
+          if (!seen.has(ruleId)) {
+            initCollapsed[ruleId] = false;
+            seen.add(ruleId);
           }
         }
         setCollapsed(initCollapsed);
@@ -295,19 +322,23 @@ export default function ReviewDetailPage() {
     };
   }, [token, versionId]);
 
-  const groupedFindings = useMemo<FileGroup[]>(() => {
+  const groupedFindings = useMemo<RuleGroup[]>(() => {
     const findings = version?.findings || [];
     const groups: Record<string, Finding[]> = {};
     for (const f of findings) {
-      const file = f.location?.file || '(unknown)';
-      if (!groups[file]) groups[file] = [];
-      groups[file].push(f);
+      const ruleId = findingRuleId(f);
+      if (!groups[ruleId]) groups[ruleId] = [];
+      groups[ruleId].push(f);
     }
     return Object.entries(groups)
-      .map(([file, items]) => ({ file, items }))
+      .map(([ruleId, items]) => ({
+        ruleId,
+        items,
+        locationCount: items.reduce((total, finding) => total + findingLocationCount(finding), 0),
+      }))
       .sort((a, b) => {
-        const aMin = Math.min(...a.items.map((f) => SEVERITY_ORDER[f.severity] ?? 99));
-        const bMin = Math.min(...b.items.map((f) => SEVERITY_ORDER[f.severity] ?? 99));
+        const aMin = Math.min(...a.items.map((f) => SEVERITY_ORDER[f.effective_severity || f.severity] ?? 99));
+        const bMin = Math.min(...b.items.map((f) => SEVERITY_ORDER[f.effective_severity || f.severity] ?? 99));
         return aMin - bMin;
       });
   }, [version?.findings]);
@@ -315,15 +346,19 @@ export default function ReviewDetailPage() {
   const filteredGroups = useMemo(() => {
     if (filter === 'all') return groupedFindings;
     return groupedFindings
-      .map((g) => ({
-        ...g,
-        items: g.items.filter((f) => f.severity === filter),
-      }))
+      .map((g) => {
+        const items = g.items.filter((f) => (f.effective_severity || f.severity) === filter);
+        return {
+          ...g,
+          items,
+          locationCount: items.reduce((total, finding) => total + findingLocationCount(finding), 0),
+        };
+      })
       .filter((g) => g.items.length > 0);
   }, [groupedFindings, filter]);
 
-  const toggleFile = (file: string) => {
-    setCollapsed((prev) => ({ ...prev, [file]: !prev[file] }));
+  const toggleRule = (ruleId: string) => {
+    setCollapsed((prev) => ({ ...prev, [ruleId]: !prev[ruleId] }));
   };
 
   const handleSubmitReview = async () => {
@@ -374,7 +409,6 @@ export default function ReviewDetailPage() {
   };
 
   const isPending = version?.status === 'pending_review';
-  const grade = version?.effective_grade ?? version?.trust_score?.risk_summary?.grade;
   const scanReport = version?.scan_report;
   const scanStatus = scanReport?.scan_status;
   const scanIncomplete = Boolean(scanStatus && (scanStatus.state !== 'complete' || scanStatus.complete === false));
@@ -383,37 +417,6 @@ export default function ReviewDetailPage() {
     ...(scanReport?.scan_limits?.exceeded || []),
   ].filter((reason, index, all) => all.indexOf(reason) === index);
   const provenance = scanReport?.provenance;
-  const provenanceSource = provenance?.acquisition_facts?.source;
-  const provenanceIntegrity = provenance?.acquisition_facts?.integrity;
-  const provenanceIsComplete = (
-    provenanceIntegrity?.is_complete === true
-    && provenanceIntegrity.hash_scope === 'scanned_source'
-  );
-  const provenanceVerification = provenance?.acquisition_facts?.verification;
-  const provenanceVerificationItems = [
-    { key: 'owner', label: t('review.detail.provenance_verification_owner'), value: provenanceVerification?.owner },
-    { key: 'signature', label: t('review.detail.provenance_verification_signature'), value: provenanceVerification?.signature },
-    { key: 'attestation', label: t('review.detail.provenance_verification_attestation'), value: provenanceVerification?.attestation },
-    { key: 'sbom', label: t('review.detail.provenance_verification_sbom'), value: provenanceVerification?.sbom },
-  ];
-  const provenanceClaimSections = [
-    {
-      key: 'source',
-      label: t('review.detail.provenance_package_source'),
-      values: flattenDisplayEntries(provenance?.package_claims?.source ?? {}),
-    },
-    {
-      key: 'integrity',
-      label: t('review.detail.provenance_package_integrity'),
-      values: flattenDisplayEntries(provenance?.package_claims?.integrity ?? {}),
-    },
-  ];
-
-  const verificationLabel = (value: boolean | undefined) => {
-    if (value === true) return t('review.detail.provenance_verified');
-    if (value === false) return t('review.detail.provenance_not_verified');
-    return '—';
-  };
 
   const reviewResultLabel = version?.review_conclusion
     ? (version.review_conclusion === 'approved'
@@ -516,11 +519,6 @@ export default function ReviewDetailPage() {
               )}
             </div>
           )}
-          {grade && (
-            <div className="review-detail-bar-grade-label">
-              {t('review.detail.risk_level')}: {version?.effective_grade} — {grade}
-            </div>
-          )}
           {version?.trust_score?.risk_summary?.requires_confirmation && (
             <div className="review-detail-bar-result">
               {t('review.detail.explicit_confirmation_required')}
@@ -555,184 +553,6 @@ export default function ReviewDetailPage() {
           )}
         </div>
       </div>
-
-      {isPending && (
-        <section className="review-pending-notice" role="status">
-          <strong>{t('review.detail.pending_notice_title')}</strong>
-          <span>{t('review.detail.pending_notice_description')}</span>
-        </section>
-      )}
-
-      {version?.manual_grade && version.auto_grade && version.manual_grade !== version.auto_grade && (
-        <div style={{
-          marginBottom: '1rem', padding: '0.85rem 1.25rem',
-          background: 'oklch(94% 0.03 85)',
-          borderLeft: '4px solid var(--color-accent)',
-          borderRadius: '0 var(--radius-md) var(--radius-md) 0',
-          fontSize: '0.82rem', color: 'var(--color-ink)',
-          display: 'flex', alignItems: 'center', gap: '1rem',
-          flexWrap: 'wrap',
-        }}>
-          <span style={{ fontWeight: 600 }}>
-            {t('review.detail.grade_overridden_banner', { from: version.auto_grade, to: version.manual_grade })}
-          </span>
-          {version.manual_grade_reason && (
-            <span style={{ color: 'var(--color-muted)', fontSize: '0.76rem' }}>
-              {t('review.detail.reason')}: {version.manual_grade_reason}
-            </span>
-          )}
-          {version.manual_grade_by && (
-            <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>
-              {t('review.detail.modified_by', { name: version.manual_grade_by_name || version.manual_grade_by })}
-            </span>
-          )}
-        </div>
-      )}
-
-      {scanIncomplete && (
-        <section
-          role="alert"
-          style={{
-            marginBottom: '1rem', padding: '0.9rem 1.1rem',
-            background: 'oklch(95% 0.04 85)',
-            borderLeft: '4px solid var(--color-warning)',
-            borderRadius: '0 var(--radius-md) var(--radius-md) 0',
-            color: 'var(--color-ink)',
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
-            {t('review.detail.scan_incomplete_title')}
-          </div>
-          <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
-            {t('review.detail.scan_incomplete_description')}
-          </div>
-          {scanReasons.length > 0 && (
-            <div style={{ marginTop: '0.45rem', fontSize: '0.78rem' }}>
-              {t('review.detail.scan_incomplete_reasons')}: {scanReasons.join(', ')}
-            </div>
-          )}
-          {scanReport?.rule_execution && (
-            <div style={{ marginTop: '0.35rem', fontSize: '0.76rem', color: 'var(--color-muted)' }}>
-              {t('review.detail.scan_rule_execution')}: {scanReport.rule_execution.succeeded ?? 0}/
-              {scanReport.rule_execution.total ?? 0} {t('review.detail.scan_rules_succeeded')}
-              {(scanReport.rule_execution.failed ?? 0) > 0 && ` · ${t('review.detail.scan_rules_failed')}: ${scanReport.rule_execution.failed}`}
-            </div>
-          )}
-        </section>
-      )}
-
-      {provenance && (
-        <section className="review-detail-section">
-          <h2 className="review-detail-section-title">{t('review.detail.provenance_title')}</h2>
-          <p style={{ margin: '-0.4rem 0 1rem', color: 'var(--color-muted)', fontSize: '0.82rem', lineHeight: 1.5 }}>
-            {t('review.detail.provenance_description')}
-          </p>
-
-          <h3 className="review-meta-subtitle" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
-            {t('review.detail.provenance_acquisition_title')}
-          </h3>
-          <div className="review-meta-grid">
-            <div className="review-meta-field full">
-              <span className="review-meta-label">{t('review.detail.provenance_repository_url')}</span>
-              <span className="review-meta-value">
-                {provenanceSource?.repository_url ? (
-                  <a href={provenanceSource.repository_url} target="_blank" rel="noopener noreferrer">
-                    {shortUrl(provenanceSource.repository_url)}
-                  </a>
-                ) : '—'}
-              </span>
-            </div>
-            <div className="review-meta-field">
-              <span className="review-meta-label">{t('review.detail.provenance_ref_type')}</span>
-              <span className="review-meta-value">{provenanceSource?.ref_type || '—'}</span>
-            </div>
-            <div className="review-meta-field">
-              <span className="review-meta-label">{t('review.detail.provenance_ref')}</span>
-              <span className="review-meta-value">{provenanceSource?.ref || '—'}</span>
-            </div>
-            <div className="review-meta-field">
-              <span className="review-meta-label">{t('review.detail.provenance_commit_hash')}</span>
-              <span className="review-meta-value">
-                {provenanceSource?.commit_hash ? <code>{provenanceSource.commit_hash}</code> : '—'}
-              </span>
-            </div>
-            <div className="review-meta-field">
-              <span className="review-meta-label">{t('review.detail.provenance_subdirectory')}</span>
-              <span className="review-meta-value">
-                {provenanceSource?.subdirectory ? <code>{provenanceSource.subdirectory}</code> : '—'}
-              </span>
-            </div>
-            <div className="review-meta-field">
-              <span className="review-meta-label">{t('review.detail.provenance_acquisition_method')}</span>
-              <span className="review-meta-value">{provenance.acquisition_facts?.acquisition_method || '—'}</span>
-            </div>
-            <div className="review-meta-field full">
-              <span className="review-meta-label">{t('review.detail.provenance_server_sha256')}</span>
-              <span className="review-meta-value">
-                {provenanceIsComplete && provenanceIntegrity?.sha256 ? (
-                  <code style={{ wordBreak: 'break-all' }}>{provenanceIntegrity.sha256}</code>
-                ) : t('review.detail.provenance_hash_unavailable')}
-              </span>
-            </div>
-            <div className="review-meta-field full">
-              <span className="review-meta-label">{t('review.detail.provenance_hash_scope')}</span>
-              <span className="review-meta-value">
-                {(provenanceIntegrity?.hash_scope || '—') + ' · ' + (provenanceIsComplete
-                  ? t('review.detail.provenance_is_complete')
-                  : t('review.detail.provenance_is_incomplete'))}
-              </span>
-            </div>
-          </div>
-
-          <h3 className="review-meta-subtitle">{t('review.detail.provenance_verification_title')}</h3>
-          <div className="review-meta-grid">
-            {provenanceVerificationItems.map((item) => (
-              <div className="review-meta-field" key={item.key}>
-                <span className="review-meta-label">{item.label}</span>
-                <span
-                  className="review-meta-value"
-                  style={{
-                    color: item.value === true
-                      ? 'var(--color-success)'
-                      : item.value === false
-                        ? 'var(--color-danger)'
-                        : 'var(--color-muted)',
-                    fontWeight: 600,
-                  }}
-                >
-                  {verificationLabel(item.value)}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <h3 className="review-meta-subtitle">{t('review.detail.provenance_claims_title')}</h3>
-          <p style={{ margin: '0 0 0.75rem', color: 'var(--color-muted)', fontSize: '0.8rem', lineHeight: 1.5 }}>
-            {t('review.detail.provenance_claims_description')}
-          </p>
-          <div className="review-meta-grid">
-            {provenanceClaimSections.map((section) => (
-              <div className="review-meta-field full" key={section.key}>
-                <span className="review-meta-label">{section.label}</span>
-                {section.values.length > 0 ? (
-                  <div
-                    className="review-meta-value"
-                    style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}
-                  >
-                    {section.values.map(([path, value]) => (
-                      <span key={`${section.key}-${path || 'value'}`}>
-                        <code>{path || t('review.detail.provenance_claim_root')}</code>: {value}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <span className="review-meta-value">—</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {version?.trust_score && (
         <section className="review-detail-section">
@@ -772,6 +592,16 @@ export default function ReviewDetailPage() {
                   <span style={{ color: 'var(--color-ink)' }}>{version.manual_grade} *</span>
                 ) : <span style={{ color: 'var(--color-muted)' }}>{t('review.detail.auto_grade_label')}</span>}
               </div>
+              {version.manual_grade_reason && (
+                <div style={{ marginTop: '0.25rem', fontSize: '0.72rem', color: 'var(--color-muted)', maxWidth: '24rem' }}>
+                  {t('review.detail.reason')}: {version.manual_grade_reason}
+                </div>
+              )}
+              {version.manual_grade_by && (
+                <div style={{ marginTop: '0.15rem', fontSize: '0.7rem', color: 'var(--color-muted)' }}>
+                  {t('review.detail.modified_by', { name: version.manual_grade_by_name || version.manual_grade_by })}
+                </div>
+              )}
             </div>
             <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>=</div>
             <div>
@@ -787,10 +617,48 @@ export default function ReviewDetailPage() {
           <TrustScoreDetail
             trustScore={version.trust_score}
             effectiveGrade={version.effective_grade}
-            autoGrade={version.auto_grade}
-            manualGrade={version.manual_grade}
-            manualGradeReason={version.manual_grade_reason}
+            showGradeSummary={false}
+            showGradeSource={false}
           />
+        </section>
+      )}
+
+      {isPending && (
+        <section className="review-pending-notice" role="status">
+          <strong>{t('review.detail.pending_notice_title')}</strong>
+          <span>{t('review.detail.pending_notice_description')}</span>
+        </section>
+      )}
+
+      {scanIncomplete && (
+        <section
+          role="alert"
+          style={{
+            marginBottom: '1rem', padding: '0.9rem 1.1rem',
+            background: 'oklch(95% 0.04 85)',
+            borderLeft: '4px solid var(--color-warning)',
+            borderRadius: '0 var(--radius-md) var(--radius-md) 0',
+            color: 'var(--color-ink)',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: '0.35rem' }}>
+            {t('review.detail.scan_incomplete_title')}
+          </div>
+          <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
+            {t('review.detail.scan_incomplete_description')}
+          </div>
+          {scanReasons.length > 0 && (
+            <div style={{ marginTop: '0.45rem', fontSize: '0.78rem' }}>
+              {t('review.detail.scan_incomplete_reasons')}: {scanReasons.join(', ')}
+            </div>
+          )}
+          {scanReport?.rule_execution && (
+            <div style={{ marginTop: '0.35rem', fontSize: '0.76rem', color: 'var(--color-muted)' }}>
+              {t('review.detail.scan_rule_execution')}: {scanReport.rule_execution.succeeded ?? 0}/
+              {scanReport.rule_execution.total ?? 0} {t('review.detail.scan_rules_succeeded')}
+              {(scanReport.rule_execution.failed ?? 0) > 0 && ` · ${t('review.detail.scan_rules_failed')}: ${scanReport.rule_execution.failed}`}
+            </div>
+          )}
         </section>
       )}
 
@@ -844,6 +712,16 @@ export default function ReviewDetailPage() {
               </article>
             ))}
           </div>
+        </section>
+      )}
+
+      {provenance && (
+        <section className="review-detail-section">
+          <h2 className="review-detail-section-title">{t('review.detail.provenance_title')}</h2>
+          <p style={{ margin: '-0.4rem 0 1rem', color: 'var(--color-muted)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+            {t('review.detail.provenance_description')}
+          </p>
+          <ProvenanceSummary provenance={provenance} />
         </section>
       )}
 
@@ -950,13 +828,6 @@ export default function ReviewDetailPage() {
             </div>
           )}
         </div>
-
-        {scanReport?.provenance && (
-          <>
-            <h3 className="review-meta-subtitle">{t('review.detail.provenance_title')}</h3>
-            <ProvenanceSummary provenance={scanReport.provenance} />
-          </>
-        )}
 
         {pkg?.permissions && Object.keys(pkg.permissions).length > 0 && (
           <>
@@ -1067,7 +938,7 @@ export default function ReviewDetailPage() {
       <section className="review-detail-section">
         <div className="review-findings-header">
           <h2 className="review-detail-section-title">
-            {t('review.detail.scan_findings_title')} · {t('review.detail.scan_findings_title')} / {version?.scan_summary?.total ?? (version?.findings || []).length}
+            {t('review.detail.scan_findings_title')} / {version?.scan_summary?.total ?? (version?.findings || []).length}
           </h2>
 
           <div className="findings-toolbar">
@@ -1104,56 +975,96 @@ export default function ReviewDetailPage() {
         ) : (
           <div className="findings-list">
             {filteredGroups.map((group) => (
-              <div key={group.file} className="finding-file-group">
+              <div key={group.ruleId} className="finding-file-group">
                 <button
                   className="finding-file-header"
-                  onClick={() => toggleFile(group.file)}
+                  onClick={() => toggleRule(group.ruleId)}
                 >
                   <span className="finding-file-chevron">
-                    {collapsed[group.file] ? '▸' : '▾'}
+                    {collapsed[group.ruleId] ? '▸' : '▾'}
                   </span>
-                  <span className="finding-file-name">{group.file}</span>
+                  <span className="finding-file-name">{group.ruleId}</span>
                   <span className="finding-file-count">
-                    {t('review.detail.file_findings_count', { count: group.items.length })}
+                    {t('review.detail.rule_locations_count', {
+                      findings: group.items.length,
+                      locations: group.locationCount,
+                    })}
                   </span>
                 </button>
 
-                {!collapsed[group.file] && (
+                {!collapsed[group.ruleId] && (
                   <div className="finding-file-body">
-                    {group.items
+                    {[...group.items]
                       .sort(
                         (a, b) =>
-                          (SEVERITY_ORDER[a.severity] ?? 99) -
-                          (SEVERITY_ORDER[b.severity] ?? 99),
+                          (SEVERITY_ORDER[a.effective_severity || a.severity] ?? 99) -
+                          (SEVERITY_ORDER[b.effective_severity || b.severity] ?? 99),
                       )
-                      .map((finding) => (
-                         <div key={finding.id!} className={`finding-card ${finding.severity}`}>
+                      .map((finding) => {
+                        const findingKey = finding.id
+                          || finding.root_cause_id
+                          || `${group.ruleId}-${finding.location?.file || 'unknown'}-${finding.location?.line || 0}`;
+                        const effectiveSeverity = finding.effective_severity || finding.severity;
+                        const staticSeverity = finding.static_severity || finding.candidate_severity || finding.severity;
+                        const locations = findingLocations(finding);
+                        const hasLlmReview = Boolean(
+                          finding.requires_llm_validation
+                          || finding.llm_adjudication_eligible
+                          || finding.llm_review_state
+                          || finding.llm_label,
+                        );
+                        const showReviewContext = hasLlmReview || finding.requires_manual_review;
+                        return (
+                         <div key={findingKey} className={`finding-card ${effectiveSeverity}`}>
                           <div className="finding-card-left" />
                           <div className="finding-card-body">
                             <div className="finding-card-header">
-                              <span className={`finding-severity-chip ${finding.severity}`}>
-                                {severityLabels[finding.severity] || finding.severity}
+                              <span className={`finding-severity-chip ${effectiveSeverity}`}>
+                                {severityLabels[effectiveSeverity] || effectiveSeverity}
                               </span>
-                              <span className="finding-rule-id">{finding.rule_id}</span>
                               <span className="finding-title-text">{finding.title}</span>
                               {finding.location?.line && (
                                 <span className="finding-line">L{finding.location.line}</span>
                               )}
                             </div>
 
+                            <div className="finding-evidence-line">
+                              {t('review.finding.static_effective_severity', {
+                                static: severityLabels[staticSeverity] || staticSeverity,
+                                effective: severityLabels[effectiveSeverity] || effectiveSeverity,
+                              })}
+                              {finding.root_cause_id && (
+                                <> · {t('review.finding.root_cause')}: <code>{finding.root_cause_id}</code></>
+                              )}
+                              {finding.detector_ids && finding.detector_ids.length > 0 && (
+                                <> · {t('review.finding.detectors')}: {finding.detector_ids.join(', ')}</>
+                              )}
+                            </div>
+
+                            {(finding.source_kind || finding.source_control || finding.sink_kind || finding.reachability) && (
+                              <div className="finding-evidence-line">
+                                {t('review.finding.data_flow')}: {[finding.source_kind, finding.source_control, finding.sink_kind, finding.reachability]
+                                  .filter(Boolean)
+                                  .join(' → ')}
+                              </div>
+                            )}
+
                             {finding.evidence && (
                               <div className="finding-evidence-line">{finding.evidence}</div>
                             )}
 
-                            {finding.requires_llm_validation && (
+                            {showReviewContext && (
                               <div className={`finding-llm-review ${finding.llm_review_state || 'pending'}`}>
-                                <strong>
-                                  {t('review.finding.llm_review_state', {
-                                    state: t(
-                                      `review.finding.llm_state_${finding.llm_review_state || 'pending'}`,
-                                    ),
-                                  })}
-                                </strong>
+                                <strong>{hasLlmReview
+                                  ? t('review.finding.llm_review_state', {
+                                      state: t(
+                                        `review.finding.llm_state_${finding.llm_review_state || 'pending'}`,
+                                      ),
+                                    })
+                                  : t('review.finding.manual_review_required')}</strong>
+                                {hasLlmReview && finding.requires_manual_review && (
+                                  <span>{t('review.finding.manual_review_required')}</span>
+                                )}
                                 {finding.llm_impact && (
                                   <span>{t('review.finding.llm_impact', { impact: finding.llm_impact })}</span>
                                 )}
@@ -1167,24 +1078,63 @@ export default function ReviewDetailPage() {
                                 {finding.llm_review_rounds ? (
                                   <span>{t('review.finding.llm_rounds', { rounds: finding.llm_review_rounds })}</span>
                                 ) : null}
+                                {typeof finding.llm_evidence_sufficient === 'boolean' && (
+                                  <span>{finding.llm_evidence_sufficient
+                                    ? t('review.finding.evidence_sufficient')
+                                    : t('review.finding.evidence_insufficient')}</span>
+                                )}
                                 {finding.llm_explanation && <p>{finding.llm_explanation}</p>}
+                                {finding.llm_missing_context && finding.llm_missing_context.length > 0 && (
+                                  <p>{t('review.finding.missing_context')}: {finding.llm_missing_context.join(', ')}</p>
+                                )}
+                                {finding.llm_supporting_evidence && finding.llm_supporting_evidence.length > 0 && (
+                                  <details>
+                                    <summary>{t('review.finding.supporting_evidence')}</summary>
+                                    <ul>
+                                      {finding.llm_supporting_evidence.map((item, index) => (
+                                        <li key={`${String(item.file || '')}:${String(item.line || '')}:${index}`}>
+                                          <code>{String(item.file || '')}:{String(item.line || '')}</code>
+                                          {item.quote ? ` — ${String(item.quote)}` : ''}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </details>
+                                )}
                               </div>
                             )}
 
-                            {finding.occurrences && finding.occurrences.count > 1 && (
-                              <div className="finding-occurrences" style={{ margin: '0.5rem 0', fontSize: '0.78rem', color: 'var(--color-ink-2)' }}>
-                                <strong>{t('review.finding.occurrences', { count: finding.occurrences.count })}</strong>
+                            {finding.detector_hits && finding.detector_hits.length > 0 && (
+                              <details style={{ margin: '0.5rem 0', fontSize: '0.78rem', color: 'var(--color-ink-2)' }}>
+                                <summary>{t('review.finding.detector_hits', { count: finding.detector_hits.length })}</summary>
                                 <ul style={{ margin: '0.25rem 0 0 1rem' }}>
-                                  {finding.occurrences.items.map((occurrence, index) => (
-                                    <li key={`${occurrence.file}:${occurrence.line || 0}:${index}`}>
-                                      {occurrence.file}{occurrence.line ? `:${occurrence.line}` : ''}
+                                  {finding.detector_hits.map((hit) => (
+                                    <li key={hit.id}>
+                                      <code>{hit.rule_id}</code> · {hit.static_severity} → {hit.effective_severity}
+                                      {hit.location?.file ? ` · ${hit.location.file}${hit.location.line ? `:${hit.location.line}` : ''}` : ''}
+                                      {hit.evidence ? ` · ${hit.evidence}` : ''}
                                     </li>
                                   ))}
                                 </ul>
-                                {finding.occurrences.truncated && (
+                              </details>
+                            )}
+
+                            {locations.count > 0 && (
+                              <details className="finding-occurrences" style={{ margin: '0.5rem 0', fontSize: '0.78rem', color: 'var(--color-ink-2)' }}>
+                                <summary>{t('review.finding.occurrences', { count: locations.count })}</summary>
+                                <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                                  {locations.items.map((occurrence, index) => (
+                                    <li key={`${occurrence.file}:${occurrence.line || 0}:${index}`}>
+                                      {occurrence.file}{occurrence.line ? `:${occurrence.line}` : ''}
+                                      {occurrence.end_line && occurrence.end_line !== occurrence.line
+                                        ? `-${occurrence.end_line}`
+                                        : ''}
+                                    </li>
+                                  ))}
+                                </ul>
+                                {locations.truncated && (
                                   <span>{t('review.finding.occurrences_truncated')}</span>
                                 )}
-                              </div>
+                              </details>
                             )}
 
                             <div className="finding-actions">
@@ -1194,11 +1144,11 @@ export default function ReviewDetailPage() {
                                   onClick={() => {
                                     setShowCodeFor((prev) => ({
                                       ...prev,
-                                      [finding.id!!]: !prev[finding.id!!],
+                                      [findingKey]: !prev[findingKey],
                                     }));
                                   }}
                                 >
-                                  {showCodeFor[finding.id!!] ? t('review.finding.collapse_code') : t('review.finding.expand_code')}
+                                  {showCodeFor[findingKey] ? t('review.finding.collapse_code') : t('review.finding.expand_code')}
                                 </button>
                               )}
                               <div className="finding-meta-pills">
@@ -1210,6 +1160,11 @@ export default function ReviewDetailPage() {
                                     {t('review.finding.requires_confirmation')}
                                   </span>
                                 )}
+                                {finding.requires_manual_review && (
+                                  <span className="finding-meta-pill confirmation">
+                                    {t('review.finding.manual_review_required')}
+                                  </span>
+                                )}
                                 {finding.cwe_id && (
                                   <span className="finding-meta-pill cwe" title={finding.cwe_id}>CWE</span>
                                 )}
@@ -1219,7 +1174,7 @@ export default function ReviewDetailPage() {
                               </div>
                             </div>
 
-                            {showCodeFor[finding.id!] && (
+                            {showCodeFor[findingKey] && (
                               <FindingCodeView
                                 finding={finding}
                                 versionId={versionId}
@@ -1228,7 +1183,8 @@ export default function ReviewDetailPage() {
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 )}
               </div>
