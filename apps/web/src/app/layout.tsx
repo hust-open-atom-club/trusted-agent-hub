@@ -8,6 +8,9 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Trusted Agent Hub',
   description: 'Discover and install trusted AI agent capability packages',
+  icons: {
+    icon: '/trusted-agent-hub-logo.png',
+  },
   alternates: {
     languages: {
       en: `${SITE_URL}/en`,
