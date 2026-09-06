@@ -78,26 +78,13 @@ function gradeColor(grade: string | null): chalk.Chalk {
   }
 }
 
-/** Resolve grade from version detail, preferring effective_grade.
- *
- * Resolution order:
- * 1. version.effective_grade (manual_grade or auto_grade from backend)
- * 2. pkg.grade (already enriched from effective_grade)
- * 3. version.trust_score.risk_summary.grade (auto grade fallback)
- * 4. risk_level → grade mapping (legacy data)
- */
+/** Resolve the effective public grade without relying on review-only fields. */
 function resolveGrade(pkg: PackageSummary, version: VersionDetail | null): string | null {
-  // Prefer effective_grade from version (reflects manual override)
   if (version?.effective_grade) {
     return version.effective_grade;
   }
   if (pkg.grade) return pkg.grade;
-  // Fallback: auto grade from risk_summary
-  if (version?.trust_score?.risk_summary?.grade) {
-    return version.trust_score.risk_summary.grade;
-  }
-  // Legacy: map risk_level → grade
-  const level = pkg.risk_level || version?.trust_score?.risk_summary?.level;
+  const level = version?.risk_level || pkg.risk_level;
   if (level && level in RISK_LEVEL_TO_GRADE) {
     return RISK_LEVEL_TO_GRADE[level];
   }
@@ -179,14 +166,6 @@ export function formatPackageDetail(
   lines.push(`  ${chalk.dim('Description:')} ${pkg.description}`);
   lines.push(`  ${chalk.dim('License:')}     ${pkg.license}`);
 
-  if (version?.author) {
-    const a = version.author;
-    const authorStr = [a.name, a.email ? `<${a.email}>` : '', a.url ? a.url : '']
-      .filter(Boolean)
-      .join(' ');
-    lines.push(`  ${chalk.dim('Author:')}      ${authorStr}`);
-  }
-
   lines.push(
     `  ${chalk.dim('Homepage:')}    ${pkg.homepage || 'N/A'}`,
   );
@@ -220,7 +199,7 @@ export function formatPackageDetail(
   {
     const rec = gradeVal
       ? GRADE_TO_RECOMMENDATION[gradeVal as Grade]
-      : version?.trust_score?.risk_summary?.install_recommendation;
+      : version?.install_recommendation;
     if (rec) {
       const recLabel =
         INSTALL_RECOMMENDATION_LABELS[rec as InstallRecommendation] || rec;
@@ -262,27 +241,21 @@ export function formatPackageDetail(
   );
 
   // Permissions summary (from version)
-  if (version?.permissions) {
+  if (version?.permission_summary) {
     const perms: string[] = [];
-    const p = version.permissions as Record<string, unknown>;
-    if (p.filesystem) perms.push('filesystem');
-    if (p.shell) perms.push('shell');
-    if (p.network) perms.push('network');
-    if (p.environment) perms.push('environment');
-    if (p.credentials) perms.push('credentials');
+    const p = version.permission_summary;
+    if (p.filesystem_read_count || p.filesystem_write_count || p.filesystem_delete) perms.push('filesystem');
+    if (p.shell_allowed) perms.push('shell');
+    if (p.network_allowed) perms.push('network');
+    if (p.environment_read_count || p.environment_write_count) perms.push('environment');
+    if (p.credentials_access_count) perms.push('credentials');
+    if (p.database_declared) perms.push('database');
+    if (p.browser_declared) perms.push('browser');
+    if (p.external_services_count) perms.push('external services');
     if (perms.length > 0) {
       lines.push(
         `  ${chalk.dim('Permissions:')} ${perms.join(', ')}`,
       );
-    }
-  }
-
-  // Top risks
-  if (version?.trust_score?.risk_summary?.top_risks?.length) {
-    lines.push('');
-    lines.push(`  ${chalk.yellow('Top risks:')}`);
-    for (const risk of version.trust_score.risk_summary.top_risks) {
-      lines.push(`    ${chalk.dim('•')} ${risk}`);
     }
   }
 

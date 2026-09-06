@@ -77,18 +77,25 @@ const apiOwnerPackage = {
 };
 
 const sampleVersion = {
-  id: 'v1', package_id: '1', version: '1.0.0', status: 'published',
-  author: { name: 'Dev', email: 'dev@test.com' },
-  source: { type: 'github', repository_url: 'https://github.com/x/y',
-    owner: 'x', repo: 'y', ref_type: 'tag', ref: 'v1.0.0',
-    commit_hash: 'a'.repeat(40), verified_owner: true },
+  name: 'test-skill', version: '1.0.0',
   compatibility: ['claude-code'],
-  permissions: {},
+  permission_summary: {
+    filesystem_read_count: 1,
+    filesystem_write_count: 0,
+    filesystem_delete: false,
+    shell_allowed: false,
+    network_allowed: false,
+    environment_read_count: 0,
+    environment_write_count: 0,
+    credentials_access_count: 0,
+    database_declared: false,
+    browser_declared: false,
+    external_services_count: 0,
+  },
   installation: { method: 'copy_directory', targets: [] },
-  trust_score: { risk_summary: {
-    level: 'low_risk', grade: 'B', top_risks: [], install_recommendation: 'safe',
-  }},
-  created_at: null, submitted_at: null,
+  effective_grade: 'B',
+  risk_level: 'low_risk',
+  install_recommendation: 'review_recommended',
 };
 
 async function test_searchPackages_success() {
@@ -140,8 +147,9 @@ async function test_getVersionDetail_success() {
   const fetchFn = mockFetchFn([{ status: 200, ok: true, body: sampleVersion }]);
   const c = createApiClient(fetchFn);
   const detail = await c.getVersionDetail('test-skill', '1.0.0');
-  assert.strictEqual(detail.id, 'v1');
-  assert.strictEqual(detail.trust_score?.risk_summary?.grade, 'B');
+  assert.strictEqual(detail.name, 'test-skill');
+  assert.strictEqual(detail.effective_grade, 'B');
+  assert.ok(!('trust_score' in detail));
   console.log('  ✓ getVersionDetail success');
 }
 

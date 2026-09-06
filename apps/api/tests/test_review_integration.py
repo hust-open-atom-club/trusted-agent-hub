@@ -621,21 +621,32 @@ class TestIntegrationAuditFlow:
         ts = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
         assert ts.status_code == 200, f"trust-score failed: {ts.text}"
         body = ts.json()
-        feedback = body["dimensions"]["user_feedback"]["details"]
+        assert set(body) == {
+            "effective_grade",
+            "level",
+            "install_recommendation",
+        }
+
+        # 公共 trust-score 响应只返回结论；详细信号仍从审核测试数据库验证。
+        refreshed_dbv = _get_db_version(ver["id"])
+        refreshed_score = (refreshed_dbv["data"] or {}).get("trust_score")
+        assert refreshed_score is not None
+        feedback = refreshed_score["dimensions"]["user_feedback"]["details"]
         assert feedback["total_installs"] == 1
         assert (
-            body["dimensions"]["manual_review"]["details"]["review_status"]
+            refreshed_score["dimensions"]["manual_review"]["details"]["review_status"]
             == "approved"
         )
 
         # 信号未变化时再次读取不应重算（评分保持一致）
         ts2 = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
         assert ts2.status_code == 200
-        assert (
-            ts2.json()["risk_summary"]["grade"]
-            == body["risk_summary"]["grade"]
-        )
-        assert ts2.json()["calculated_at"] == body["calculated_at"]
+        assert set(ts2.json()) == set(body)
+        stable_dbv = _get_db_version(ver["id"])
+        stable_score = (stable_dbv["data"] or {}).get("trust_score")
+        assert stable_score is not None
+        assert stable_score["score"] == refreshed_score["score"]
+        assert stable_score["calculated_at"] == refreshed_score["calculated_at"]
 
         # 提交 positive 反馈后，level_counts 应进入 user_feedback 维度
         fb = client.post(
@@ -647,7 +658,10 @@ class TestIntegrationAuditFlow:
 
         ts3 = client.get(f"/api/v0/versions/{ver['id']}/trust-score")
         assert ts3.status_code == 200
-        counts = ts3.json()["dimensions"]["user_feedback"]["details"][
+        feedback_dbv = _get_db_version(ver["id"])
+        feedback_score = (feedback_dbv["data"] or {}).get("trust_score")
+        assert feedback_score is not None
+        counts = feedback_score["dimensions"]["user_feedback"]["details"][
             "level_counts"
         ]
         assert counts["positive"] >= 1

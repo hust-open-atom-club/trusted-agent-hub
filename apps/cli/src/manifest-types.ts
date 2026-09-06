@@ -147,12 +147,8 @@ export interface ManifestPermissions {
 export interface ManifestRiskSummary {
   level: string;
   grade: 'A' | 'B' | 'C' | 'D' | 'E';
-  top_risks?: string[];
   install_recommendation: string;
   requires_confirmation?: boolean;
-  auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-  manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-  effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,8 +9,8 @@ from src.models.common import ErrorEnvelope, PackageListQuery
 from src.models.packages import (
     PackageDetail,
     PackagePage,
+    PublicVersionDetail,
     TrustHistoryPoint,
-    VersionDetail,
     VersionSummary,
 )
 from src.services.packages import PackageService
@@ -65,12 +65,12 @@ def get_package_trust_history(
 
 @router.get(
     "/packages/{name}/versions/{version}",
-    response_model=VersionDetail,
+    response_model=PublicVersionDetail,
     responses={404: {"model": ErrorEnvelope}},
 )
 def get_package_version(
     name: str,
     version: str,
     repository: RepositoryDependency,
-) -> VersionDetail:
+) -> PublicVersionDetail:
     return PackageService(repository).get_public_version(name, version)

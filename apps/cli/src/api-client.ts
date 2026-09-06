@@ -45,43 +45,33 @@ export interface PackageSummary {
 }
 
 export interface VersionDetail {
-  id: string;
-  package_id: string;
+  name: string;
   version: string;
-  author?: { name: string; email?: string; url?: string };
-  source?: {
-    type: string; repository_url: string; owner?: string; repo?: string;
-    ref_type?: string; ref: string; subdirectory?: string | null; commit_hash: string; verified_owner?: boolean;
-  };
-  compatibility?: string[];
-  permissions?: Record<string, unknown>;
+  compatibility: string[];
+  permission_summary?: {
+    filesystem_read_count: number;
+    filesystem_write_count: number;
+    filesystem_delete: boolean;
+    shell_allowed: boolean;
+    network_allowed: boolean;
+    environment_read_count: number;
+    environment_write_count: number;
+    credentials_access_count: number;
+    database_declared: boolean;
+    browser_declared: boolean;
+    external_services_count: number;
+  } | null;
   installation?: {
     method: string;
-    targets?: Array<{ client: string; destination: string }>;
-    post_install_message?: string;
-    command?: string;
-  };
-  status: string;
-  trust_score?: {
-    risk_summary?: {
-      level: string;
-      grade?: 'A' | 'B' | 'C' | 'D' | 'E';
-      top_risks?: string[];
-      install_recommendation?: string;
-      requires_confirmation?: boolean;
-      auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-      manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-      effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-    };
+    package?: string | null;
+    targets?: Array<{ client: string; destination: string }> | null;
+    target_client?: string | null;
+    pre_install_message?: string | null;
+    post_install_message?: string | null;
   } | null;
-  auto_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-  manual_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
   effective_grade?: 'A' | 'B' | 'C' | 'D' | 'E' | null;
-  manual_grade_by?: string | null;
-  manual_grade_reason?: string | null;
-  manual_grade_at?: string | null;
-  created_at?: string | null;
-  submitted_at?: string | null;
+  risk_level?: string | null;
+  install_recommendation?: string | null;
 }
 
 export interface PackagePage {
@@ -268,10 +258,9 @@ function validateVersionDetail(raw: unknown): VersionDetail {
     throw new ApiError('Invalid VersionDetail: expected object');
   }
   const o = raw as Record<string, unknown>;
-  requireString(o.id, 'id', 'VersionDetail');
-  requireString(o.package_id, 'package_id', 'VersionDetail');
+  requireString(o.name, 'name', 'VersionDetail');
   requireString(o.version, 'version', 'VersionDetail');
-  requireString(o.status, 'status', 'VersionDetail');
+  requireArray(o.compatibility, 'compatibility', 'VersionDetail');
   return raw as unknown as VersionDetail;
 }
 

@@ -270,7 +270,7 @@ def test_user_feedback_level_is_updated_per_package_and_user(
     assert listed.json()["items"][0]["comment"] == "Install failed locally."
 
 
-def test_persisted_trust_level_exposes_no_numeric_score(
+def test_persisted_trust_level_exposes_only_public_conclusion(
     db_client: TestClient,
     db_repository: SqlAlchemyPackageRepository,
 ) -> None:
@@ -289,10 +289,15 @@ def test_persisted_trust_level_exposes_no_numeric_score(
     response = db_client.get(f"/api/v0/versions/{version.id}/trust-level")
 
     assert response.status_code == 200
-    assert response.json()["level"] == "low_risk"
-    assert "score" not in response.json()
-    assert response.json()["top_risks"] == ["Requests shell access"]
-    assert response.json()["model_fingerprint"] == "f" * 64
+    assert response.json() == {
+        "version_id": version.id,
+        "effective_grade": "A",
+        "level": "trusted",
+        "install_recommendation": "safe",
+    }
+    assert "score" not in response.text
+    assert "top_risks" not in response.text
+    assert "model_fingerprint" not in response.text
 
 
 @pytest.mark.parametrize("version_id", ["missing-version", "ver-005"])
@@ -316,8 +321,15 @@ def test_public_version_without_level_computes_from_effective_grade(
     assert response.status_code == 200
     data = response.json()
     assert data["version_id"] == "ver-001"
+    assert "effective_grade" in data
     assert "level" in data
     assert "install_recommendation" in data
+    assert set(data) == {
+        "version_id",
+        "effective_grade",
+        "level",
+        "install_recommendation",
+    }
 
 
 def test_database_configured_default_app_persists_feedback(

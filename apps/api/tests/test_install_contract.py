@@ -99,6 +99,12 @@ def test_install_manifest_defaults_to_latest_published_version(
     assert manifest["permissions"]["network"]["allowed"] is False
     assert manifest["risk_summary"]["install_recommendation"] == "safe"
     assert manifest["risk_summary"]["grade"] == "A"
+    assert set(manifest["risk_summary"]) == {
+        "level",
+        "grade",
+        "install_recommendation",
+        "requires_confirmation",
+    }
     assert manifest["compatibility"] == ["claude-code", "cursor"]
     assert manifest["dependencies"] == {
         "npm": None,

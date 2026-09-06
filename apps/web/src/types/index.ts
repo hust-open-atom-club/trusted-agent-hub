@@ -306,6 +306,40 @@ export interface Installation {
   post_install_message?: string | null;
 }
 
+export interface PublicInstallation {
+  method: string;
+  package?: string | null;
+  targets?: Array<Pick<InstallTarget, 'client' | 'destination'>> | null;
+  target_client?: string | null;
+  pre_install_message?: string | null;
+  post_install_message?: string | null;
+}
+
+export interface PublicPermissionSummary {
+  filesystem_read_count: number;
+  filesystem_write_count: number;
+  filesystem_delete: boolean;
+  shell_allowed: boolean;
+  network_allowed: boolean;
+  environment_read_count: number;
+  environment_write_count: number;
+  credentials_access_count: number;
+  database_declared: boolean;
+  browser_declared: boolean;
+  external_services_count: number;
+}
+
+export interface PublicVersionDetail {
+  name: string;
+  version: string;
+  compatibility: string[];
+  permission_summary?: PublicPermissionSummary | null;
+  installation?: PublicInstallation | null;
+  effective_grade?: string | null;
+  risk_level?: string | null;
+  install_recommendation?: string | null;
+}
+
 export interface Dependencies {
   npm?: Array<Record<string, string>> | null;
   pip?: Array<Record<string, string>> | null;
@@ -346,6 +380,7 @@ export interface VersionDetail {
   manual_grade_by?: string | null;
   manual_grade_by_name?: string | null;
   manual_grade_reason?: string | null;
+  manual_grade_at?: string | null;
   effective_grade?: string | null;
   review_conclusion?: string | null;
   yank_reason?: string | null;
@@ -559,7 +594,6 @@ export interface VersionSummary {
 
 export interface TrustHistoryPoint {
   version: string;
-  score: number | null;
   grade: string | null;
   calculated_at?: string | null;
 }

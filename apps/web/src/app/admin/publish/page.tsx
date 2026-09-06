@@ -21,6 +21,7 @@ interface PublishItem {
   manual_grade: string | null;
   manual_grade_by: string | null;
   manual_grade_by_name: string | null;
+  manual_grade_at: string | null;
   manual_grade_reason: string | null;
   grade: string | null;
   grade_label: string | null;
@@ -215,7 +216,7 @@ export default function AdminPublishPage() {
                     {item.manual_grade ? (
                       <span
                         style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-ink)' }}
-                        title={`${t('admin.publish.overridden_by', { name: item.manual_grade_by_name || item.manual_grade_by || '' })}${item.manual_grade_reason ? ': ' + item.manual_grade_reason : ''}`}
+                        title={`${t('admin.publish.overridden_by', { name: item.manual_grade_by_name || item.manual_grade_by || '' })}${item.manual_grade_at ? ` · ${t('admin.publish.manual_grade_at')}: ${formatDate(item.manual_grade_at)}` : ''}${item.manual_grade_reason ? ': ' + item.manual_grade_reason : ''}`}
                       >
                         {item.manual_grade} *
                       </span>
@@ -334,6 +335,7 @@ export default function AdminPublishPage() {
                   }}>
                     {t('admin.publish.override_reason')}: {selectedItem.manual_grade_reason}
                     {selectedItem.manual_grade_by_name && <> · {t('admin.publish.overridden_by', { name: selectedItem.manual_grade_by_name })}</>}
+                    {selectedItem.manual_grade_at && <> · {t('admin.publish.manual_grade_at')}: {formatDate(selectedItem.manual_grade_at)}</>}
                   </div>
                 )}
 

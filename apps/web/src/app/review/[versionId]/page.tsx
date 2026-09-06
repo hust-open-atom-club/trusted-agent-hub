@@ -602,6 +602,11 @@ export default function ReviewDetailPage() {
                   {t('review.detail.modified_by', { name: version.manual_grade_by_name || version.manual_grade_by })}
                 </div>
               )}
+              {version.manual_grade_at && (
+                <div style={{ marginTop: '0.15rem', fontSize: '0.7rem', color: 'var(--color-muted)' }}>
+                  {t('review.detail.manual_grade_at')}: {formatDate(version.manual_grade_at)}
+                </div>
+              )}
             </div>
             <div style={{ color: 'var(--color-muted)', alignSelf: 'center', fontSize: '1.2rem' }}>=</div>
             <div>
@@ -615,6 +620,7 @@ export default function ReviewDetailPage() {
           </div>
 
           <TrustScoreDetail
+            mode="review"
             trustScore={version.trust_score}
             effectiveGrade={version.effective_grade}
             showGradeSummary={false}
@@ -870,6 +876,20 @@ export default function ReviewDetailPage() {
                   <span className="review-meta-value">{item.evidence}</span>
                 </div>
               ))}
+            </div>
+          </>
+        )}
+
+        {version?.integrity?.sha256 && (
+          <>
+            <h3 className="review-meta-subtitle">{t('review.detail.artifact_integrity_title')}</h3>
+            <div className="review-meta-grid">
+              <div className="review-meta-field full">
+                <span className="review-meta-label">SHA-256</span>
+                <span className="review-meta-value">
+                  <code style={{ wordBreak: 'break-all' }}>{version.integrity.sha256}</code>
+                </span>
+              </div>
             </div>
           </>
         )}

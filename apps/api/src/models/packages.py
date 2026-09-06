@@ -112,6 +112,24 @@ class Installation(StrictContractModel):
     post_install_message: str | None = None
 
 
+class PublicInstallTarget(StrictContractModel):
+    """Install destination safe to expose on the public package page."""
+
+    client: str
+    destination: str
+
+
+class PublicInstallation(StrictContractModel):
+    """Public installation metadata with executable/checksum steps removed."""
+
+    method: str
+    package: str | None = None
+    targets: list[PublicInstallTarget] | None = None
+    target_client: str | None = None
+    pre_install_message: str | None = None
+    post_install_message: str | None = None
+
+
 class Dependencies(StrictContractModel):
     npm: list[dict[str, str]] | None = None
     pip: list[dict[str, str]] | None = None
@@ -649,12 +667,48 @@ class VersionSummary(StrictContractModel):
 
 
 class TrustHistoryPoint(StrictContractModel):
-    """One point in a package's version-level trust-score history."""
+    """Public version-level grade history without internal numeric scores."""
 
     version: str
-    score: float | None = None
     grade: Grade | None = None
     calculated_at: str | None = None
+
+
+class PublicPermissionSummary(StrictContractModel):
+    """Counts and capability flags safe for the public package page."""
+
+    filesystem_read_count: int = Field(default=0, ge=0)
+    filesystem_write_count: int = Field(default=0, ge=0)
+    filesystem_delete: bool = False
+    shell_allowed: bool = False
+    network_allowed: bool = False
+    environment_read_count: int = Field(default=0, ge=0)
+    environment_write_count: int = Field(default=0, ge=0)
+    credentials_access_count: int = Field(default=0, ge=0)
+    database_declared: bool = False
+    browser_declared: bool = False
+    external_services_count: int = Field(default=0, ge=0)
+
+
+class PublicTrustSummary(StrictContractModel):
+    """Effective public conclusion; scoring evidence remains review-only."""
+
+    effective_grade: Grade
+    level: str
+    install_recommendation: str
+
+
+class PublicVersionDetail(StrictContractModel):
+    """Least-privilege projection returned by public version endpoints."""
+
+    name: str
+    version: str
+    compatibility: list[str] = Field(default_factory=list)
+    permission_summary: PublicPermissionSummary | None = None
+    installation: PublicInstallation | None = None
+    effective_grade: Grade | None = None
+    risk_level: str | None = None
+    install_recommendation: str | None = None
 
 
 class VersionDetail(StrictContractModel):

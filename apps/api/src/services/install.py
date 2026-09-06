@@ -20,10 +20,11 @@ from src.models.install import (
     ManifestInstallation,
     ManifestInstallationStep,
     ManifestIntegrity,
+    ManifestRiskSummary,
     ManifestSource,
     VerifyInstallationStep,
 )
-from src.models.packages import Dependencies, Grade, RiskSummary
+from src.models.packages import Dependencies, Grade
 from src.repositories.base import PackageRepository
 from src.settings import get_settings
 
@@ -74,7 +75,10 @@ class InstallManifestService:
     ) -> InstallManifest:
         package = self.packages.get_public_package(name)
         selected_version = version or package.latest_version
-        record = self.packages.get_public_version(name, selected_version)
+        # Installation needs the full server-side record (including the
+        # artifact checksum).  The unauthenticated version endpoint receives
+        # a separate redacted projection.
+        record = self.packages.get_published_version(name, selected_version)
 
         invalid_fields: list[str] = []
         source = record.source
@@ -222,23 +226,15 @@ class InstallManifestService:
         level = GRADE_TO_RISK_LEVEL.get(
             str(effective_grade), "medium_risk"
         )
-        final_risk_summary = RiskSummary(
+        final_risk_summary = ManifestRiskSummary(
             level=level,
             grade=effective_grade,
-            top_risks=(
-                original_risk_summary.top_risks
-                if original_risk_summary is not None
-                else []
-            ),
             install_recommendation=recommendation,
             requires_confirmation=(
                 original_risk_summary.requires_confirmation
                 if original_risk_summary is not None
                 else False
             ),
-            auto_grade=auto_grade,
-            manual_grade=record.manual_grade,
-            effective_grade=effective_grade,
         )
 
         return InstallManifest(

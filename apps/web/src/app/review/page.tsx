@@ -21,6 +21,7 @@ interface ReviewItem {
   manual_grade: string | null;
   manual_grade_by: string | null;
   manual_grade_by_name: string | null;
+  manual_grade_at: string | null;
   manual_grade_reason: string | null;
   grade: string | null;
   grade_label: string | null;

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 
 from src.dependencies import RepositoryDependency
 from src.models.common import ErrorEnvelope, StrictContractModel
-from src.models.packages import TrustScore
+from src.models.packages import PublicTrustSummary
 from src.services.errors import TrustScoreNotFoundError, VersionNotFoundError
 from src.services.packages import PackageService
 
@@ -44,16 +44,16 @@ def _lazy_refresh_trust_score(version_id: str, repository) -> None:
 
 @router.get(
     "/versions/{version_id}/trust-score",
-    response_model=TrustScore,
+    response_model=PublicTrustSummary,
     responses={404: {"model": ErrorEnvelope}},
 )
 def get_trust_score(
     version_id: str,
     query: Annotated[NoQueryParameters, Query()],
     repository: RepositoryDependency,
-) -> TrustScore:
+) -> PublicTrustSummary:
     _lazy_refresh_trust_score(version_id, repository)
     try:
-        return PackageService(repository).get_trust_score(version_id)
+        return PackageService(repository).get_public_trust_summary(version_id)
     except VersionNotFoundError as error:
         raise TrustScoreNotFoundError(version_id) from error

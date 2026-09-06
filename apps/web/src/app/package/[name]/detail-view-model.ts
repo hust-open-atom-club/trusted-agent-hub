@@ -1,4 +1,9 @@
-import type { VersionIntegrity, VersionPermissions, VersionSource } from '@/types';
+import type {
+  PublicPermissionSummary,
+  VersionIntegrity,
+  VersionPermissions,
+  VersionSource,
+} from '@/types';
 
 export const TYPE_LABELS: Record<string, string> = {
   skill: 'search.skill',
@@ -156,6 +161,97 @@ export function getPermissionSummary(perms?: VersionPermissions | null): Permiss
       labelKey: 'detail.credentials',
       valueKey: 'detail.permission_summary.credentials_access',
       values: { access: credentials.access.join(', ') },
+      tone: 'caution',
+    });
+  }
+
+  return items;
+}
+
+export function getPublicPermissionSummary(
+  summary?: PublicPermissionSummary | null,
+): PermissionSummaryItem[] {
+  if (!summary) return [];
+
+  const hasFilesystemAccess = Boolean(
+    summary.filesystem_read_count
+    || summary.filesystem_write_count
+    || summary.filesystem_delete,
+  );
+  const items: PermissionSummaryItem[] = [
+    {
+      labelKey: 'detail.filesystem',
+      valueKey: hasFilesystemAccess
+        ? 'detail.permission_summary.filesystem_access'
+        : 'detail.permission_summary.filesystem_none',
+      values: hasFilesystemAccess
+        ? {
+            readCount: summary.filesystem_read_count,
+            writeCount: summary.filesystem_write_count,
+            deleteAllowed: summary.filesystem_delete,
+          }
+        : {},
+      tone: summary.filesystem_delete || summary.filesystem_write_count > 0 ? 'danger' : 'safe',
+    },
+    {
+      labelKey: 'detail.shell',
+      valueKey: summary.shell_allowed
+        ? 'detail.permission_summary.shell_allowed_summary'
+        : 'detail.permission_summary.shell_not_allowed',
+      values: {},
+      tone: summary.shell_allowed ? 'danger' : 'safe',
+    },
+    {
+      labelKey: 'detail.network',
+      valueKey: summary.network_allowed
+        ? 'detail.permission_summary.network_allowed_summary'
+        : 'detail.permission_summary.network_not_allowed',
+      values: {},
+      tone: summary.network_allowed ? 'caution' : 'safe',
+    },
+  ];
+
+  if (summary.environment_read_count || summary.environment_write_count) {
+    items.push({
+      labelKey: 'detail.environment',
+      valueKey: summary.environment_write_count
+        ? 'detail.permission_summary.environment_write'
+        : 'detail.permission_summary.environment_read',
+      values: {
+        count: summary.environment_write_count || summary.environment_read_count,
+      },
+      tone: summary.environment_write_count ? 'caution' : 'safe',
+    });
+  }
+  if (summary.credentials_access_count) {
+    items.push({
+      labelKey: 'detail.credentials',
+      valueKey: 'detail.permission_summary.credentials_access_count',
+      values: { count: summary.credentials_access_count },
+      tone: 'caution',
+    });
+  }
+  if (summary.database_declared) {
+    items.push({
+      labelKey: 'detail.database',
+      valueKey: 'detail.permission_summary.declared',
+      values: {},
+      tone: 'caution',
+    });
+  }
+  if (summary.browser_declared) {
+    items.push({
+      labelKey: 'detail.browser',
+      valueKey: 'detail.permission_summary.declared',
+      values: {},
+      tone: 'caution',
+    });
+  }
+  if (summary.external_services_count) {
+    items.push({
+      labelKey: 'detail.external_services',
+      valueKey: 'detail.permission_summary.external_services_count',
+      values: { count: summary.external_services_count },
       tone: 'caution',
     });
   }

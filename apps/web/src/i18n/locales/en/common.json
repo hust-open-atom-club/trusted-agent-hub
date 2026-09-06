@@ -95,6 +95,7 @@
     "retry": "Try Again",
     "reset": "Scan Another Package",
     "trust_score": "Trust Score",
+    "trust_conclusion": "Trust conclusion",
     "grade": "Grade",
     "safe": "Safe to install",
     "review_recommended": "Review recommended",
@@ -190,12 +191,16 @@
     "verified_owner": "Verified owner",
     "stars": "Stars",
     "compatible_clients": "Compatible Clients",
+    "compatible_clients_label": "Compatible clients: {{clients}}",
     "permissions": "Permissions",
     "filesystem": "Filesystem",
     "shell": "Shell",
     "network": "Network",
     "environment": "Environment",
     "credentials": "Credentials",
+    "database": "Database",
+    "browser": "Browser",
+    "external_services": "External services",
     "read": "Read",
     "write": "Write",
     "can_delete": "Can delete files",
@@ -233,7 +238,7 @@
     },
     "nav": {
       "overview": "Overview",
-      "trust": "Trust Score",
+      "trust": "Trust conclusion",
       "files": "Files",
       "integrity": "Integrity",
       "permissions": "Permissions",
@@ -242,7 +247,7 @@
       "feedback": "Feedback"
     },
     "section": {
-      "overview_kicker": "Source, clients, and keywords",
+      "overview_kicker": "Compatible clients and keywords",
       "trust_history": "Trust Score History",
       "permissions_kicker": "Declared capability scope",
       "dependencies_kicker": "Runtime requirements",
@@ -323,11 +328,16 @@
       "filesystem_access": "Read {{readCount}} paths · Write {{writeCount}} paths · Delete allowed: {{deleteAllowed}}",
       "shell_not_allowed": "Not allowed",
       "shell_allowed": "Allowed: {{commands}}",
+      "shell_allowed_summary": "Allowed",
       "network_not_allowed": "Not allowed",
       "network_allowed": "Allowed: {{domains}}",
+      "network_allowed_summary": "Allowed",
       "environment_read": "Read {{count}} variables",
       "environment_write": "Write {{count}} variables",
-      "credentials_access": "Access: {{access}}"
+      "credentials_access": "Access: {{access}}",
+      "credentials_access_count": "Access to {{count}} credential types",
+      "declared": "Declared",
+      "external_services_count": "Access to {{count}} services"
     },
     "install": {
       "method": "Method",
@@ -483,6 +493,7 @@
       "effective_grade": "Effective Grade",
       "override_reason": "Override reason",
       "overridden_by": "By {{name}}",
+      "manual_grade_at": "Reviewed at",
       "significant_gap_warning": "Significant gap between auto and manual grade. Please confirm.",
       "confirm_checkbox": "I confirm publishing this package with effective grade {{grade}}.",
       "post_publish_hint": "Once published, it will be immediately visible to consumers."
@@ -724,6 +735,8 @@
       "provenance_observed_unavailable": "No corresponding fact was collected",
       "reason": "Reason",
       "modified_by": "By {{name}}",
+      "manual_grade_at": "Reviewed at",
+      "artifact_integrity_title": "Install artifact integrity",
       "trust_score_title": "Trust Score",
       "override_grade_btn": "Override Grade",
       "auto_grade_label": "Auto Grade",
@@ -931,6 +944,12 @@
     }
   },
   "trust_score": {
+    "public": {
+      "effective_grade": "Effective grade",
+      "rating_explanation": "Rating",
+      "install_advice": "Install advice",
+      "disclaimer": "This advice is based on the current scan and rating rules and is not an absolute security guarantee."
+    },
     "auto_grade": "Auto Grade",
     "manual_grade": "Manual Grade",
     "no_manual_override": "No manual grade is set; using the automatic grade",

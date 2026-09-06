@@ -8,8 +8,8 @@ from pydantic import AfterValidator, Field, HttpUrl, RootModel
 from .common import PackageType, SafeSourceSubdirectory, StrictContractModel
 from .packages import (
     Dependencies,
+    Grade,
     Permissions,
-    RiskSummary,
 )
 from src.settings import get_settings
 
@@ -203,6 +203,15 @@ class ManifestInstallation(StrictContractModel):
     post_install_message: str | None = None
 
 
+class ManifestRiskSummary(StrictContractModel):
+    """Install gate inputs without review-only scoring provenance."""
+
+    level: str
+    grade: Grade
+    install_recommendation: str
+    requires_confirmation: bool = False
+
+
 class InstallManifest(StrictContractModel):
     manifest_version: Literal["1.0"] = "1.0"
     name: str
@@ -213,6 +222,6 @@ class InstallManifest(StrictContractModel):
     integrity: ManifestIntegrity | None = None
     installation: ManifestInstallation
     permissions: Permissions
-    risk_summary: RiskSummary
+    risk_summary: ManifestRiskSummary
     compatibility: list[str]
     dependencies: Dependencies

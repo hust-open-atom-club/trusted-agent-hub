@@ -15,21 +15,24 @@ from src.models.packages import (
     PackagePage,
     PackageStats,
     PackageSummary,
+    PublicInstallation,
+    PublicInstallTarget,
+    PublicPermissionSummary,
+    PublicTrustSummary,
+    PublicVersionDetail,
     TrustHistoryPoint,
-    TrustScore,
     VersionDetail,
     VersionSummary,
 )
 from src.repositories.base import PackageRepository, RepositoryDataError
 
-from schema.constants import GRADE_TO_RISK_LEVEL
+from schema.constants import GRADE_TO_RECOMMENDATION, GRADE_TO_RISK_LEVEL
 
 from .errors import (
     PackageNotFoundError,
     TrustScoreNotFoundError,
     VersionNotFoundError,
 )
-from .file_contents import sanitize_public_file_contents
 
 _GRADE_NUMERIC: dict[Grade | None, int] = {
     Grade.A: 5,
@@ -278,12 +281,21 @@ class PackageService:
                 str(effective), "medium_risk"
             )
 
-    def get_public_version(self, name: str, version: str) -> VersionDetail:
+    def get_published_version(self, name: str, version: str) -> VersionDetail:
+        """Return the full record for trusted server-side consumers only."""
+
         self.get_public_package(name)
         record = self.repository.get_version(name, version)
         if record is None or record.status != "published":
             raise VersionNotFoundError(f"{name}@{version}")
-        return self._with_scan_file_contents(record)
+        return record
+
+    def get_public_version(self, name: str, version: str) -> PublicVersionDetail:
+        """Return only fields intended for an unauthenticated package page."""
+
+        package = self.get_public_package(name)
+        record = self.get_published_version(name, version)
+        return self._public_version_projection(package.name, record)
 
     def get_package_detail(self, name: str) -> PackageDetail:
         package = self.get_public_package(name)
@@ -316,7 +328,7 @@ class PackageService:
         return [self._version_summary(version) for version in versions]
 
     def get_trust_history(self, name: str) -> list[TrustHistoryPoint]:
-        """Published-version trust-score history for the detail page trend."""
+        """Published-version grade history without numeric scoring details."""
         self.get_public_package(name)
         versions = sorted(
             (
@@ -329,31 +341,22 @@ class PackageService:
         )
         points: list[TrustHistoryPoint] = []
         for version in versions:
-            grade = version.effective_grade
-            if grade is None and version.trust_score and version.trust_score.risk_summary:
-                grade = version.trust_score.risk_summary.grade
-            score: float | None = None
+            grade = self.resolve_effective_grade(version)
             calculated_at: str | None = None
             if version.trust_score is not None:
-                raw = getattr(version.trust_score, "score", None)
-                if raw is None and version.trust_score.model_extra:
-                    raw = version.trust_score.model_extra.get("score")
-                if isinstance(raw, (int, float)):
-                    score = float(raw)
-                elif grade is not None and grade in _GRADE_MIDPOINT:
-                    score = _GRADE_MIDPOINT[grade]
                 calculated_at = version.trust_score.calculated_at
             points.append(
                 TrustHistoryPoint(
                     version=version.version,
-                    score=score,
                     grade=grade,
                     calculated_at=calculated_at,
                 )
             )
         return points
 
-    def get_public_version_by_id(self, version_id: str) -> VersionDetail:
+    def get_published_version_by_id(self, version_id: str) -> VersionDetail:
+        """Return a full published record after enforcing package visibility."""
+
         version = self.repository.get_version_by_id(version_id)
         if version is None or version.status != "published":
             raise VersionNotFoundError(version_id)
@@ -367,37 +370,97 @@ class PackageService:
         )
         if package is None or package.status != "published":
             raise VersionNotFoundError(version_id)
-        return self._with_scan_file_contents(version)
+        return version
 
-    def _with_scan_file_contents(self, version: VersionDetail) -> VersionDetail:
-        get_scan_report = getattr(self.repository, "get_scan_report", None)
-        if not callable(get_scan_report):
-            return version
+    @staticmethod
+    def resolve_effective_grade(version: VersionDetail) -> Grade | None:
+        if version.effective_grade is not None:
+            return version.effective_grade
+        if version.manual_grade is not None:
+            return version.manual_grade
+        if version.trust_score and version.trust_score.risk_summary:
+            summary = version.trust_score.risk_summary
+            return summary.effective_grade or summary.manual_grade or summary.grade
+        return None
 
-        scan = get_scan_report(version.id)
-        if not scan:
-            return version
+    @staticmethod
+    def _permission_summary(version: VersionDetail) -> PublicPermissionSummary | None:
+        permissions = version.permissions
+        if permissions is None:
+            return None
+        filesystem = permissions.filesystem
+        environment = permissions.environment
+        credentials = permissions.credentials
+        return PublicPermissionSummary(
+            filesystem_read_count=len(filesystem.read) if filesystem else 0,
+            filesystem_write_count=len(filesystem.write) if filesystem else 0,
+            filesystem_delete=filesystem.delete if filesystem else False,
+            shell_allowed=permissions.shell.allowed if permissions.shell else False,
+            network_allowed=permissions.network.allowed if permissions.network else False,
+            environment_read_count=len(environment.read) if environment else 0,
+            environment_write_count=len(environment.write) if environment else 0,
+            credentials_access_count=len(credentials.access) if credentials else 0,
+            database_declared=bool(permissions.database),
+            browser_declared=bool(permissions.browser),
+            external_services_count=len(permissions.external_services or []),
+        )
 
-        scan_json = scan.get("scan_json", {})
-        if not isinstance(scan_json, dict):
-            return version
+    @staticmethod
+    def _public_installation(version: VersionDetail) -> PublicInstallation | None:
+        installation = version.installation
+        if installation is None:
+            return None
+        targets = (
+            [
+                PublicInstallTarget(
+                    client=target.client,
+                    destination=target.destination,
+                )
+                for target in installation.targets
+            ]
+            if installation.targets is not None
+            else None
+        )
+        return PublicInstallation(
+            method=installation.method,
+            package=installation.package,
+            targets=targets,
+            target_client=installation.target_client,
+            pre_install_message=installation.pre_install_message,
+            post_install_message=installation.post_install_message,
+        )
 
-        file_contents = scan_json.get("file_contents", {})
-        if not isinstance(file_contents, dict):
-            return version
+    def _public_version_projection(
+        self,
+        package_name: str,
+        version: VersionDetail,
+    ) -> PublicVersionDetail:
+        grade = self.resolve_effective_grade(version)
+        return PublicVersionDetail(
+            name=package_name,
+            version=version.version,
+            compatibility=version.compatibility,
+            permission_summary=self._permission_summary(version),
+            installation=self._public_installation(version),
+            effective_grade=grade,
+            risk_level=(
+                GRADE_TO_RISK_LEVEL.get(str(grade)) if grade is not None else None
+            ),
+            install_recommendation=(
+                GRADE_TO_RECOMMENDATION.get(str(grade)) if grade is not None else None
+            ),
+        )
 
-        sanitized = sanitize_public_file_contents(file_contents)
-        return version.model_copy(update={"scan_file_contents": sanitized})
-
-    def get_trust_score(self, version_id: str) -> TrustScore:
-        version = self.get_public_version_by_id(version_id)
-        if version.trust_score is None:
+    def get_public_trust_summary(self, version_id: str) -> PublicTrustSummary:
+        version = self.get_published_version_by_id(version_id)
+        grade = self.resolve_effective_grade(version)
+        if version.trust_score is None or grade is None:
             raise TrustScoreNotFoundError(version_id)
-        # Strip legacy numerical score from public API responses
-        ts = version.trust_score
-        if hasattr(ts, 'model_extra') and ts.model_extra:
-            ts.model_extra.pop('score', None)
-        return ts
+        return PublicTrustSummary(
+            effective_grade=grade,
+            level=GRADE_TO_RISK_LEVEL[str(grade)],
+            install_recommendation=GRADE_TO_RECOMMENDATION[str(grade)],
+        )
 
     def get_stats(self, name: str) -> PackageStats:
         now = _time.time()

@@ -677,6 +677,8 @@ class ProducerService:
             operator_id=operator_id,
             reason=reason.strip(),
         )
+        updated_version = self.repository.get_version(version_id) or {}
+        manual_grade_at = updated_version.get("manual_grade_at")
 
         effective = normalized_grade or (auto_grade if isinstance(auto_grade, str) else None)
 
@@ -729,6 +731,7 @@ class ProducerService:
             "effective_grade": effective,
             "manual_grade_by": operator_id,
             "manual_grade_reason": reason.strip(),
+            "manual_grade_at": manual_grade_at,
         }
 
     # ── 查询 ──────────────────────────────────────────────

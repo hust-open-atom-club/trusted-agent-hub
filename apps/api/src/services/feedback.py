@@ -1,7 +1,5 @@
 """Consumer write-side services for installs, feedback, and trust levels."""
 
-from datetime import datetime, timezone
-
 from schema.constants import (
     GRADE_TO_RECOMMENDATION,
     GRADE_TO_RISK_LEVEL,
@@ -37,7 +35,7 @@ class FeedbackService:
         request: InstallReportRequest,
         user_id: str | None,
     ) -> tuple[InstallRecord, bool]:
-        version = self.packages.get_public_version(
+        version = self.packages.get_published_version(
             request.package_name,
             request.version,
         )
@@ -93,28 +91,29 @@ class FeedbackService:
 
     def get_trust_level(self, version_id: str) -> TrustLevelResponse:
         try:
-            version = self.packages.get_public_version_by_id(version_id)
+            version = self.packages.get_published_version_by_id(version_id)
         except VersionNotFoundError as error:
             raise _trust_level_not_found(version_id) from error
         if not is_consumer_persistence_repository(self.repository):
             raise _persistence_unavailable()
 
-        payload = self.repository.get_trust_level(version_id)
-        if payload is not None:
-            return TrustLevelResponse.model_validate(payload)
-
-        # No trust_level row yet — compute from effective_grade and backfill
-        effective = version.effective_grade
-        if effective is None and version.trust_score is not None:
-            rs = version.trust_score.risk_summary
-            if rs is not None:
-                effective = rs.grade
+        effective = self.packages.resolve_effective_grade(version)
 
         if effective is None:
             raise _trust_level_not_found(version_id)
 
+        payload = self.repository.get_trust_level(version_id)
         level = GRADE_TO_RISK_LEVEL.get(str(effective), "medium_risk")
         recommendation = GRADE_TO_RECOMMENDATION.get(str(effective), "caution")
+        if payload is not None:
+            return TrustLevelResponse(
+                version_id=version_id,
+                effective_grade=effective,
+                level=level,
+                install_recommendation=recommendation,
+            )
+
+        # No trust_level row yet — compute from effective_grade and backfill
         top_risks: list[str] = []
         explanation: str | None = None
         model_version = "legacy-unknown"
@@ -147,13 +146,9 @@ class FeedbackService:
 
         return TrustLevelResponse(
             version_id=version_id,
+            effective_grade=effective,
             level=level,
             install_recommendation=recommendation,
-            top_risks=top_risks,
-            explanation=explanation,
-            model_version=model_version,
-            model_fingerprint=model_fingerprint,
-            calculated_at=datetime.now(timezone.utc).isoformat(),
         )
 
 

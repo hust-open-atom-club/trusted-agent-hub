@@ -5,6 +5,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from .common import Page, StrictContractModel
+from .packages import Grade
 
 
 class FeedbackLevel(StrEnum):
@@ -72,13 +73,6 @@ class NoQueryParameters(StrictContractModel):
 
 class TrustLevelResponse(StrictContractModel):
     version_id: str
+    effective_grade: Grade
     level: TrustLevelName
     install_recommendation: str
-    top_risks: list[str] = Field(default_factory=list)
-    explanation: str | None = None
-    model_version: str
-    model_fingerprint: str | None = Field(
-        default=None,
-        pattern=r"^[0-9a-f]{64}$",
-    )
-    calculated_at: str

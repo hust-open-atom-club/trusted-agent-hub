@@ -66,7 +66,7 @@ export async function fetchPackage(name: string): Promise<Package | null> {
 export async function fetchPackageVersion(
   name: string,
   version: string,
-): Promise<import('@/types').VersionDetail | null> {
+): Promise<import('@/types').PublicVersionDetail | null> {
   const res = await fetch(
     `${API_BASE}/api/v0/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`,
   );
@@ -79,7 +79,7 @@ export async function fetchPackageVersion(
 
 export async function fetchPackageVersions(
   name: string,
-): Promise<import('@/types').VersionDetail[]> {
+): Promise<import('@/types').VersionSummary[]> {
   const res = await fetch(
     `${API_BASE}/api/v0/packages/${encodeURIComponent(name)}/versions`,
   );

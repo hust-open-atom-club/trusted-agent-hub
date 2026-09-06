@@ -23,6 +23,8 @@ from src.models.packages import (
     PackagePage,
     PackageStats,
     PackageSummary,
+    PublicTrustSummary,
+    PublicVersionDetail,
     RiskSummary,
     TrustScore,
     VersionDetail,
@@ -407,7 +409,7 @@ def test_trust_history_reports_published_version_scores(
 
     assert [point.version for point in points] == ["2.0.0"]
     assert points[0].grade == Grade.B
-    assert points[0].score == 85.0
+    assert "score" not in points[0].model_dump()
 
 
 @pytest.mark.parametrize(
@@ -548,14 +550,23 @@ def test_public_package_and_version_lookups_return_explicit_records(
 
     package = service.get_public_package("alpha-package")
     version = service.get_public_version("alpha-package", "2.0.0")
-    version_by_id = service.get_public_version_by_id("v-alpha-published")
+    full_version = service.get_published_version("alpha-package", "2.0.0")
+    version_by_id = service.get_published_version_by_id("v-alpha-published")
 
     assert package == fake_repository.packages[0]
-    assert version == fake_repository.versions[0]
+    assert version == PublicVersionDetail(
+        name="alpha-package",
+        version="2.0.0",
+        compatibility=["claude-code"],
+        effective_grade=Grade.B,
+        risk_level="low_risk",
+        install_recommendation="review_recommended",
+    )
+    assert full_version == fake_repository.versions[0]
     assert version_by_id == fake_repository.versions[0]
 
 
-def test_public_version_file_contents_are_sanitized_before_output(
+def test_public_version_projection_never_contains_scan_file_contents(
     fake_repository: FakeRepository,
 ) -> None:
     repository = FakeRepositoryWithScanReport(
@@ -581,10 +592,9 @@ def test_public_version_file_contents_are_sanitized_before_output(
         "2.0.0",
     )
 
-    assert version.scan_file_contents == {
-        "SKILL.md": "---\nname: alpha\n---\n",
-        "src/main.py": "print('safe')\n",
-    }
+    payload = version.model_dump(mode="json")
+    assert "scan_file_contents" not in payload
+    assert "SKILL.md" not in str(payload)
 
 
 def test_seed_file_snapshot_collection_skips_sensitive_and_linked_files(
@@ -734,29 +744,38 @@ def test_real_json_repository_service_list_is_published_only() -> None:
 
 
 @pytest.mark.parametrize("version_id", ["missing", "v-alpha-draft", "v-private-published"])
-def test_get_public_version_by_id_hides_invalid_or_non_public_versions(
+def test_get_published_version_by_id_hides_invalid_or_non_public_versions(
     fake_repository: FakeRepository,
     version_id: str,
 ) -> None:
     with pytest.raises(VersionNotFoundError) as caught:
-        PackageService(fake_repository).get_public_version_by_id(version_id)
+        PackageService(fake_repository).get_published_version_by_id(version_id)
 
     assert caught.value.code == "version_not_found"
 
 
-def test_get_trust_score_returns_public_grade_document(
+def test_get_public_trust_summary_returns_only_the_effective_conclusion(
     fake_repository: FakeRepository,
 ) -> None:
-    score = PackageService(fake_repository).get_trust_score("v-alpha-published")
+    score = PackageService(fake_repository).get_public_trust_summary("v-alpha-published")
 
-    assert score == grade_document("B")
+    assert score == PublicTrustSummary(
+        effective_grade=Grade.B,
+        level="low_risk",
+        install_recommendation="review_recommended",
+    )
+    assert set(score.model_dump()) == {
+        "effective_grade",
+        "level",
+        "install_recommendation",
+    }
 
 
 def test_get_trust_score_reports_absent_score(
     fake_repository: FakeRepository,
 ) -> None:
     with pytest.raises(TrustScoreNotFoundError) as caught:
-        PackageService(fake_repository).get_trust_score("v-beta-published")
+        PackageService(fake_repository).get_public_trust_summary("v-beta-published")
 
     assert caught.value.code == "trust_score_not_found"
 
@@ -863,6 +882,39 @@ def test_http_unknown_version_uses_canonical_not_found(
             "details": {},
         }
     }
+
+
+def test_http_public_version_is_a_least_privilege_projection(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/api/v0/packages/code-review-skill/versions/1.0.0"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "name",
+        "version",
+        "compatibility",
+        "permission_summary",
+        "installation",
+        "effective_grade",
+        "risk_level",
+        "install_recommendation",
+    }
+    assert body["name"] == "code-review-skill"
+    assert body["effective_grade"] == "A"
+    assert body["risk_level"] == "trusted"
+    assert body["install_recommendation"] == "safe"
+    assert body["permission_summary"]["shell_allowed"] is True
+    assert "commands" not in response.text
+    assert "trust_score" not in response.text
+    assert "manual_grade" not in response.text
+    assert "model_version" not in response.text
+    assert "scan_file_contents" not in response.text
+    assert "sha256" not in response.text.lower()
+    assert "steps" not in body["installation"]
 
 
 def test_http_package_detail_includes_latest_version_detail(
@@ -976,7 +1028,7 @@ def test_http_list_rejects_invalid_enums_and_ranges(
     assert response.status_code == 422
 
 
-def test_http_trust_history_endpoint_returns_published_version_scores(
+def test_http_trust_history_endpoint_hides_numeric_scores(
     client: TestClient,
 ) -> None:
     response = client.get("/api/v0/packages/code-review-skill/trust-history")
@@ -985,7 +1037,6 @@ def test_http_trust_history_endpoint_returns_published_version_scores(
     assert response.json() == [
         {
             "version": "1.0.0",
-            "score": 95.0,
             "grade": "A",
             "calculated_at": None,
         }

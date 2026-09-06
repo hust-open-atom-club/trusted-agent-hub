@@ -30,20 +30,58 @@ function makeTrustScore(overrides: Partial<TrustScore> = {}): TrustScore {
 
 describe('TrustScoreDetail', () => {
   it('renders nothing without a trust score', () => {
-    const { container } = render(<TrustScoreDetail trustScore={null} />);
+    const { container } = render(<TrustScoreDetail mode="review" trustScore={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('shows grade badge, risk level and recommendation', () => {
-    render(<TrustScoreDetail trustScore={makeTrustScore()} />);
+    render(<TrustScoreDetail mode="review" trustScore={makeTrustScore()} />);
 
     expect(screen.getByText('B · 低风险')).toBeInTheDocument();
     expect(screen.getByText('低风险')).toBeInTheDocument();
     expect(screen.getByText('建议查看详情后安装')).toBeInTheDocument();
   });
 
+  it('shows only the effective conclusion in public mode', () => {
+    const modelFingerprint = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+    render(
+      <TrustScoreDetail
+        mode="public"
+        trustScore={makeTrustScore({
+          security_assessment: {
+            score: 100,
+            level: 'trusted',
+            grade: 'A',
+            status: 'conclusive',
+            input_dimensions: ['permission_minimization', 'scan_results'],
+            unresolved_findings: 0,
+          },
+          model_fingerprint: modelFingerprint,
+        })}
+        effectiveGrade="A"
+        publicRiskLevel="trusted"
+        publicInstallRecommendation="safe"
+        autoGrade="B"
+        manualGrade="A"
+        manualGradeReason="Reviewed"
+      />,
+    );
+
+    const summary = screen.getByTestId('public-trust-summary');
+    expect(summary).toHaveTextContent('评级 A · 可信');
+    expect(summary).toHaveTextContent('生效评级A');
+    expect(summary).toHaveTextContent('评级说明可信');
+    expect(summary).toHaveTextContent('安装建议可安全安装');
+    expect(summary).toHaveTextContent('不代表绝对安全保证');
+    expect(summary).not.toHaveTextContent('100/100');
+    expect(summary).not.toHaveTextContent('自动评级');
+    expect(summary).not.toHaveTextContent('人工评级');
+    expect(summary).not.toHaveTextContent('模型指纹');
+    expect(summary).not.toHaveTextContent('Uses shell permission');
+  });
+
   it('lists top risks and explanation messages', () => {
-    render(<TrustScoreDetail trustScore={makeTrustScore()} />);
+    render(<TrustScoreDetail mode="review" trustScore={makeTrustScore()} />);
 
     expect(screen.getByText('Uses shell permission')).toBeInTheDocument();
     expect(screen.getByText('Network access declared')).toBeInTheDocument();
@@ -56,6 +94,7 @@ describe('TrustScoreDetail', () => {
     const modelFingerprint = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={makeTrustScore({ model_fingerprint: modelFingerprint })}
       />,
     );
@@ -69,6 +108,7 @@ describe('TrustScoreDetail', () => {
   it('prefers effectiveGrade over risk_summary grade', () => {
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={makeTrustScore()}
         effectiveGrade="C"
       />,
@@ -80,6 +120,7 @@ describe('TrustScoreDetail', () => {
   it('shows manual grade override and reason', () => {
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={makeTrustScore()}
         autoGrade="B"
         manualGrade="C"
@@ -95,6 +136,7 @@ describe('TrustScoreDetail', () => {
   it('shows separate security and evidence assessments', () => {
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={makeTrustScore({
           security_assessment: {
             score: 81,
@@ -132,6 +174,7 @@ describe('TrustScoreDetail', () => {
   it('can hide duplicate grade summaries in the review page', () => {
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={makeTrustScore()}
         effectiveGrade="B"
         autoGrade="B"
@@ -147,6 +190,7 @@ describe('TrustScoreDetail', () => {
   it('shows the empty state when there is nothing to display', () => {
     render(
       <TrustScoreDetail
+        mode="review"
         trustScore={{ risk_summary: {}, explanations: [] }}
       />,
     );

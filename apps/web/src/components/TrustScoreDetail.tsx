@@ -43,8 +43,11 @@ function gradeToRecommendation(grade: string | null | undefined): string {
 }
 
 export interface TrustScoreDetailProps {
-  trustScore: TrustScore | null | undefined;
+  mode: 'public' | 'review';
+  trustScore?: TrustScore | null;
   effectiveGrade?: string | null;
+  publicRiskLevel?: string | null;
+  publicInstallRecommendation?: string | null;
   autoGrade?: string | null;
   manualGrade?: string | null;
   manualGradeReason?: string | null;
@@ -53,8 +56,11 @@ export interface TrustScoreDetailProps {
 }
 
 export default function TrustScoreDetail({
+  mode,
   trustScore,
   effectiveGrade,
+  publicRiskLevel,
+  publicInstallRecommendation,
   autoGrade,
   manualGrade,
   manualGradeReason,
@@ -62,6 +68,88 @@ export default function TrustScoreDetail({
   showGradeSource = true,
 }: TrustScoreDetailProps) {
   const { t } = useTranslation();
+
+  if (mode === 'public') {
+    const grade = effectiveGrade ?? null;
+    const riskLevel = publicRiskLevel || gradeToRiskLevel(grade);
+    const recommendation = publicInstallRecommendation || gradeToRecommendation(grade);
+    if (!grade && !riskLevel && !recommendation) return null;
+    const gradeColor = grade ? GRADE_COLORS[grade] : null;
+
+    return (
+      <div
+        data-testid="public-trust-summary"
+        style={{
+          background: 'var(--color-paper-2)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--color-rule)',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          padding: '1rem 1.25rem',
+          borderBottom: '1px solid var(--color-rule)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}>
+          {grade && gradeColor && (
+            <span style={{
+              display: 'inline-flex',
+              padding: '0.2rem 0.75rem',
+              borderRadius: 'var(--radius-pill)',
+              fontSize: '0.85rem',
+              fontWeight: 700,
+              background: gradeColor.bg,
+              color: gradeColor.fg,
+              border: `1px solid ${gradeColor.border}`,
+            }}>
+              {t('detail.grade_risk', {
+                grade,
+                risk: t(`trust_score.level.${riskLevel}`, riskLevel),
+              })}
+            </span>
+          )}
+          {recommendation && (
+            <strong style={{ fontSize: '0.82rem', color: 'var(--color-ink-2)' }}>
+              {t(`trust_score.recommendation.${recommendation}`, recommendation)}
+            </strong>
+          )}
+        </div>
+        <dl style={{
+          display: 'grid',
+          gridTemplateColumns: 'max-content 1fr',
+          gap: '0.45rem 1rem',
+          margin: 0,
+          padding: '0.9rem 1.25rem 0.6rem',
+          fontSize: '0.78rem',
+        }}>
+          <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.effective_grade')}</dt>
+          <dd style={{ margin: 0, fontWeight: 700 }}>{grade ?? '—'}</dd>
+          <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.rating_explanation')}</dt>
+          <dd style={{ margin: 0, fontWeight: 600 }}>
+            {riskLevel ? t(`trust_score.level.${riskLevel}`, riskLevel) : '—'}
+          </dd>
+          <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.install_advice')}</dt>
+          <dd style={{ margin: 0, fontWeight: 600 }}>
+            {recommendation
+              ? t(`trust_score.recommendation.${recommendation}`, recommendation)
+              : '—'}
+          </dd>
+        </dl>
+        <p style={{
+          margin: 0,
+          padding: '0.35rem 1.25rem 1rem',
+          color: 'var(--color-muted)',
+          fontSize: '0.72rem',
+          lineHeight: 1.55,
+        }}>
+          {t('trust_score.public.disclaimer')}
+        </p>
+      </div>
+    );
+  }
 
   if (!trustScore) return null;
 

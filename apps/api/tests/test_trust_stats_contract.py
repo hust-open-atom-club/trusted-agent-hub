@@ -78,19 +78,21 @@ def test_injected_version_lookup_does_not_read_base_repository(
     assert augmented_repository.get_version_by_id(injected.id) == injected
 
 
-def test_trust_score_returns_public_grade_document(
+def test_trust_score_returns_only_public_conclusion(
     client: TestClient,
     repository: JsonPackageRepository,
 ) -> None:
     response = client.get(TRUST_SCORE_PATH)
 
-    record = repository.get_version_by_id("ver-001")
-    assert record is not None
-    assert record.trust_score is not None
     assert response.status_code == 200
-    assert response.json() == record.trust_score.model_dump(mode="json")
-    assert "score" not in response.json()
-    assert response.json()["risk_summary"]["grade"] == "A"
+    assert response.json() == {
+        "effective_grade": "A",
+        "level": "trusted",
+        "install_recommendation": "safe",
+    }
+    assert "score" not in response.text
+    assert "model_version" not in response.text
+    assert "model_fingerprint" not in response.text
 
 
 def test_unknown_version_has_canonical_trust_score_not_found(
@@ -264,7 +266,7 @@ def test_trust_score_and_stats_openapi_contract(client: TestClient) -> None:
     ] == ["name"]
     assert trust_operation["responses"]["200"]["content"][
         "application/json"
-    ]["schema"] == {"$ref": "#/components/schemas/TrustScore"}
+    ]["schema"] == {"$ref": "#/components/schemas/PublicTrustSummary"}
     assert stats_operation["responses"]["200"]["content"][
         "application/json"
     ]["schema"] == {"$ref": "#/components/schemas/PackageStats"}
