@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetchAll } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -21,15 +21,14 @@ interface VersionItem {
 }
 
 function getTodayStartISO(): string {
+  // Dashboard statistics define "today" by the UTC calendar day.  Use the
+  // same boundary here instead of the browser's local timezone.
   const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  return now.toISOString();
-}
-
-function getTodayEndISO(): string {
-  const now = new Date();
-  now.setHours(23, 59, 59, 999);
-  return now.toISOString();
+  return new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  )).toISOString().replace('.000Z', '+00:00');
 }
 
 function formatDate(iso: string | null): string {
@@ -62,11 +61,9 @@ export default function AdminTodaySubmissionsPage() {
     setError(null);
 
     const since = getTodayStartISO();
-    const until = getTodayEndISO();
-
-    apiFetch<VersionItem[]>(
-      `${API_BASE}/api/v0/producer/versions?limit=200&since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+    apiFetchAll<VersionItem>(
+      `${API_BASE}/api/v0/producer/versions?since=${encodeURIComponent(since)}`,
+      { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } },
     )
       .then((data) => setItems(data))
       .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))

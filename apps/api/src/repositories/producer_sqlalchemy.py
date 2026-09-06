@@ -41,6 +41,21 @@ def _parse_iso_date(value: str) -> datetime:
     return dt
 
 
+def _normalize_iso_boundary(value: str) -> str:
+    """Normalize a client-provided ISO boundary to the stored UTC format.
+
+    Submitted timestamps are currently stored inside JSON using
+    ``datetime.isoformat()`` (for example, ``+00:00``).  Normalizing query
+    boundaries avoids a lexicographic mismatch with equivalent ``.000Z``
+    values sent by browsers.
+    """
+    try:
+        return _parse_iso_date(value).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        # Preserve the previous comparison behavior for malformed values.
+        return value
+
+
 def _serialize_dt(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
@@ -706,8 +721,10 @@ class ProducerRepository:
                     >= today_start.isoformat()
                 )
             ) or 0
+            # The publish page exposes only the newest approved version per
+            # package, so count the same unit here instead of raw versions.
             approved_count = session.scalar(
-                select(func.count())
+                select(func.count(func.distinct(PackageVersionRow.package_id)))
                 .select_from(PackageVersionRow)
                 .where(PackageVersionRow.status == "approved")
             ) or 0
@@ -726,10 +743,12 @@ class ProducerRepository:
                 .select_from(PackageVersionRow)
                 .where(PackageVersionRow.status == "yanked")
             ) or 0
+            # The user-management page lists both active and disabled users.
             total_users = session.scalar(
-                select(func.count())
-                .select_from(UserRow)
-                .where(UserRow.is_active.is_(True))
+                select(func.count()).select_from(UserRow)
+            ) or 0
+            total_audit_logs = session.scalar(
+                select(func.count()).select_from(AuditLogRow)
             ) or 0
             today_audit_actions = session.scalar(
                 select(func.count())
@@ -746,6 +765,10 @@ class ProducerRepository:
             "rejected": rejected_count,
             "yanked": yanked_count,
             "total_users": total_users,
+            "total_audit_logs": total_audit_logs,
+            # Retain this field for existing API consumers.  The dashboard
+            # card uses total_audit_logs because its destination shows all
+            # audit records, not only today's records.
             "today_audit_actions": today_audit_actions,
         }
 
@@ -841,11 +864,13 @@ class ProducerRepository:
 
             if since:
                 stmt = stmt.where(
-                    PackageVersionRow.data["submitted_at"].as_string() >= since
+                    PackageVersionRow.data["submitted_at"].as_string()
+                    >= _normalize_iso_boundary(since)
                 )
             if until:
                 stmt = stmt.where(
-                    PackageVersionRow.data["submitted_at"].as_string() <= until
+                    PackageVersionRow.data["submitted_at"].as_string()
+                    <= _normalize_iso_boundary(until)
                 )
 
             stmt = stmt.order_by(

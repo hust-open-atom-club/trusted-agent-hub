@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetchAll } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -56,7 +56,8 @@ export default function AdminPackagesPage() {
     setLoading(true);
     setError(null);
 
-    apiFetch<PackageItem[]>(`${API_BASE}/api/v0/producer/packages?limit=200`, {
+    apiFetchAll<PackageItem>(`${API_BASE}/api/v0/producer/packages`, {
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => setItems(data))

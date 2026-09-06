@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch, clearFetchCache, setOnUnauthorized } from './api-fetch';
+import { apiFetch, apiFetchAll, clearFetchCache, setOnUnauthorized } from './api-fetch';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -32,6 +32,38 @@ describe('apiFetch', () => {
     await apiFetch('/same');
     await apiFetch('/same');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('bypasses the cache for no-store requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ n: 1 }))
+      .mockResolvedValueOnce(jsonResponse({ n: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiFetch('/fresh')).resolves.toEqual({ n: 1 });
+    await expect(apiFetch('/fresh', { cache: 'no-store' })).resolves.toEqual({ n: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetches all pages from an array endpoint', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([{ id: 1 }, { id: 2 }]))
+      .mockResolvedValueOnce(jsonResponse([{ id: 3 }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      apiFetchAll<{ id: number }>(
+        '/versions?status=approved',
+        { cache: 'no-store' },
+        2,
+      ),
+    ).resolves.toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/versions?status=approved&limit=2&offset=0',
+      '/versions?status=approved&limit=2&offset=2',
+    ]);
   });
 
   it('deduplicates concurrent requests', async () => {
