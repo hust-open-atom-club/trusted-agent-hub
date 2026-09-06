@@ -47,6 +47,12 @@ model client.
 Each case records the scanner's content-tree SHA-256. Fixture drift is fatal in
 check mode regardless of enforcement. The scoring engine receives the same
 fixed source, verification, author, review, and feedback inputs on every run.
+`fixture_source_commit_hash` must point to a Git commit whose
+`benchmarks/corpus` tree is byte-for-byte identical to the working corpus; the
+runner verifies this before scanning. `scanner_implementation_sha256` identifies
+the scanner and trust-score source actually executed, including uncommitted
+changes. Existing schema-v2 configs may still use
+`scanner_source_commit_hash` as a deprecated alias for the fixture commit.
 `security_fingerprint` hashes all security results while excluding duration and
 peak-memory measurements, which naturally vary between runs.
 
@@ -140,7 +146,8 @@ fixture at the recorded revision and remains MIT licensed. The webapp-testing
 and MCP-builder examples are minimized from Apache-2.0 in-repository fixtures.
 All other samples are original synthetic fixtures licensed Apache-2.0 with this
 repository. The per-case source record is authoritative; keep it updated when a
-fixture changes.
+fixture changes. Required attribution and license notices are collected in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Interface for follow-up PRs
 

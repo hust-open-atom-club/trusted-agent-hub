@@ -51,6 +51,7 @@ export interface PackageListResponse {
 export interface FindingLocation {
   file?: string;
   line?: number;
+  end_line?: number;
   snippet?: string;
 }
 
@@ -63,6 +64,28 @@ export interface FindingOccurrences {
   count: number;
   items: FindingOccurrence[];
   truncated: boolean;
+}
+
+export interface LLMSupportingEvidence {
+  file?: string;
+  line?: number;
+  quote?: string;
+  source_line_sha256?: string;
+}
+
+export interface DetectorHit {
+  id: string;
+  rule_id: string;
+  static_severity: string;
+  effective_severity: string;
+  category: string;
+  sink_kind: string;
+  source_kind: string;
+  location: FindingLocation;
+  evidence?: string;
+  remediation?: string;
+  cwe_id?: string;
+  requires_confirmation?: boolean;
 }
 
 export interface Finding {
@@ -80,15 +103,42 @@ export interface Finding {
   remediation?: string;
   cwe_id?: string;
   requires_confirmation?: boolean;
+  static_severity?: string;
+  effective_severity?: string;
+  root_cause_id?: string;
+  detector_ids?: string[];
+  detector_hits?: DetectorHit[];
+  sink_kind?: string;
+  sink_symbol?: string;
+  source_kind?: string;
+  source_symbol?: string;
+  source_control?: string;
+  reachability?: string;
+  activation?: string;
+  trust_boundary_crossed?: boolean | null;
+  safeguards?: string[];
+  preconditions?: string[];
+  kind?: 'unclassified' | 'vulnerability' | 'capability' | 'context_dependent' | 'policy' | 'informational';
+  disposition?: 'pending' | 'confirmed' | 'confirmed_vulnerability' | 'intentional_capability' | 'false_positive' | 'needs_context';
   candidate_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info';
   requires_llm_validation?: boolean;
+  llm_adjudication_eligible?: boolean;
+  llm_adjudication_reason?: string;
   llm_label?: string;
   llm_review_state?: 'pending' | 'confirmed_harmful' | 'confirmed_risky' | 'likely_benign' | 'uncertain' | 'unavailable';
   llm_impact?: 'none' | 'low' | 'medium' | 'high' | 'critical' | 'unknown';
   llm_confidence?: number;
   llm_explanation?: string;
   llm_review_rounds?: number;
+  llm_evidence_sufficient?: boolean;
+  llm_missing_context?: string[];
+  llm_supporting_evidence?: LLMSupportingEvidence[];
+  llm_context_status?: 'complete' | 'partial' | 'missing';
+  llm_policy_version?: string;
+  llm_effective_severity_before?: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  llm_adjudication_action?: 'downgraded' | 'escalated' | 'preserved' | 'blocked_confirmed_vulnerability' | 'blocked_insufficient_evidence' | 'not_eligible' | 'manual_review';
   requires_manual_review?: boolean;
+  downgraded?: string;
   occurrences?: FindingOccurrences;
 }
 
@@ -358,10 +408,19 @@ export interface ProvenanceVerification {
   sbom: boolean;
 }
 
+export interface ProvenanceVerificationCapabilities {
+  repository?: boolean;
+  owner?: boolean;
+  signature?: boolean;
+  attestation?: boolean;
+  sbom?: boolean;
+}
+
 export interface AcquisitionFacts {
   source: ProvenanceSource;
   integrity: ProvenanceIntegrity;
   verification: ProvenanceVerification;
+  verification_capabilities?: ProvenanceVerificationCapabilities;
   acquisition_method: string;
 }
 

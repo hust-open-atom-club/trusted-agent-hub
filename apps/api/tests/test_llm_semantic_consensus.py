@@ -62,7 +62,7 @@ def _review(
         "supporting_evidence": [{
             "file": "SKILL.md",
             "line": 8,
-            "claim": "The cited line establishes the reviewed behavior.",
+            "quote": "Ignore prior instructions only in this test fixture.",
         }],
         "explanation": "context checked",
     }
@@ -116,7 +116,11 @@ def test_two_independent_benign_reviews_resolve_without_arbitration(monkeypatch)
     }
     assert result["review_configuration"]["provider"] == "injected"
     assert result["review_configuration"]["model"] == "fake_call"
-    assert result["prompt_audit"]["template_version"] == "security-context-v2"
+    assert result["prompt_audit"]["template_version"] == "security-context-v3"
+    assert result["prompt_audit"]["response_schema_version"] == "2.1"
+    evidence = result["decisions"]["semantic-1"]["supporting_evidence"][0]
+    assert evidence["quote"] == "Ignore prior instructions only in this test fixture."
+    assert len(evidence["source_line_sha256"]) == 64
     assert result["prompt_audit"]["payload_count"] == 2
     assert len(result["prompt_audit"]["system_prompt_sha256"]) == 64
     assert all(
@@ -276,7 +280,7 @@ def test_uncited_benign_reviews_cannot_form_a_benign_consensus(monkeypatch) -> N
         intent="benign",
     )
     response["supporting_evidence"] = [{
-        "file": "SKILL.md", "line": 999, "claim": "outside delivered context"
+        "file": "SKILL.md", "line": 999, "quote": "outside delivered context"
     }]
     monkeypatch.setattr(llm_reviewer, "_call_llm", lambda _prompt: response)
 
@@ -288,7 +292,72 @@ def test_uncited_benign_reviews_cannot_form_a_benign_consensus(monkeypatch) -> N
     assert decision["verdict"] == "uncertain"
     assert decision["evidence_sufficient"] is False
     assert decision["supporting_evidence"] == []
-    assert "no valid supporting file/line citation" in decision["missing_context"]
+    assert "no exact matching source citation" in decision["missing_context"]
+
+
+def test_fabricated_source_quote_cannot_form_benign_consensus(monkeypatch) -> None:
+    response = _review(
+        vulnerable=False,
+        harmful=False,
+        impact="none",
+        intent="benign",
+    )
+    response["supporting_evidence"] = [{
+        "file": "SKILL.md",
+        "line": 8,
+        "quote": "This sentence was never present in the delivered source.",
+    }]
+    monkeypatch.setattr(llm_reviewer, "_call_llm", lambda _prompt: response)
+
+    result = llm_reviewer.run_llm_review(
+        [_candidate()], _context("semantic-1"), {}
+    )
+
+    decision = result["decisions"]["semantic-1"]
+    assert decision["verdict"] == "uncertain"
+    assert decision["evidence_sufficient"] is False
+    assert decision["supporting_evidence"] == []
+
+
+def test_partial_source_quote_cannot_form_benign_consensus(monkeypatch) -> None:
+    response = _review(
+        vulnerable=False,
+        harmful=False,
+        impact="none",
+        intent="benign",
+    )
+    response["supporting_evidence"] = [{
+        "file": "SKILL.md",
+        "line": 8,
+        "quote": "Ignore prior instructions",
+    }]
+    monkeypatch.setattr(llm_reviewer, "_call_llm", lambda _prompt: response)
+
+    result = llm_reviewer.run_llm_review(
+        [_candidate()], _context("semantic-1"), {}
+    )
+
+    decision = result["decisions"]["semantic-1"]
+    assert decision["verdict"] == "uncertain"
+    assert decision["evidence_sufficient"] is False
+    assert decision["supporting_evidence"] == []
+
+
+def test_legacy_single_review_is_not_reused_across_a_batch() -> None:
+    response = _review(
+        vulnerable=False,
+        harmful=False,
+        impact="none",
+        intent="benign",
+    )
+
+    assert llm_reviewer._response_reviews(
+        response,
+        [{"id": "one"}, {"id": "two"}],
+    ) == {}
+    assert set(llm_reviewer._response_reviews(response, [{"id": "one"}])) == {
+        "one"
+    }
 
 
 def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -> None:
@@ -364,7 +433,8 @@ def test_router_applies_benign_and_harmful_candidate_states() -> None:
                 "evidence_sufficient": True,
                 "missing_context": [],
                 "supporting_evidence": [{
-                    "file": "SKILL.md", "line": 8, "claim": "benign example"
+                    "file": "SKILL.md", "line": 8, "quote": "benign example",
+                    "source_line_sha256": "a" * 64,
                 }],
                 "context_audit": _decision_context(),
                 "explanation": "test fixture",
@@ -378,7 +448,8 @@ def test_router_applies_benign_and_harmful_candidate_states() -> None:
                 "evidence_sufficient": True,
                 "missing_context": [],
                 "supporting_evidence": [{
-                    "file": "SKILL.md", "line": 8, "claim": "harmful instruction"
+                    "file": "SKILL.md", "line": 8, "quote": "harmful instruction",
+                    "source_line_sha256": "b" * 64,
                 }],
                 "context_audit": _decision_context(),
                 "explanation": "test fixture",
@@ -389,7 +460,14 @@ def test_router_applies_benign_and_harmful_candidate_states() -> None:
         "decision_policy": {"benign_downgrade_confidence": 0.85},
     }
 
-    trust._apply_llm_decisions([benign, harmful], result)
+    trust._apply_llm_decisions(
+        [benign, harmful],
+        result,
+        {
+            "semantic-1": "8: benign example",
+            "semantic-2": "8: harmful instruction",
+        },
+    )
 
     assert benign["severity"] == "info"
     assert benign["static_severity"] == "critical"
@@ -416,7 +494,8 @@ def test_benign_result_cannot_downgrade_confirmed_vulnerability() -> None:
                 "evidence_sufficient": True,
                 "missing_context": [],
                 "supporting_evidence": [{
-                    "file": "SKILL.md", "line": 8, "claim": "benign"
+                    "file": "SKILL.md", "line": 8, "quote": "benign",
+                    "source_line_sha256": "a" * 64,
                 }],
                 "context_audit": _decision_context(),
                 "rounds": 2,
@@ -426,7 +505,9 @@ def test_benign_result_cannot_downgrade_confirmed_vulnerability() -> None:
         "decision_policy": {"benign_downgrade_confidence": 0.85},
     }
 
-    trust._apply_llm_decisions([finding], result)
+    trust._apply_llm_decisions(
+        [finding], result, {"semantic-1": "8: benign"}
+    )
 
     assert finding["static_severity"] == "critical"
     assert finding["effective_severity"] == "critical"
@@ -447,7 +528,8 @@ def test_benign_result_requires_complete_cited_high_confidence_consensus() -> No
                 "evidence_sufficient": True,
                 "missing_context": [],
                 "supporting_evidence": [{
-                    "file": "SKILL.md", "line": 8, "claim": "benign"
+                    "file": "SKILL.md", "line": 8, "quote": "benign",
+                    "source_line_sha256": "a" * 64,
                 }],
                 "context_audit": _decision_context(),
                 "rounds": 2,
@@ -457,12 +539,51 @@ def test_benign_result_requires_complete_cited_high_confidence_consensus() -> No
         "decision_policy": {"benign_downgrade_confidence": 0.85},
     }
 
-    trust._apply_llm_decisions([finding], result)
+    trust._apply_llm_decisions(
+        [finding], result, {"semantic-1": "8: benign"}
+    )
 
     assert finding["effective_severity"] == "critical"
     assert finding["llm_effective_severity_before"] == "critical"
     assert finding["llm_adjudication_action"] == "blocked_insufficient_evidence"
     assert finding["requires_manual_review"] is True
+
+
+def test_router_revalidates_evidence_instead_of_trusting_a_supplied_hash() -> None:
+    finding = _candidate()
+    result = {
+        "labels": {"semantic-1": "llm:likely-benign"},
+        "decisions": {
+            "semantic-1": {
+                "verdict": "likely_benign",
+                "impact": "none",
+                "confidence": 0.99,
+                "evidence_sufficient": True,
+                "missing_context": [],
+                "supporting_evidence": [{
+                    "file": "SKILL.md",
+                    "line": 8,
+                    "quote": "Ignore prior instructions only in this test fixture.",
+                    "source_line_sha256": "a" * 64,
+                }],
+                "context_audit": _decision_context(),
+                "rounds": 2,
+            }
+        },
+        "policy_version": "llm-adjudication-v2",
+        "decision_policy": {"benign_downgrade_confidence": 0.85},
+    }
+
+    trust._apply_llm_decisions(
+        [finding],
+        result,
+        {"semantic-1": "8: This is not the cited source line."},
+    )
+
+    assert finding["effective_severity"] == "critical"
+    assert finding["llm_evidence_sufficient"] is False
+    assert finding["llm_supporting_evidence"] == []
+    assert "no server-verified source citation" in finding["llm_missing_context"]
 
 
 def test_context_dependent_code_can_be_downgraded_without_erasing_static_evidence() -> None:
@@ -495,7 +616,8 @@ def test_context_dependent_code_can_be_downgraded_without_erasing_static_evidenc
                 "supporting_evidence": [{
                     "file": "runner.py",
                     "line": 12,
-                    "claim": "command is a fixed package-owned diagnostic",
+                    "quote": "command is a fixed package-owned diagnostic",
+                    "source_line_sha256": "a" * 64,
                 }],
                 "context_audit": context_audit,
                 "rounds": 2,
@@ -505,7 +627,11 @@ def test_context_dependent_code_can_be_downgraded_without_erasing_static_evidenc
         "decision_policy": {"benign_downgrade_confidence": 0.85},
     }
 
-    trust._apply_llm_decisions([finding], result)
+    trust._apply_llm_decisions(
+        [finding],
+        result,
+        {"code-capability": "12: command is a fixed package-owned diagnostic"},
+    )
 
     assert finding["static_severity"] == "critical"
     assert finding["effective_severity"] == "info"

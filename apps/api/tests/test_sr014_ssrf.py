@@ -1,7 +1,10 @@
 """SR-014: SSRF rule unit tests."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from scanners.risk_scanner.analyzers.javascript_ast import analyze_javascript
 from scanners.risk_scanner.rules import ssrf
 from tests.scanner_mock import MockScanner
 
@@ -43,6 +46,17 @@ class TestSR014SSRF:
         })
         ssrf.run(s)
         assert len(s.findings) >= 1
+
+    def test_operator_argv_url_is_not_remote_attacker_controlled(self):
+        content = "fetch(process.argv[2]);\n"
+        s = MockScanner(files={"cli.js": content})
+        s.analysis = SimpleNamespace(
+            javascript_ast={"cli.js": analyze_javascript("cli.js", content)}
+        )
+
+        ssrf.run(s)
+
+        assert s.findings == []
 
     def test_defensive_context_downgraded_to_info(self):
         """Defensive prose without a request sink is not a finding."""

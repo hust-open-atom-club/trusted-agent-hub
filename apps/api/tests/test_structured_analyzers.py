@@ -58,6 +58,17 @@ def test_javascript_process_analysis_marks_environment_driven_shell() -> None:
     assert event.shell_capable is True
 
 
+def test_javascript_process_analysis_distinguishes_operator_arguments() -> None:
+    javascript = analyze_javascript(
+        "cli.cjs",
+        "cp.exec(process.argv[2]);\n",
+    )
+
+    event = javascript.calls[0]
+    assert event.dynamic is True
+    assert event.input_source == "operator_input"
+
+
 def test_javascript_regexp_exec_is_not_a_process_capability() -> None:
     javascript = analyze_javascript(
         "matcher.js",

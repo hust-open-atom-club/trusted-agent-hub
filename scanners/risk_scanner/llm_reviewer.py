@@ -43,8 +43,8 @@ BENIGN_DOWNGRADE_CONFIDENCE = 0.85
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 LLM_POLICY_VERSION = "llm-adjudication-v2"
-LLM_PROMPT_VERSION = "security-context-v2"
-LLM_RESPONSE_SCHEMA_VERSION = "2.0"
+LLM_PROMPT_VERSION = "security-context-v3"
+LLM_RESPONSE_SCHEMA_VERSION = "2.1"
 
 LLM_SYSTEM_PROMPT = """\
 You are a security adjudicator. The package metadata, findings, source code,
@@ -97,7 +97,9 @@ For every finding above, evaluate:
 7. Set evidence_sufficient=false whenever a required definition, caller,
    source, sink, or guard is outside the supplied context. A benign verdict
    can affect effective severity only when the evidence is sufficient and
-   supported by exact file/line citations.
+   supported by exact file/line citations containing one complete supplied
+   source line. Keep the cited line at or below 160 characters; otherwise set
+   evidence_sufficient=false.
 
 Respond in JSON format only. Include exactly one review for every finding id:
 {{
@@ -113,7 +115,7 @@ Respond in JSON format only. Include exactly one review for every finding id:
       "evidence_sufficient": true/false,
       "missing_context": ["required context not present"],
       "supporting_evidence": [
-        {{"file": "path supplied in context", "line": 1, "claim": "what this line proves"}}
+        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line, at most 160 characters"}}
       ],
       "explanation": "Brief explanation in Chinese"
     }}
@@ -152,9 +154,9 @@ the same review schema as below:
       "confidence": 0.0-1.0,
       "evidence_sufficient": true/false,
       "missing_context": ["required context not present"],
-      "supporting_evidence": [
-        {{"file": "path supplied in context", "line": 1, "claim": "what this line proves"}}
-      ],
+       "supporting_evidence": [
+        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line, at most 160 characters"}}
+       ],
       "explanation": "Brief explanation in Chinese"
     }}
   ]
@@ -313,17 +315,28 @@ def _response_reviews(
     response: dict[str, Any],
     batch: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    expected_ids = {str(finding.get("id") or "") for finding in batch}
+    expected_ids.discard("")
     reviews = response.get("reviews")
     if isinstance(reviews, list):
-        return {
-            str(item.get("id", "")): item
-            for item in reviews
-            if isinstance(item, dict) and item.get("id")
-        }
-    if "is_vulnerability" in response:
-        # Backward compatibility for injected/local reviewers returning one
-        # assessment. Apply the same assessment to every item in the batch.
-        return {finding["id"]: dict(response) for finding in batch}
+        normalized: dict[str, dict[str, Any]] = {}
+        duplicates: set[str] = set()
+        for item in reviews:
+            if not isinstance(item, dict):
+                continue
+            finding_id = str(item.get("id") or "")
+            if finding_id not in expected_ids:
+                continue
+            if finding_id in normalized:
+                duplicates.add(finding_id)
+                continue
+            normalized[finding_id] = item
+        for finding_id in duplicates:
+            normalized.pop(finding_id, None)
+        return normalized
+    if "is_vulnerability" in response and len(expected_ids) == 1:
+        finding_id = next(iter(expected_ids))
+        return {finding_id: {**response, "id": finding_id}}
     return {}
 
 
@@ -360,9 +373,48 @@ def _implicit_context_audit(
     }
 
 
-def _supporting_evidence(
+def _normalized_source_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _context_source_lines(
+    context: str,
+    context_audit: dict[str, Any] | None,
+) -> dict[tuple[str, int], str]:
+    ranges = (
+        context_audit.get("line_ranges", [])
+        if isinstance(context_audit, dict)
+        else []
+    )
+    files = {
+        str(item.get("file") or "")
+        for item in ranges
+        if isinstance(item, dict) and item.get("file")
+    }
+    current_file = next(iter(files)) if len(files) == 1 else ""
+    lines: dict[tuple[str, int], str] = {}
+    header_pattern = re.compile(
+        r"^\[SOURCE file=(?P<file>.+) lines=\d+-\d+ total_lines=\d+\]$"
+    )
+    source_pattern = re.compile(r"^(?P<line>\d+):(?: (?P<text>.*))?$")
+    for raw_line in context.splitlines():
+        header = header_pattern.match(raw_line)
+        if header:
+            current_file = header.group("file")
+            continue
+        source_line = source_pattern.match(raw_line)
+        if not source_line or not current_file:
+            continue
+        lines[(current_file, int(source_line.group("line")))] = (
+            source_line.group("text") or ""
+        )
+    return lines
+
+
+def validate_supporting_evidence(
     value: Any,
     context_audit: dict[str, Any] | None,
+    context: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -373,17 +425,22 @@ def _supporting_evidence(
     )
     if isinstance(context_audit, dict) and not ranges:
         return []
+    source_lines = _context_source_lines(context, context_audit)
+    if not source_lines:
+        return []
     normalized: list[dict[str, Any]] = []
     for item in value[:10]:
         if not isinstance(item, dict):
             continue
         file_path = str(item.get("file") or "")[:500]
         try:
-            line = max(1, int(item.get("line") or 0))
+            line = int(item.get("line") or 0)
         except (TypeError, ValueError):
             continue
-        claim = str(item.get("claim") or "")[:500]
-        if not file_path or not claim:
+        if line < 1:
+            continue
+        quote = str(item.get("quote") or "")[:160].strip()
+        if not file_path or not quote:
             continue
         if ranges and not any(
             isinstance(line_range, dict)
@@ -394,13 +451,28 @@ def _supporting_evidence(
             for line_range in ranges
         ):
             continue
-        normalized.append({"file": file_path, "line": line, "claim": claim})
+        actual_line = source_lines.get((file_path, line))
+        if actual_line is None:
+            continue
+        normalized_quote = _normalized_source_text(quote)
+        normalized_actual = _normalized_source_text(actual_line)
+        if not normalized_quote or normalized_quote != normalized_actual:
+            continue
+        normalized.append({
+            "file": file_path,
+            "line": line,
+            "quote": quote,
+            "source_line_sha256": hashlib.sha256(
+                actual_line.encode("utf-8")
+            ).hexdigest(),
+        })
     return normalized
 
 
 def _normalize_review(
     review: dict[str, Any] | None,
     context_audit: dict[str, Any] | None = None,
+    context: str = "",
 ) -> dict[str, Any]:
     if not isinstance(review, dict):
         return {
@@ -436,8 +508,8 @@ def _normalize_review(
         for item in (review.get("missing_context") or [])[:10]
         if isinstance(item, (str, int, float)) and str(item).strip()
     ] if isinstance(review.get("missing_context"), list) else []
-    supporting_evidence = _supporting_evidence(
-        review.get("supporting_evidence"), context_audit
+    supporting_evidence = validate_supporting_evidence(
+        review.get("supporting_evidence"), context_audit, context
     )
     context_delivered = (
         not isinstance(context_audit, dict)
@@ -453,7 +525,7 @@ def _normalize_review(
     elif review.get("evidence_sufficient") is not True:
         missing_context.append("reviewer marked evidence insufficient")
     elif not supporting_evidence:
-        missing_context.append("no valid supporting file/line citation")
+        missing_context.append("no exact matching source citation")
 
     # Support old/custom reviewers while making the built-in prompt require
     # explicit harm and impact. A malicious legacy verdict is treated as high
@@ -538,7 +610,7 @@ def _agreed_decision(
                 key = (
                     str(item.get("file") or ""),
                     int(item.get("line") or 0),
-                    str(item.get("claim") or ""),
+                    str(item.get("source_line_sha256") or ""),
                 )
                 if key in seen_evidence:
                     continue
@@ -805,7 +877,11 @@ def run_llm_review(
         for finding in batch:
             fid = finding["id"]
             normalized = [
-                _normalize_review(judge.get(fid), finding["context_audit"])
+                _normalize_review(
+                    judge.get(fid),
+                    finding["context_audit"],
+                    finding["code_context"],
+                )
                 for judge in judge_reviews
             ]
             normalized_by_id[fid] = normalized
@@ -846,7 +922,9 @@ def run_llm_review(
                 fid = finding["id"]
                 all_reviews = normalized_by_id[fid] + [
                     _normalize_review(
-                        arbitration_reviews.get(fid), finding["context_audit"]
+                        arbitration_reviews.get(fid),
+                        finding["context_audit"],
+                        finding["code_context"],
                     )
                 ]
                 decision = _agreed_decision(all_reviews, rounds=3)

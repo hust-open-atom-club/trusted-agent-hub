@@ -80,6 +80,26 @@ class TestSR005RCE:
         assert finding["source_control"] == "operator"
         assert finding["requires_manual_review"] is True
 
+    def test_operator_argv_exec_is_not_remote_command_execution(self):
+        content = (
+            'const childProcess = require("child_process");\n'
+            "childProcess.exec(process.argv[2]);\n"
+        )
+        s = MockScanner(files={"cli.js": content})
+        s.analysis = SimpleNamespace(
+            javascript_ast={"cli.js": analyze_javascript("cli.js", content)}
+        )
+
+        run_rce(s)
+
+        assert len(s.findings) == 1
+        finding = s.findings[0]
+        assert finding["severity"] == "medium"
+        assert finding["kind"] == "context_dependent"
+        assert finding["source_kind"] == "runtime_argument"
+        assert finding["source_control"] == "operator"
+        assert finding["trust_boundary_crossed"] is False
+
     def test_exec_file_with_fixed_binary_is_capability_only(self):
         content = (
             'const childProcess = require("child_process");\n'
