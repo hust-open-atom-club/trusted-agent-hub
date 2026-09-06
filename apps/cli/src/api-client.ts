@@ -2,7 +2,7 @@
  * TrustedAgentHub Consumer API Client.
  *
  * API_BASE is read from TRUSTED_AGENT_HUB_API_URL env var, then CLI config,
- * then localhost. A custom fetch implementation can be injected
+ * then the public Hub default. A custom fetch implementation can be injected
  * (useful for testing).
  */
 
