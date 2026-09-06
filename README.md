@@ -251,6 +251,30 @@ docker compose --env-file .env up -d --build
 - **Web 前端**：由 `.env` 中的 `NEXT_PUBLIC_SITE_URL` 配置
 - **Swagger API 文档**：`${NEXT_PUBLIC_API_URL}/docs`
 
+### 生产域名与用户安装
+
+生产环境使用 `https://tah.openatom.club` 作为 Web 和 API 的统一入口，反向代理需要将
+`/` 转发到 Web 容器的 3000 端口，将 `/api/*` 转发到 API 容器的 8000 端口。
+
+修改 `.env` 后重新构建并启动：
+
+```bash
+docker compose --env-file .env up -d --build
+```
+
+CLI 发布版本默认连接该域名，因此用户无需配置服务器 IP：
+
+```bash
+npx tah search <keyword>
+npx tah install <package-name>
+```
+
+使用旧版 CLI 或连接其他 Hub 时，可手动指定地址：
+
+```bash
+tah use https://tah.openatom.club
+```
+
 ## 真实能力包
 
 `examples/real-world/` 内置了来自开源社区的**真实能力包**（Apache-2.0）：

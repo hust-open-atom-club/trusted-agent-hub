@@ -1,7 +1,9 @@
 import './load-root-env';
 import { loadConfig, normalizeApiUrl } from './config-store';
 
-export const DEFAULT_API_BASE = 'http://127.0.0.1:8000';
+// Public Hub endpoint used by the published CLI when no per-user override is
+// configured. Users can still use `tah use <api-url>` for another Hub.
+export const DEFAULT_API_BASE = 'https://tah.openatom.club';
 
 const LOCALHOST_ORIGINS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
