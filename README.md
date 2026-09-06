@@ -1,6 +1,19 @@
 # TrustedAgentHub — 可信 Agent Skills 与 MCP Hub 平台
 
+[![API CI](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/api.yml/badge.svg)](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/api.yml)
+[![Web CI](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/web.yml/badge.svg)](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/web.yml)
+[![CLI CI](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/cli.yml/badge.svg)](https://github.com/hust-open-atom-club/trusted-agent-hub/actions/workflows/cli.yml)
+
 面向智能体生态的可信能力分发平台。支持 Agent Skills、MCP Server、Plugin、Subagent 等能力单元的浏览、搜索、提交、安全扫描、人工审核、信任评分和 CLI 安装。
+
+## 项目入口
+
+| 入口 | 地址 |
+|---|---|
+| 在线演示 | [TrustedAgentHub Web](https://tah.openatom.club/) |
+| API 文档 | [Swagger UI](https://tah.openatom.club/docs  ) |
+| 源码仓库 | [hust-open-atom-club/trusted-agent-hub](https://github.com/hust-open-atom-club/trusted-agent-hub) |
+
 
 ---
 
@@ -25,7 +38,7 @@ TrustedAgentHub/
 
 ---
 
-## 核心功能
+## 核心能力
 
 ### Hub 平台 (Web + API)
 
@@ -109,12 +122,31 @@ npx tah verify <name>
 - PostgreSQL 16+
 - Git
 
-### 安装与配置
+### Docker Compose（推荐）
+
+```bash
+# 创建本地配置
+cp .env.example .env
+# 编辑 .env，至少填写 POSTGRES_PASSWORD 和 JWT_SECRET
+
+# Linux/macOS
+./deploy/deploy.sh
+
+# Windows PowerShell
+.\deploy\build.ps1
+```
+
+部署完成后访问：
+
+- Web 前端：<http://localhost:3000>
+- Swagger API 文档：<http://127.0.0.1:8000/docs>
+
+### 本地开发：安装与配置
 
 ```bash
 # 克隆仓库
-git clone <repo-url>
-cd TrustedAgentHub
+git clone https://github.com/hust-open-atom-club/trusted-agent-hub.git
+cd trusted-agent-hub
 
 # 创建本地私有配置（.env 已被 Git 和 Docker 构建上下文忽略）
 cp .env.example .env
@@ -214,42 +246,26 @@ python -m src.scripts.backfill_trust_scores --batch-size 100 --max-attempts 3
 单个版本失败会自动重试，最终仍有失败时以非零状态退出。修复故障后可直接重跑，
 已完成版本不会重复计算。
 
-### 启动服务
+### 本地开发：启动服务
 
-不使用 Docker 部署时可以跳过下面的 Docker Compose 步骤。使用 Docker 时，先从
-仓库中的模板生成本地 API Dockerfile：
-
-`deploy/deploy.sh`（Linux/macOS）和 `deploy/build.ps1`（Windows）在发现本地
-Dockerfile 不存在时会自动执行这一步；已有的本地 Dockerfile 不会被覆盖。
-
-Linux/macOS：
+以下命令适用于不使用 Docker 的本地开发。后端和前端建议分别在两个终端中运行。
 
 ```bash
-cp apps/api/Dockerfile.example apps/api/Dockerfile
-```
-
-Windows PowerShell：
-
-```powershell
-Copy-Item apps/api/Dockerfile.example apps/api/Dockerfile
-```
-
-```bash
-# 启动后端 (端口 8000)
+# 终端 1：启动后端（端口 8000）
 cd apps/api
 python run.py
+```
 
-# 启动前端 (端口 3000)
+```bash
+# 终端 2：从仓库根目录启动前端（端口 3000）
 cd apps/web
 npm install && npm run dev
-
-# Docker Compose 一键构建、迁移并启动（仅 Docker 部署需要）
-docker compose --env-file .env up -d --build
 ```
 
 启动后访问：
-- **Web 前端**：由 `.env` 中的 `NEXT_PUBLIC_SITE_URL` 配置
-- **Swagger API 文档**：`${NEXT_PUBLIC_API_URL}/docs`
+
+- Web 前端：<http://localhost:3000>
+- Swagger API 文档：<http://127.0.0.1:8000/docs>
 
 ## 真实能力包
 
@@ -283,7 +299,7 @@ docker compose --env-file .env up -d --build
 cd apps/api
 python -m pytest tests/ -v
 
-# 扫描器规则测试 (100 tests)
+# 扫描器规则测试
 python -m pytest tests/test_sr*.py -v
 
 # 状态机测试
@@ -295,8 +311,6 @@ npm test
 ```
 
 ---
-
-
 ## 技术栈
 
 | 层 | 技术 |
@@ -305,11 +319,17 @@ npm test
 | 前端 | Next.js 14 (App Router), React 18, TypeScript, i18next |
 | CLI | TypeScript, Commander.js, Node.js |
 | 扫描器 | Python AST, 正则引擎, OWASP 规则, LLM 审查 (litellm) |
-| 评分引擎 | 多维度加权评分, 否决规则, 3 色基线 |
+| 评分引擎 | 安全风险与证据完整度评估, 多维度解释 |
 | 部署 | Docker Compose (API + Web + PostgreSQL) |
+
+---
+
+## 参与贡献
+
+欢迎通过 [Issues](https://github.com/hust-open-atom-club/trusted-agent-hub/issues) 反馈问题，或提交 [Pull Request](https://github.com/hust-open-atom-club/trusted-agent-hub/pulls) 改进代码与文档。
 
 ---
 
 ## License
 
-MIT
+Apache-2.0
