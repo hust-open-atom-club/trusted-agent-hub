@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetchAll } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -65,11 +65,11 @@ export default function ReviewPage() {
 
     setLoading(true);
     setError(null);
-    apiFetch(
+    apiFetchAll<ReviewItem>(
       `${API_BASE}/api/v0/producer/versions?status=pending_review`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } },
     )
-      .then((data) => setItems(data as ReviewItem[]))
+      .then((data) => setItems(data))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, [user, token, authLoading]);

@@ -549,6 +549,7 @@
       "col_operator": "Operator",
       "col_detail": "Detail",
       "total_count": "{{count}}+ records",
+      "total_count_exact": "{{count}} records",
       "per_page": "Per page",
       "per_page_unit": "",
       "prev_page": "Prev",

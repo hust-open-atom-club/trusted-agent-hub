@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
+import { apiFetchAll, clearFetchCache } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -63,10 +63,12 @@ export default function AdminYankPage() {
     setError(null);
 
     Promise.all([
-      apiFetch<YankItem[]>(`${API_BASE}/api/v0/producer/versions?status=published`, {
+      apiFetchAll<YankItem>(`${API_BASE}/api/v0/producer/versions?status=published`, {
+        cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       }),
-      apiFetch<YankItem[]>(`${API_BASE}/api/v0/producer/versions?status=yanked`, {
+      apiFetchAll<YankItem>(`${API_BASE}/api/v0/producer/versions?status=yanked`, {
+        cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` },
       }),
     ])

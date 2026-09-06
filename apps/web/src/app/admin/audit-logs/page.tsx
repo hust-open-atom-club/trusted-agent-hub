@@ -95,6 +95,7 @@ export default function AdminAuditLogsPage() {
     params.set('offset', String(page * pageSize));
 
     apiFetch<AuditLogEntry[]>(`${API_BASE}/api/v0/producer/audit-logs?${params.toString()}`, {
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data: AuditLogEntry[]) => {
@@ -121,6 +122,7 @@ export default function AdminAuditLogsPage() {
   };
 
   const hasMore = logs.length === pageSize;
+  const displayedCount = totalCount + page * pageSize;
 
   if (authLoading) return null;
 
@@ -285,7 +287,7 @@ export default function AdminAuditLogsPage() {
 
           <div className="pagination">
             <div className="pagination-info">
-              {t('admin.audit.total_count', { count: totalCount + page * pageSize })}
+              {t(`admin.audit.total_count${hasMore ? '' : '_exact'}`, { count: displayedCount })}
             </div>
 
             <div className="pagination-controls">

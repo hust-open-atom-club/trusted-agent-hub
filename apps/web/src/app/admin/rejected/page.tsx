@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetchAll } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -49,7 +49,8 @@ export default function AdminRejectedPage() {
     setLoading(true);
     setError(null);
 
-    apiFetch<RejectedItem[]>(`${API_BASE}/api/v0/producer/versions?status=rejected&limit=200`, {
+    apiFetchAll<RejectedItem>(`${API_BASE}/api/v0/producer/versions?status=rejected`, {
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => setItems(data))

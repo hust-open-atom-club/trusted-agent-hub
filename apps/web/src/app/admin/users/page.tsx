@@ -66,7 +66,7 @@ export default function AdminUsersPage() {
 
     apiFetch<{ items: UserItem[]; total: number }>(
       `${API_BASE}/api/v0/admin/users?${params.toString()}`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } },
     )
       .then((data) => { setItems(data.items); setTotal(data.total); })
       .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))

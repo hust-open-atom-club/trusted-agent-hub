@@ -420,9 +420,11 @@ def list_versions(
             grade=grade,
             since=since,
             until=until,
+            limit=limit,
+            offset=offset,
         )
 
-    return service.list_versions_by_status()
+    return service.list_versions_by_status(limit=limit, offset=offset)
 
 
 # ── PATCH /versions/{version_id}/grade ──────────────────────

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch, clearFetchCache } from '@/lib/api-fetch';
+import { apiFetchAll, clearFetchCache } from '@/lib/api-fetch';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 
 import { API_BASE } from '@/lib/runtime-config';
@@ -89,7 +89,8 @@ export default function AdminPublishPage() {
     setLoading(true);
     setError(null);
 
-    apiFetch<PublishItem[]>(`${API_BASE}/api/v0/producer/versions?status=approved`, {
+    apiFetchAll<PublishItem>(`${API_BASE}/api/v0/producer/versions?status=approved`, {
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((data) => setItems(data))

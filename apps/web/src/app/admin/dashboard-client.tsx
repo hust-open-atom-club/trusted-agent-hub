@@ -17,7 +17,9 @@ interface DashboardStats {
   rejected: number;
   yanked: number;
   total_users: number;
-  today_audit_actions: number;
+  total_audit_logs?: number;
+  /** Kept for compatibility with older API responses. */
+  today_audit_actions?: number;
 }
 
 interface StatCard {
@@ -42,13 +44,36 @@ export default function AdminDashboardClient() {
       return;
     }
 
-    fetch(`${API_BASE}/api/v0/producer/stats/dashboard`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => { if (data) setStats(data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let disposed = false;
+
+    const fetchStats = () => {
+      setLoading(true);
+      fetch(`${API_BASE}/api/v0/producer/stats/dashboard`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => {
+          if (!disposed && data) setStats(data);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!disposed) setLoading(false);
+        });
+    };
+
+    fetchStats();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') fetchStats();
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+
+    return () => {
+      disposed = true;
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
   }, [user, token, authLoading]);
 
   const cards: StatCard[] = [
@@ -96,7 +121,7 @@ export default function AdminDashboardClient() {
     },
     {
       title: t('admin.dashboard.audit_logs'),
-      count: stats?.today_audit_actions ?? null,
+      count: stats?.total_audit_logs ?? stats?.today_audit_actions ?? null,
       description: t('admin.dashboard.audit_logs_desc'),
       path: '/admin/audit-logs',
     },

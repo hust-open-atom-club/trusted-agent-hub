@@ -827,10 +827,17 @@ class ProducerService:
         grade: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
     ) -> list[dict[str, object]]:
         """按状态/风险等级/时间范围筛选版本列表（审核员视图用）。"""
         items = self.repository.list_versions_by_status(
-            status=status, grade=grade, since=since, until=until,
+            status=status,
+            grade=grade,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
         )
         for item in items:
             g = item.get("grade")

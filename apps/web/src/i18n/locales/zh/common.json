@@ -549,6 +549,7 @@
       "col_operator": "操作人",
       "col_detail": "详情",
       "total_count": "共 {{count}}+ 条",
+      "total_count_exact": "共 {{count}} 条",
       "per_page": "每页",
       "per_page_unit": "条",
       "prev_page": "上一页",
