@@ -19,6 +19,7 @@ import stat
 import struct
 import sys
 import tempfile
+import threading
 import time as _time
 import urllib.error
 import urllib.parse
@@ -26,7 +27,7 @@ import urllib.request
 import uuid
 import zipfile
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Any, Optional
 
@@ -82,9 +83,114 @@ _scans: Dict[str, Dict[str, Any]] = {}
 _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 _SCAN_TTL_SECONDS = 3600  # 临时扫描结果保留 1 小时
+_LLM_REVIEW_DEADLINE_SECONDS = 15 * 60
+_LLM_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _SOURCE_POLICY = ScanPolicy()
 _ZIP_READ_CHUNK_BYTES = 64 * 1024
 _MAX_MANIFEST_JSON_NESTING = 128
+_SCAN_PROGRESS_LOCK = threading.RLock()
+
+_PUBLIC_LLM_PROGRESS_FIELDS = frozenset({
+    "status",
+    "phase",
+    "attempt",
+    "max_attempts",
+    "findings_total",
+    "findings_reviewed",
+    "findings_pending",
+    "started_at",
+    "last_update_at",
+    "deadline_at",
+    "fallback",
+})
+_LLM_PROGRESS_STATUSES = frozenset({"running", "completed", "degraded", "timeout"})
+_LLM_PROGRESS_PHASES = frozenset({"judge_a", "judge_b", "arbitration", "complete"})
+_LLM_PROGRESS_FALLBACKS = frozenset({
+    "manual_review_required",
+    "manual_review_for_unresolved",
+    "manual_review_for_incomplete_context",
+})
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _nonnegative_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _initial_llm_progress(findings_total: int) -> tuple[dict[str, Any], float]:
+    started = datetime.now(timezone.utc)
+    deadline = started + timedelta(seconds=_LLM_REVIEW_DEADLINE_SECONDS)
+    return ({
+        "status": "running",
+        "phase": "judge_a",
+        "attempt": 1,
+        "max_attempts": 3,
+        "findings_total": max(0, findings_total),
+        "findings_reviewed": 0,
+        "findings_pending": max(0, findings_total),
+        "started_at": started.isoformat(),
+        "last_update_at": started.isoformat(),
+        "deadline_at": deadline.isoformat(),
+    }, _time.monotonic() + _LLM_REVIEW_DEADLINE_SECONDS)
+
+
+def _update_llm_progress(scan_id: str, update: dict[str, Any]) -> None:
+    """Atomically publish only the safe, user-facing LLM progress fields."""
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is None:
+            return
+        current = info.get("llm_review")
+        if not isinstance(current, dict):
+            return
+        next_progress = dict(current)
+        status_value = update.get("status")
+        if status_value in _LLM_PROGRESS_STATUSES:
+            next_progress["status"] = status_value
+        phase_value = update.get("phase")
+        if phase_value in _LLM_PROGRESS_PHASES:
+            next_progress["phase"] = phase_value
+        for key in (
+            "attempt",
+            "max_attempts",
+            "findings_total",
+            "findings_reviewed",
+            "findings_pending",
+        ):
+            if key not in update:
+                continue
+            numeric_value = _nonnegative_int(update[key], default=-1)
+            if numeric_value < 0:
+                continue
+            if key == "max_attempts":
+                numeric_value = max(1, min(10, numeric_value))
+            next_progress[key] = numeric_value
+        fallback_value = update.get("fallback")
+        if fallback_value in _LLM_PROGRESS_FALLBACKS:
+            next_progress["fallback"] = fallback_value
+        next_progress["last_update_at"] = _utc_now_iso()
+        info["llm_review"] = next_progress
+
+
+def _heartbeat_llm_progress(scan_id: str, stop_event: threading.Event) -> None:
+    """Keep last_update_at fresh while a bounded provider call is in flight."""
+    while not stop_event.wait(_LLM_PROGRESS_HEARTBEAT_SECONDS):
+        with _SCAN_PROGRESS_LOCK:
+            info = _scans.get(scan_id)
+            if info is None:
+                return
+            current = info.get("llm_review")
+            if not isinstance(current, dict) or current.get("status") != "running":
+                return
+            next_progress = dict(current)
+            next_progress["last_update_at"] = _utc_now_iso()
+            info["llm_review"] = next_progress
 
 
 class _DeterministicAcquisitionError(ValueError):
@@ -124,6 +230,21 @@ class ScanResponse(BaseModel):
     created_at: str
 
 
+class LLMReviewProgressResponse(BaseModel):
+    """Safe progress projection returned by the scan-status endpoint."""
+    status: str
+    phase: Optional[str] = None
+    attempt: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, ge=1)
+    findings_total: int = Field(default=0, ge=0)
+    findings_reviewed: int = Field(default=0, ge=0)
+    findings_pending: int = Field(default=0, ge=0)
+    started_at: Optional[str] = None
+    last_update_at: Optional[str] = None
+    deadline_at: Optional[str] = None
+    fallback: Optional[str] = None
+
+
 class ScanStatusResponse(BaseModel):
     """扫描状态查询响应。"""
     scan_id: str
@@ -133,7 +254,7 @@ class ScanStatusResponse(BaseModel):
     finished_at: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
     trust_score: Optional[Dict[str, Any]] = None
-    llm_review: Optional[Dict[str, Any]] = None
+    llm_review: Optional[LLMReviewProgressResponse] = None
     error: Optional[str] = None
 
 
@@ -452,19 +573,34 @@ def _run_llm_review_with_fallback(
     findings: list[dict[str, Any]],
     scanner: Any,
     manifest: dict[str, Any] | None = None,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Run multi-judge review and attach structured verdicts to findings."""
     try:
+        if (
+            deadline_monotonic is not None
+            and _time.monotonic() >= deadline_monotonic
+        ):
+            raise TimeoutError("LLM review deadline exceeded")
         reviewer = _load_llm_reviewer()
         finding_contexts, context_audit = build_finding_context_bundle(
             findings,
             scanner._file_contents,
         )
+        if (
+            deadline_monotonic is not None
+            and _time.monotonic() >= deadline_monotonic
+        ):
+            raise TimeoutError("LLM review deadline exceeded")
         result = reviewer.run_llm_review(
             findings=findings,
             finding_contexts=finding_contexts,
             manifest=manifest if manifest is not None else scanner._package_metadata,
             context_audit=context_audit,
+            progress_callback=progress_callback,
+            deadline_monotonic=deadline_monotonic,
         )
         labels = result.get("labels", {})
         if not isinstance(labels, dict):
@@ -488,7 +624,12 @@ def _run_llm_review_with_fallback(
         return result
     except Exception as exc:
         print(f"[TAH-trust]     LLM 审查跳过（{exc}）")
-        return _mark_llm_review_unavailable(findings, exc)
+        result = _mark_llm_review_unavailable(findings, exc)
+        if isinstance(exc, TimeoutError) or type(exc).__name__ == "LLMReviewDeadlineExceeded":
+            result["status"] = "timeout"
+            result["findings_reviewed"] = 0
+            result["fallback"] = "manual_review_for_unresolved"
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -1418,12 +1559,66 @@ def _run_scan_task(
         findings = scan_report.get("findings", [])
         if findings:
             _scans[scan_id]["status"] = "llm_review"
-            print(f"[TAH-trust]     LLM 审查: {len(findings)} findings 待审查...")
-            scan_report["llm_review"] = _run_llm_review_with_fallback(
-                findings,
-                scanner,
-                manifest=package_metadata,
+            reviewable_total = sum(
+                1
+                for finding in findings
+                if isinstance(finding, dict)
+                and finding.get("id")
+                and _is_llm_reviewable_finding(finding)
             )
+            progress, deadline_monotonic = _initial_llm_progress(reviewable_total)
+            with _SCAN_PROGRESS_LOCK:
+                _scans[scan_id]["llm_review"] = progress
+            heartbeat_stop = threading.Event()
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_llm_progress,
+                args=(scan_id, heartbeat_stop),
+                name=f"llm-progress-{scan_id}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+            print(
+                f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查..."
+            )
+            try:
+                scan_report["llm_review"] = _run_llm_review_with_fallback(
+                    findings,
+                    scanner,
+                    manifest=package_metadata,
+                    progress_callback=lambda update: _update_llm_progress(
+                        scan_id, update
+                    ),
+                    deadline_monotonic=deadline_monotonic,
+                )
+            finally:
+                heartbeat_stop.set()
+                heartbeat_thread.join(timeout=1.0)
+
+            llm_result = scan_report["llm_review"]
+            result_status = str(llm_result.get("status") or "call_failed")
+            public_status = (
+                "timeout"
+                if result_status == "timeout"
+                else "completed"
+                if result_status in {"completed", "not_required"}
+                else "degraded"
+            )
+            final_progress: dict[str, Any] = {
+                "status": public_status,
+                "findings_total": reviewable_total,
+                "findings_reviewed": _nonnegative_int(
+                    llm_result.get("findings_reviewed", 0)
+                ),
+                "findings_pending": _nonnegative_int(
+                    llm_result.get("findings_pending", 0)
+                ),
+            }
+            if public_status != "timeout":
+                final_progress["phase"] = "complete"
+            fallback = llm_result.get("fallback")
+            if isinstance(fallback, str) and fallback:
+                final_progress["fallback"] = fallback
+            _update_llm_progress(scan_id, final_progress)
         else:
             scan_report["llm_review"] = {
                 "triggered": False,
@@ -1436,6 +1631,15 @@ def _run_scan_task(
                 "arbitrated": 0,
                 "labels": {},
                 "decisions": {},
+            }
+            _scans[scan_id]["llm_review"] = {
+                "status": "completed",
+                "phase": "complete",
+                "attempt": 0,
+                "max_attempts": 3,
+                "findings_total": 0,
+                "findings_reviewed": 0,
+                "findings_pending": 0,
             }
         refresh_report_summaries(scan_report)
 
@@ -1539,7 +1743,6 @@ def _run_scan_task(
                 "grade": trust_score_result.get("risk_summary", {}).get("grade"),
                 "recommendation": trust_score_result.get("risk_summary", {}).get("install_recommendation"),
             },
-            "llm_review": scan_report.get("llm_review"),
         })
 
         # 临时目录保留给提交阶段打包产物，由 handle_scan_complete / 过期清理负责删除
@@ -1876,6 +2079,7 @@ def get_scan_status(
         pending  — 已入队，等待处理
         downloading — 正在下载受限仓库快照
         scanning — 正在运行风险扫描
+        llm_review — 正在进行多评审 LLM 语义复核
         scoring  — 正在计算信任评分
         saving   — 正在保存报告
         complete — 扫描完成
