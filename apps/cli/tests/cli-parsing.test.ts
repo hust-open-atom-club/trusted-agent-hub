@@ -125,6 +125,8 @@ function test_installHelpShowsVersionOption() {
   assert.strictEqual(status, 0);
   assert.ok(stdout.includes('--version'), 'install help must show --version option');
   assert.ok(stdout.includes('version'), 'install help must mention version');
+  assert.ok(stdout.includes('--reinstall'), 'install help must show --reinstall option');
+  assert.ok(stdout.includes('--overwrite-unowned'), 'install help must show --overwrite-unowned option');
   console.log('  ✓ install --help shows --version option');
 }
 

@@ -409,7 +409,10 @@ export class LocalInstallStore {
    * the target.  If the write or rename fails, the temporary file is cleaned
    * up and the original file is preserved.
    */
-  save(record: LocalInstallRecord): void {
+  save(
+    record: LocalInstallRecord,
+    expectedRecord?: LocalInstallRecord | null,
+  ): void {
     // Validate BEFORE loading or touching the file.  This prevents
     // an invalid record from being persisted, which would make the
     // file unreadable on the next load().
@@ -419,6 +422,23 @@ export class LocalInstallStore {
     const idx = records.findIndex(
       (r) => r.package_name === validated.package_name && r.client === validated.client,
     );
+
+    if (expectedRecord === null) {
+      if (idx >= 0) {
+        throw new RecordStoreError(
+          `Record for "${validated.package_name}" (client: "${validated.client}") appeared before save.`,
+          'record_changed',
+        );
+      }
+    } else if (
+      expectedRecord !== undefined &&
+      (idx < 0 || !recordsMatch(records[idx], expectedRecord))
+    ) {
+      throw new RecordStoreError(
+        `Record for "${validated.package_name}" (client: "${validated.client}") changed before save.`,
+        'record_changed',
+      );
+    }
 
     if (idx >= 0) {
       records[idx] = validated;
