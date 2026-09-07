@@ -40,6 +40,10 @@ assert.deepStrictEqual(
   CLIENT_INSTALL_ROOTS['cursor'],
   '.cursor/skills',
 );
+assert.deepStrictEqual(
+  CLIENT_INSTALL_ROOTS['codex'],
+  '.codex/skills',
+);
 console.log('  ✓ CLIENT_INSTALL_ROOTS has expected keys');
 
 // --- CLIENT_MANIFEST_ROOTS ---
@@ -55,6 +59,10 @@ assert.deepStrictEqual(
   CLIENT_MANIFEST_ROOTS['cursor'],
   '~/.cursor/skills/',
 );
+assert.deepStrictEqual(
+  CLIENT_MANIFEST_ROOTS['codex'],
+  '~/.codex/skills/',
+);
 console.log('  ✓ CLIENT_MANIFEST_ROOTS has expected keys');
 
 // --- SUPPORTED_CLIENTS ---
@@ -62,12 +70,14 @@ assert.deepStrictEqual(SUPPORTED_CLIENTS, [
   'claude-code',
   'claude-code-plugin',
   'cursor',
+  'codex',
 ]);
 console.log('  ✓ SUPPORTED_CLIENTS');
 
 // --- isSupportedClient ---
 assert.strictEqual(isSupportedClient('claude-code'), true);
 assert.strictEqual(isSupportedClient('cursor'), true);
+assert.strictEqual(isSupportedClient('codex'), true);
 assert.strictEqual(isSupportedClient('vscode'), false);
 assert.strictEqual(isSupportedClient(''), false);
 console.log('  ✓ isSupportedClient');
@@ -86,6 +96,12 @@ console.log('  ✓ isSupportedClient');
   const root = getClientRoot('cursor', home);
   assert.strictEqual(root, path.resolve(home, '.cursor/skills'));
   console.log('  ✓ getClientRoot cursor');
+}
+
+{
+  const root = getClientRoot('codex', home);
+  assert.strictEqual(root, path.resolve(home, '.codex/skills'));
+  console.log('  ✓ getClientRoot codex');
 }
 
 {
@@ -174,6 +190,18 @@ console.log('  ✓ isSupportedClient');
   );
   assert.strictEqual(result, path.resolve(home, '.claude/skills/example'));
   console.log('  ✓ resolveManifestDestination claude-code-plugin correct');
+}
+
+// Correct destination for Codex Skills
+{
+  const clientRoot = path.resolve(home, '.codex/skills');
+  const result = resolveManifestDestination(
+    '~/.codex/skills/example/',
+    'codex',
+    clientRoot,
+  );
+  assert.strictEqual(result, path.resolve(home, '.codex/skills/example'));
+  console.log('  ✓ resolveManifestDestination codex correct');
 }
 
 // Rejects wrong client root (cursor destination with claude-code client)

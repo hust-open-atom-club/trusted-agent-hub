@@ -382,7 +382,8 @@
     "client": {
       "claude-code": "Claude Code",
       "claude-code-plugin": "Claude Code Plugin",
-      "cursor": "Cursor"
+      "cursor": "Cursor",
+      "codex": "Codex"
     },
     "rail": {
       "install": "Install",

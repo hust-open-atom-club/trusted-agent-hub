@@ -49,6 +49,7 @@ CLIENT_INSTALL_ROOTS = {
     # auto-discovered.
     "claude-code-plugin": "~/.claude/skills/",
     "cursor": "~/.cursor/skills/",
+    "codex": "~/.codex/skills/",
 }
 
 

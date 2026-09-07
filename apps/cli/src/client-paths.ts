@@ -19,6 +19,7 @@ export const CLIENT_INSTALL_ROOTS: Record<string, string> = {
   // A bare directory under ~/.claude/plugins/ is NOT registered/enabled.
   'claude-code-plugin': '.claude/skills',
   cursor: '.cursor/skills',
+  codex: '.codex/skills',
 } as const;
 
 /**
@@ -30,6 +31,7 @@ export const CLIENT_MANIFEST_ROOTS: Record<string, string> = {
   'claude-code': '~/.claude/skills/',
   'claude-code-plugin': '~/.claude/skills/',
   cursor: '~/.cursor/skills/',
+  codex: '~/.codex/skills/',
 } as const;
 
 // ---------------------------------------------------------------------------

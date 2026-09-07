@@ -382,7 +382,8 @@
     "client": {
       "claude-code": "Claude Code",
       "claude-code-plugin": "Claude Code 插件",
-      "cursor": "Cursor"
+      "cursor": "Cursor",
+      "codex": "Codex"
     },
     "rail": {
       "install": "安装",

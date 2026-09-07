@@ -114,6 +114,22 @@ def test_parent_selector_skips_author_objects_without_a_name() -> None:
     assert selected == {"author": {"name": "ROOT"}}
 
 
+def test_parent_selector_accepts_url_only_author_identity() -> None:
+    selected, source = trust._select_parent_package_json(
+        "packages/team/demo",
+        {
+            "packages/team/package.json": json.dumps(
+                {"author": {"url": "https://github.com/team-owner"}}
+            ),
+        },
+    )
+
+    assert source == "packages/team/package.json"
+    assert selected == {
+        "author": {"url": "https://github.com/team-owner"}
+    }
+
+
 def test_parent_selector_skips_placeholder_authors() -> None:
     selected, source = trust._select_parent_package_json(
         "packages/team/demo",
@@ -202,6 +218,119 @@ def test_local_package_and_frontmatter_keep_higher_precedence(
         parent_package_json={"author": {"name": "PARENT"}},
     )
     assert frontmatter_metadata["author"]["name"] == "FRONTMATTER"
+
+
+def test_extractor_merges_package_author_url_with_frontmatter_name(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "packages" / "demo"
+    skill_dir.mkdir(parents=True)
+    _write_skill(skill_dir / "SKILL.md", author="FRONTMATTER")
+    (skill_dir / "package.json").write_text(
+        json.dumps(
+            {
+                "author": {
+                    "name": "LOCAL",
+                    "url": "https://github.com/local-owner",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    policy, inventory, contents = _target_snapshot(skill_dir)
+
+    metadata = extract_single_skill(
+        skill_dir,
+        repo_url="https://github.com/source-owner/demo",
+        policy=policy,
+        inventory=inventory,
+        file_contents=contents,
+    )
+
+    assert metadata["author"] == {
+        "name": "FRONTMATTER",
+        "email": "unknown@unknown.org",
+        "url": "https://github.com/local-owner",
+    }
+
+
+def test_extractor_infers_author_homepage_from_repository_owner(
+    tmp_path: Path,
+) -> None:
+    _write_skill(tmp_path / "SKILL.md")
+    (tmp_path / "package.json").write_text(
+        json.dumps({"author": {"url": "UNKNOWN"}}),
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(
+        tmp_path,
+        repo_url="https://github.com/source-owner/demo.git",
+    )
+
+    assert metadata["author"]["url"] == "https://github.com/source-owner"
+
+
+def test_fallback_infers_owner_from_repository_tree_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_extraction(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("forced extractor failure")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "extract_skills",
+        SimpleNamespace(extract_single_skill=fail_extraction),
+    )
+    metadata = trust._build_package_metadata(
+        {"package_name": "fallback-demo", "version": "1.0.0"},
+        "unused",
+        repo_url="https://github.com/source-owner/demo/tree/main/skill",
+        file_contents={"manifest.json": '{"author":{"url":"UNKNOWN"}}'},
+    )
+
+    assert metadata["author"] == {
+        "url": "https://github.com/source-owner"
+    }
+
+
+def test_project_url_is_not_mistaken_for_author_url(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: issue-68-demo\n"
+        "description: Regression fixture for project homepage semantics\n"
+        "url: https://docs.example.com/demo\n"
+        "---\n"
+        "# Demo\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(
+        tmp_path,
+        repo_url="https://github.com/source-owner/demo",
+    )
+
+    assert metadata["author"]["url"] == "https://github.com/source-owner"
+    assert metadata["homepage"] == "https://docs.example.com/demo"
+
+
+def test_duplicate_project_and_source_urls_are_omitted(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: issue-68-demo\n"
+        "description: Regression fixture for duplicate homepage removal\n"
+        "homepage: https://github.com/source-owner/demo/\n"
+        "---\n"
+        "# Demo\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(
+        tmp_path,
+        repo_url="https://github.com/source-owner/demo.git",
+    )
+
+    assert "homepage" not in metadata
 
 
 def test_extractor_does_not_read_ambient_parent_metadata(

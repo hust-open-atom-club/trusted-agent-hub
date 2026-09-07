@@ -39,12 +39,56 @@ logger = logging.getLogger(__name__)
 _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 
-def _author_has_real_name(author: object) -> bool:
-    """author 是否含真实姓名（缺失 / UNKNOWN 占位 → False）。"""
+_AUTHOR_PLACEHOLDERS = {
+    "unknown",
+    "unknown@unknown.org",
+    "unknown@unknown.com",
+}
+
+
+def _usable_author_fields(author: object) -> dict[str, str]:
+    """Return non-placeholder legacy author fields safe to persist."""
     if not isinstance(author, dict):
-        return False
-    name = str(author.get("name") or "").strip()
-    return bool(name) and name.upper() != "UNKNOWN"
+        return {}
+    result: dict[str, str] = {}
+    for field in ("name", "email", "url"):
+        value = str(author.get(field) or "").strip()
+        if not value or value.casefold() in _AUTHOR_PLACEHOLDERS:
+            continue
+        if field == "url" and "github.com/unknown/" in value.casefold():
+            continue
+        result[field] = value
+    return result
+
+
+def _canonical_comparison_url(value: str | None) -> str | None:
+    """Normalize benign URL spelling differences for duplicate detection."""
+    if not value or not value.strip():
+        return None
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return value.strip().rstrip("/")
+    path = parsed.path.rstrip("/")
+    if path.casefold().endswith(".git"):
+        path = path[:-4]
+    normalized = f"{parsed.scheme.casefold()}://{parsed.netloc.casefold()}{path}"
+    return normalized.casefold() if parsed.hostname == "github.com" else normalized
+
+
+def _distinct_homepage(
+    homepage: str | None,
+    repository_url: str | None,
+) -> str | None:
+    """Drop a project homepage that merely repeats the source repository."""
+    value = homepage.strip() if homepage else ""
+    if not value:
+        return None
+    if (
+        _canonical_comparison_url(value)
+        == _canonical_comparison_url(repository_url)
+    ):
+        return None
+    return value
 
 
 def _backfill_author_license(
@@ -54,8 +98,9 @@ def _backfill_author_license(
 ) -> None:
     """用扫描提取的真实 author/license 补齐版本元数据。
 
-    规则：手动值优先（已有真实值不覆盖）；提取器的占位兜底值
-    （UNKNOWN / UNLICENSED / 空）不写回，避免污染数据。
+    规则：逐字段合并且手动值优先；提取器的占位兜底值
+    （UNKNOWN / UNLICENSED / 空）不写回。作者 URL 被用户修改或清空后，
+    后续扫描都不得覆盖该选择。
     """
     version = repository.get_version(version_id)
     if not version:
@@ -63,10 +108,21 @@ def _backfill_author_license(
 
     updates: dict[str, object] = {}
 
-    if not _author_has_real_name(version.get("author")):
-        new_author = extracted.get("author")
-        if _author_has_real_name(new_author):
-            updates["author"] = new_author
+    current_author = _usable_author_fields(version.get("author"))
+    scanned_author = _usable_author_fields(extracted.get("author"))
+    field_source = version.get("field_source")
+    author_url_is_manual = (
+        isinstance(field_source, dict)
+        and field_source.get("author.url") == "manual"
+    )
+    merged_author = dict(current_author)
+    for field, value in scanned_author.items():
+        if field == "url" and author_url_is_manual:
+            continue
+        merged_author.setdefault(field, value)
+    raw_author = version.get("author")
+    if merged_author and merged_author != raw_author:
+        updates["author"] = merged_author
 
     current_license = str(version.get("license") or "").strip()
     if not current_license or current_license.upper() in ("NONE", "UNLICENSED"):
@@ -110,6 +166,31 @@ class ProducerService:
             return values
         return allowed or ["claude-code"]
 
+    @staticmethod
+    def _validate_installation_clients(
+        package_type: str,
+        installation: object,
+    ) -> None:
+        """Reject installation targets that the package type cannot support."""
+        if installation is None:
+            return
+        allowed = set(PACKAGE_TYPE_INSTALL_CLIENTS.get(package_type, ()))
+        clients: list[str] = []
+        target_client = getattr(installation, "target_client", None)
+        if target_client:
+            clients.append(str(target_client))
+        for target in getattr(installation, "targets", None) or []:
+            client = getattr(target, "client", None)
+            if client:
+                clients.append(str(client))
+        invalid = sorted({client for client in clients if client not in allowed})
+        if invalid:
+            raise ProducerServiceError(
+                f"包类型 '{package_type}' 不允许安装目标客户端: "
+                f"{', '.join(invalid)}；允许的客户端: "
+                f"{', '.join(sorted(allowed)) or '无'}"
+            )
+
     # ── 创建包 ────────────────────────────────────────────
 
     def create_package(
@@ -119,6 +200,7 @@ class ProducerService:
             raise ProducerServiceError("包名称不能为空")
         if not data.description:
             raise ProducerServiceError("包描述不能为空")
+        self._validate_installation_clients(data.type.value, data.installation)
 
         # 检查包名重复
         if self.repository.package_name_exists(data.name.strip()):
@@ -134,9 +216,12 @@ class ProducerService:
             license=data.license,
             keywords=data.keywords,
             category=data.category,
-            homepage=data.homepage,
+            homepage=_distinct_homepage(
+                data.homepage,
+                data.source.repository_url if data.source else None,
+            ),
             icon_url=data.icon_url,
-            author=data.author.model_dump() if data.author else None,
+            author=data.author.model_dump(exclude_none=True) if data.author else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
             installation=data.installation.model_dump() if data.installation else None,
             dependencies=data.dependencies.model_dump() if data.dependencies else None,
@@ -171,6 +256,7 @@ class ProducerService:
         if pkg is None:
             raise ProducerServiceError(f"包 {package_id} 不存在")
         package_type = str(pkg.get("type") or "skill")
+        self._validate_installation_clients(package_type, data.installation)
 
         # 校验 SemVer
         if not _SEMVER_RE.match(data.version):
@@ -184,7 +270,7 @@ class ProducerService:
             submitter_id=submitter_id,
             repo_url=data.repo_url,
             description=data.description,
-            author=data.author.model_dump() if data.author else None,
+            author=data.author.model_dump(exclude_none=True) if data.author else None,
             license=data.license,
             source=data.source.model_dump() if data.source else None,
             integrity=data.integrity.model_dump() if data.integrity else None,
@@ -516,6 +602,7 @@ class ProducerService:
             "claude-code": "~/.claude/skills/",
             "claude-code-plugin": "~/.claude/skills/",
             "cursor": "~/.cursor/skills/",
+            "codex": "~/.codex/skills/",
         }
         destination_root = client_roots.get(target_client, "~/.claude/skills/")
         archive_name = str(artifact.get("download_url", "")).rsplit("/", 1)[-1]

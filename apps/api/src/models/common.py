@@ -45,6 +45,20 @@ class PackageType(StrEnum):
     PROMPT = "prompt"
 
 
+class Client(StrEnum):
+    CLAUDE_CODE = "claude-code"
+    CLAUDE_CODE_PLUGIN = "claude-code-plugin"
+    CLAUDE_AI = "claude-ai"
+    CURSOR = "cursor"
+    CODEX = "codex"
+    VSCODE = "vscode"
+    MCP_CLIENT_GENERIC = "mcp-client-generic"
+    OPENAI_AGENTS = "openai-agents"
+    GITHUB_COPILOT = "github-copilot"
+    WINDSURF = "windsurf"
+    CLINE = "cline"
+
+
 class StrictContractModel(BaseModel):
     """Base for repository contracts that reject undeclared fields."""
 
@@ -69,7 +83,7 @@ class PackageListQuery(BaseModel):
 
     q: str | None = None
     type: PackageType | None = None
-    client: str | None = None
+    client: Client | None = None
     category: str | None = None
     tag: str | None = None
     min_grade: Literal["A", "B", "C", "D", "E"] | None = None

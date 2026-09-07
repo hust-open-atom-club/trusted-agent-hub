@@ -10,7 +10,19 @@ import {
   SCAN_FRONTEND_WAIT_MS,
   type ScanStatusPayload,
 } from '@/lib/scan-polling';
-import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../../packages/schema/constants';
+import {
+  CLIENT_LABELS,
+  PACKAGE_TYPE_INSTALL_CLIENTS,
+} from '../../../../../packages/schema/constants';
+import {
+  canonicalComparisonUrl,
+  distinctProjectHomepage,
+  getAllowedSubmissionClients,
+  inferGithubOwnerHomepage,
+  isGithubProfileUrl,
+  normalizeSubmissionClients,
+  redactAuthorEmailForPreview,
+} from '@/lib/submission-metadata';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -18,6 +30,7 @@ const PACKAGE_TYPES = [
   { value: 'skill', label: 'Skill' },
   { value: 'mcp_server', label: 'MCP Server' },
   { value: 'plugin', label: 'Plugin' },
+  { value: 'subagent', label: 'Subagent' },
   { value: 'command', label: 'Command' },
   { value: 'prompt', label: 'Prompt' },
 ];
@@ -34,7 +47,6 @@ const SPDX_LICENSES = [
   { value: 'Unlicense', label: 'Unlicense' },
   { value: 'BSL-1.0', label: 'BSL-1.0' },
   { value: 'LGPL-3.0', label: 'LGPL-3.0' },
-  { value: 'UNLICENSED', label: 'UNLICENSED' },
   { value: 'OTHER', label: '其他' },
 ];
 
@@ -63,14 +75,11 @@ interface PackageMetadata {
 
 type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' | 'done';
 
-const TYPE_DEFAULT_CLIENTS: Record<string, string> = Object.fromEntries(
-  Object.entries(PACKAGE_TYPE_INSTALL_CLIENTS).map(([type, clients]) => [type, clients.join(', ')])
-);
-
 function isPlaceholderStr(v: string | undefined | null): boolean {
   if (!v || v.trim() === '') return true;
-  if (v === 'UNKNOWN' || v === 'unknown@unknown.org' || v === 'UNLICENSED') return true;
-  if (v.includes('github.com/unknown/')) return true;
+  const normalized = v.trim().toLowerCase();
+  if (normalized === 'unknown' || normalized === 'unknown@unknown.org' || normalized === 'unknown@unknown.com' || normalized === 'unlicensed') return true;
+  if (normalized.includes('github.com/unknown/')) return true;
   return false;
 }
 
@@ -98,11 +107,12 @@ function SubmitForm() {
   const [pkgDescription, setPkgDescription] = useState('');
   const [pkgLicense, setPkgLicense] = useState('');
   const [pkgSourceUrl, setPkgSourceUrl] = useState('');
-  const [pkgAuthorName, setPkgAuthorName] = useState('');
-  const [pkgAuthorEmail, setPkgAuthorEmail] = useState('');
+  const [pkgAuthorUrl, setPkgAuthorUrl] = useState('');
   const [pkgCategory, setPkgCategory] = useState('');
   const [pkgHomepage, setPkgHomepage] = useState('');
-  const [pkgCompatibility, setPkgCompatibility] = useState('');
+  const [pkgCompatibility, setPkgCompatibility] = useState<string[]>(
+    () => [...PACKAGE_TYPE_INSTALL_CLIENTS.skill],
+  );
   const [pkgKeywords, setPkgKeywords] = useState('');
 
   const [error, setError] = useState('');
@@ -139,13 +149,6 @@ function SubmitForm() {
 
   /* ── 字段来源追踪 ── */
   const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
-
-  function markField(field: string, value: unknown): void {
-    setFieldSource((prev) => ({
-      ...prev,
-      [field]: isPlaceholderStr(typeof value === 'string' ? value : '') ? 'manual' : 'auto',
-    }));
-  }
 
   /* ── 扫描 ── */
   const fetchScanStatus = async (scanId: string): Promise<ScanStatusPayload> => {
@@ -184,25 +187,33 @@ function SubmitForm() {
     const nameV = meta?.name || '';
     const verV = meta?.version || '';
     const descV = meta?.description || '';
-    const licV = meta?.license || '';
+    const rawLicense = meta?.license || '';
+    const licV = isPlaceholderStr(rawLicense) ? '' : rawLicense;
     const typeV = meta?.type || 'skill';
+    const normalizedType = PACKAGE_TYPES.some((item) => item.value === typeV)
+      ? typeV
+      : 'skill';
     const srcV = (meta?.source && typeof meta.source === 'object'
       ? String((meta.source as Record<string, unknown>).repository_url || '') : '');
     const auth = (meta?.author && typeof meta.author === 'object'
-      ? meta.author as { name?: string; email?: string } : null);
+      ? meta.author as { name?: string; email?: string; url?: string } : null);
+    const sourceOwner = (meta?.source && typeof meta.source === 'object'
+      ? String((meta.source as Record<string, unknown>).owner || '') : '');
+    const inferredAuthorUrl = inferGithubOwnerHomepage(srcV, sourceOwner);
+    const scannedAuthorUrl = auth?.url?.trim() ?? '';
+    const authorUrl = !isPlaceholderStr(scannedAuthorUrl) ? scannedAuthorUrl : inferredAuthorUrl;
     const catV = meta?.category || '';
-    const hpV = meta?.homepage || '';
+    const hpV = distinctProjectHomepage(meta?.homepage, srcV);
     const kwV = meta?.keywords?.join(', ') || '';
-    const cmV = meta?.compatibility?.join(', ') || '';
+    const cmV = normalizeSubmissionClients(normalizedType, meta?.compatibility);
 
     setPkgName(nameV);
     setPkgVersion(verV);
     setPkgDescription(descV);
     setPkgLicense(licV);
-    setPkgType(typeV === 'mcp_server' ? 'mcp_server' : typeV === 'plugin' ? 'plugin' : typeV === 'command' ? 'command' : typeV === 'prompt' ? 'prompt' : 'skill');
+    setPkgType(normalizedType);
     setPkgSourceUrl(srcV);
-    setPkgAuthorName(auth?.name || '');
-    setPkgAuthorEmail(auth?.email || '');
+    setPkgAuthorUrl(authorUrl);
     setPkgCategory(catV);
     setPkgHomepage(hpV);
     setPkgKeywords(kwV);
@@ -215,12 +226,16 @@ function SubmitForm() {
     fs.license = isPlaceholderStr(licV) ? 'manual' : 'auto';
     fs['source.repository_url'] = isPlaceholderStr(srcV) ? 'manual' : 'auto';
     fs.type = 'auto';
-    if (auth?.name) fs['author.name'] = isPlaceholderStr(auth.name) ? 'manual' : 'auto';
-    if (auth?.email) fs['author.email'] = isPlaceholderStr(auth.email) ? 'manual' : 'auto';
+    if (authorUrl) {
+      fs['author.url'] = inferredAuthorUrl
+        && canonicalComparisonUrl(authorUrl) === canonicalComparisonUrl(inferredAuthorUrl)
+        ? 'inferred'
+        : 'auto';
+    }
     if (catV) fs.category = 'auto';
     if (hpV) fs.homepage = 'auto';
     if (kwV) fs.keywords = 'auto';
-    if (cmV) fs.compatibility = 'auto';
+    if (cmV.length > 0) fs.compatibility = 'auto';
     setFieldSource(fs);
 
     try {
@@ -330,8 +345,14 @@ function SubmitForm() {
     if (!pkgSourceUrl.trim() || !pkgSourceUrl.trim().startsWith('https://')) {
       setError('请输入有效的源码仓库地址'); return;
     }
+    if (pkgAuthorUrl.trim() && !isGithubProfileUrl(pkgAuthorUrl)) {
+      setError('作者 GitHub 主页应为个人或组织主页，例如 https://github.com/owner'); return;
+    }
     if (!pkgLicense.trim() || pkgLicense === 'UNLICENSED') {
       setError('请选择有效的许可证'); return;
+    }
+    if (pkgCompatibility.length === 0) {
+      setError('请至少选择一个兼容客户端'); return;
     }
     setError('');
     setPhase('submitting');
@@ -358,9 +379,10 @@ function SubmitForm() {
       }
       sourceObj.repository_url = sUrl;
 
-      const authorObj = { name: pkgAuthorName.trim() || 'unknown', email: pkgAuthorEmail.trim() || 'unknown@unknown.org' };
-      const compatList = pkgCompatibility ? pkgCompatibility.split(',').map(s => s.trim()).filter(Boolean) : meta.compatibility || [];
+      const authorObj = pkgAuthorUrl.trim() ? { url: pkgAuthorUrl.trim() } : null;
+      const compatList = normalizeSubmissionClients(pkgType, pkgCompatibility);
       const kwList = pkgKeywords ? pkgKeywords.split(',').map(s => s.trim()).filter(Boolean) : meta.keywords || [];
+      const homepage = distinctProjectHomepage(pkgHomepage, sUrl);
 
       if (isNewVersion) {
         const verBody: Record<string, unknown> = {
@@ -394,7 +416,7 @@ function SubmitForm() {
       const pkgBody: Record<string, unknown> = {
         name: pkgName.trim(), type: pkgType, description: pkgDescription.trim() || pkgName.trim(),
         license: pkgLicense.trim(), keywords: kwList, category: pkgCategory.trim() || meta.category || 'other',
-        homepage: pkgHomepage.trim() || meta.homepage || null, author: authorObj,
+        homepage: homepage || null, author: authorObj,
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
         compatibility: compatList, installation: meta.installation, source: sourceObj,
         dependencies: meta.dependencies || null,
@@ -441,12 +463,18 @@ function SubmitForm() {
 
   /* ── 辅助函数 ── */
   const isAuto = (field: string) => fieldSource[field] === 'auto';
+  const isInferred = (field: string) => fieldSource[field] === 'inferred';
 
-  const badge = (variant: 'auto' | 'manual'): React.CSSProperties => {
+  const badge = (variant: 'auto' | 'inferred' | 'manual'): React.CSSProperties => {
     if (variant === 'auto') return {
       display: 'inline-flex', alignItems: 'center', padding: '0.1rem 0.45rem',
       borderRadius: 'var(--radius-pill)', fontSize: '0.68rem', fontWeight: 700,
       background: 'oklch(92% 0.03 140)', color: 'oklch(45% 0.10 140)', whiteSpace: 'nowrap',
+    };
+    if (variant === 'inferred') return {
+      display: 'inline-flex', alignItems: 'center', padding: '0.1rem 0.45rem',
+      borderRadius: 'var(--radius-pill)', fontSize: '0.68rem', fontWeight: 700,
+      background: 'oklch(93% 0.04 230)', color: 'oklch(48% 0.11 230)', whiteSpace: 'nowrap',
     };
     return {
       display: 'inline-flex', alignItems: 'center', padding: '0.1rem 0.45rem',
@@ -466,9 +494,10 @@ function SubmitForm() {
   const roInp: React.CSSProperties = { ...inp, background: 'var(--color-paper-3)', borderStyle: 'dashed', color: 'var(--color-muted)', cursor: 'not-allowed' };
   const hint: React.CSSProperties = { fontSize: '0.76rem', color: 'var(--color-muted)', lineHeight: 1.4 };
   const warnHint: React.CSSProperties = { ...hint, color: 'var(--color-warning)' };
+  const availableClients = getAllowedSubmissionClients(pkgType);
 
   return (
-    <div className="submit-page" style={{ paddingBottom: '80px' }}>
+    <div className={`submit-page${phase === 'confirm' && scanResult ? ' submit-page--with-actions' : ''}`}>
       <div className="submit-container">
         <div className="submit-header">
           <h1>{isNewVersion ? '创建新版本' : '提交 Agent 能力包'}</h1>
@@ -640,9 +669,12 @@ function SubmitForm() {
                   {PACKAGE_TYPES.map((t) => (
                     <button key={t.value} type="button" onClick={() => {
                       setPkgType(t.value);
-                      setPkgCompatibility((prev) => (
-                        prev && prev.trim() ? prev : TYPE_DEFAULT_CLIENTS[t.value]
-                      ));
+                      setPkgCompatibility((prev) => normalizeSubmissionClients(t.value, prev));
+                      setFieldSource((prev) => ({
+                        ...prev,
+                        type: 'manual',
+                        compatibility: 'manual',
+                      }));
                     }} disabled={isBusy}
                       style={{
                         padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-pill)',
@@ -713,8 +745,9 @@ function SubmitForm() {
                 </label>
                 <input type="url" value={pkgSourceUrl}
                   onChange={(e) => { setPkgSourceUrl(e.target.value); setFieldSource(p => ({ ...p, 'source.repository_url': 'manual' })); }}
-                  disabled={isBusy} placeholder="https://github.com/owner/repo"
+                  readOnly={isAuto('source.repository_url')} disabled={isBusy} placeholder="https://github.com/owner/repo"
                   style={isAuto('source.repository_url') ? roInp : inp} />
+                {isAuto('source.repository_url') && <span style={hint}>源码地址与本次扫描内容绑定；如需更换，请使用“重新扫描”。</span>}
                 {!isAuto('source.repository_url') && <span style={{ ...badge('manual'), marginTop: '0.25rem' }}>需用户补充</span>}
               </div>
             </div>
@@ -725,18 +758,17 @@ function SubmitForm() {
                 选填信息（展开编辑）
               </summary>
               <div style={{ marginTop: '1rem' }}>
-                {/* 作者 */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1rem' }}>
-                  <div style={fieldStyle}>
-                    <label style={lbl}>作者名称</label>
-                    <input type="text" value={pkgAuthorName} onChange={(e) => setPkgAuthorName(e.target.value)}
-                      disabled={isBusy} placeholder="unknown" style={inp} />
-                  </div>
-                  <div style={fieldStyle}>
-                    <label style={lbl}>作者邮箱</label>
-                    <input type="email" value={pkgAuthorEmail} onChange={(e) => setPkgAuthorEmail(e.target.value)}
-                      disabled={isBusy} placeholder="unknown@unknown.org" style={inp} />
-                  </div>
+                {/* 作者 GitHub 主页 */}
+                <div style={fieldStyle}>
+                  <label style={lbl}>作者 GitHub 主页
+                    {isInferred('author.url') && <span style={badge('inferred')}>自动推断</span>}
+                    {isAuto('author.url') && <span style={badge('auto')}>自动识别</span>}
+                  </label>
+                  <input type="url" value={pkgAuthorUrl} onChange={(e) => {
+                    setPkgAuthorUrl(e.target.value);
+                    setFieldSource((prev) => ({ ...prev, 'author.url': 'manual' }));
+                  }} disabled={isBusy} placeholder="https://github.com/owner" style={inp} />
+                  <span style={hint}>用于标识作者个人或组织；自动推断值可以修改或清空。</span>
                 </div>
 
                 <div style={fieldStyle}>
@@ -746,9 +778,13 @@ function SubmitForm() {
                 </div>
 
                 <div style={fieldStyle}>
-                  <label style={lbl}>项目主页</label>
-                  <input type="url" value={pkgHomepage} onChange={(e) => setPkgHomepage(e.target.value)}
+                  <label style={lbl}>项目主页 / 文档</label>
+                  <input type="url" value={pkgHomepage} onChange={(e) => {
+                    setPkgHomepage(e.target.value);
+                    setFieldSource((prev) => ({ ...prev, homepage: 'manual' }));
+                  }}
                     disabled={isBusy} placeholder="https://..." style={inp} />
+                  <span style={hint}>填写独立官网、文档、Demo 或产品介绍页；与源码地址相同的值不会保存。</span>
                 </div>
 
                 <div style={fieldStyle}>
@@ -759,14 +795,38 @@ function SubmitForm() {
 
                 <div style={fieldStyle}>
                   <label style={lbl}>兼容客户端</label>
-                  <input type="text" value={pkgCompatibility} onChange={(e) => setPkgCompatibility(e.target.value)}
-                    disabled={isBusy} placeholder={'逗号分隔，如: ' + (TYPE_DEFAULT_CLIENTS[pkgType] ?? 'claude-code')} style={inp} />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.55rem' }}>
+                    {availableClients.map((client) => {
+                      const checked = pkgCompatibility.includes(client);
+                      return (
+                        <label key={client} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                          padding: '0.45rem 0.7rem', border: '1px solid var(--color-rule)',
+                          borderRadius: 'var(--radius-sm)', background: checked ? 'oklch(95% 0.04 95)' : 'var(--color-paper)',
+                          cursor: isBusy ? 'not-allowed' : 'pointer', fontSize: '0.84rem',
+                        }}>
+                          <input type="checkbox" checked={checked}
+                            disabled={isBusy || (checked && pkgCompatibility.length === 1)}
+                            onChange={(event) => {
+                              setPkgCompatibility((previous) => event.target.checked
+                                ? Array.from(new Set([...previous, client]))
+                                : previous.filter((value) => value !== client));
+                              setFieldSource((previous) => ({ ...previous, compatibility: 'manual' }));
+                            }} />
+                          {CLIENT_LABELS[client as keyof typeof CLIENT_LABELS] ?? client}
+                        </label>
+                      );
+                    })}
+                  </div>
                   <span style={hint}>
                     {pkgType === 'plugin'
-                      ? '插件仅支持 Claude Code 插件方式安装（claude-code-plugin）。'
-                      : pkgType === 'skill' || pkgType === 'mcp_server'
-                        ? '该类型可安装到 Claude Code / Cursor。'
+                      ? 'Plugin 仅支持 Claude Code Plugin。'
+                      : pkgType === 'skill'
+                        ? 'Skill 可安装到 Claude Code、Cursor 或 Codex。'
+                        : pkgType === 'mcp_server'
+                          ? 'MCP Server 暂仅开放 Claude Code 与 Cursor；Codex 配置方案明确后再开放。'
                         : '该类型仅支持安装到 Claude Code。'}
+                    {' '}至少保留一个客户端。
                   </span>
                 </div>
 
@@ -781,7 +841,7 @@ function SubmitForm() {
                       borderRadius: 'var(--radius-md)', maxHeight: '180px', overflow: 'auto',
                       marginTop: '0.5rem', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap',
                     }}>
-                      {JSON.stringify(metadata, null, 2)}
+                      {JSON.stringify(redactAuthorEmailForPreview(metadata as unknown as Record<string, unknown>), null, 2)}
                     </pre>
                   </details>
                 )}
@@ -792,12 +852,7 @@ function SubmitForm() {
 
         {/* ══ Sticky 底部操作栏 ══ */}
         {phase === 'confirm' && scanResult && (
-          <div style={{
-            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
-            background: 'var(--color-paper)', borderTop: '1px solid var(--color-rule)',
-            padding: '0.85rem 2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            boxShadow: '0 -4px 20px oklch(0% 0 0 / 0.06)',
-          }}>
+          <div className="submit-sticky-actions">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--color-ink)', cursor: 'pointer' }}>
               <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)}
                 disabled={isBusy}
@@ -811,7 +866,7 @@ function SubmitForm() {
                 重新扫描
               </button>
               <button type="button" className="btn btn-primary btn-lg" onClick={handleSubmit}
-                disabled={isBusy || !confirmed || !pkgName.trim() || !pkgSourceUrl.trim() || !pkgLicense.trim() || pkgLicense === 'UNLICENSED'}>
+                disabled={isBusy || !confirmed || !pkgName.trim() || !pkgSourceUrl.trim() || !pkgLicense.trim() || pkgLicense === 'UNLICENSED' || pkgCompatibility.length === 0}>
                 提交审核
               </button>
             </div>

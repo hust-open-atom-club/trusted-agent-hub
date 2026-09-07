@@ -333,6 +333,7 @@ export const CLIENTS = [
   'claude-code-plugin',
   'claude-ai',
   'cursor',
+  'codex',
   'vscode',
   'mcp-client-generic',
   'openai-agents',
@@ -347,6 +348,7 @@ export const CLIENT_LABELS: Record<Client, string> = {
   'claude-code-plugin': 'Claude Code 插件',
   'claude-ai': 'claude.ai',
   cursor: 'Cursor',
+  codex: 'Codex',
   vscode: 'VS Code',
   'mcp-client-generic': '通用 MCP 客户端',
   'openai-agents': 'OpenAI Agents SDK',
@@ -360,7 +362,7 @@ export const CLIENT_LABELS: Record<Client, string> = {
  * 详情页的安装目标选择与后端校验都以该映射为唯一依据。
  */
 export const PACKAGE_TYPE_INSTALL_CLIENTS: Record<PackageType, readonly string[]> = {
-  skill: ['claude-code', 'cursor'],
+  skill: ['claude-code', 'cursor', 'codex'],
   mcp_server: ['claude-code', 'cursor'],
   plugin: ['claude-code-plugin'],
   subagent: ['claude-code'],

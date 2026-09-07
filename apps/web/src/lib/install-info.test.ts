@@ -83,6 +83,7 @@ describe('getClientLabel', () => {
     expect(getClientLabel('claude-code')).toBe('Claude Code');
     expect(getClientLabel('claude-code-plugin')).toBe('Claude Code 插件');
     expect(getClientLabel('cursor')).toBe('Cursor');
+    expect(getClientLabel('codex')).toBe('Codex');
     expect(getClientLabel('unknown')).toBe('unknown');
   });
 });
@@ -108,6 +109,9 @@ describe('getClientTargetPath', () => {
     expect(getClientTargetPath(null, 'cursor', 'demo')).toBe(
       '~/.cursor/skills/demo/',
     );
+    expect(getClientTargetPath(null, 'codex', 'demo')).toBe(
+      '~/.codex/skills/demo/',
+    );
   });
 });
 
@@ -115,8 +119,9 @@ describe('CLIENT_OPTIONS / isClientCompatible', () => {
   it('lists all supported clients', () => {
     expect(CLIENT_OPTIONS.map((c) => c.id)).toEqual([
       'claude-code',
-      'claude-code-plugin',
       'cursor',
+      'codex',
+      'claude-code-plugin',
     ]);
   });
 
@@ -136,8 +141,8 @@ describe('getClientsForType', () => {
     expect(getClientsForType('plugin')).toEqual(['claude-code-plugin']);
   });
 
-  it('allows skills to target claude-code and cursor only', () => {
-    expect(getClientsForType('skill')).toEqual(['claude-code', 'cursor']);
+  it('allows skills to target Claude Code, Cursor, and Codex', () => {
+    expect(getClientsForType('skill')).toEqual(['claude-code', 'cursor', 'codex']);
   });
 
   it('returns an empty list for unknown types', () => {
@@ -163,6 +168,7 @@ describe('getSelectableClients', () => {
     expect(getSelectableClients('skill', null)).toEqual([
       'claude-code',
       'cursor',
+      'codex',
     ]);
     expect(getSelectableClients('plugin', [])).toEqual(['claude-code-plugin']);
   });
@@ -171,6 +177,7 @@ describe('getSelectableClients', () => {
     expect(getSelectableClients('skill', ['vscode', 'windsurf'])).toEqual([
       'claude-code',
       'cursor',
+      'codex',
     ]);
   });
 

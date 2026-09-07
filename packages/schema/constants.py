@@ -319,6 +319,7 @@ CLIENTS: Final[tuple[str, ...]] = (
     "claude-code-plugin",
     "claude-ai",
     "cursor",
+    "codex",
     "vscode",
     "mcp-client-generic",
     "openai-agents",
@@ -332,6 +333,7 @@ CLIENT_LABELS: Final[dict[str, str]] = {
     "claude-code-plugin": "Claude Code 插件",
     "claude-ai": "claude.ai",
     "cursor": "Cursor",
+    "codex": "Codex",
     "vscode": "VS Code",
     "mcp-client-generic": "通用 MCP 客户端",
     "openai-agents": "OpenAI Agents SDK",
@@ -344,7 +346,7 @@ CLIENT_LABELS: Final[dict[str, str]] = {
 # 包类型允许安装到的客户端。
 # 详情页的安装目标选择与后端校验都以该映射为唯一依据。
 PACKAGE_TYPE_INSTALL_CLIENTS: Final[dict[str, tuple[str, ...]]] = {
-    "skill": ("claude-code", "cursor"),
+    "skill": ("claude-code", "cursor", "codex"),
     "mcp_server": ("claude-code", "cursor"),
     "plugin": ("claude-code-plugin",),
     "subagent": ("claude-code",),

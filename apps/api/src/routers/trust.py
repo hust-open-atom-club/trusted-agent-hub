@@ -925,6 +925,21 @@ def _normalized_author_name(value: Any) -> str | None:
     return name
 
 
+def _normalized_author_url(value: Any) -> str | None:
+    """Return a usable author homepage from object metadata."""
+    if not isinstance(value, dict):
+        return None
+    url = value.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    normalized = url.strip()
+    if normalized.casefold() in _AUTHOR_PLACEHOLDER_NAMES:
+        return None
+    if "github.com/unknown/" in normalized.casefold():
+        return None
+    return normalized
+
+
 def _validate_manifest_json_nesting(text: str) -> None:
     depth = 0
     in_string = False
@@ -1006,7 +1021,10 @@ def _select_parent_package_json(
             )
             continue
         author = value.get("author")
-        if _normalized_author_name(author) is not None:
+        if (
+            _normalized_author_name(author) is not None
+            or _normalized_author_url(author) is not None
+        ):
             return value, relative_path
         if author:
             logging.warning(
@@ -1768,45 +1786,55 @@ def _run_scan_task(
             on_complete(scan_id, None, public_error)
 
 
-def _is_missing_fallback_author(value: Any) -> bool:
-    """Identify empty or placeholder authors in fallback metadata."""
-    return _normalized_author_name(value) is None
-
-
 def _normalize_fallback_author(value: Any) -> dict[str, str] | None:
     """Normalize a package.json author value for fallback metadata."""
     name = _normalized_author_name(value)
-    if name is None:
-        return None
     if isinstance(value, str):
-        return {"name": name, "email": "unknown@unknown.org"}
+        return {"name": name} if name is not None else None
     if isinstance(value, dict):
-        author = {
-            "name": name,
-            "email": str(value.get("email") or "unknown@unknown.org"),
-        }
-        if value.get("url"):
-            author["url"] = str(value["url"])
-        return author
+        author: dict[str, str] = {}
+        if name is not None:
+            author["name"] = name
+        email = str(value.get("email") or "").strip()
+        if email and email.casefold() not in _AUTHOR_PLACEHOLDER_NAMES:
+            author["email"] = email
+        url = _normalized_author_url(value)
+        if url is not None:
+            author["url"] = url
+        return author or None
     return None
+
+
+def _repository_owner_homepage(repo_url: str) -> str | None:
+    match = re.match(
+        r"https?://github\.com/([^/?#]+)/[^/?#]+(?:\.git)?(?:/|$)",
+        repo_url.strip(),
+        flags=re.IGNORECASE,
+    )
+    return f"https://github.com/{match.group(1)}" if match else None
 
 
 def _apply_fallback_author(
     metadata: dict[str, Any],
     local_package_author: Any,
     parent_package_json: dict[str, Any] | None,
+    repo_url: str = "",
 ) -> dict[str, Any]:
-    """Apply local package or inherited author without overriding metadata."""
-    if not _is_missing_fallback_author(metadata.get("author")):
-        return metadata
+    """Merge declared author data and infer a missing GitHub owner homepage."""
+    author = _normalize_fallback_author(metadata.get("author")) or {}
+    candidates = [local_package_author]
+    if isinstance(parent_package_json, dict):
+        candidates.append(parent_package_json.get("author"))
+    for candidate in candidates:
+        normalized = _normalize_fallback_author(candidate) or {}
+        for field, value in normalized.items():
+            author.setdefault(field, value)
 
-    author = _normalize_fallback_author(local_package_author)
-    if author is None and isinstance(parent_package_json, dict):
-        author = _normalize_fallback_author(parent_package_json.get("author"))
-    if author is None:
-        return metadata
-
-    metadata["author"] = author
+    inferred_url = _repository_owner_homepage(repo_url)
+    if inferred_url:
+        author.setdefault("url", inferred_url)
+    if author:
+        metadata["author"] = author
     return metadata
 
 
@@ -1880,6 +1908,7 @@ def _build_package_metadata(
                     value,
                     local_package_author,
                     parent_package_json,
+                    repo_url,
                 )
             logging.warning("manifest.json root is not an object for %s", target)
         except (ValueError, RecursionError, OSError) as e:
@@ -1895,6 +1924,7 @@ def _build_package_metadata(
                     value,
                     local_package_author,
                     parent_package_json,
+                    repo_url,
                 )
             logging.warning("plugin.json root is not an object for %s", target)
         except (ValueError, RecursionError, OSError) as e:
@@ -1910,6 +1940,7 @@ def _build_package_metadata(
                     result.data,
                     local_package_author,
                     parent_package_json,
+                    repo_url,
                 )
         except (OSError, UnicodeDecodeError) as e:
             logging.warning("SKILL.md fallback failed for %s: %s", target, e)
@@ -1933,6 +1964,7 @@ def _build_package_metadata(
         fallback_metadata,
         local_package_author,
         parent_package_json,
+        repo_url,
     )
 
 

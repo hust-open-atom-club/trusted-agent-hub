@@ -191,7 +191,7 @@ program
 program
   .command('install <name>')
   .description('Install a package with grade-based safety gating')
-  .option('-c, --client <client>', 'Target client (e.g. claude-code)', 'claude-code')
+  .option('-c, --client <client>', 'Target client (claude-code, cursor, codex, or claude-code-plugin)', 'claude-code')
   .option('--version <version>', 'Specific version to install (default: latest)')
   .option('-y, --yes', 'Skip confirmation prompts (Grade C)')
   .option('-f, --force', 'First explicit consent for high-risk installs (Grade D)')
