@@ -412,6 +412,7 @@ class LLMReview(StrictContractModel):
         "completed",
         "call_failed",
         "context_incomplete",
+        "timeout",
     ] | None = None
     attempts: int = 0
     review_rounds: int = Field(default=0, ge=0, le=3)

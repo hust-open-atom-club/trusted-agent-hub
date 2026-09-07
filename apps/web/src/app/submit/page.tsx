@@ -4,6 +4,12 @@ import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { apiFetch } from '@/lib/api-fetch';
+import {
+  formatScanStatusMessage,
+  scanPollIntervalMs,
+  SCAN_FRONTEND_WAIT_MS,
+  type ScanStatusPayload,
+} from '@/lib/scan-polling';
 import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../../packages/schema/constants';
 
 import { API_BASE } from '@/lib/runtime-config';
@@ -33,14 +39,9 @@ const SPDX_LICENSES = [
 ];
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[\w.]+)?(?:\+[\w.]+)?$/;
+const PENDING_SCAN_STORAGE_KEY = 'trusted-agent-hub:pending-scan-id';
 
-interface ScanResult {
-  scan_id: string;
-  status: string;
-  package_name: string;
-  trust_score?: { grade: string | null; level: string | null; recommendation: string | null };
-  summary?: { total: number; critical: number; high: number; medium: number; low: number; info: number };
-}
+type ScanResult = ScanStatusPayload;
 
 interface PackageMetadata {
   name: string;
@@ -60,7 +61,7 @@ interface PackageMetadata {
   dependencies?: Record<string, unknown>;
 }
 
-type ScanPhase = 'input' | 'scanning' | 'confirm' | 'submitting' | 'done';
+type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' | 'done';
 
 const TYPE_DEFAULT_CLIENTS: Record<string, string> = Object.fromEntries(
   Object.entries(PACKAGE_TYPE_INSTALL_CLIENTS).map(([type, clients]) => [type, clients.join(', ')])
@@ -106,6 +107,8 @@ function SubmitForm() {
 
   const [error, setError] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
+  const [activeScanId, setActiveScanId] = useState('');
+  const [checkingBackground, setCheckingBackground] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
 
   const isBusy = phase === 'scanning' || phase === 'submitting';
@@ -124,6 +127,16 @@ function SubmitForm() {
     }).catch(() => {});
   }, [isNewVersion, packageId, token]);
 
+  useEffect(() => {
+    try {
+      const pendingScanId = window.sessionStorage.getItem(PENDING_SCAN_STORAGE_KEY);
+      if (!pendingScanId) return;
+      setActiveScanId(pendingScanId);
+      setStatusMsg('扫描仍在后台进行，您可以刷新查看结果。');
+      setPhase('background');
+    } catch { /* sessionStorage 不可用时仍保留当前页面内的 scan_id */ }
+  }, []);
+
   /* ── 字段来源追踪 ── */
   const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
 
@@ -135,8 +148,108 @@ function SubmitForm() {
   }
 
   /* ── 扫描 ── */
+  const fetchScanStatus = async (scanId: string): Promise<ScanStatusPayload> => {
+    const response = await fetch(`${API_BASE}/api/v0/scan/${scanId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `扫描状态查询失败 (${response.status})`);
+    }
+    return response.json();
+  };
+
+  const applyCompletedScan = async (
+    scanId: string,
+    data: ScanStatusPayload,
+  ): Promise<void> => {
+    let meta: PackageMetadata | null = null;
+    let caps: { path: string; name: string; type: string }[] = [];
+    try {
+      const mr = await fetch(`${API_BASE}/api/v0/scan/${scanId}/metadata`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (mr.ok) {
+        const md = await mr.json();
+        meta = md.metadata;
+        caps = Array.isArray(md.capabilities) ? md.capabilities : [];
+      }
+    } catch { /* 元数据获取失败不影响扫描结果展示 */ }
+
+    setScanResult(data);
+    setMetadata(meta);
+    setCapabilities(caps);
+    setSelectedCapability('');
+
+    const nameV = meta?.name || '';
+    const verV = meta?.version || '';
+    const descV = meta?.description || '';
+    const licV = meta?.license || '';
+    const typeV = meta?.type || 'skill';
+    const srcV = (meta?.source && typeof meta.source === 'object'
+      ? String((meta.source as Record<string, unknown>).repository_url || '') : '');
+    const auth = (meta?.author && typeof meta.author === 'object'
+      ? meta.author as { name?: string; email?: string } : null);
+    const catV = meta?.category || '';
+    const hpV = meta?.homepage || '';
+    const kwV = meta?.keywords?.join(', ') || '';
+    const cmV = meta?.compatibility?.join(', ') || '';
+
+    setPkgName(nameV);
+    setPkgVersion(verV);
+    setPkgDescription(descV);
+    setPkgLicense(licV);
+    setPkgType(typeV === 'mcp_server' ? 'mcp_server' : typeV === 'plugin' ? 'plugin' : typeV === 'command' ? 'command' : typeV === 'prompt' ? 'prompt' : 'skill');
+    setPkgSourceUrl(srcV);
+    setPkgAuthorName(auth?.name || '');
+    setPkgAuthorEmail(auth?.email || '');
+    setPkgCategory(catV);
+    setPkgHomepage(hpV);
+    setPkgKeywords(kwV);
+    setPkgCompatibility(cmV);
+
+    const fs: Record<string, string> = {};
+    fs.name = isPlaceholderStr(nameV) ? 'manual' : 'auto';
+    fs.version = isPlaceholderStr(verV) ? 'manual' : 'auto';
+    fs.description = isPlaceholderStr(descV) ? 'manual' : 'auto';
+    fs.license = isPlaceholderStr(licV) ? 'manual' : 'auto';
+    fs['source.repository_url'] = isPlaceholderStr(srcV) ? 'manual' : 'auto';
+    fs.type = 'auto';
+    if (auth?.name) fs['author.name'] = isPlaceholderStr(auth.name) ? 'manual' : 'auto';
+    if (auth?.email) fs['author.email'] = isPlaceholderStr(auth.email) ? 'manual' : 'auto';
+    if (catV) fs.category = 'auto';
+    if (hpV) fs.homepage = 'auto';
+    if (kwV) fs.keywords = 'auto';
+    if (cmV) fs.compatibility = 'auto';
+    setFieldSource(fs);
+
+    try {
+      window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
+    } catch { /* ignore */ }
+    setPhase('confirm');
+  };
+
+  const handlePolledStatus = async (
+    scanId: string,
+    data: ScanStatusPayload,
+  ): Promise<boolean> => {
+    setStatusMsg(formatScanStatusMessage(data));
+    if (data.status === 'complete') {
+      await applyCompletedScan(scanId, data);
+      return true;
+    }
+    if (data.status === 'error') {
+      throw new Error(data.error || '扫描失败');
+    }
+    return false;
+  };
+
   const runScan = async (url: string) => {
     setError('');
+    setActiveScanId('');
+    try {
+      window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
+    } catch { /* ignore */ }
     const body = { repo_url: url.trim() };
 
     // 记录仓库 base 与 ref，供“多能力子目录重扫”拼接 URL
@@ -154,81 +267,51 @@ function SubmitForm() {
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '扫描提交失败'); }
       const { scan_id } = await r.json();
+      setActiveScanId(scan_id);
 
-      for (let i = 0; i < 120; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const sr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}`, { headers: { Authorization: `Bearer ${token}` } });
-        const data = await sr.json();
-        setStatusMsg(`扫描中... (${data.status})`);
-
-        if (data.status === 'complete') {
-          let meta: PackageMetadata | null = null;
-          let caps: { path: string; name: string; type: string }[] = [];
-          try {
-            const mr = await fetch(`${API_BASE}/api/v0/scan/${scan_id}/metadata`, { headers: { Authorization: `Bearer ${token}` } });
-            if (mr.ok) {
-              const md = await mr.json();
-              meta = md.metadata;
-              caps = Array.isArray(md.capabilities) ? md.capabilities : [];
-            }
-          } catch { /* ignore */ }
-
-          setScanResult(data);
-          setMetadata(meta);
-          setCapabilities(caps);
-          setSelectedCapability('');
-
-          const nameV = meta?.name || '';
-          const verV = meta?.version || '';
-          const descV = meta?.description || '';
-          const licV = meta?.license || '';
-          const typeV = meta?.type || 'skill';
-          const srcV = (meta?.source && typeof meta.source === 'object'
-            ? String((meta.source as Record<string, unknown>).repository_url || '') : '');
-          const auth = (meta?.author && typeof meta.author === 'object'
-            ? meta.author as { name?: string; email?: string } : null);
-          const catV = meta?.category || '';
-          const hpV = meta?.homepage || '';
-          const kwV = meta?.keywords?.join(', ') || '';
-          const cmV = meta?.compatibility?.join(', ') || '';
-
-          setPkgName(nameV);
-          setPkgVersion(verV);
-          setPkgDescription(descV);
-          setPkgLicense(licV);
-          setPkgType(typeV === 'mcp_server' ? 'mcp_server' : typeV === 'plugin' ? 'plugin' : typeV === 'command' ? 'command' : typeV === 'prompt' ? 'prompt' : 'skill');
-          setPkgSourceUrl(srcV);
-          setPkgAuthorName(auth?.name || '');
-          setPkgAuthorEmail(auth?.email || '');
-          setPkgCategory(catV);
-          setPkgHomepage(hpV);
-          setPkgKeywords(kwV);
-          setPkgCompatibility(cmV);
-
-          const fs: Record<string, string> = {};
-          fs['name'] = isPlaceholderStr(nameV) ? 'manual' : 'auto';
-          fs['version'] = isPlaceholderStr(verV) ? 'manual' : 'auto';
-          fs['description'] = isPlaceholderStr(descV) ? 'manual' : 'auto';
-          fs['license'] = isPlaceholderStr(licV) ? 'manual' : 'auto';
-          fs['source.repository_url'] = isPlaceholderStr(srcV) ? 'manual' : 'auto';
-          fs['type'] = 'auto';
-          if (auth?.name) fs['author.name'] = isPlaceholderStr(auth.name) ? 'manual' : 'auto';
-          if (auth?.email) fs['author.email'] = isPlaceholderStr(auth.email) ? 'manual' : 'auto';
-          if (catV) fs['category'] = 'auto';
-          if (hpV) fs['homepage'] = 'auto';
-          if (kwV) fs['keywords'] = 'auto';
-          if (cmV) fs['compatibility'] = 'auto';
-          setFieldSource(fs);
-
-          setPhase('confirm');
-          return;
-        }
-        if (data.status === 'error') throw new Error(data.error || '扫描失败');
+      const pollingStartedAt = Date.now();
+      let latest: ScanStatusPayload = { scan_id, status: 'pending' };
+      while (Date.now() - pollingStartedAt < SCAN_FRONTEND_WAIT_MS) {
+        const remainingMs = SCAN_FRONTEND_WAIT_MS - (Date.now() - pollingStartedAt);
+        const intervalMs = Math.min(scanPollIntervalMs(latest), remainingMs);
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        latest = await fetchScanStatus(scan_id);
+        if (await handlePolledStatus(scan_id, latest)) return;
       }
-      throw new Error('扫描超时，请重试');
+
+      // The final query closes the race where the backend completes as the
+      // frontend wait budget expires.
+      latest = await fetchScanStatus(scan_id);
+      if (await handlePolledStatus(scan_id, latest)) return;
+      try {
+        window.sessionStorage.setItem(PENDING_SCAN_STORAGE_KEY, scan_id);
+      } catch { /* 当前页面仍会保留 scan_id */ }
+      setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
+      setPhase('background');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '扫描失败');
       setPhase('input');
+    }
+  };
+
+  const checkBackgroundScan = async () => {
+    if (!activeScanId || checkingBackground) return;
+    setCheckingBackground(true);
+    setError('');
+    try {
+      const latest = await fetchScanStatus(activeScanId);
+      if (latest.status === 'error') {
+        try {
+          window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
+        } catch { /* ignore */ }
+        setPhase('input');
+      }
+      if (await handlePolledStatus(activeScanId, latest)) return;
+      setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : '扫描状态查询失败');
+    } finally {
+      setCheckingBackground(false);
     }
   };
 
@@ -413,9 +496,35 @@ function SubmitForm() {
           <div className="scanner-status scanner-status-busy">
             <div className="scanner-spinner" />
             <div>
-              <p className="scanner-status-title">正在扫描仓库</p>
+              <p className="scanner-status-title">
+                {statusMsg.includes('LLM') ? '正在进行 LLM 审查' : '正在扫描仓库'}
+              </p>
+              <p className="scanner-status-msg" style={{ whiteSpace: 'pre-line' }}>{statusMsg}</p>
+              <p className="scanning-estimate">
+                {statusMsg.includes('LLM')
+                  ? 'LLM 审查最长 15 分钟，页面会自动降低轮询频率'
+                  : '正在下载代码、执行静态扫描并自动提取元数据...'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ══ Phase: 后台继续 ══ */}
+        {phase === 'background' && (
+          <div className="scanner-status">
+            <div>
+              <p className="scanner-status-title">扫描仍在后台进行</p>
               <p className="scanner-status-msg">{statusMsg}</p>
-              <p className="scanning-estimate">预计耗时 30–90 秒，正在自动提取元数据...</p>
+              <p className="scanning-estimate">扫描 ID：{activeScanId}</p>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={checkBackgroundScan}
+                disabled={checkingBackground}
+                style={{ marginTop: '0.75rem' }}
+              >
+                {checkingBackground ? '查询中...' : '刷新查看结果'}
+              </button>
             </div>
           </div>
         )}
@@ -496,6 +605,13 @@ function SubmitForm() {
                     {' · '}Medium: <strong>{scanResult.summary.medium}</strong>
                     {' · '}Low: <strong>{scanResult.summary.low}</strong>
                   </span>
+                </div>
+              )}
+              {(scanResult.llm_review?.status === 'timeout'
+                || scanResult.llm_review?.status === 'degraded'
+                || Boolean(scanResult.llm_review?.fallback)) && (
+                <div className="submit-error" style={{ marginTop: '0.9rem', marginBottom: 0 }}>
+                  LLM 审查未能完成全部裁决；扫描结果已保存，未解决的问题需要人工审核。
                 </div>
               )}
             </div>

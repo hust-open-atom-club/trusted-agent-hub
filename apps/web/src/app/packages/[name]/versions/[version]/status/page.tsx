@@ -10,7 +10,7 @@ import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } fr
 import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
 const POLL_INTERVAL_MS = 10_000;
-const MAX_SCAN_POLLS = 18; // 18 × 10s = 3 分钟超时
+const MAX_SCAN_POLLS = 90; // 90 × 10s = 15 分钟，随后执行最后一次查询
 const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error']);
 
 const STATUS_LABELS: Record<string, string> = {
@@ -76,7 +76,7 @@ function StatusContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [scanTimedOut, setScanTimedOut] = useState(false);
+  const [scanPollingStopped, setScanPollingStopped] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitMsg, setSubmitMsg] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -86,7 +86,6 @@ function StatusContent() {
     if (!token) return null;
     try {
       setError(null);
-      setScanTimedOut(false);
       const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -151,13 +150,18 @@ function StatusContent() {
     if (intervalRef.current) return;
 
     pollRef.current = 0;
+    setScanPollingStopped(false);
 
     intervalRef.current = setInterval(async () => {
       pollRef.current += 1;
       if (pollRef.current >= MAX_SCAN_POLLS) {
+        // Close the completion race before stopping automatic polling.
         clearInterval(intervalRef.current!);
         intervalRef.current = null;
-        setScanTimedOut(true);
+        const latest = await fetchDetail();
+        if (!latest || !TERMINAL_STATUSES.has(latest.status)) {
+          setScanPollingStopped(true);
+        }
         return;
       }
       const latest = await fetchDetail();
@@ -388,14 +392,14 @@ function StatusContent() {
             </div>
             {stage.phase === 'active' && isScanning && (
               <div className="scanning-block">
-                {scanTimedOut ? (
+                {scanPollingStopped ? (
                   <div className="status-alert">
-                    <div className="status-alert-title">&#x23F0; 扫描超时</div>
+                    <div className="status-alert-title">&#x23F0; 扫描仍在后台进行</div>
                     <div className="status-alert-detail">
-                      扫描已超过 3 分钟未完成，可能出现了异常。
+                      页面已在等待 15 分钟后停止自动刷新；后台任务未被判定为失败。
                     </div>
                     <div className="status-alert-contact">
-                      请稍后点击"刷新状态"查看结果，或联系 {SUPPORT_EMAIL}
+                      请稍后点击"刷新状态"查看结果。
                     </div>
                   </div>
                 ) : (
@@ -409,7 +413,7 @@ function StatusContent() {
                       系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
                     </p>
                     <p className="scanning-estimate">
-                      预计耗时 30–90 秒 · 页面每 10 秒自动刷新
+                      LLM 复核最长约 15 分钟 · 页面每 10 秒自动刷新
                     </p>
                   </>
                 )}
@@ -507,11 +511,11 @@ function StatusContent() {
       )}
 
       {(!detail.scan_summary || !detail.scan_summary.findings) && isScanning && (
-        scanTimedOut ? (
+        scanPollingStopped ? (
           <div className="empty-state">
             <div className="empty-state-icon">&#x23F0;</div>
-            <h3>扫描超时</h3>
-            <p>扫描已超过 3 分钟未完成，请点击上方"刷新状态"按钮重试</p>
+            <h3>扫描仍在后台进行</h3>
+            <p>页面已停止自动刷新，您可以稍后点击上方“刷新状态”查看结果</p>
           </div>
         ) : (
           <div className="scanning-block scanning-block-large">
@@ -521,7 +525,7 @@ function StatusContent() {
               <span className="scanning-dot" />
             </div>
             <p>扫描进行中，完成后将自动展示发现详情。</p>
-            <p className="scanning-estimate">预计耗时 30–90 秒 · 页面每 10 秒自动刷新</p>
+            <p className="scanning-estimate">LLM 复核最长约 15 分钟 · 页面每 10 秒自动刷新</p>
           </div>
         )
       )}

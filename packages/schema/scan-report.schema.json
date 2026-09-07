@@ -721,7 +721,7 @@
           "type": "string",
           "enum": [
             "not_triggered", "not_required", "not_configured", "completed",
-            "call_failed", "context_incomplete"
+            "call_failed", "context_incomplete", "timeout"
           ]
         },
         "attempts": { "type": "integer", "minimum": 0 },

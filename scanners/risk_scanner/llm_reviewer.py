@@ -26,7 +26,7 @@ import json
 import os
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from scanners.risk_scanner.redaction import redact_value
 
@@ -40,6 +40,8 @@ SEMANTIC_REVIEWED_SEVERITIES: frozenset[str] = frozenset(
 REVIEW_BATCH_SIZE = 8
 DECISION_CONFIDENCE = 0.7
 BENIGN_DOWNGRADE_CONFIDENCE = 0.85
+LLM_REQUEST_TIMEOUT_SECONDS = 30.0
+LLM_MAX_ATTEMPTS = 3
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 LLM_POLICY_VERSION = "llm-adjudication-v2"
@@ -168,6 +170,63 @@ class LLMReviewCallError(RuntimeError):
     """A configured LLM provider failed or returned an unusable response."""
 
 
+class LLMReviewRequestTimeout(LLMReviewCallError):
+    """One provider request reached its per-request timeout."""
+
+
+class LLMReviewDeadlineExceeded(LLMReviewCallError):
+    """The deadline for the complete multi-judge review was exhausted."""
+
+    def __init__(self, message: str, *, attempts: int = 0) -> None:
+        super().__init__(message)
+        self.attempts = attempts
+
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    *,
+    status: str,
+    phase: str,
+    attempt: int,
+    max_attempts: int,
+    findings_total: int,
+    findings_reviewed: int,
+    findings_pending: int | None = None,
+    event: str,
+    fallback: str | None = None,
+) -> None:
+    """Publish safe orchestration metadata without affecting review results."""
+    if callback is None:
+        return
+    pending = (
+        max(0, findings_total - findings_reviewed)
+        if findings_pending is None
+        else max(0, findings_pending)
+    )
+    update: dict[str, Any] = {
+        "status": status,
+        "phase": phase,
+        "attempt": max(0, attempt),
+        "max_attempts": max(1, max_attempts),
+        "findings_total": max(0, findings_total),
+        "findings_reviewed": max(0, findings_reviewed),
+        "findings_pending": pending,
+        # This event is useful to the backend callback, but is intentionally
+        # not part of the public scan-status payload.
+        "event": event,
+    }
+    if fallback:
+        update["fallback"] = fallback
+    try:
+        callback(update)
+    except Exception:
+        # Progress reporting is best effort and must never change a verdict.
+        return
+
+
 def _has_llm_config() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -224,7 +283,11 @@ def _build_metadata_text(manifest: dict[str, Any]) -> str:
     return "\n".join(parts) if parts else "No metadata available"
 
 
-def _call_llm(prompt: str) -> dict[str, Any]:
+def _call_llm(
+    prompt: str,
+    *,
+    timeout_seconds: float = LLM_REQUEST_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     provider, api_key, base_url, model = _provider_configuration()
 
     try:
@@ -255,7 +318,9 @@ def _call_llm(prompt: str) -> dict[str, Any]:
                 ],
             }
 
-        with httpx.Client(timeout=30) as client:
+        with httpx.Client(
+            timeout=max(0.001, min(LLM_REQUEST_TIMEOUT_SECONDS, timeout_seconds))
+        ) as client:
             resp = client.post(api_url, json=body, headers=headers)
             resp.raise_for_status()
             data = resp.json()
@@ -276,21 +341,134 @@ def _call_llm(prompt: str) -> dict[str, Any]:
     except LLMReviewCallError:
         raise
     except Exception as exc:
+        if "timeout" in type(exc).__name__.lower():
+            raise LLMReviewRequestTimeout(
+                f"LLM request timed out after {timeout_seconds:.3g}s"
+            ) from exc
         raise LLMReviewCallError(f"LLM request failed: {type(exc).__name__}: {exc}") from exc
 
 
-def _call_llm_with_retries(prompt: str, max_attempts: int = 3) -> tuple[dict[str, Any], int]:
+_NETWORK_CALL_LLM = _call_llm
+
+
+def _remaining_deadline_seconds(deadline_monotonic: float | None) -> float | None:
+    if deadline_monotonic is None:
+        return None
+    return deadline_monotonic - time.monotonic()
+
+
+def _call_llm_with_retries(
+    prompt: str,
+    max_attempts: int = LLM_MAX_ATTEMPTS,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    phase: str = "judge_a",
+    deadline_monotonic: float | None = None,
+    findings_total: int = 0,
+    findings_reviewed: int = 0,
+) -> tuple[dict[str, Any], int]:
     last_error: LLMReviewCallError | None = None
     for attempt in range(1, max_attempts + 1):
+        remaining = _remaining_deadline_seconds(deadline_monotonic)
+        if remaining is not None and remaining <= 0:
+            _emit_progress(
+                progress_callback,
+                status="timeout",
+                phase=phase,
+                attempt=max(0, attempt - 1),
+                max_attempts=max_attempts,
+                findings_total=findings_total,
+                findings_reviewed=findings_reviewed,
+                event="deadline_exceeded",
+                fallback="manual_review_for_unresolved",
+            )
+            raise LLMReviewDeadlineExceeded(
+                "LLM review deadline exceeded",
+                attempts=max(0, attempt - 1),
+            )
+        _emit_progress(
+            progress_callback,
+            status="running",
+            phase=phase,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            findings_total=findings_total,
+            findings_reviewed=findings_reviewed,
+            event="request_started",
+        )
         try:
-            response = _call_llm(prompt)
+            if _call_llm is _NETWORK_CALL_LLM:
+                response = _call_llm(
+                    prompt,
+                    timeout_seconds=(
+                        LLM_REQUEST_TIMEOUT_SECONDS
+                        if remaining is None
+                        else min(LLM_REQUEST_TIMEOUT_SECONDS, remaining)
+                    ),
+                )
+            else:
+                # Preserve the one-argument contract used by injected/local
+                # reviewers and the existing test suite.
+                response = _call_llm(prompt)
+            remaining = _remaining_deadline_seconds(deadline_monotonic)
+            if remaining is not None and remaining <= 0:
+                _emit_progress(
+                    progress_callback,
+                    status="timeout",
+                    phase=phase,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    findings_total=findings_total,
+                    findings_reviewed=findings_reviewed,
+                    event="deadline_exceeded",
+                    fallback="manual_review_for_unresolved",
+                )
+                raise LLMReviewDeadlineExceeded(
+                    "LLM review deadline exceeded",
+                    attempts=attempt,
+                )
             if not isinstance(response, dict):
                 raise LLMReviewCallError("LLM response is not a JSON object")
+            _emit_progress(
+                progress_callback,
+                status="running",
+                phase=phase,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                findings_total=findings_total,
+                findings_reviewed=findings_reviewed,
+                event="request_succeeded",
+            )
             return response, attempt
+        except LLMReviewDeadlineExceeded:
+            raise
         except LLMReviewCallError as exc:
             last_error = exc
+            _emit_progress(
+                progress_callback,
+                status="running",
+                phase=phase,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                findings_total=findings_total,
+                findings_reviewed=findings_reviewed,
+                event=(
+                    "request_timed_out"
+                    if isinstance(exc, LLMReviewRequestTimeout)
+                    else "request_failed"
+                ),
+            )
             if attempt < max_attempts:
-                time.sleep(0.2 * (2 ** (attempt - 1)))
+                backoff = 0.2 * (2 ** (attempt - 1))
+                remaining = _remaining_deadline_seconds(deadline_monotonic)
+                if remaining is not None:
+                    if remaining <= 0:
+                        raise LLMReviewDeadlineExceeded(
+                            "LLM review deadline exceeded",
+                            attempts=attempt,
+                        ) from exc
+                    backoff = min(backoff, remaining)
+                time.sleep(backoff)
     raise last_error or LLMReviewCallError("LLM request failed")
 
 
@@ -660,6 +838,9 @@ def run_llm_review(
     finding_contexts: dict[str, str] | None,
     manifest: dict[str, Any] | None,
     context_audit: dict[str, Any] | None = None,
+    *,
+    progress_callback: ProgressCallback | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     review_template_sha256 = hashlib.sha256(
         LLM_REVIEW_PROMPT.encode("utf-8")
@@ -726,6 +907,17 @@ def run_llm_review(
     }
 
     if not findings:
+        _emit_progress(
+            progress_callback,
+            status="completed",
+            phase="complete",
+            attempt=0,
+            max_attempts=LLM_MAX_ATTEMPTS,
+            findings_total=0,
+            findings_reviewed=0,
+            findings_pending=0,
+            event="review_completed",
+        )
         return result
 
     finding_contexts = finding_contexts or {}
@@ -784,6 +976,17 @@ def run_llm_review(
 
     if not reviewable:
         result["status"] = "not_required"
+        _emit_progress(
+            progress_callback,
+            status="completed",
+            phase="complete",
+            attempt=0,
+            max_attempts=LLM_MAX_ATTEMPTS,
+            findings_total=0,
+            findings_reviewed=0,
+            findings_pending=0,
+            event="review_completed",
+        )
         return result
 
     statuses = [
@@ -812,6 +1015,18 @@ def run_llm_review(
         result["findings_pending"] = len(reviewable)
         result["error"] = "LLM provider is not configured"
         result["fallback"] = "manual_review_required"
+        _emit_progress(
+            progress_callback,
+            status="degraded",
+            phase="complete",
+            attempt=0,
+            max_attempts=LLM_MAX_ATTEMPTS,
+            findings_total=len(reviewable),
+            findings_reviewed=0,
+            findings_pending=len(reviewable),
+            event="review_degraded",
+            fallback="manual_review_required",
+        )
         return result
 
     if injected_reviewer:
@@ -850,111 +1065,165 @@ def run_llm_review(
         }
 
     errors: list[str] = []
-    for start in range(0, len(ready), REVIEW_BATCH_SIZE):
-        batch = ready[start : start + REVIEW_BATCH_SIZE]
-        judge_reviews: list[dict[str, dict[str, Any]]] = []
-        for judge in ("A", "B"):
-            prompt = LLM_REVIEW_PROMPT.format(
-                judge=judge,
-                metadata=metadata_text,
-                findings=json.dumps(batch, ensure_ascii=False),
-            )
-            result["prompt_audit"]["payload_sha256s"].append(
-                hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            )
-            try:
-                response, attempts = _call_llm_with_retries(prompt)
-                result["attempts"] += attempts
-                judge_reviews.append(_response_reviews(response, batch))
-            except LLMReviewCallError as exc:
-                errors.append(f"judge {judge}: {exc}")
-                result["attempts"] += 3
-                judge_reviews.append({})
-
-        result["review_rounds"] = max(result["review_rounds"], 2)
-        disputed: list[dict[str, Any]] = []
-        normalized_by_id: dict[str, list[dict[str, Any]]] = {}
-        for finding in batch:
-            fid = finding["id"]
-            normalized = [
-                _normalize_review(
-                    judge.get(fid),
-                    finding["context_audit"],
-                    finding["code_context"],
+    progress_reviewed = 0
+    last_phase = "judge_a"
+    last_attempt = 0
+    timed_out = False
+    try:
+        for start in range(0, len(ready), REVIEW_BATCH_SIZE):
+            batch = ready[start : start + REVIEW_BATCH_SIZE]
+            judge_reviews: list[dict[str, dict[str, Any]]] = []
+            for judge in ("A", "B"):
+                last_phase = f"judge_{judge.lower()}"
+                prompt = LLM_REVIEW_PROMPT.format(
+                    judge=judge,
+                    metadata=metadata_text,
+                    findings=json.dumps(batch, ensure_ascii=False),
                 )
-                for judge in judge_reviews
-            ]
-            normalized_by_id[fid] = normalized
-            decision = _agreed_decision(normalized, rounds=2)
-            if decision is not None:
-                decision["context_audit"] = finding["context_audit"]
-                result["decisions"][fid] = decision
-            else:
-                disputed.append({
-                    **finding,
-                    "independent_reviews": normalized,
-                })
-
-        if disputed:
-            result["arbitrated"] += len(disputed)
-            arbitration_prompt = LLM_ARBITRATION_PROMPT.format(
-                metadata=metadata_text,
-                findings=json.dumps(disputed, ensure_ascii=False),
-            )
-            result["prompt_audit"]["payload_sha256s"].append(
-                hashlib.sha256(arbitration_prompt.encode("utf-8")).hexdigest()
-            )
-            try:
-                arbitration_response, attempts = _call_llm_with_retries(
-                    arbitration_prompt
+                result["prompt_audit"]["payload_sha256s"].append(
+                    hashlib.sha256(prompt.encode("utf-8")).hexdigest()
                 )
-                result["attempts"] += attempts
-                arbitration_reviews = _response_reviews(
-                    arbitration_response, disputed
-                )
-            except LLMReviewCallError as exc:
-                errors.append(f"arbiter: {exc}")
-                result["attempts"] += 3
-                arbitration_reviews = {}
-            result["review_rounds"] = 3
+                try:
+                    response, attempts = _call_llm_with_retries(
+                        prompt,
+                        progress_callback=progress_callback,
+                        phase=last_phase,
+                        deadline_monotonic=deadline_monotonic,
+                        findings_total=len(reviewable),
+                        findings_reviewed=progress_reviewed,
+                    )
+                    last_attempt = attempts
+                    result["attempts"] += attempts
+                    judge_reviews.append(_response_reviews(response, batch))
+                except LLMReviewDeadlineExceeded as exc:
+                    last_attempt = max(last_attempt, exc.attempts)
+                    result["attempts"] += exc.attempts
+                    raise
+                except LLMReviewCallError as exc:
+                    errors.append(f"judge {judge}: {exc}")
+                    last_attempt = LLM_MAX_ATTEMPTS
+                    result["attempts"] += LLM_MAX_ATTEMPTS
+                    judge_reviews.append({})
 
-            for finding in disputed:
+            result["review_rounds"] = max(result["review_rounds"], 2)
+            disputed: list[dict[str, Any]] = []
+            normalized_by_id: dict[str, list[dict[str, Any]]] = {}
+            for finding in batch:
                 fid = finding["id"]
-                all_reviews = normalized_by_id[fid] + [
+                normalized = [
                     _normalize_review(
-                        arbitration_reviews.get(fid),
+                        judge.get(fid),
                         finding["context_audit"],
                         finding["code_context"],
                     )
+                    for judge in judge_reviews
                 ]
-                decision = _agreed_decision(all_reviews, rounds=3)
-                if decision is None:
-                    had_response = any(
-                        review.get("confidence", 0) > 0 for review in all_reviews
-                    )
-                    decision = {
-                        "verdict": "uncertain" if had_response else "unavailable",
-                        "impact": "unknown",
-                        "intent": "benign",
-                        "confidence": max(
-                            (float(review.get("confidence", 0)) for review in all_reviews),
-                            default=0.0,
-                        ),
-                        "context_role": "unknown",
-                        "evidence_sufficient": False,
-                        "missing_context": sorted({
-                            str(item)
-                            for review in all_reviews
-                            for item in (review.get("missing_context") or [])
-                        }),
-                        "supporting_evidence": [],
-                        "explanation": "三轮语义复核未形成一致结论",
-                        "rounds": 3,
-                    }
-                decision["context_audit"] = finding["context_audit"]
-                result["decisions"][fid] = decision
+                normalized_by_id[fid] = normalized
+                decision = _agreed_decision(normalized, rounds=2)
+                if decision is not None:
+                    decision["context_audit"] = finding["context_audit"]
+                    result["decisions"][fid] = decision
+                else:
+                    disputed.append({
+                        **finding,
+                        "independent_reviews": normalized,
+                    })
 
-    if errors:
+            progress_reviewed += len(batch) - len(disputed)
+            if disputed:
+                result["arbitrated"] += len(disputed)
+                last_phase = "arbitration"
+                arbitration_prompt = LLM_ARBITRATION_PROMPT.format(
+                    metadata=metadata_text,
+                    findings=json.dumps(disputed, ensure_ascii=False),
+                )
+                result["prompt_audit"]["payload_sha256s"].append(
+                    hashlib.sha256(arbitration_prompt.encode("utf-8")).hexdigest()
+                )
+                try:
+                    arbitration_response, attempts = _call_llm_with_retries(
+                        arbitration_prompt,
+                        progress_callback=progress_callback,
+                        phase=last_phase,
+                        deadline_monotonic=deadline_monotonic,
+                        findings_total=len(reviewable),
+                        findings_reviewed=progress_reviewed,
+                    )
+                    last_attempt = attempts
+                    result["attempts"] += attempts
+                    arbitration_reviews = _response_reviews(
+                        arbitration_response, disputed
+                    )
+                except LLMReviewDeadlineExceeded as exc:
+                    last_attempt = max(last_attempt, exc.attempts)
+                    result["attempts"] += exc.attempts
+                    raise
+                except LLMReviewCallError as exc:
+                    errors.append(f"arbiter: {exc}")
+                    last_attempt = LLM_MAX_ATTEMPTS
+                    result["attempts"] += LLM_MAX_ATTEMPTS
+                    arbitration_reviews = {}
+                result["review_rounds"] = 3
+
+                for finding in disputed:
+                    fid = finding["id"]
+                    all_reviews = normalized_by_id[fid] + [
+                        _normalize_review(
+                            arbitration_reviews.get(fid),
+                            finding["context_audit"],
+                            finding["code_context"],
+                        )
+                    ]
+                    decision = _agreed_decision(all_reviews, rounds=3)
+                    if decision is None:
+                        had_response = any(
+                            review.get("confidence", 0) > 0 for review in all_reviews
+                        )
+                        decision = {
+                            "verdict": "uncertain" if had_response else "unavailable",
+                            "impact": "unknown",
+                            "intent": "benign",
+                            "confidence": max(
+                                (
+                                    float(review.get("confidence", 0))
+                                    for review in all_reviews
+                                ),
+                                default=0.0,
+                            ),
+                            "context_role": "unknown",
+                            "evidence_sufficient": False,
+                            "missing_context": sorted({
+                                str(item)
+                                for review in all_reviews
+                                for item in (review.get("missing_context") or [])
+                            }),
+                            "supporting_evidence": [],
+                            "explanation": "三轮语义复核未形成一致结论",
+                            "rounds": 3,
+                        }
+                    decision["context_audit"] = finding["context_audit"]
+                    result["decisions"][fid] = decision
+                progress_reviewed += len(disputed)
+
+            _emit_progress(
+                progress_callback,
+                status="running",
+                phase=last_phase,
+                attempt=last_attempt,
+                max_attempts=LLM_MAX_ATTEMPTS,
+                findings_total=len(reviewable),
+                findings_reviewed=progress_reviewed,
+                event="batch_completed",
+            )
+    except LLMReviewDeadlineExceeded as exc:
+        timed_out = True
+        errors.append(str(exc))
+
+    if timed_out:
+        result["status"] = "timeout"
+        result["error"] = "LLM review deadline exceeded"
+        result["fallback"] = "manual_review_for_unresolved"
+    elif errors:
         result["status"] = "call_failed"
         result["error"] = "; ".join(errors)
         result["fallback"] = "manual_review_for_unresolved"
@@ -997,6 +1266,32 @@ def run_llm_review(
             result["findings_pending"] += 1
         result["labels"][fid] = label
 
-    result["findings_reviewed"] = len(ready)
+    result["findings_reviewed"] = progress_reviewed if timed_out else len(ready)
+
+    public_status = (
+        "timeout"
+        if result["status"] == "timeout"
+        else "completed"
+        if result["status"] in {"completed", "not_required"}
+        else "degraded"
+    )
+    _emit_progress(
+        progress_callback,
+        status=public_status,
+        phase=last_phase if timed_out else "complete",
+        attempt=last_attempt,
+        max_attempts=LLM_MAX_ATTEMPTS,
+        findings_total=len(reviewable),
+        findings_reviewed=result["findings_reviewed"],
+        findings_pending=result["findings_pending"],
+        event=(
+            "review_timed_out"
+            if timed_out
+            else "review_completed"
+            if public_status == "completed"
+            else "review_degraded"
+        ),
+        fallback=result.get("fallback"),
+    )
 
     return result
