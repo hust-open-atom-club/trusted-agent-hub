@@ -1,6 +1,23 @@
 {
   "components": {
     "schemas": {
+      "Client": {
+        "enum": [
+          "claude-code",
+          "claude-code-plugin",
+          "claude-ai",
+          "cursor",
+          "codex",
+          "vscode",
+          "mcp-client-generic",
+          "openai-agents",
+          "github-copilot",
+          "windsurf",
+          "cline"
+        ],
+        "title": "Client",
+        "type": "string"
+      },
       "CopyInstallationStep": {
         "additionalProperties": false,
         "properties": {
@@ -525,7 +542,7 @@
         "properties": {
           "compatibility": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Client"
             },
             "title": "Compatibility",
             "type": "array"
@@ -597,8 +614,7 @@
         "additionalProperties": false,
         "properties": {
           "client": {
-            "title": "Client",
-            "type": "string"
+            "$ref": "#/components/schemas/Client"
           },
           "event_id": {
             "title": "Event Id",
@@ -668,9 +684,7 @@
         "additionalProperties": false,
         "properties": {
           "client": {
-            "minLength": 1,
-            "title": "Client",
-            "type": "string"
+            "$ref": "#/components/schemas/Client"
           },
           "event_id": {
             "description": "Client-generated unique idempotency key",
@@ -758,8 +772,7 @@
             "type": "array"
           },
           "target_client": {
-            "title": "Target Client",
-            "type": "string"
+            "$ref": "#/components/schemas/Client"
           }
         },
         "required": [
@@ -1667,8 +1680,7 @@
         "description": "Install destination safe to expose on the public package page.",
         "properties": {
           "client": {
-            "title": "Client",
-            "type": "string"
+            "$ref": "#/components/schemas/Client"
           },
           "destination": {
             "title": "Destination",
@@ -1726,13 +1738,12 @@
           "target_client": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/Client"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Target Client"
+            ]
           },
           "targets": {
             "anyOf": [
@@ -1854,7 +1865,7 @@
         "properties": {
           "compatibility": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Client"
             },
             "title": "Compatibility",
             "type": "array"
@@ -2318,7 +2329,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/Client"
                 },
                 {
                   "type": "null"
@@ -2766,9 +2777,7 @@
             "name": "client",
             "required": true,
             "schema": {
-              "minLength": 1,
-              "title": "Client",
-              "type": "string"
+              "$ref": "#/components/schemas/Client"
             }
           },
           {

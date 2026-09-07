@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from .common import Page, StrictContractModel
+from .common import Client, Page, StrictContractModel
 from .packages import Grade
 
 
@@ -25,7 +25,7 @@ class TrustLevelName(StrEnum):
 class InstallReportRequest(StrictContractModel):
     package_name: str
     version: str
-    client: str = Field(min_length=1)
+    client: Client
     event_id: str = Field(min_length=1, description="Client-generated unique idempotency key")
     install_path: str | None = Field(default=None, description="Omitted for anonymous installs")
     integrity_verified: bool = False
@@ -37,7 +37,7 @@ class InstallRecord(StrictContractModel):
     version: str
     version_id: str
     user_id: str | None = None
-    client: str
+    client: Client
     event_id: str
     install_path: str | None = None
     integrity_verified: bool

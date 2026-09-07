@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SortField, SortOrder } from '@/data/packages';
 import { AnimatePresence, listItem, listStagger, motion, softPanel } from '@/components/Motion';
+import { CLIENT_OPTIONS, getClientLabel } from '@/lib/install-info';
 
 type MarketView = 'all' | 'low_risk' | 'popular' | 'recent';
 type SearchBarLayout = 'inline' | 'rail' | 'secondary';
@@ -36,8 +37,6 @@ interface SearchBarProps {
 }
 
 const FILTER_KEYS = ['all', 'skill', 'mcp_server', 'plugin', 'command', 'subagent', 'prompt'] as const;
-
-const CLIENT_OPTIONS = ['claude-code', 'cursor', 'claude-code-plugin'] as const;
 
 const GRADE_OPTIONS = ['A', 'B', 'C', 'D', 'E'] as const;
 
@@ -336,8 +335,10 @@ export default function SearchBar({
                     aria-label={t('search.client')}
                   >
                     <option value="">{t('search.all_clients')}</option>
-                    {CLIENT_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
+                    {CLIENT_OPTIONS.map((clientOption) => (
+                      <option key={clientOption.id} value={clientOption.id}>
+                        {t(`detail.client.${clientOption.id}`, { defaultValue: getClientLabel(clientOption.id) })}
+                      </option>
                     ))}
                   </select>
                 </div>

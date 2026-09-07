@@ -26,10 +26,10 @@
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "attestation_url": "https://github.com/alice-dev/code-review-skill/attestations/v1.0.0"
   },
-  "compatibility": ["claude-code", "cursor"],
+  "compatibility": ["claude-code", "cursor", "codex"],
   "keywords": ["code-review", "pull-request", "quality", "security"],
   "category": "code-generation",
-  "homepage": "https://github.com/alice-dev/code-review-skill#readme",
+  "homepage": "https://alice-dev.github.io/code-review-skill/",
   "dependencies": {
     "system": ["git"]
   },
@@ -62,6 +62,10 @@
       {
         "client": "cursor",
         "destination": "~/.cursor/skills/code-review-skill/"
+      },
+      {
+        "client": "codex",
+        "destination": "~/.codex/skills/code-review-skill/"
       }
     ],
     "post_install_message": "安装完成后，使用 /review-pr 命令触发代码审查。"

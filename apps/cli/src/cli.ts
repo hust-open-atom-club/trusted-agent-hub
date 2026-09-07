@@ -20,6 +20,7 @@ import { client, ApiError } from './api-client';
 import type { PackageSummary, VersionDetail } from './api-client';
 import { ConfigStoreError, getConfigPath, saveConfig } from './config-store';
 import {
+  CLIENTS,
   PACKAGE_TYPE_LABELS,
   GRADE_LABELS,
 } from '../../../packages/schema/constants';
@@ -105,6 +106,11 @@ program
     page?: string;
     pageSize?: string;
   }) => {
+    if (options.client && !(CLIENTS as readonly string[]).includes(options.client)) {
+      fatal(
+        `Invalid --client value: "${options.client}". Supported clients: ${CLIENTS.join(', ')}.`,
+      );
+    }
     const pageRaw = parseInt(options.page || '1', 10);
     if (!Number.isFinite(pageRaw) || pageRaw < 1) {
       fatal(`Invalid --page value: "${options.page}". Must be a positive integer.`);
@@ -191,7 +197,7 @@ program
 program
   .command('install <name>')
   .description('Install a package with grade-based safety gating')
-  .option('-c, --client <client>', 'Target client (e.g. claude-code)', 'claude-code')
+  .option('-c, --client <client>', 'Target client (claude-code, cursor, codex, or claude-code-plugin)', 'claude-code')
   .option('--version <version>', 'Specific version to install (default: latest)')
   .option('-y, --yes', 'Skip confirmation prompts (Grade C)')
   .option('-f, --force', 'First explicit consent for high-risk installs (Grade D)')

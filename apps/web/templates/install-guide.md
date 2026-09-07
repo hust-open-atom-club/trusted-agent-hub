@@ -67,6 +67,7 @@ This stores the Hub API address locally. After this step, package installation c
 - `claude-code`: installs skills and compatible capability packages into `~/.claude/skills/`.
 - `claude-code-plugin`: installs plugin packages into `~/.claude/skills/`; Claude Code discovers plugins that include `.claude-plugin/plugin.json`.
 - `cursor`: installs compatible skill packages into `~/.cursor/skills/`.
+- `codex`: installs compatible skill packages into `~/.codex/skills/`.
 
 If the package type and client are incompatible, do not improvise another destination. Report the incompatibility and stop.
 
@@ -94,6 +95,12 @@ Install a plugin into Claude Code:
 
 ```bash
 tah install demo-claude-plugin --client claude-code-plugin
+```
+
+Install a skill into Codex:
+
+```bash
+tah install code-review-skill --client codex
 ```
 
 Install a namespaced package:

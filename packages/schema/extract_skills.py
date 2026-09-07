@@ -88,9 +88,25 @@ VALID_CATEGORIES: set[str] = {
 
 # 有效 compatibility 枚举（对齐 schema items.enum）
 VALID_CLIENTS: set[str] = {
-    "claude-code", "claude-code-plugin", "claude-ai", "cursor", "vscode",
+    "claude-code", "claude-code-plugin", "claude-ai", "cursor", "codex", "vscode",
     "mcp-client-generic", "openai-agents", "github-copilot",
     "windsurf", "cline",
+}
+
+PACKAGE_TYPE_INSTALL_CLIENTS: dict[str, tuple[str, ...]] = {
+    "skill": ("claude-code", "cursor", "codex"),
+    "mcp_server": ("claude-code", "cursor"),
+    "plugin": ("claude-code-plugin",),
+    "subagent": ("claude-code",),
+    "command": ("claude-code",),
+    "prompt": ("claude-code",),
+}
+
+CLIENT_INSTALL_ROOTS: dict[str, str] = {
+    "claude-code": "~/.claude/skills/",
+    "claude-code-plugin": "~/.claude/skills/",
+    "cursor": "~/.cursor/skills/",
+    "codex": "~/.codex/skills/",
 }
 
 # 有效能力包类型（对齐 schema items.enum）
@@ -216,6 +232,20 @@ def _normalized_author_name(value: Any) -> str | None:
     if not name or name.casefold() in _AUTHOR_PLACEHOLDER_NAMES:
         return None
     return name
+
+
+def _normalized_author_url(value: Any) -> str | None:
+    """Return a usable author URL, excluding scanner placeholder values."""
+    if isinstance(value, dict):
+        value = value.get("url")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    url = value.strip()
+    if url.casefold() in _AUTHOR_PLACEHOLDER_NAMES:
+        return None
+    if "github.com/unknown/" in url.casefold():
+        return None
+    return url
 
 
 def _require_safe_source_subdirectory(value: str) -> str:
@@ -801,6 +831,16 @@ def _parse_github_url(url: str) -> tuple[str, str] | None:
     if m:
         return m.group(1), m.group(2)
     return None
+
+
+def _canonical_url_for_comparison(value: str | None) -> str | None:
+    """Normalize repository URL spelling without changing stored URLs."""
+    if not value or not value.strip():
+        return None
+    normalized = value.strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    if normalized.casefold().endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized.casefold() if "github.com/" in normalized.casefold() else normalized
 
 
 def extract_git_source(
@@ -1556,7 +1596,10 @@ def build_skill_config(result: ScanResult) -> dict[str, Any]:
     return config
 
 
-def build_installation(result: ScanResult) -> dict[str, Any]:
+def build_installation(
+    result: ScanResult,
+    compatibility: list[str],
+) -> dict[str, Any]:
     """构建 installation 对象。"""
     name = to_kebab_case(result.frontmatter.get("name") or result.directory_name)
     is_tool = result.skill_type == "tool"
@@ -1582,10 +1625,13 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
     else:
         method = "manual_steps"
 
-    targets = [{
-        "client": "claude-code",
-        "destination": f"~/.claude/skills/{name}/",
-    }]
+    targets = [
+        {
+            "client": client,
+            "destination": f"{CLIENT_INSTALL_ROOTS[client]}{name}/",
+        }
+        for client in compatibility
+    ]
 
     # command（工具类）
     command = ""
@@ -1722,34 +1768,45 @@ def build_metadata_json(
     if not description or len(description) < 10:
         description = "No description available — manual review required"
 
+    source = extract_git_source(result, repo_url=repo_url, git_root=git_root)
+
     # author
     fm_author_value = result.frontmatter.get("author")
     fm_author = _normalized_author_name(fm_author_value)
     fm_email = result.frontmatter.get("email")
-    fm_url = result.frontmatter.get("url")
+    # A top-level `url` describes the project/homepage.  Author identity comes
+    # from author.url (or the explicit legacy author_url alias) only.
+    fm_url = _normalized_author_url(result.frontmatter.get("author_url"))
     if isinstance(fm_author_value, dict):
         if not fm_email and fm_author_value.get("email"):
             fm_email = fm_author_value["email"]
-        if not fm_url and fm_author_value.get("url"):
-            fm_url = fm_author_value["url"]
+        if not fm_url:
+            fm_url = _normalized_author_url(fm_author_value)
 
-    # ── 回退：从受限快照中的当前或父级 package.json 提取 author ──
-    if fm_author is None:
-        pkg = result.json_object("package.json")
-        pkg_author = pkg.get("author")
-        if (
-            _normalized_author_name(pkg_author) is None
-            and isinstance(parent_package_json, dict)
-        ):
-            pkg_author = parent_package_json.get("author")
-        author_name = _normalized_author_name(pkg_author)
-        if author_name is not None:
-            fm_author = author_name
-            if isinstance(pkg_author, dict):
-                if not fm_email and pkg_author.get("email"):
-                    fm_email = pkg_author["email"]
-                if not fm_url and pkg_author.get("url"):
-                    fm_url = pkg_author["url"]
+    # ── 回退：从受限快照中的当前或父级 package.json 逐字段补齐 author ──
+    # frontmatter 仍然具有最高优先级，但只声明 name 时不应丢掉
+    # package.json 中有效的 author.url。
+    pkg = result.json_object("package.json")
+    package_authors = [pkg.get("author")]
+    if isinstance(parent_package_json, dict):
+        package_authors.append(parent_package_json.get("author"))
+    for pkg_author in package_authors:
+        if fm_author is None:
+            author_name = _normalized_author_name(pkg_author)
+            if author_name is not None:
+                fm_author = author_name
+        if isinstance(pkg_author, dict):
+            if not fm_email and pkg_author.get("email"):
+                fm_email = pkg_author["email"]
+            if not fm_url:
+                fm_url = _normalized_author_url(pkg_author)
+
+    # If no author homepage is declared, the repository owner is the safest
+    # deterministic identity fallback for GitHub-hosted source.
+    if not fm_url:
+        repository_owner = str(source.get("owner") or "").strip()
+        if repository_owner and repository_owner.casefold() != "unknown":
+            fm_url = f"https://github.com/{repository_owner}"
 
     author: dict[str, str] = {
         "name": str(fm_author) if fm_author else "UNKNOWN",
@@ -1758,21 +1815,32 @@ def build_metadata_json(
     if fm_url:
         author["url"] = str(fm_url)
 
+    pkg_type = _infer_package_type(result)
+
     # compatibility
+    allowed_clients = PACKAGE_TYPE_INSTALL_CLIENTS.get(pkg_type, ("claude-code",))
     fm_comp = result.frontmatter.get("compatibility")
     if fm_comp:
         if isinstance(fm_comp, str):
             fm_comp = [c.strip() for c in fm_comp.split(",")]
-        compatibility = [c for c in fm_comp if c in VALID_CLIENTS]
+        compatibility = [
+            c for c in fm_comp
+            if c in VALID_CLIENTS and c in allowed_clients
+        ]
     else:
-        compatibility = ["claude-code"]
+        compatibility = [allowed_clients[0]]
     if not compatibility:
-        compatibility = ["claude-code"]
+        compatibility = [allowed_clients[0]]
 
     # 其他
     category = infer_category(result)
     keywords = extract_keywords(result)
     homepage = result.frontmatter.get("homepage") or result.frontmatter.get("url") or None
+    if (
+        _canonical_url_for_comparison(str(homepage) if homepage else None)
+        == _canonical_url_for_comparison(str(source.get("repository_url") or ""))
+    ):
+        homepage = None
     icon = None
     for f in result.all_files:
         base = os.path.basename(f)
@@ -1783,12 +1851,11 @@ def build_metadata_json(
     # dependencies & entry_points
     dependencies = build_dependencies(result)
     entry_points = extract_entry_points(result)
-    pkg_type = _infer_package_type(result)
 
     # ── 若仓库自带 agent-package manifest.json，优先保留其显式声明 ──
     # 扫描器无法可靠推断 MCP server 注册信息（dependencies.mcp_servers）
     # 以及 npm/pip/docker 等安装方式与 targets；仓库 manifest 是权威来源。
-    installation = build_installation(result)
+    installation = build_installation(result, compatibility)
     manifest_text = result.text("manifest.json")
     if manifest_text is not None:
         manifest = _parse_json_object(manifest_text, "manifest.json")
@@ -1812,7 +1879,7 @@ def build_metadata_json(
         "description": description,
         "author": author,
         "license": extract_license(result),
-        "source": extract_git_source(result, repo_url=repo_url, git_root=git_root),
+        "source": source,
         "integrity": extract_integrity(result),
         "compatibility": compatibility,
         "permissions": infer_permissions(result),
@@ -1888,12 +1955,10 @@ def validate_metadata(data: dict[str, Any], skill_name: str) -> list[str]:
     if len(desc) > 200:
         issues.append(f"description 长度超过 200 字符: {len(desc)}")
 
-    # author required 字段
+    # author.name/email are optional legacy fields; author.url is preferred.
     author = data.get("author", {})
-    if not author.get("name"):
-        issues.append("author.name 为空")
-    if not author.get("email"):
-        issues.append("author.email 为空")
+    if not isinstance(author, dict):
+        issues.append("author 必须为对象")
 
     # source required 字段
     src = data.get("source", {})

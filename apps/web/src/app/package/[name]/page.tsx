@@ -119,9 +119,11 @@ function DetailSection({
 function InstallationDetails({
   install,
   t,
+  clientLabel,
 }: {
   install?: PublicInstallation | null;
   t: Translate;
+  clientLabel: (client: string) => string;
 }) {
   if (!install) {
     return <p className="detail-muted">{t('detail.empty.installation')}</p>;
@@ -149,7 +151,7 @@ function InstallationDetails({
           <ul>
             {install.targets.map((target, i) => (
               <li key={i}>
-                <span>{target.client}</span>
+                <span>{target.client ? clientLabel(target.client) : '—'}</span>
                 <code>{target.destination}</code>
               </li>
             ))}
@@ -374,7 +376,7 @@ export default function PackageDetailPage() {
           </DetailSection>
 
           <DetailSection id="installation" title={tt('detail.installation')} kicker={tt('detail.section.installation_kicker')}>
-            <InstallationDetails install={install} t={tt} />
+            <InstallationDetails install={install} t={tt} clientLabel={clientLabel} />
           </DetailSection>
 
           <div id="feedback">

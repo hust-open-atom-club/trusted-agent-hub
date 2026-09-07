@@ -86,6 +86,16 @@ describe('SearchBar', () => {
     expect(props.onTagChange).toHaveBeenCalledWith('summary');
   });
 
+  it('offers Codex as a friendly marketplace client filter', () => {
+    const props = renderSearchBar();
+    openFilters();
+    const clientSelect = screen.getByLabelText('客户端');
+
+    expect(screen.getByRole('option', { name: 'Codex' })).toHaveValue('codex');
+    fireEvent.change(clientSelect, { target: { value: 'codex' } });
+    expect(props.onClientChange).toHaveBeenCalledWith('codex');
+  });
+
   it('reports score range inputs', () => {
     const props = renderSearchBar();
     openFilters();

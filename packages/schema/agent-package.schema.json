@@ -49,7 +49,6 @@
     },
     "author": {
       "type": "object",
-      "required": ["name", "email"],
       "properties": {
         "name": {
           "type": "string",
@@ -197,6 +196,7 @@
           "claude-code-plugin",
           "claude-ai",
           "cursor",
+          "codex",
           "vscode",
           "mcp-client-generic",
           "openai-agents",
@@ -485,6 +485,7 @@
                   "claude-code",
                   "claude-code-plugin",
                   "cursor",
+                  "codex",
                   "vscode",
                   "mcp-client-generic",
                   "openai-agents",
@@ -838,7 +839,20 @@
         "properties": {
           "compatibility": {
             "items": {
-              "enum": ["claude-code", "cursor"]
+              "enum": ["claude-code", "cursor", "codex"]
+            }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code", "cursor", "codex"]
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -855,6 +869,19 @@
             "items": {
               "enum": ["claude-code", "cursor"]
             }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code", "cursor"]
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -869,6 +896,19 @@
           "compatibility": {
             "items": {
               "enum": ["claude-code-plugin"]
+            }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code-plugin"]
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -885,6 +925,19 @@
             "items": {
               "enum": ["claude-code"]
             }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code"]
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -900,6 +953,19 @@
             "items": {
               "enum": ["claude-code"]
             }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code"]
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -914,6 +980,19 @@
           "compatibility": {
             "items": {
               "enum": ["claude-code"]
+            }
+          },
+          "installation": {
+            "properties": {
+              "targets": {
+                "items": {
+                  "properties": {
+                    "client": {
+                      "enum": ["claude-code"]
+                    }
+                  }
+                }
+              }
             }
           }
         }

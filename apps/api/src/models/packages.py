@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, model_serializer
 
-from .common import Owner, PackageType, Page, SafeSourceSubdirectory, StrictContractModel
+from .common import Client, Owner, PackageType, Page, SafeSourceSubdirectory, StrictContractModel
 
 # Valid LLM review labels as defined by scan-report.schema.json
 LLM_LABEL = Literal[
@@ -18,8 +18,10 @@ LLM_LABEL = Literal[
 
 
 class Author(StrictContractModel):
-    name: str
-    email: str
+    # name/email remain accepted for legacy records, but author.url is the
+    # canonical identity field for new submissions.
+    name: str | None = None
+    email: str | None = None
     url: str | None = None
 
 
@@ -88,7 +90,7 @@ class Permissions(StrictContractModel):
 
 
 class InstallTarget(StrictContractModel):
-    client: str
+    client: Client
     destination: str
     config_template: str | None = None
 
@@ -106,7 +108,7 @@ class Installation(StrictContractModel):
     package: str | None = None
     targets: list[InstallTarget] | None = None
     steps: list[InstallationStep] = Field(default_factory=list)
-    target_client: str | None = None
+    target_client: Client | None = None
     command: str | None = None
     pre_install_message: str | None = None
     post_install_message: str | None = None
@@ -115,7 +117,7 @@ class Installation(StrictContractModel):
 class PublicInstallTarget(StrictContractModel):
     """Install destination safe to expose on the public package page."""
 
-    client: str
+    client: Client
     destination: str
 
 
@@ -125,7 +127,7 @@ class PublicInstallation(StrictContractModel):
     method: str
     package: str | None = None
     targets: list[PublicInstallTarget] | None = None
-    target_client: str | None = None
+    target_client: Client | None = None
     pre_install_message: str | None = None
     post_install_message: str | None = None
 
@@ -704,7 +706,7 @@ class PublicVersionDetail(StrictContractModel):
 
     name: str
     version: str
-    compatibility: list[str] = Field(default_factory=list)
+    compatibility: list[Client] = Field(default_factory=list)
     permission_summary: PublicPermissionSummary | None = None
     installation: PublicInstallation | None = None
     effective_grade: Grade | None = None
@@ -720,7 +722,7 @@ class VersionDetail(StrictContractModel):
     author: Author | None = None
     source: Source | None = None
     integrity: Integrity | None = None
-    compatibility: list[str] = Field(default_factory=list)
+    compatibility: list[Client] = Field(default_factory=list)
     permissions: Permissions | None = None
     installation: Installation | None = None
     type_config: dict[str, object] | None = None

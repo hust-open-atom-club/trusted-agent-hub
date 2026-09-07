@@ -2,7 +2,10 @@
  * Install method display helpers for the package detail page.
  */
 
-import { PACKAGE_TYPE_INSTALL_CLIENTS } from '../../../../packages/schema/constants';
+import {
+  CLIENT_LABELS as SCHEMA_CLIENT_LABELS,
+  PACKAGE_TYPE_INSTALL_CLIENTS,
+} from '../../../../packages/schema/constants';
 import type { PackageType } from '../../../../packages/schema/constants';
 
 export interface InstallMethodInfo {
@@ -59,17 +62,12 @@ export function getInstallMethodInfo(
   );
 }
 
-const CLIENT_LABELS: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  'claude-code-plugin': 'Claude Code 插件',
-  cursor: 'Cursor',
-};
-
-export const CLIENT_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: 'claude-code', label: 'Claude Code' },
-  { id: 'claude-code-plugin', label: 'Claude Code 插件' },
-  { id: 'cursor', label: 'Cursor' },
-];
+export const CLIENT_OPTIONS: Array<{ id: string; label: string }> = Array.from(
+  new Set(Object.values(PACKAGE_TYPE_INSTALL_CLIENTS).flat()),
+).map((id) => ({
+  id,
+  label: SCHEMA_CLIENT_LABELS[id as keyof typeof SCHEMA_CLIENT_LABELS] ?? id,
+}));
 
 /**
  * Which install clients each package type may target.
@@ -105,7 +103,7 @@ export function getSelectableClients(
 }
 
 export function getClientLabel(client: string): string {
-  return CLIENT_LABELS[client] ?? client;
+  return SCHEMA_CLIENT_LABELS[client as keyof typeof SCHEMA_CLIENT_LABELS] ?? client;
 }
 
 export function isClientCompatible(
@@ -130,10 +128,14 @@ export function getClientTargetPath(
   if (match?.destination) {
     return match.destination;
   }
-  // claude-code and claude-code-plugin share the skills root: Claude Code
-  // auto-loads plugins from ~/.claude/skills/<name>/ (skills-dir plugins).
-  const root =
-    client === 'cursor' ? '~/.cursor/skills/' : '~/.claude/skills/';
+  // claude-code and claude-code-plugin share the Claude skills root.
+  const roots: Record<string, string> = {
+    'claude-code': '~/.claude/skills/',
+    'claude-code-plugin': '~/.claude/skills/',
+    cursor: '~/.cursor/skills/',
+    codex: '~/.codex/skills/',
+  };
+  const root = roots[client] ?? '~/.claude/skills/';
   return `${root}${packageName}/`;
 }
 

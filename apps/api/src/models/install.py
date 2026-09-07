@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field, HttpUrl, RootModel
 
-from .common import PackageType, SafeSourceSubdirectory, StrictContractModel
+from .common import Client, PackageType, SafeSourceSubdirectory, StrictContractModel
 from .packages import (
     Dependencies,
     Grade,
@@ -84,7 +84,7 @@ InstallMethod = Literal[
 class InstallManifestQuery(StrictContractModel):
     """Exact accepted query parameters for install manifest requests."""
 
-    client: NonBlankString
+    client: Client
     version: str | None = Field(
         default=None,
         pattern=SEMANTIC_VERSION_PATTERN,
@@ -197,7 +197,7 @@ class ManifestInstallationStep(RootModel[StepVariant]):
 
 class ManifestInstallation(StrictContractModel):
     method: InstallMethod
-    target_client: str
+    target_client: Client
     steps: list[ManifestInstallationStep] = Field(min_length=1)
     pre_install_message: str | None = None
     post_install_message: str | None = None
@@ -223,5 +223,5 @@ class InstallManifest(StrictContractModel):
     installation: ManifestInstallation
     permissions: Permissions
     risk_summary: ManifestRiskSummary
-    compatibility: list[str]
+    compatibility: list[Client]
     dependencies: Dependencies
