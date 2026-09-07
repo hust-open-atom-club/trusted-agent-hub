@@ -102,6 +102,13 @@ PACKAGE_TYPE_INSTALL_CLIENTS: dict[str, tuple[str, ...]] = {
     "prompt": ("claude-code",),
 }
 
+CLIENT_INSTALL_ROOTS: dict[str, str] = {
+    "claude-code": "~/.claude/skills/",
+    "claude-code-plugin": "~/.claude/skills/",
+    "cursor": "~/.cursor/skills/",
+    "codex": "~/.codex/skills/",
+}
+
 # 有效能力包类型（对齐 schema items.enum）
 VALID_PACKAGE_TYPES: set[str] = {
     "skill", "mcp_server", "plugin", "subagent", "command", "prompt",
@@ -1589,7 +1596,10 @@ def build_skill_config(result: ScanResult) -> dict[str, Any]:
     return config
 
 
-def build_installation(result: ScanResult) -> dict[str, Any]:
+def build_installation(
+    result: ScanResult,
+    compatibility: list[str],
+) -> dict[str, Any]:
     """构建 installation 对象。"""
     name = to_kebab_case(result.frontmatter.get("name") or result.directory_name)
     is_tool = result.skill_type == "tool"
@@ -1615,10 +1625,13 @@ def build_installation(result: ScanResult) -> dict[str, Any]:
     else:
         method = "manual_steps"
 
-    targets = [{
-        "client": "claude-code",
-        "destination": f"~/.claude/skills/{name}/",
-    }]
+    targets = [
+        {
+            "client": client,
+            "destination": f"{CLIENT_INSTALL_ROOTS[client]}{name}/",
+        }
+        for client in compatibility
+    ]
 
     # command（工具类）
     command = ""
@@ -1842,7 +1855,7 @@ def build_metadata_json(
     # ── 若仓库自带 agent-package manifest.json，优先保留其显式声明 ──
     # 扫描器无法可靠推断 MCP server 注册信息（dependencies.mcp_servers）
     # 以及 npm/pip/docker 等安装方式与 targets；仓库 manifest 是权威来源。
-    installation = build_installation(result)
+    installation = build_installation(result, compatibility)
     manifest_text = result.text("manifest.json")
     if manifest_text is not None:
         manifest = _parse_json_object(manifest_text, "manifest.json")

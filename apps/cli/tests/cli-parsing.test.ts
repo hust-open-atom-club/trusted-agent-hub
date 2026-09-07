@@ -136,6 +136,24 @@ function test_verifyHelpShowsOptions() {
   console.log('  ✓ verify --help shows options');
 }
 
+function test_searchRejectsUnknownClientBeforeRequest() {
+  const { stdout, stderr, status } = runCli(
+    ['search', 'demo', '--client', 'not-a-client'],
+    ENV,
+  );
+  const combined = stdout + stderr;
+
+  assert.notStrictEqual(status, 0, 'invalid search client must fail');
+  assert.ok(
+    combined.includes('Invalid --client value: "not-a-client"'),
+    `expected controlled validation error, got: "${combined.slice(0, 300)}"`,
+  );
+  assert.ok(combined.includes('codex'), 'error must list supported clients');
+  assert.ok(combined.includes('mcp-client-generic'), 'error must include every API-supported client');
+  assert.ok(!combined.includes('validation_error'), 'must not expose a raw Pydantic validation error');
+  console.log('  ✓ search rejects an unknown client before sending a request');
+}
+
 function test_uninstallHelpShowsOptions() {
   const { stdout, status } = runCli(['uninstall', '--help']);
   assert.strictEqual(status, 0);
@@ -191,6 +209,7 @@ test_installVersionOptionOrderSwapped();
 test_installWithoutVersionStillWorks();
 test_installHelpShowsVersionOption();
 test_verifyHelpShowsOptions();
+test_searchRejectsUnknownClientBeforeRequest();
 test_uninstallHelpShowsOptions();
 test_uninstallClientOptionWorks();
 test_uninstallForceOptionWorks();

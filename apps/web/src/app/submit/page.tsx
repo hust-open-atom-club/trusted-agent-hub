@@ -19,7 +19,7 @@ import {
   distinctProjectHomepage,
   getAllowedSubmissionClients,
   inferGithubOwnerHomepage,
-  isGithubProfileUrl,
+  isHttpsUrl,
   normalizeSubmissionClients,
   redactAuthorEmailForPreview,
 } from '@/lib/submission-metadata';
@@ -345,8 +345,8 @@ function SubmitForm() {
     if (!pkgSourceUrl.trim() || !pkgSourceUrl.trim().startsWith('https://')) {
       setError('请输入有效的源码仓库地址'); return;
     }
-    if (pkgAuthorUrl.trim() && !isGithubProfileUrl(pkgAuthorUrl)) {
-      setError('作者 GitHub 主页应为个人或组织主页，例如 https://github.com/owner'); return;
+    if (pkgAuthorUrl.trim() && !isHttpsUrl(pkgAuthorUrl)) {
+      setError('请输入有效的 HTTPS 作者主页，例如 https://example.com/author'); return;
     }
     if (!pkgLicense.trim() || pkgLicense === 'UNLICENSED') {
       setError('请选择有效的许可证'); return;
@@ -758,17 +758,17 @@ function SubmitForm() {
                 选填信息（展开编辑）
               </summary>
               <div style={{ marginTop: '1rem' }}>
-                {/* 作者 GitHub 主页 */}
+                {/* 作者主页 */}
                 <div style={fieldStyle}>
-                  <label style={lbl}>作者 GitHub 主页
+                  <label style={lbl}>作者主页
                     {isInferred('author.url') && <span style={badge('inferred')}>自动推断</span>}
                     {isAuto('author.url') && <span style={badge('auto')}>自动识别</span>}
                   </label>
                   <input type="url" value={pkgAuthorUrl} onChange={(e) => {
                     setPkgAuthorUrl(e.target.value);
                     setFieldSource((prev) => ({ ...prev, 'author.url': 'manual' }));
-                  }} disabled={isBusy} placeholder="https://github.com/owner" style={inp} />
-                  <span style={hint}>用于标识作者个人或组织；自动推断值可以修改或清空。</span>
+                  }} disabled={isBusy} placeholder="https://example.com/author" style={inp} />
+                  <span style={hint}>支持任意 HTTPS 个人或组织主页；自动推断值可以修改或清空。</span>
                 </div>
 
                 <div style={fieldStyle}>

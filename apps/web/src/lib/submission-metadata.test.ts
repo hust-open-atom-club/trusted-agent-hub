@@ -4,7 +4,7 @@ import {
   distinctProjectHomepage,
   getAllowedSubmissionClients,
   inferGithubOwnerHomepage,
-  isGithubProfileUrl,
+  isHttpsUrl,
   normalizeSubmissionClients,
   redactAuthorEmailForPreview,
 } from './submission-metadata';
@@ -34,11 +34,12 @@ describe('submission author and homepage metadata', () => {
     expect(inferGithubOwnerHomepage('https://github.com/octo/repo.git')).toBe('https://github.com/octo');
   });
 
-  it('accepts only GitHub profile or organization URLs', () => {
-    expect(isGithubProfileUrl('https://github.com/acme')).toBe(true);
-    expect(isGithubProfileUrl('https://github.com/acme/')).toBe(true);
-    expect(isGithubProfileUrl('https://github.com/acme/project')).toBe(false);
-    expect(isGithubProfileUrl('https://example.com/acme')).toBe(false);
+  it('accepts any valid HTTPS author homepage', () => {
+    expect(isHttpsUrl('https://github.com/acme')).toBe(true);
+    expect(isHttpsUrl('https://github.com/acme/project')).toBe(true);
+    expect(isHttpsUrl('https://example.com/acme')).toBe(true);
+    expect(isHttpsUrl('http://example.com/acme')).toBe(false);
+    expect(isHttpsUrl('not-a-url')).toBe(false);
   });
 
   it('drops a homepage that repeats the source repository', () => {

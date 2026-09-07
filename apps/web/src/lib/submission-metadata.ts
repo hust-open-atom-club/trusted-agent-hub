@@ -66,17 +66,10 @@ export function inferGithubOwnerHomepage(
   return match ? `https://github.com/${match[1]}` : '';
 }
 
-export function isGithubProfileUrl(value: string): boolean {
+export function isHttpsUrl(value: string): boolean {
   try {
     const parsed = new URL(value.trim());
-    const segments = parsed.pathname.split('/').filter(Boolean);
-    return (
-      parsed.protocol === 'https:'
-      && parsed.hostname.toLowerCase() === 'github.com'
-      && segments.length === 1
-      && !parsed.search
-      && !parsed.hash
-    );
+    return parsed.protocol === 'https:' && Boolean(parsed.hostname);
   } catch {
     return false;
   }

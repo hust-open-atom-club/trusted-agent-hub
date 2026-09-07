@@ -10,6 +10,7 @@ import jsonschema
 import pytest
 from pydantic import ValidationError
 
+from packages.schema.extract_skills import extract_single_skill
 from schema.constants import CLIENTS
 from src.models.common import Client, PackageListQuery
 from src.models.packages import Author
@@ -47,10 +48,10 @@ class _VersionRepository:
 
 
 def test_author_name_and_email_are_optional_legacy_fields() -> None:
-    author = Author.model_validate({"url": "https://github.com/example"})
+    author = Author.model_validate({"url": "https://example.com/author"})
 
     assert author.model_dump(exclude_none=True) == {
-        "url": "https://github.com/example"
+        "url": "https://example.com/author"
     }
     assert Author.model_validate(
         {"name": "Legacy", "email": "legacy@example.com"}
@@ -82,7 +83,7 @@ def test_json_schema_accepts_url_only_codex_skill_author() -> None:
     skill = json.loads(
         (SCHEMA_EXAMPLES / "skill-basic.json").read_text(encoding="utf-8")
     )
-    skill["author"] = {"url": "https://github.com/alice-dev"}
+    skill["author"] = {"url": "https://example.com/alice-dev"}
     skill["compatibility"] = ["codex"]
     skill["installation"]["targets"] = [
         {
@@ -92,6 +93,31 @@ def test_json_schema_accepts_url_only_codex_skill_author() -> None:
     ]
 
     jsonschema.validate(skill, schema)
+
+
+def test_extractor_uses_codex_target_for_codex_only_skill(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: codex-only-skill\n"
+        "description: A Skill intended only for Codex installations.\n"
+        "compatibility:\n"
+        "  - codex\n"
+        "---\n"
+        "\n# Codex only skill\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+
+    assert metadata["compatibility"] == ["codex"]
+    assert metadata["installation"]["targets"] == [
+        {
+            "client": "codex",
+            "destination": "~/.codex/skills/codex-only-skill/",
+        }
+    ]
 
 
 def test_json_schema_rejects_codex_for_mcp_server() -> None:
