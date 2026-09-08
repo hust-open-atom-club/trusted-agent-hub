@@ -3,9 +3,16 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import * as os from 'os';
 import packageJson from '../package.json';
 import { formatPackageCard, formatPackageDetail } from './format';
 import { InstallExecutor, InstallBlockedError, InstallError } from './install-executor';
+import {
+  inspectExistingInstall,
+  makeOverwriteConsent,
+  PreflightError,
+  type InstallOverwriteConsent,
+} from './install-preflight';
 import { VerifyExecutor } from './verify-executor';
 import type { VerifyResult } from './verify-executor';
 import { UninstallExecutor } from './uninstall-executor';
@@ -13,6 +20,7 @@ import type { UninstallResult } from './uninstall-executor';
 import { UpdateExecutor } from './update-executor';
 import type { UpdateResult } from './update-executor';
 import { createTerminalConfirm } from './confirm';
+import { sanitizeOutput } from './safe-output';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest } from './manifest-types';
 import type { McpWriteSummary } from './config-writer';
@@ -200,12 +208,16 @@ program
   .option('-c, --client <client>', 'Target client (claude-code, cursor, codex, or claude-code-plugin)', 'claude-code')
   .option('--version <version>', 'Specific version to install (default: latest)')
   .option('-y, --yes', 'Skip confirmation prompts (Grade C)')
+  .option('--reinstall', 'Allow overwriting an existing installation')
+  .option('--overwrite-unowned', 'Allow overwriting a target directory with no install record')
   .option('-f, --force', 'First explicit consent for high-risk installs (Grade D)')
   .option('--accept-high-risk', 'Second explicit consent for high-risk installs (Grade D, required with --force)')
   .action(async (name: string, options: {
     client?: string;
     version?: string;
     yes?: boolean;
+    reinstall?: boolean;
+    overwriteUnowned?: boolean;
     force?: boolean;
     acceptHighRisk?: boolean;
   }) => {
@@ -351,6 +363,117 @@ program
 
     console.log('');
 
+    // ── Preflight: never silently overwrite an existing installation ──
+    let preflight: Awaited<ReturnType<typeof inspectExistingInstall>>;
+    try {
+      preflight = await inspectExistingInstall(
+        executor.getRecordStore(),
+        manifest,
+        clientType,
+        os.homedir(),
+      );
+    } catch (err: unknown) {
+      if (err instanceof PreflightError && err.code === 'target_not_directory') {
+        fatal(`Target path is not a real directory: ${sanitizeOutput(err.message)}`);
+      }
+      fatal(
+        `Cannot inspect install records or target path: ${sanitizeOutput(
+          err instanceof Error ? err.message : String(err),
+        )}`,
+      );
+    }
+
+    if (preflight.block) {
+      const block = preflight.block;
+      switch (block.code) {
+        case 'record_path_mismatch':
+          fatal(
+            `Install target conflicts with an existing record.\n` +
+            `    Expected: ${sanitizeOutput(block.expectedPath)}\n` +
+            `    Recorded: ${sanitizeOutput(block.actualPath)}\n` +
+            `    Uninstall the existing record or repair it before reinstalling.`,
+          );
+          break;
+        case 'target_owned_by_other':
+          fatal(
+            `Target directory is owned by package "${sanitizeOutput(block.ownerRecord.package_name)}" ` +
+            `(${sanitizeOutput(block.ownerRecord.client)}).\n` +
+            `    Uninstall that package first or choose a different target.`,
+          );
+          break;
+      }
+    }
+
+    let overwriteConsent: InstallOverwriteConsent | null = null;
+    if (preflight.existingRecord || preflight.targetExists) {
+      console.log('');
+      if (preflight.existingRecord) {
+        console.log(chalk.yellow('  ⚠ Already installed:'));
+        console.log(`  ${chalk.dim('Version:')} ${sanitizeOutput(preflight.existingRecord.version)}`);
+        console.log(`  ${chalk.dim('Path:')}    ${sanitizeOutput(preflight.existingRecord.install_path)}`);
+        console.log(
+          chalk.dim(
+            `  Use \`tah update ${sanitizeOutput(manifest.name)} -c ${sanitizeOutput(clientType)}\` to upgrade, or confirm below to overwrite.`,
+          ),
+        );
+      } else {
+        console.log(chalk.yellow('  ⚠ Target path already exists but has no install record:'));
+        console.log(`  ${chalk.dim('Path:')}    ${sanitizeOutput(preflight.targetDir)}`);
+        console.log(
+          chalk.dim(
+            '  This may be user data. Confirm below only if you intend to replace it.',
+          ),
+        );
+      }
+
+      if (preflight.existingRecord) {
+        if (!options.reinstall) {
+          const confirm = createTerminalConfirm();
+          const confirmed = confirm
+            ? await confirm({
+                packageName: manifest.name,
+                version: manifest.version,
+                client: clientType,
+                installPath: preflight.targetDir,
+                contentState: 'already-installed',
+              })
+            : false;
+          if (!confirmed) {
+            fatal(
+              `Installation cancelled. Use --reinstall to explicitly overwrite ${sanitizeOutput(manifest.name)}.`,
+            );
+          }
+        } else {
+          console.log(
+            chalk.yellow(
+              `  --reinstall specified: overwriting existing installation for ${sanitizeOutput(manifest.name)}.`,
+            ),
+          );
+        }
+        overwriteConsent = makeOverwriteConsent(preflight, 'record');
+      } else {
+        let allowed = Boolean(options.overwriteUnowned);
+        if (!allowed) {
+          const confirm = createTerminalConfirm();
+          allowed = confirm
+            ? await confirm({
+                packageName: manifest.name,
+                version: manifest.version,
+                client: clientType,
+                installPath: preflight.targetDir,
+                contentState: 'orphan-directory',
+              })
+            : false;
+        }
+        if (!allowed) {
+          fatal(
+            `Installation cancelled. Use --overwrite-unowned to explicitly replace unowned data at ${sanitizeOutput(preflight.targetDir)}.`,
+          );
+        }
+        overwriteConsent = makeOverwriteConsent(preflight, 'orphan');
+      }
+    }
+
     // ── Phase 3: Execute install (reuse pre-fetched manifest) ──
     installSpinner = ora('Installing…').start();
     try {
@@ -362,12 +485,13 @@ program
           force: options.force,
           acceptHighRisk: options.acceptHighRisk,
         },
+        overwriteConsent,
       );
 
       installSpinner?.succeed(chalk.green('Installation complete'));
 
       console.log('');
-      console.log(`  ${chalk.dim('Installed to:')} ${chalk.cyan(result.targetDir)}`);
+      console.log(`  ${chalk.dim('Installed to:')} ${chalk.cyan(sanitizeOutput(result.targetDir))}`);
       if (result.sha256) {
         console.log(`  ${chalk.dim('SHA-256:')}      ${chalk.dim(result.sha256.slice(0, 16))}…`);
       }
@@ -406,7 +530,7 @@ program
           : err.grade === 'C' ? chalk.yellow.bold('  ⚠ Grade C — requires --yes')
           : chalk.red.bold('  ✗ Installation blocked');
         console.log(header);
-        console.log(chalk.yellow(`    ${err.message}`));
+        console.log(chalk.yellow(`    ${sanitizeOutput(err.message)}`));
         console.log('');
         process.exit(1);
       }
@@ -414,7 +538,7 @@ program
       if (err instanceof InstallError) {
         console.log('');
         console.log(chalk.red.bold(`  ✗ Installation failed (${err.code})`));
-        console.log(chalk.red(`    ${err.message}`));
+        console.log(chalk.red(`    ${sanitizeOutput(err.message)}`));
         console.log('');
         process.exit(1);
       }
@@ -422,7 +546,11 @@ program
       // Unexpected errors
       console.log('');
       console.log(chalk.red.bold('  ✗ Installation failed'));
-      console.log(chalk.red(`    ${err instanceof Error ? err.message : String(err)}`));
+      console.log(
+        chalk.red(
+          `    ${sanitizeOutput(err instanceof Error ? err.message : String(err))}`,
+        ),
+      );
       console.log('');
       process.exit(1);
     }

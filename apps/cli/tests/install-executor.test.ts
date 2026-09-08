@@ -35,11 +35,17 @@ import * as os from 'os';
 import AdmZip from 'adm-zip';
 
 import { InstallExecutor, InstallBlockedError, InstallError } from '../src/install-executor';
+import {
+  getInstallTargetDir,
+  inspectExistingInstall,
+  makeOverwriteConsent,
+} from '../src/install-preflight';
 import { validateManifest, ManifestValidationError, isSafeInstallPath } from '../src/manifest-types';
 import { createApiClient } from '../src/api-client';
 import type { FetchFn } from '../src/api-client';
 import type { InstallManifest } from '../src/manifest-types';
 import { isStrictChildPath, resolveManifestDestination, ClientPathError } from '../src/client-paths';
+import { LocalInstallStore } from '../src/local-install-store';
 
 // ---------------------------------------------------------------------------
 // Raw ZIP construction (bypasses AdmZip's filename normalization)
@@ -256,7 +262,12 @@ function mockFetch(
 function mockSetup(
   manifest: InstallManifest,
   zipBuf: Buffer,
-  opts?: { homeDir?: string; recordInstallFails?: boolean; maxDownloadSize?: number },
+  opts?: {
+    homeDir?: string;
+    recordInstallFails?: boolean;
+    maxDownloadSize?: number;
+    beforeDigest?: (stagingDir: string) => void;
+  },
 ): { apiClient: ReturnType<typeof createApiClient>; executor: InstallExecutor; fetchFn: FetchFn } {
   const fetcher = mockFetch(manifest, zipBuf, opts);
   const apiClient = createApiClient(fetcher);
@@ -265,6 +276,7 @@ function mockSetup(
     fetchFn: fetcher,
     maxDownloadSize: opts?.maxDownloadSize,
     beforeSaveRecord: (opts as any)?.beforeSaveRecord,
+    beforeDigest: opts?.beforeDigest,
   });
   return { apiClient, executor, fetchFn: fetcher };
 }
@@ -1517,6 +1529,156 @@ function test_manifestDestinationRejectsRelative() {
 }
 
 // ---------------------------------------------------------------------------
+// Test: install preflight target resolution
+// ---------------------------------------------------------------------------
+
+async function test_installPreflightTargetResolution() {
+  cleanup();
+  const { manifest } = setup();
+
+  const target = getInstallTargetDir(manifest, 'claude-code', TEST_HOME);
+  assert.strictEqual(
+    target,
+    path.join(TEST_HOME, '.claude', 'skills', 'test-package'),
+  );
+
+  const store = new LocalInstallStore(TEST_HOME);
+  const before = await inspectExistingInstall(store, manifest, 'claude-code', TEST_HOME);
+  assert.strictEqual(before.existingRecord, null);
+  assert.strictEqual(before.targetExists, false);
+
+  fs.mkdirSync(target, { recursive: true });
+  const after = await inspectExistingInstall(store, manifest, 'claude-code', TEST_HOME);
+  assert.strictEqual(after.existingRecord, null);
+  assert.strictEqual(after.targetExists, true);
+
+  cleanup();
+  console.log('  ✓ Install preflight target resolution');
+}
+
+async function test_installPreflightRejectsRecordPathMismatch() {
+  cleanup();
+  const { manifest } = setup();
+  const store = new LocalInstallStore(TEST_HOME);
+  store.save({
+    package_name: manifest.name,
+    version: '1.0.0',
+    client: 'claude-code',
+    install_path: path.join(TEST_HOME, 'elsewhere', manifest.name),
+    sha256: 'a'.repeat(64),
+    integrity_verified: true,
+    installed_at: new Date().toISOString(),
+    manifest_version: '1.0',
+    method: 'copy_directory',
+  });
+
+  const result = await inspectExistingInstall(
+    store,
+    manifest,
+    'claude-code',
+    TEST_HOME,
+  );
+  assert.strictEqual(result.block?.code, 'record_path_mismatch');
+
+  cleanup();
+  console.log('  ✓ Install preflight rejects record path mismatch');
+}
+
+async function test_installPreflightRejectsTargetOwnedByOther() {
+  cleanup();
+  const { manifest, clientRoot } = setup();
+  const targetDir = path.join(clientRoot, 'test-package');
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  const store = new LocalInstallStore(TEST_HOME);
+  store.save({
+    package_name: 'other-package',
+    version: '1.0.0',
+    client: 'claude-code',
+    install_path: targetDir,
+    sha256: 'b'.repeat(64),
+    integrity_verified: true,
+    installed_at: new Date().toISOString(),
+    manifest_version: '1.0',
+    method: 'copy_directory',
+  });
+
+  const result = await inspectExistingInstall(
+    store,
+    manifest,
+    'claude-code',
+    TEST_HOME,
+  );
+  assert.strictEqual(result.block?.code, 'target_owned_by_other');
+
+  cleanup();
+  console.log('  ✓ Install preflight rejects target owned by another record');
+}
+
+async function test_installOverwriteConsentBlocksChangedTarget() {
+  cleanup();
+  const clientRoot = path.join(TEST_HOME, '.claude', 'skills');
+  const targetDir = path.join(clientRoot, 'test-package');
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.writeFileSync(path.join(targetDir, 'original.txt'), 'original', 'utf-8');
+
+  const zipBuf = createPayloadZip({
+    'package/README.md': '# New package\n',
+  });
+  const expectedSha = sha256(zipBuf);
+  const manifest = makeManifest({
+    integrity: { sha256: expectedSha, download_size_bytes: zipBuf.length },
+    installation: {
+      method: 'copy_directory',
+      target_client: 'claude-code',
+      steps: [
+        { action: 'download', url: 'https://example.com/package.zip' },
+        { action: 'verify', algorithm: 'sha256', checksum: expectedSha },
+        { action: 'extract', archive: 'package.zip' },
+        { action: 'copy', source: 'package/', destination: '~/.claude/skills/test-package/' },
+      ],
+      pre_install_message: null,
+      post_install_message: null,
+    },
+  });
+
+  const store = new LocalInstallStore(TEST_HOME);
+  const preflight = await inspectExistingInstall(
+    store,
+    manifest,
+    'claude-code',
+    TEST_HOME,
+  );
+  const consent = makeOverwriteConsent(preflight, 'orphan');
+  const { executor } = mockSetup(manifest, zipBuf, {
+    beforeDigest: () => {
+      fs.writeFileSync(path.join(targetDir, 'changed.txt'), 'changed', 'utf-8');
+    },
+  });
+
+  try {
+    await executor.installWithManifest(manifest, 'claude-code', {}, consent);
+    assert.fail('Should have blocked changed target');
+  } catch (err: unknown) {
+    assert.ok(err instanceof InstallError);
+    assert.strictEqual((err as InstallError).code, 'overwrite_state_changed');
+  }
+
+  assert.ok(
+    fs.existsSync(path.join(targetDir, 'original.txt')),
+    'original unowned target must remain intact',
+  );
+  assert.strictEqual(
+    fs.existsSync(path.join(targetDir, 'README.md')),
+    false,
+    'new package content must not have been installed',
+  );
+
+  cleanup();
+  console.log('  ✓ Overwrite consent re-checks target before activation');
+}
+
+// ---------------------------------------------------------------------------
 // Test: Local install records
 // ---------------------------------------------------------------------------
 
@@ -1665,6 +1827,10 @@ async function test_versionParamInManifestRequest() {
   test_manifestDestinationRejectsRootItself();
   test_manifestDestinationRejectsTraversal();
   test_manifestDestinationRejectsRelative();
+  await test_installPreflightTargetResolution();
+  await test_installPreflightRejectsRecordPathMismatch();
+  await test_installPreflightRejectsTargetOwnedByOther();
+  await test_installOverwriteConsentBlocksChangedTarget();
   test_localRecords();
 
   await test_normalInstall();

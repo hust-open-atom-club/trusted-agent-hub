@@ -289,6 +289,64 @@ async function main() {
     }
   });
 
+  runTest('save with matching expected record succeeds', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      const existing = makeRecord({ version: '1.0.0' });
+      store.save(existing);
+
+      store.save(makeRecord({ version: '2.0.0' }), existing);
+      assert.strictEqual(store.find('test-pkg', 'claude-code')!.version, '2.0.0');
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('save with stale expected record throws record_changed', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ version: '1.0.0' }));
+      const stale = makeRecord({ version: '2.0.0' });
+
+      assert.throws(
+        () => store.save(makeRecord({ version: '3.0.0' }), stale),
+        (err: unknown) =>
+          err instanceof RecordStoreError && err.code === 'record_changed',
+      );
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('save with expected null blocks an existing record', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ version: '1.0.0' }));
+
+      assert.throws(
+        () => store.save(makeRecord({ version: '1.0.0' }), null),
+        (err: unknown) =>
+          err instanceof RecordStoreError && err.code === 'record_changed',
+      );
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  runTest('save with expected null succeeds when no record exists', () => {
+    const home = makeTmpDir();
+    try {
+      const store = new LocalInstallStore(home);
+      store.save(makeRecord({ version: '1.0.0' }), null);
+      assert.strictEqual(store.load().length, 1);
+    } finally {
+      cleanup(home);
+    }
+  });
+
   // -----------------------------------------------------------------------
   // Different clients coexist
   // -----------------------------------------------------------------------

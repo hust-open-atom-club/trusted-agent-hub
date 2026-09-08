@@ -35,7 +35,14 @@ import {
   getClientRoot,
 } from './client-paths';
 import { computeDirectoryDigest } from './content-integrity';
-import { LocalInstallStore } from './local-install-store';
+import {
+  captureTargetSnapshot,
+  getInstallTargetDir,
+  sameInstallPath,
+  type InstallOverwriteConsent,
+  type InstallRecordSnapshot,
+} from './install-preflight';
+import { LocalInstallStore, RECORD_COMPARE_FIELDS } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
 import { runDockerInstall } from './executors/docker';
 import { runManualInstall } from './executors/manual';
@@ -258,6 +265,7 @@ export class InstallExecutor {
     manifest: InstallManifest,
     clientType: string,
     gradeFlags: { yes?: boolean; force?: boolean; acceptHighRisk?: boolean },
+    overwriteConsent?: InstallOverwriteConsent | null,
   ): Promise<InstallResult> {
     // Resolve client root
     const clientRootRel = CLIENT_INSTALL_ROOTS[clientType];
@@ -295,7 +303,7 @@ export class InstallExecutor {
 
     // 非 copy_directory 安装方式（npm/pip/docker/manual）委托给对应执行器
     if (manifest.installation.method !== 'copy_directory') {
-      return this.installNonCopy(manifest, clientType);
+      return this.installNonCopy(manifest, clientType, overwriteConsent);
     }
 
     // Resolve target directory from the manifest's logical destination.
@@ -318,6 +326,15 @@ export class InstallExecutor {
       clientType,
       clientRoot,
     );
+
+    if (overwriteConsent) {
+      await this.assertOverwriteConsentStillValid(
+        overwriteConsent,
+        manifest,
+        clientType,
+        targetDir,
+      );
+    }
 
     // Ensure client root exists
     fs.mkdirSync(clientRoot, { recursive: true });
@@ -402,6 +419,18 @@ export class InstallExecutor {
         await this.beforeActivate(targetDir);
       }
 
+      // 7b. Re-check overwrite consent immediately before activation. All
+      //     remaining work before the rename is synchronous, so this is the
+      //     latest practical point to detect concurrent target changes.
+      if (overwriteConsent) {
+        await this.assertOverwriteConsentStillValid(
+          overwriteConsent,
+          manifest,
+          clientType,
+          targetDir,
+        );
+      }
+
       // 8. Backup existing target if present (digest succeeded — staging is valid)
       if (fs.existsSync(targetDir)) {
         fs.renameSync(targetDir, backupDir);
@@ -441,7 +470,10 @@ export class InstallExecutor {
       };
       // Allow test hooks to inject failure at this exact point
       if (this.beforeSaveRecord) this.beforeSaveRecord();
-      this.recordStore.save(record);
+      this.recordStore.save(
+        record,
+        overwriteConsent ? overwriteConsent.record : undefined,
+      );
 
       // 11. Only now is it safe to remove the old backup.
       //    P2: backup cleanup is non-fatal — failure here must not invalidate
@@ -506,9 +538,132 @@ export class InstallExecutor {
   // managed directories under ~/.trusted-agent-hub/installed/.
   // -----------------------------------------------------------------------
 
+  private async assertOverwriteConsentStillValid(
+    consent: InstallOverwriteConsent,
+    manifest: InstallManifest,
+    clientType: string,
+    explicitTargetDir?: string,
+  ): Promise<void> {
+    const targetDir = explicitTargetDir ||
+      getInstallTargetDir(manifest, clientType, this.homeDir);
+
+    const stateChanged = (message: string): never => {
+      throw new InstallError(message, 'overwrite_state_changed');
+    };
+
+    if (!sameInstallPath(consent.targetDir, targetDir)) {
+      stateChanged(
+        `Install target changed after confirmation: expected "${consent.targetDir}", got "${targetDir}".`,
+      );
+    }
+    if ((consent.kind === 'record') !== (consent.record !== null)) {
+      stateChanged('Overwrite consent kind does not match its record snapshot.');
+    }
+
+    let records: LocalInstallRecord[] = [];
+    try {
+      records = this.recordStore.load();
+    } catch (err: unknown) {
+      stateChanged(
+        `Cannot re-read install records before activation: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const current =
+      records.find(
+        (record) =>
+          record.package_name === manifest.name && record.client === clientType,
+      ) || null;
+
+    if (consent.record === null) {
+      if (current) {
+        stateChanged(
+          'An install record appeared after confirmation; refusing to overwrite.',
+        );
+      }
+    } else {
+      if (!current || !this.recordSnapshotMatches(consent.record, current)) {
+        stateChanged(
+          'The existing install record changed after confirmation; refusing to overwrite.',
+        );
+      }
+    }
+
+    const owner = records.find(
+      (record) =>
+        sameInstallPath(record.install_path, targetDir) &&
+        (record.package_name !== manifest.name || record.client !== clientType),
+    );
+    if (owner) {
+      stateChanged(
+        `Target directory is now owned by another install record ("${owner.package_name}").`,
+      );
+    }
+
+    let snapshot: Awaited<ReturnType<typeof captureTargetSnapshot>> = {
+      exists: false,
+      identity: null,
+      digest: null,
+    };
+    try {
+      snapshot = await captureTargetSnapshot(targetDir);
+    } catch (err: unknown) {
+      stateChanged(
+        `Target state changed after confirmation: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (snapshot.exists !== consent.target.exists) {
+      stateChanged(
+        snapshot.exists
+          ? 'Target directory appeared after confirmation; refusing to overwrite.'
+          : 'Target directory disappeared after confirmation; refusing to overwrite.',
+      );
+    }
+
+    if (snapshot.exists && consent.target.exists) {
+      if (
+        !snapshot.identity ||
+        !consent.target.identity ||
+        snapshot.identity.dev !== consent.target.identity.dev ||
+        snapshot.identity.ino !== consent.target.identity.ino
+      ) {
+        stateChanged('Target directory identity changed after confirmation.');
+      }
+      if (
+        consent.target.digest &&
+        snapshot.digest !== consent.target.digest
+      ) {
+        stateChanged('Target directory content changed after confirmation.');
+      }
+    }
+  }
+
+  private recordSnapshotMatches(
+    expected: InstallRecordSnapshot,
+    actual: LocalInstallRecord,
+  ): boolean {
+    for (const key of RECORD_COMPARE_FIELDS) {
+      const expectedValue = expected[key];
+      const actualValue = actual[key];
+      if (Array.isArray(expectedValue) && Array.isArray(actualValue)) {
+        if (
+          expectedValue.length !== actualValue.length ||
+          expectedValue.some((value, index) => value !== actualValue[index])
+        ) {
+          return false;
+        }
+      } else if (expectedValue !== actualValue) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private async installNonCopy(
     manifest: InstallManifest,
     clientType: string,
+    overwriteConsent?: InstallOverwriteConsent | null,
   ): Promise<InstallResult> {
     // 外部命令执行确认（manual_steps 只展示文本，无需确认）
     if (manifest.installation.method !== 'manual_steps') {
@@ -526,6 +681,14 @@ export class InstallExecutor {
           'C',
         );
       }
+    }
+
+    if (overwriteConsent) {
+      await this.assertOverwriteConsentStillValid(
+        overwriteConsent,
+        manifest,
+        clientType,
+      );
     }
 
     const ctx: ExecutorContext = {
@@ -575,7 +738,10 @@ export class InstallExecutor {
     }
     try {
       if (this.beforeSaveRecord) this.beforeSaveRecord();
-      this.recordStore.save(result.record);
+      this.recordStore.save(
+        result.record,
+        overwriteConsent ? overwriteConsent.record : undefined,
+      );
     } catch (err) {
       if (mcpInfo) {
         try {
