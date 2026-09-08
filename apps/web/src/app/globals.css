@@ -4329,12 +4329,6 @@ h3 {
   overflow-wrap: break-word;
 }
 
-.login-hint {
-  font-size: 0.8rem;
-  color: var(--color-muted);
-  margin-bottom: 0.5rem;
-}
-
 .login-register-link {
   font-size: 0.85rem;
   color: var(--color-accent-deep);

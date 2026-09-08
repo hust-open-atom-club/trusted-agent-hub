@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
-import { DEMO_ACCOUNT_EMAIL, DEMO_ACCOUNT_PASSWORD } from '@/lib/runtime-config';
 
 const ROLE_REDIRECT: Record<string, string> = {
   admin: '/admin',
@@ -110,11 +109,6 @@ export default function LoginPage() {
         </form>
 
         <div className="login-footer">
-          {DEMO_ACCOUNT_EMAIL && DEMO_ACCOUNT_PASSWORD ? (
-            <p className="login-hint">
-              演示账号：{DEMO_ACCOUNT_EMAIL} / {DEMO_ACCOUNT_PASSWORD}
-            </p>
-          ) : null}
           <a href="/register" className="login-register-link">
             没有账号？注册
           </a>

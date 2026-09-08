@@ -12,7 +12,3 @@ export const SITE_URL = trimTrailingSlash(
 
 export const SUPPORT_EMAIL =
   process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'support@example.com';
-
-// Deliberately public: use only for a disposable demo account.
-export const DEMO_ACCOUNT_EMAIL = process.env.NEXT_PUBLIC_DEMO_ACCOUNT_EMAIL || '';
-export const DEMO_ACCOUNT_PASSWORD = process.env.NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD || '';

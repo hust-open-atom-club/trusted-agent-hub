@@ -122,7 +122,6 @@
     "password_placeholder": "Enter password",
     "submit": "Login",
     "submitting": "Logging in...",
-    "test_hint": "Demo account: {{email}} / {{password}}",
     "register_link": "No account? Register"
   },
   "register": {

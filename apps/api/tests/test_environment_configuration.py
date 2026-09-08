@@ -210,13 +210,27 @@ def test_environment_template_keeps_context_specific_values_blank() -> None:
         "GITHUB_TOKEN",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
-        "NEXT_PUBLIC_DEMO_ACCOUNT_PASSWORD",
         "TRUSTED_AGENT_HUB_TOKEN",
         "SEED_ADMIN_PASSWORD",
         "SEED_REVIEWER_PASSWORD",
         "SEED_SUBMITTER_PASSWORD",
     ):
         assert values[sensitive_key] == ""
+
+
+def test_demo_credentials_are_not_configured_for_web_sources() -> None:
+    sources = (
+        REPOSITORY_ROOT / ".env.example",
+        REPOSITORY_ROOT / "docker-compose.yml",
+        REPOSITORY_ROOT / "apps" / "web" / "Dockerfile",
+        REPOSITORY_ROOT / "apps" / "web" / "src" / "lib" / "runtime-config.ts",
+        REPOSITORY_ROOT / "apps" / "web" / "src" / "app" / "login" / "page.tsx",
+    )
+
+    for source in sources:
+        content = source.read_text(encoding="utf-8")
+        assert "NEXT_PUBLIC_" + "DEMO_ACCOUNT_" not in content
+        assert "DEMO_ACCOUNT_" + "PASSWORD" not in content
 
 
 def test_all_user_facing_environment_variables_are_in_the_root_template(
