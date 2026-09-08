@@ -1,7 +1,8 @@
 """供给侧 ORM 模型定义。
 
-对应 Alembic migration 创建的四张表：
+对应 Alembic migration 创建的供给侧表：
 - users: 用户账户
+- refresh_tokens: 一次性 refresh token 消费状态
 - review_records: 审核记录
 - scan_reports: 扫描报告
 - audit_logs: 审计日志
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     JSON,
     String,
     Text,
@@ -39,6 +41,12 @@ class UserRow(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     role: Mapped[str] = mapped_column(String(32), index=True)
     display_name: Mapped[str] = mapped_column(String(128))
+    auth_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -46,6 +54,28 @@ class UserRow(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now
+    )
+
+
+class RefreshTokenRow(Base):
+    """One-time server-side state for refresh-token rotation."""
+
+    __tablename__ = "refresh_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False
     )
 
 

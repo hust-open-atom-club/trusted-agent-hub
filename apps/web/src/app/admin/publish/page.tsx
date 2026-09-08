@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetchAll, clearFetchCache } from '@/lib/api-fetch';
+import { apiFetchAll, authFetch, clearFetchCache } from '@/lib/api-fetch';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 
 import { API_BASE } from '@/lib/runtime-config';
@@ -115,7 +115,7 @@ export default function AdminPublishPage() {
     setSubmitting(true);
 
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/publish`,
         {
           method: 'POST',

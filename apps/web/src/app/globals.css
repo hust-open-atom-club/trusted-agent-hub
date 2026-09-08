@@ -4199,6 +4199,80 @@ h3 {
 }
 
 /* ============================================================
+   账号设置页
+   ============================================================ */
+
+.account-page {
+  display: flex;
+  justify-content: center;
+  min-height: calc(100vh - 5rem);
+  padding: 2rem 1.5rem 4rem;
+}
+
+.account-card {
+  width: 100%;
+  max-width: 720px;
+  height: fit-content;
+  padding: 2.5rem 2rem;
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.account-header {
+  margin-bottom: 2rem;
+}
+
+.account-header h1 {
+  margin-bottom: 0.375rem;
+  font-size: 1.5rem;
+}
+
+.account-header p,
+.account-help {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.account-section + .account-section {
+  margin-top: 2.25rem;
+  padding-top: 2.25rem;
+  border-top: 1px solid var(--color-rule);
+}
+
+.account-section h2 {
+  margin-bottom: 1.25rem;
+  color: var(--color-ink);
+  font-size: 1.05rem;
+}
+
+.account-help {
+  margin-top: 0.15rem;
+}
+
+.account-message {
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+}
+
+.account-message-error {
+  color: var(--color-danger);
+  background: var(--color-danger-light);
+}
+
+.account-message-success {
+  color: var(--color-success);
+  background: var(--color-success-light);
+}
+
+.account-card .empty-state {
+  padding: 1rem;
+}
+
+/* ============================================================
    File Viewer — 完整文件代码查看页
    ============================================================ */
 

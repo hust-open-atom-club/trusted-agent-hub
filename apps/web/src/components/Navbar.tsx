@@ -114,9 +114,9 @@ export default function Navbar() {
 
         {loading ? null : user ? (
           <div className="nav-pill__user">
-            <span className="nav-pill__username" title={`角色: ${user.role}`}>
+            <Link href="/account" className="nav-pill__username" title={`角色: ${user.role}`}>
               {user.display_name || user.email}
-            </span>
+            </Link>
             <button className="nav-pill__logout" onClick={() => { logout(); router.push('/'); }}>
               {t('nav.logout')}
             </button>

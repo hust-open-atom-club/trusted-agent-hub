@@ -12,6 +12,21 @@ const ROLE_REDIRECT: Record<string, string> = {
   user: '/',
 };
 
+function getSafeRedirect(): string | null {
+  const value = new URLSearchParams(window.location.search).get('redirect');
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
+    return null;
+  }
+
+  try {
+    const target = new URL(value, window.location.origin);
+    if (target.origin !== window.location.origin) return null;
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return null;
+  }
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
@@ -28,19 +43,21 @@ export default function LoginPage() {
     setError('');
     setSubmitting(true);
     try {
-      await login(email.trim(), password);
+      const authenticated = await login(email.trim(), password);
+      if (!authenticated) return;
       setSuccess(true);
+      const redirect = getSafeRedirect();
       const token = localStorage.getItem('tah_token');
       if (token) {
         try {
           const payload = JSON.parse(atob(token.split('.')[1]));
-          const target = ROLE_REDIRECT[payload.role] || '/';
+          const target = redirect || ROLE_REDIRECT[payload.role] || '/';
           router.push(target);
         } catch {
-          router.push('/');
+          router.push(redirect || '/');
         }
       } else {
-        router.push('/');
+        router.push(redirect || '/');
       }
     } catch (err: unknown) {
       setSubmitting(false);

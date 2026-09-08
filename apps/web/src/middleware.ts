@@ -25,6 +25,7 @@ const ROLE_LEVEL: Record<string, number> = {
 };
 
 const PROTECTED: { path: string; minRole: string }[] = [
+  { path: '/account', minRole: 'user' },
   { path: '/submit', minRole: 'submitter' },
   { path: '/submissions', minRole: 'submitter' },
   { path: '/packages', minRole: 'submitter' },
@@ -34,6 +35,7 @@ const PROTECTED: { path: string; minRole: string }[] = [
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const returnPath = `${pathname}${request.nextUrl.search}`;
 
   const rule = PROTECTED.find((r) => pathname.startsWith(r.path));
   if (!rule) return NextResponse.next();
@@ -50,15 +52,20 @@ export function middleware(request: NextRequest) {
 
   if (!token) {
     const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
+    loginUrl.searchParams.set('redirect', returnPath);
     return NextResponse.redirect(loginUrl);
   }
 
   const payload = parseJwt(token);
-  if (!payload || payload.exp * 1000 < Date.now()) {
+  if (!payload || !Number.isFinite(payload.exp)) {
     const loginUrl = new URL('/login', request.url);
+    loginUrl.searchParams.set('redirect', returnPath);
     return NextResponse.redirect(loginUrl);
   }
+
+  // Let AuthProvider renew an expired access token with the HttpOnly refresh
+  // cookie before the page decides whether the session is still valid.
+  if (payload.exp * 1000 < Date.now()) return NextResponse.next();
 
   const userLevel = ROLE_LEVEL[payload.role] ?? 99;
   const requiredLevel = ROLE_LEVEL[rule.minRole] ?? 99;
@@ -72,5 +79,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/submit/:path*', '/submissions/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
+  matcher: ['/account/:path*', '/submit/:path*', '/submissions/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
 };

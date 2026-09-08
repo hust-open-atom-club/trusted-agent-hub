@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { apiFetch, apiFetchAll, clearFetchCache, setOnUnauthorized } from './api-fetch';
+import {
+  apiFetch,
+  apiFetchAll,
+  authFetch,
+  clearFetchCache,
+  setOnTokenRefresh,
+  setOnUnauthorized,
+} from './api-fetch';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -12,6 +19,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 afterEach(() => {
   vi.restoreAllMocks();
   clearFetchCache();
+  setOnTokenRefresh(null);
   setOnUnauthorized(null);
   vi.useRealTimers();
 });
@@ -103,6 +111,83 @@ describe('apiFetch', () => {
 
     await expect(apiFetch('/expired')).rejects.toThrow('unauthorized');
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes an expired authorized request and retries with the rotated token', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ detail: 'expired' }, 401))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    const refresh = vi.fn().mockResolvedValue('rotated-access-token');
+    const onUnauthorized = vi.fn();
+    setOnTokenRefresh(refresh);
+    setOnUnauthorized(onUnauthorized);
+
+    await expect(
+      apiFetch('/private', { headers: { Authorization: 'Bearer old-token' } }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retryInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(retryInit.headers).get('Authorization')).toBe(
+      'Bearer rotated-access-token',
+    );
+  });
+
+  it('authFetch exposes the retried Response to direct authenticated callers', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ saved: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    setOnTokenRefresh(vi.fn().mockResolvedValue('fresh-token'));
+
+    const response = await authFetch('/account', {
+      headers: { Authorization: 'Bearer stale-token' },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ saved: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a cancelled request after token refresh', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(null, { status: 401 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const controller = new AbortController();
+    let resolveRefresh: (token: string | null) => void = () => undefined;
+    const refreshResult = new Promise<string | null>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let signalSeen: AbortSignal | null | undefined;
+    let resolveRefreshStarted: () => void = () => undefined;
+    const refreshStarted = new Promise<void>((resolve) => {
+      resolveRefreshStarted = resolve;
+    });
+    setOnTokenRefresh((signal) => {
+      signalSeen = signal;
+      resolveRefreshStarted();
+      return refreshResult;
+    });
+
+    const request = apiFetch('/mutate', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer stale-token' },
+      body: '{}',
+      signal: controller.signal,
+    });
+
+    await refreshStarted;
+    controller.abort();
+    resolveRefresh('fresh-token');
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(signalSeen).toBe(controller.signal);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('throws HTTP detail from error responses', async () => {

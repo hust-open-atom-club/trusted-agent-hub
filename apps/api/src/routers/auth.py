@@ -3,12 +3,20 @@
 端点:
     POST /auth/register — 注册新用户（邮箱+密码+昵称）
     POST /auth/login    — 登录（邮箱+密码），返回 access + refresh token
-    POST /auth/refresh  — 刷新 access token（refresh token rotation）
+    GET  /auth/me       — 获取当前用户资料
+    PATCH /auth/me      — 修改当前用户昵称
+    POST /auth/change-password — 修改当前用户密码
+    POST /auth/refresh  — CLI 刷新（body refresh token）
+    POST /auth/refresh/browser — 浏览器刷新（HttpOnly Cookie）
+    POST /auth/logout   — 撤销当前 refresh token 并清除浏览器 Cookie
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from datetime import datetime, timezone
+import uuid
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 
 from src.auth import (
@@ -20,12 +28,18 @@ from src.auth import (
     verify_password,
 )
 from src.database import create_session_factory, get_runtime_engine
-from src.repositories.orm_producer import UserRow
+from src.dependencies import BearerTokenInvalid, CurrentUser, get_current_user
+from src.models.common import StrictContractModel
+from src.repositories.orm_producer import RefreshTokenRow, UserRow
 from src.settings import get_settings
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/v0/auth", tags=["auth"])
+
+_REFRESH_COOKIE_NAME = "tah_refresh_token"
+_REFRESH_COOKIE_PATH = "/api/v0/auth"
+_REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60
 
 
 # ── 请求/响应模型 ─────────────────────────────────────────
@@ -56,8 +70,28 @@ class TokenResponse(BaseModel):
     user: UserResponse | None = None
 
 
+class BrowserTokenResponse(BaseModel):
+    """Browser response; refresh token is delivered only via HttpOnly Cookie."""
+
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse | None = None
+
+
+AuthTokenResponse = TokenResponse | BrowserTokenResponse
+
+
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
+
+
+class ProfileUpdateRequest(StrictContractModel):
+    display_name: str = Field(min_length=1, max_length=64)
+
+
+class ChangePasswordRequest(StrictContractModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
 
 
 # ── 仓库辅助 ──────────────────────────────────────────────
@@ -75,15 +109,124 @@ def _email_prefix(email: str) -> str:
     return email.split("@")[0][:64]
 
 
+def _user_response(user: UserRow) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        display_name=user.display_name,
+    )
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    """Keep the browser refresh token out of JavaScript-readable storage."""
+    settings = get_settings()
+    secure = bool(
+        settings.public_api_base_url
+        and settings.public_api_base_url.startswith("https://")
+    )
+    response.set_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        max_age=_REFRESH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path=_REFRESH_COOKIE_PATH,
+    )
+
+
+def _cleanup_refresh_tokens(session: Session) -> None:
+    """Bound refresh-token state during normal token issuance.
+
+    Used tokens can be removed immediately and expired tokens are no longer
+    needed for validation because JWT expiry is checked before the lookup.
+    The indexed timestamp columns keep this maintenance bounded by the
+    eligible rows instead of retaining every historical session forever.
+    """
+    now = datetime.now(timezone.utc)
+    # The application session factory intentionally disables autoflush. Flush
+    # first so a just-consumed token is visible to the cleanup predicate; the
+    # bulk delete then must not try to synchronize stale ORM instances.
+    session.flush()
+    session.execute(
+        delete(RefreshTokenRow).where(
+            or_(
+                RefreshTokenRow.used_at.is_not(None),
+                RefreshTokenRow.expires_at <= now,
+            )
+        ).execution_options(synchronize_session=False)
+    )
+
+
+def _token_response(session: Session, user: UserRow) -> TokenResponse:
+    refresh_jti = uuid.uuid4().hex
+    access = create_access_token(
+        user.id,
+        user.role,
+        email=user.email,
+        display_name=user.display_name,
+        auth_version=user.auth_version,
+    )
+    refresh = create_refresh_token(
+        user.id,
+        user.role,
+        auth_version=user.auth_version,
+        jti=refresh_jti,
+    )
+    refresh_payload = decode_token(refresh)
+    _cleanup_refresh_tokens(session)
+    session.add(
+        RefreshTokenRow(
+            jti=refresh_jti,
+            user_id=user.id,
+            expires_at=datetime.fromtimestamp(
+                int(refresh_payload["exp"]), tz=timezone.utc
+            ),
+        )
+    )
+    session.commit()
+    return TokenResponse(
+        access_token=access,
+        refresh_token=refresh,
+        token_type="bearer",
+        user=_user_response(user),
+    )
+
+
+def _response_for_client(
+    token_response: TokenResponse,
+    browser_client: bool,
+) -> AuthTokenResponse:
+    if not browser_client:
+        return token_response
+    return BrowserTokenResponse(
+        access_token=token_response.access_token,
+        token_type=token_response.token_type,
+        user=token_response.user,
+    )
+
+
+def _load_active_user(session: Session, user_id: str) -> UserRow:
+    user = session.scalar(select(UserRow).where(UserRow.id == user_id))
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")
+    return user
+
+
 # ── POST /auth/register ───────────────────────────────────
 
 
-@router.post("/register", status_code=201, response_model=TokenResponse)
-def register(body: RegisterRequest) -> dict:
+@router.post("/register", status_code=201, response_model=AuthTokenResponse)
+def register(
+    body: RegisterRequest,
+    response: Response,
+    browser_client: bool = Header(default=False, alias="X-TAH-Browser"),
+) -> AuthTokenResponse:
     """注册新用户。邮箱为登录凭证，昵称默认取邮箱前缀，角色默认 submitter。"""
     session = _get_session()
-    import uuid
-
     email = body.email.lower().strip()
 
     try:
@@ -106,22 +249,11 @@ def register(body: RegisterRequest) -> dict:
             display_name=display_name,
         )
         session.add(user)
-        session.commit()
+        session.flush()
 
-        access = create_access_token(user.id, user.role, email=user.email, display_name=user.display_name)
-        refresh = create_refresh_token(user.id, user.role)
-
-        return {
-            "access_token": access,
-            "refresh_token": refresh,
-            "token_type": "bearer",
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "role": user.role,
-                "display_name": user.display_name,
-            },
-        }
+        token_response = _token_response(session, user)
+        _set_refresh_cookie(response, token_response.refresh_token)
+        return _response_for_client(token_response, browser_client)
     finally:
         session.close()
 
@@ -129,8 +261,12 @@ def register(body: RegisterRequest) -> dict:
 # ── POST /auth/login ──────────────────────────────────────
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest) -> TokenResponse:
+@router.post("/login", response_model=AuthTokenResponse)
+def login(
+    body: LoginRequest,
+    response: Response,
+    browser_client: bool = Header(default=False, alias="X-TAH-Browser"),
+) -> AuthTokenResponse:
     """登录（邮箱+密码），返回 access token（2h）+ refresh token（7d）+ 用户信息。"""
     session = _get_session()
     email = body.email.lower().strip()
@@ -150,66 +286,206 @@ def login(body: LoginRequest) -> TokenResponse:
         if not user.is_active:
             raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")
 
-        access = create_access_token(user.id, user.role, email=user.email, display_name=user.display_name)
-        refresh = create_refresh_token(user.id, user.role)
-        return TokenResponse(
-            access_token=access,
-            refresh_token=refresh,
-            user=UserResponse(
-                id=user.id,
-                email=user.email,
-                role=user.role,
-                display_name=user.display_name,
-            ),
-        )
+        token_response = _token_response(session, user)
+        _set_refresh_cookie(response, token_response.refresh_token)
+        return _response_for_client(token_response, browser_client)
     finally:
         session.close()
 
 
-# ── POST /auth/refresh ────────────────────────────────────
+# ── GET/PATCH /auth/me ─────────────────────────────────────
 
 
-@router.post("/refresh", response_model=TokenResponse)
-def refresh(body: RefreshRequest) -> TokenResponse:
-    """使用 refresh token 获取新的 access token。
-
-    实现 refresh token rotation：旧的 refresh token 被消费后失效，
-    同时签发新 access token 和新 refresh token。
-    """
+@router.get("/me", response_model=UserResponse)
+def get_me(current_user: CurrentUser = Depends(get_current_user)) -> UserResponse:
+    """返回当前登录用户的最新资料。"""
+    session = _get_session()
     try:
-        payload = decode_token(body.refresh_token, verify_exp=False)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Refresh token 无效")
+        return _user_response(_load_active_user(session, current_user.id))
+    finally:
+        session.close()
 
-    import time
-    if time.time() > payload.get("exp", 0):
-        raise HTTPException(status_code=401, detail="Refresh token 已过期，请重新登录")
 
-    user_id = payload["sub"]
-    role = payload.get("role", "user")
-    email = payload.get("email", "")
-    display_name = payload.get("display_name", "")
+@router.patch("/me", response_model=UserResponse)
+def update_me(
+    body: ProfileUpdateRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> UserResponse:
+    """修改当前用户可编辑的资料；邮箱、角色和状态不可自助修改。"""
+    display_name = body.display_name.strip()
+    if not display_name:
+        raise HTTPException(status_code=422, detail="昵称不能为空")
 
     session = _get_session()
     try:
-        user = session.scalar(select(UserRow).where(UserRow.id == user_id))
-        if user is None:
-            raise HTTPException(status_code=401, detail="用户不存在")
-        if not user.is_active:
-            raise HTTPException(status_code=403, detail="该账号已被禁用，请联系管理员")
+        user = _load_active_user(session, current_user.id)
+        user.display_name = display_name
+        session.commit()
+        return _user_response(user)
     finally:
         session.close()
 
-    new_access = create_access_token(user_id, role, email=email, display_name=display_name)
-    new_refresh = create_refresh_token(user_id, role)
 
-    return TokenResponse(
-        access_token=new_access,
-        refresh_token=new_refresh,
-        user=UserResponse(
-            id=user_id,
-            email=email,
-            role=role,
-            display_name=display_name,
-        ),
+# ── POST /auth/change-password ─────────────────────────────
+
+
+@router.post("/change-password", response_model=AuthTokenResponse)
+def change_password(
+    body: ChangePasswordRequest,
+    response: Response,
+    browser_client: bool = Header(default=False, alias="X-TAH-Browser"),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> AuthTokenResponse:
+    """修改当前用户密码，并使修改前签发的 Token 全部失效。"""
+    session = _get_session()
+    try:
+        user = _load_active_user(session, current_user.id)
+        if not verify_password(body.current_password, user.password_hash):
+            raise HTTPException(status_code=400, detail="当前密码错误")
+        if verify_password(body.new_password, user.password_hash):
+            raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
+
+        user.password_hash = hash_password(body.new_password)
+        user.auth_version += 1
+        token_response = _token_response(session, user)
+        _set_refresh_cookie(response, token_response.refresh_token)
+        return _response_for_client(token_response, browser_client)
+    finally:
+        session.close()
+
+
+def _rotate_refresh_token(refresh_token: str) -> TokenResponse:
+    """Consume one stored refresh token and issue its replacement."""
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token 缺失")
+
+    try:
+        payload = decode_token(refresh_token, verify_exp=False)
+    except BearerTokenInvalid:
+        raise HTTPException(status_code=401, detail="Refresh token 无效")
+
+    import time
+    try:
+        expires_at = int(payload.get("exp", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Refresh token 无效") from None
+    if time.time() > expires_at:
+        raise HTTPException(status_code=401, detail="Refresh token 已过期，请重新登录")
+
+    if payload.get("token_type") != "refresh":
+        raise HTTPException(status_code=401, detail="Refresh token 类型无效")
+    jti = payload.get("jti")
+    if not isinstance(jti, str) or not jti:
+        raise HTTPException(status_code=401, detail="Refresh token 无效")
+
+    user_id = payload.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=401, detail="Refresh token 无效")
+    try:
+        auth_version = int(payload.get("auth_version", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Refresh token 无效") from None
+
+    session = _get_session()
+    try:
+        user = _load_active_user(session, user_id)
+        if user.auth_version != auth_version:
+            raise HTTPException(status_code=401, detail="Refresh token 已失效")
+        stored_token = session.scalar(
+            select(RefreshTokenRow)
+            .where(RefreshTokenRow.jti == jti)
+            .with_for_update()
+        )
+        if (
+            stored_token is None
+            or stored_token.user_id != user.id
+            or stored_token.used_at is not None
+        ):
+            raise HTTPException(status_code=401, detail="Refresh token 已使用或无效")
+        stored_token.used_at = datetime.now(timezone.utc)
+        return _token_response(session, user)
+    finally:
+        session.close()
+
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh(body: RefreshRequest | None = None) -> TokenResponse:
+    """CLI refresh contract: the token must be supplied in the request body.
+
+    This endpoint deliberately never reads the browser cookie and never
+    changes it. Browser clients must use ``/refresh/browser`` instead.
+    """
+    if body is None or not body.refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token 缺失")
+    return _rotate_refresh_token(body.refresh_token)
+
+
+@router.post("/refresh/browser", response_model=BrowserTokenResponse)
+def refresh_browser(request: Request, response: Response) -> BrowserTokenResponse:
+    """Browser refresh contract: accept only the HttpOnly refresh cookie."""
+    refresh_token = request.cookies.get(_REFRESH_COOKIE_NAME)
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token 缺失")
+
+    token_response = _rotate_refresh_token(refresh_token)
+    _set_refresh_cookie(response, token_response.refresh_token)
+    return BrowserTokenResponse(
+        access_token=token_response.access_token,
+        token_type=token_response.token_type,
+        user=token_response.user,
+    )
+
+
+@router.post("/logout", status_code=204)
+def logout(
+    request: Request,
+    response: Response,
+    body: RefreshRequest | None = None,
+) -> None:
+    """Revoke the presented refresh token and clear the browser cookie.
+
+    Browser clients normally authenticate this request with the HttpOnly
+    cookie.  Body-based tokens remain supported for CLI clients, and logout
+    stays idempotent for missing or already-invalid tokens.
+    """
+    refresh_token = (
+        (body.refresh_token if body is not None else None)
+        or request.cookies.get(_REFRESH_COOKIE_NAME)
+    )
+
+    if refresh_token:
+        try:
+            payload = decode_token(refresh_token, verify_exp=False)
+        except BearerTokenInvalid:
+            payload = None
+
+        jti = payload.get("jti") if payload else None
+        user_id = payload.get("sub") if payload else None
+        if (
+            payload is not None
+            and payload.get("token_type") == "refresh"
+            and isinstance(jti, str)
+            and bool(jti)
+            and isinstance(user_id, str)
+            and bool(user_id)
+        ):
+            session = _get_session()
+            try:
+                stored_token = session.scalar(
+                    select(RefreshTokenRow)
+                    .where(
+                        RefreshTokenRow.jti == jti,
+                        RefreshTokenRow.user_id == user_id,
+                    )
+                    .with_for_update()
+                )
+                if stored_token is not None and stored_token.used_at is None:
+                    stored_token.used_at = datetime.now(timezone.utc)
+                    session.commit()
+            finally:
+                session.close()
+
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        path=_REFRESH_COOKIE_PATH,
     )

@@ -51,7 +51,10 @@ def create_app() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_allowed_origins),
-        allow_credentials=False,
+        # Browser refresh tokens use an HttpOnly cookie. Wildcard origins
+        # cannot be used with credentialed requests, so deployments that need
+        # browser sessions must configure explicit CORS_ALLOWED_ORIGINS.
+        allow_credentials="*" not in settings.cors_allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

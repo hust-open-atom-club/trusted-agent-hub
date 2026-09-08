@@ -28,6 +28,7 @@ BUSINESS_TABLES = {
 }
 PRODUCER_TABLES = {
     "users",
+    "refresh_tokens",
     "scan_reports",
     "review_records",
     "audit_logs",
@@ -43,8 +44,10 @@ def _alembic_config(database_url: str) -> Config:
 def test_migration_graph_has_single_base_and_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config("sqlite+pysqlite:///:memory:"))
     assert script.get_bases() == ["20260826_0001"]
-    assert script.get_heads() == ["20260826_0011"]
+    assert script.get_heads() == ["20260908_0002"]
     assert [revision.revision for revision in script.walk_revisions()] == [
+        "20260908_0002",
+        "20260908_0001",
         "20260826_0011",
         "20260826_0010",
         "20260826_0001",
@@ -73,6 +76,7 @@ def test_migration_foreign_keys_reference_parents_with_cascade(
         "feedback_records": ("package_id", "packages", "id"),
         "review_records": ("version_id", "package_versions", "id"),
         "scan_reports": ("version_id", "package_versions", "id"),
+        "refresh_tokens": ("user_id", "users", "id"),
     }
     for table_name, (column, parent_table, parent_column) in expected_foreign_keys.items():
         foreign_keys = inspector.get_foreign_keys(table_name)
@@ -196,7 +200,10 @@ def test_alembic_upgrade_head_creates_exact_schema(
         },
         "users": {
             "id", "email", "password_hash", "role", "display_name",
-            "is_active", "created_at",
+            "auth_version", "is_active", "created_at",
+        },
+        "refresh_tokens": {
+            "jti", "user_id", "expires_at", "used_at", "created_at",
         },
         "review_records": {
             "id", "version_id", "reviewer_id", "conclusion", "comment",
@@ -216,6 +223,13 @@ def test_alembic_upgrade_head_creates_exact_schema(
             "email": False,
             "display_name": False,
             "is_active": False,
+        },
+        "refresh_tokens": {
+            "jti": False,
+            "user_id": False,
+            "expires_at": False,
+            "used_at": True,
+            "created_at": False,
         },
         "install_records": {
             "user_id": True,
@@ -272,6 +286,11 @@ def test_alembic_upgrade_head_creates_exact_schema(
             "ix_feedback_records_user_id",
         },
         "users": {"ix_users_role"},
+        "refresh_tokens": {
+            "ix_refresh_tokens_expires_at",
+            "ix_refresh_tokens_used_at",
+            "ix_refresh_tokens_user_id",
+        },
         "review_records": {
             "ix_review_records_conclusion",
             "ix_review_records_version_id",
@@ -410,6 +429,8 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
             "20260826_0001_initial_schema.py",
             "20260826_0010_migrate_legacy_hash_complete.py",
             "20260826_0011_add_trust_model_fingerprint.py",
+            "20260908_0001_add_user_auth_version.py",
+            "20260908_0002_add_refresh_token_store.py",
         }
         unpacked = tmp_path / "unpacked"
         wheel.extractall(unpacked)
