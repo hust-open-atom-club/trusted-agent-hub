@@ -3,7 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetch, authFetch } from '@/lib/api-fetch';
 import {
   formatScanStatusMessage,
   scanPollIntervalMs,
@@ -152,7 +152,7 @@ function SubmitForm() {
 
   /* ── 扫描 ── */
   const fetchScanStatus = async (scanId: string): Promise<ScanStatusPayload> => {
-    const response = await fetch(`${API_BASE}/api/v0/scan/${scanId}`, {
+    const response = await authFetch(`${API_BASE}/api/v0/scan/${scanId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
@@ -169,7 +169,7 @@ function SubmitForm() {
     let meta: PackageMetadata | null = null;
     let caps: { path: string; name: string; type: string }[] = [];
     try {
-      const mr = await fetch(`${API_BASE}/api/v0/scan/${scanId}/metadata`, {
+      const mr = await authFetch(`${API_BASE}/api/v0/scan/${scanId}/metadata`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (mr.ok) {
@@ -277,7 +277,7 @@ function SubmitForm() {
     setPhase('scanning');
     setStatusMsg('正在提交扫描任务...');
     try {
-      const r = await fetch(`${API_BASE}/api/v0/scan`, {
+      const r = await authFetch(`${API_BASE}/api/v0/scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '扫描提交失败'); }
@@ -397,11 +397,11 @@ function SubmitForm() {
           dependencies: meta.dependencies || null,
           field_source: fs,
         };
-        const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
+        const verRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
         if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
         const verData = await verRes.json();
         const versionId: string = verData.id;
-        const subRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
+        const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
           body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
         });
@@ -423,7 +423,7 @@ function SubmitForm() {
         field_source: fs,
       };
 
-      const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages`, { method: 'POST', headers, body: JSON.stringify(pkgBody) });
+      const pkgRes = await authFetch(`${API_BASE}/api/v0/producer/packages`, { method: 'POST', headers, body: JSON.stringify(pkgBody) });
       if (!pkgRes.ok) { const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' })); throw new Error(e.detail || `创建包失败 (${pkgRes.status})`); }
       const pkgData = await pkgRes.json();
       const createdPkgId: string = pkgData.id;
@@ -440,12 +440,12 @@ function SubmitForm() {
         dependencies: meta.dependencies || null,
         field_source: fs,
       };
-      const verRes = await fetch(`${API_BASE}/api/v0/producer/packages/${createdPkgId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
+      const verRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${createdPkgId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
       if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
       const verData = await verRes.json();
       const versionId: string = verData.id;
 
-      const subRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
+      const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST', headers,
         body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
       });

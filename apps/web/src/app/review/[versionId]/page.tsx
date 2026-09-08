@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetch, authFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 import ProvenanceSummary from './ProvenanceSummary';
@@ -374,7 +374,7 @@ export default function ReviewDetailPage() {
     setSubmitting(true);
 
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/api/v0/producer/versions/${versionId}/reviews`,
         {
           method: 'POST',

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetch } from '@/lib/api-fetch';
+import { apiFetch, authFetch } from '@/lib/api-fetch';
 import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
 
 import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
@@ -86,7 +86,7 @@ function StatusContent() {
     if (!token) return null;
     try {
       setError(null);
-      const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
+      const res = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
@@ -98,7 +98,7 @@ function StatusContent() {
 
       if (data.package_id && !packageName) {
         try {
-          const pkgRes = await fetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`, {
+          const pkgRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (pkgRes.ok) {
@@ -110,7 +110,7 @@ function StatusContent() {
 
       if (data.status === 'rejected' || data.status === 'changes_requested') {
         try {
-          const reviewsRes = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
+          const reviewsRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (reviewsRes.ok) {

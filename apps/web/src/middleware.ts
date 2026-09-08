@@ -25,6 +25,7 @@ const ROLE_LEVEL: Record<string, number> = {
 };
 
 const PROTECTED: { path: string; minRole: string }[] = [
+  { path: '/account', minRole: 'user' },
   { path: '/submit', minRole: 'submitter' },
   { path: '/submissions', minRole: 'submitter' },
   { path: '/packages', minRole: 'submitter' },
@@ -72,5 +73,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/submit/:path*', '/submissions/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
+  matcher: ['/account/:path*', '/submit/:path*', '/submissions/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
 };

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
-import { apiFetchAll, clearFetchCache } from '@/lib/api-fetch';
+import { apiFetchAll, authFetch, clearFetchCache } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -103,7 +103,7 @@ export default function AdminYankPage() {
 
     try {
       if (actionType === 're-review') {
-        const res = await fetch(
+        const res = await authFetch(
           `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/re-review`,
           {
             method: 'POST',
@@ -116,7 +116,7 @@ export default function AdminYankPage() {
         }
         setSuccessMsg(t('admin.yank.re_review_success', { name: selectedItem.package_name, version: selectedItem.version }));
       } else {
-        const res = await fetch(
+        const res = await authFetch(
           `${API_BASE}/api/v0/producer/versions/${selectedItem.version_id}/yank?reason=${encodeURIComponent(reason.trim())}`,
           {
             method: 'POST',
@@ -148,7 +148,7 @@ export default function AdminYankPage() {
   const handleUnyank = async (item: YankItem) => {
     if (!token) return;
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/api/v0/producer/versions/${item.version_id}/unyank`,
         {
           method: 'POST',
@@ -173,7 +173,7 @@ export default function AdminYankPage() {
     if (!confirm(t('admin.yank.delete_confirm', { name: item.package_name, version: item.version }))) return;
     setDeletingId(item.version_id);
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `${API_BASE}/api/v0/producer/versions/${item.version_id}`,
         { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
       );

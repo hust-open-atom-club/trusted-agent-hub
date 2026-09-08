@@ -50,11 +50,12 @@ export default function RegisterPage() {
 
     setSubmitting(true);
     try {
-      await register(
+      const authenticated = await register(
         email.trim(),
         password,
         displayName.trim() || undefined,
       );
+      if (!authenticated) return;
       setSuccess(true);
       const token = localStorage.getItem('tah_token');
       if (token) {

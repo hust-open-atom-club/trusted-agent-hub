@@ -12,16 +12,21 @@ import os
 import bcrypt
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import Depends, HTTPException
 from jose import JWTError, jwt
 from pwdlib import PasswordHash
 from schema.constants import UserRole
+from sqlalchemy import select
+
+from src.database import create_session_factory, get_runtime_engine
 from src.dependencies import (
     BearerTokenInvalid,
     CurrentUser,
     get_current_user,
 )
+from src.repositories.orm_producer import UserRow
 from src.settings import get_settings
 
 # ── 密码哈希（Argon2id）───────────────────────────────────
@@ -69,26 +74,68 @@ def _get_jwt_secret() -> str:
     return _JWT_SECRET
 
 
-def create_access_token(user_id: str, role: str, *, email: str = "", display_name: str = "") -> str:
+def create_access_token(
+    user_id: str,
+    role: str,
+    *,
+    email: str = "",
+    display_name: str = "",
+    auth_version: int = 0,
+) -> str:
     """签发 access token（2h 有效）。"""
-    return _create_token(user_id, role, _ACCESS_TOKEN_TTL, email=email, display_name=display_name)
+    return _create_token(
+        user_id,
+        role,
+        _ACCESS_TOKEN_TTL,
+        token_type="access",
+        email=email,
+        display_name=display_name,
+        auth_version=auth_version,
+    )
 
 
-def create_refresh_token(user_id: str, role: str) -> str:
+def create_refresh_token(
+    user_id: str,
+    role: str,
+    *,
+    auth_version: int = 0,
+    jti: str | None = None,
+) -> str:
     """签发 refresh token（7d 有效）。"""
-    return _create_token(user_id, role, _REFRESH_TOKEN_TTL)
+    return _create_token(
+        user_id,
+        role,
+        _REFRESH_TOKEN_TTL,
+        token_type="refresh",
+        jti=jti or uuid4().hex,
+        auth_version=auth_version,
+    )
 
 
-def _create_token(user_id: str, role: str, ttl: timedelta, *, email: str = "", display_name: str = "") -> str:
+def _create_token(
+    user_id: str,
+    role: str,
+    ttl: timedelta,
+    *,
+    token_type: str,
+    jti: str | None = None,
+    email: str = "",
+    display_name: str = "",
+    auth_version: int = 0,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "role": role,
+        "token_type": token_type,
         "email": email,
         "display_name": display_name,
+        "auth_version": auth_version,
         "iat": now,
         "exp": now + ttl,
     }
+    if jti is not None:
+        payload["jti"] = jti
     return jwt.encode(payload, _get_jwt_secret(), algorithm=_ALGORITHM)
 
 
@@ -114,7 +161,35 @@ def decode_token(token: str, *, verify_exp: bool = True) -> dict:
 def verify_jwt_token(token: str) -> CurrentUser:
     """JWT 验证函数，替换 dependencies 中的占位实现。"""
     payload = decode_token(token)
-    return CurrentUser(id=payload["sub"], role=payload.get("role", "user"))
+    if payload.get("token_type") != "access":
+        raise BearerTokenInvalid("Token 类型无效")
+    user_id = payload.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise BearerTokenInvalid("Token 缺少用户标识")
+
+    try:
+        auth_version = int(payload.get("auth_version", 0))
+    except (TypeError, ValueError):
+        raise BearerTokenInvalid("Token 版本无效") from None
+
+    settings = get_settings()
+    if settings.database_url is None:
+        raise BearerTokenInvalid("数据库未配置")
+
+    engine = get_runtime_engine(settings.database_url)
+    session = create_session_factory(engine)()
+    try:
+        user = session.scalar(select(UserRow).where(UserRow.id == user_id))
+        if (
+            user is None
+            or not user.is_active
+            or user.auth_version != auth_version
+        ):
+            raise BearerTokenInvalid("Token 已失效")
+        # The database is authoritative for role changes and account status.
+        return CurrentUser(id=user.id, role=user.role)
+    finally:
+        session.close()
 
 
 # 角色层级：值越小权限越高

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { authFetch } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
 
@@ -73,7 +74,7 @@ export default function GradeOverrideModal({
         grade: isResetting ? null : grade,
         reason: reason.trim(),
       };
-      const res = await fetch(`${API_BASE}/api/v0/producer/versions/${versionId}/grade`, {
+      const res = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/grade`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),

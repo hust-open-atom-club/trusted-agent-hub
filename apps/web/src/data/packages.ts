@@ -3,6 +3,7 @@ import type { Package, PackageListResponse } from '@/types';
 export type { Owner, Package, PackageListResponse } from '@/types';
 
 import { API_BASE } from '@/lib/runtime-config';
+import { authFetch } from '@/lib/api-fetch';
 
 /* ── 查询参数 ── */
 
@@ -123,7 +124,7 @@ export async function submitFeedback(
   comment: string | null,
   token: string,
 ): Promise<import('@/types').FeedbackRecord> {
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/api/v0/packages/${encodeURIComponent(name)}/feedback`,
     {
       method: 'POST',

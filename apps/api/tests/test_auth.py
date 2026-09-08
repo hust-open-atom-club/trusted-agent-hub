@@ -148,6 +148,75 @@ class TestRegisterLoginRefresh:
         assert data["access_token"]
         assert data["refresh_token"]
 
+    def test_browser_auth_responses_keep_refresh_token_in_cookie_only(self):
+        """Browser auth responses never expose the HttpOnly refresh token body."""
+        _needs_db()
+        client = _get_client()
+        email = _random_email("browser-response")
+        browser_headers = {"X-TAH-Browser": "1"}
+
+        registered = client.post(
+            "/api/v0/auth/register",
+            headers=browser_headers,
+            json={
+                "email": email,
+                "password": "Test123456",
+                "display_name": "Browser Tester",
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        register_data = registered.json()
+        _TEST_USER_IDS.append(register_data["user"]["id"])
+        assert register_data["access_token"]
+        assert "refresh_token" not in register_data
+        assert client.cookies.get("tah_refresh_token")
+
+        logged_in = client.post(
+            "/api/v0/auth/login",
+            headers=browser_headers,
+            json={"email": email, "password": "Test123456"},
+        )
+        assert logged_in.status_code == 200
+        assert "refresh_token" not in logged_in.json()
+
+        cli_without_body = client.post("/api/v0/auth/refresh")
+        assert cli_without_body.status_code == 401
+
+        refreshed = client.post(
+            "/api/v0/auth/refresh/browser",
+        )
+        assert refreshed.status_code == 200
+        assert "refresh_token" not in refreshed.json()
+
+    def test_cli_refresh_never_falls_back_to_browser_cookie(self):
+        """The CLI endpoint cannot consume a token supplied only by Cookie."""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("cli-cookie"))
+        without_body = client.post("/api/v0/auth/refresh")
+        assert without_body.status_code == 401
+
+        with_body = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert with_body.status_code == 200
+        assert with_body.json()["refresh_token"]
+
+    def test_browser_refresh_requires_cookie(self):
+        """The browser endpoint ignores body tokens when its cookie is absent."""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("browser-cookie"))
+        client.cookies.clear()
+        response = client.post(
+            "/api/v0/auth/refresh/browser",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert response.status_code == 401
+
     def test_login_wrong_password(self):
         """错误密码登录：401。"""
         _needs_db()
@@ -175,11 +244,31 @@ class TestRegisterLoginRefresh:
         client = _get_client()
 
         data = _register(client, _random_email("refresh"))
-        resp = client.post("/api/v0/auth/refresh", json={"refresh_token": data["refresh_token"]})
+        cookie_header = client.cookies.get("tah_refresh_token")
+        assert cookie_header == data["refresh_token"]
+        # CLI clients must present the refresh token in the request body.
+        resp = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        )
         assert resp.status_code == 200, f"Refresh failed: {resp.text}"
         new = resp.json()
         assert new["access_token"]
         assert new["refresh_token"]
+
+        # Rotation is one-time: the consumed refresh token cannot be replayed.
+        replay = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert replay.status_code == 401
+
+        # An access token is not a refresh token, even though both are JWTs.
+        access_as_refresh = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["access_token"]},
+        )
+        assert access_as_refresh.status_code == 401
 
         # 新 access token 可正常访问受保护端点（refresh 产出的凭证有效）
         resp = client.get(
@@ -188,6 +277,132 @@ class TestRegisterLoginRefresh:
         )
         # submitter 角色能过鉴权但无 reviewer 权限 → 403（而非 401），证明 token 有效
         assert resp.status_code == 403
+
+    def test_current_user_can_read_and_update_profile(self):
+        """登录用户可以读取和修改昵称，但不能提交未声明的账号字段。"""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("profile"))
+        headers = {"Authorization": f"Bearer {data['access_token']}"}
+
+        current = client.get("/api/v0/auth/me", headers=headers)
+        assert current.status_code == 200
+        assert current.json()["display_name"] == "AuthTester"
+
+        updated = client.patch(
+            "/api/v0/auth/me",
+            headers=headers,
+            json={"display_name": "Updated Tester"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["display_name"] == "Updated Tester"
+        assert updated.json()["email"] == data["user"]["email"]
+
+        forbidden_field = client.patch(
+            "/api/v0/auth/me",
+            headers=headers,
+            json={"display_name": "Another Name", "email": "other@example.com"},
+        )
+        assert forbidden_field.status_code == 422
+
+    def test_refresh_returns_latest_profile(self):
+        """refresh 必须从数据库返回最新昵称，而不是旧 Token 中的资料。"""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("profile-refresh"))
+        headers = {"Authorization": f"Bearer {data['access_token']}"}
+        updated = client.patch(
+            "/api/v0/auth/me",
+            headers=headers,
+            json={"display_name": "Fresh Name"},
+        )
+        assert updated.status_code == 200
+
+        refreshed = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert refreshed.status_code == 200
+        assert refreshed.json()["user"]["display_name"] == "Fresh Name"
+        assert refreshed.json()["user"]["email"] == data["user"]["email"]
+
+    def test_logout_clears_browser_refresh_cookie(self):
+        """Browser logout revokes the token and removes the HttpOnly cookie."""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("logout"))
+        assert client.cookies.get("tah_refresh_token")
+
+        response = client.post("/api/v0/auth/logout")
+        assert response.status_code == 204
+        assert client.cookies.get("tah_refresh_token") in (None, "")
+        assert client.post("/api/v0/auth/refresh").status_code == 401
+        assert client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        ).status_code == 401
+
+    def test_logout_accepts_body_refresh_token_for_cli_clients(self):
+        """CLI logout can revoke a body-presented refresh token."""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("logout-body"))
+        client.cookies.clear()
+
+        response = client.post(
+            "/api/v0/auth/logout",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert response.status_code == 204
+        assert client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        ).status_code == 401
+
+    def test_change_password_invalidates_previous_tokens(self):
+        """修改密码后旧密码、旧 access token 和旧 refresh token 均失效。"""
+        _needs_db()
+        client = _get_client()
+
+        email = _random_email("change-password")
+        data = _register(client, email)
+        headers = {"Authorization": f"Bearer {data['access_token']}"}
+
+        changed = client.post(
+            "/api/v0/auth/change-password",
+            headers=headers,
+            json={
+                "current_password": "Test123456",
+                "new_password": "NewTest123456",
+            },
+        )
+        assert changed.status_code == 200
+        assert changed.json()["user"]["email"] == email
+
+        old_login = client.post(
+            "/api/v0/auth/login",
+            json={"email": email, "password": "Test123456"},
+        )
+        assert old_login.status_code == 401
+
+        new_login = client.post(
+            "/api/v0/auth/login",
+            json={"email": email, "password": "NewTest123456"},
+        )
+        assert new_login.status_code == 200
+
+        old_access = client.get("/api/v0/auth/me", headers=headers)
+        assert old_access.status_code == 401
+
+        old_refresh = client.post(
+            "/api/v0/auth/refresh",
+            json={"refresh_token": data["refresh_token"]},
+        )
+        assert old_refresh.status_code == 401
 
     def test_refresh_rejects_expired_token(self):
         """过期 refresh token：401。"""
