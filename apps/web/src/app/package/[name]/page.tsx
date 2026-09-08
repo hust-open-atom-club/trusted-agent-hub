@@ -435,7 +435,7 @@ export default function PackageDetailPage() {
             <InstallCommandBlock command={installCommand} packageName={pkg.name} client={effectiveClient} />
             <div className="rail-target-path">
               <span>{tt('detail.install.target_path')}</span>
-              <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name)}</code>
+              <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name, pkg.type)}</code>
             </div>
           </motion.div>
 

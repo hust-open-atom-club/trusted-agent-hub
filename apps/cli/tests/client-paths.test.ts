@@ -14,6 +14,7 @@ import {
   SUPPORTED_CLIENTS,
   isSupportedClient,
   getClientRoot,
+  getRecordInstallRoot,
   isStrictChildPath,
   resolveManifestDestination,
   ClientPathError,
@@ -102,6 +103,50 @@ console.log('  ✓ isSupportedClient');
   const root = getClientRoot('codex', home);
   assert.strictEqual(root, path.resolve(home, '.codex/skills'));
   console.log('  ✓ getClientRoot codex');
+
+  const codexMcpRoot = getClientRoot('codex', home, 'mcp_server');
+  assert.strictEqual(
+    codexMcpRoot,
+    path.resolve(home, '.trusted-agent-hub', 'installed'),
+  );
+  console.log('  ✓ getClientRoot codex mcp_server uses TAH managed directory');
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  const customCodexHome = path.join(home, '.custom-codex');
+  process.env.CODEX_HOME = customCodexHome;
+  try {
+    assert.strictEqual(
+      getClientRoot('codex', home),
+      path.resolve(customCodexHome, 'skills'),
+    );
+    assert.strictEqual(
+      getClientRoot('codex', home, 'mcp_server'),
+      path.resolve(home, '.trusted-agent-hub', 'installed'),
+    );
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+  }
+  console.log('  ✓ getClientRoot codex honors CODEX_HOME for skills');
+
+  assert.throws(
+    () =>
+      getRecordInstallRoot(
+        {
+          client: 'codex',
+          package_type: 'mcp_server',
+          install_root: path.resolve(home, '.evil'),
+          method: 'copy_directory',
+        },
+        home,
+      ),
+    (err: unknown) =>
+      err instanceof ClientPathError && err.code === 'unsafe_install_root',
+  );
+  console.log('  ✓ getRecordInstallRoot rejects mismatched install root');
 }
 
 {
@@ -202,6 +247,19 @@ console.log('  ✓ isSupportedClient');
   );
   assert.strictEqual(result, path.resolve(home, '.codex/skills/example'));
   console.log('  ✓ resolveManifestDestination codex correct');
+
+  const codexMcpRoot = path.resolve(home, '.trusted-agent-hub', 'installed');
+  const codexMcpResult = resolveManifestDestination(
+    '~/.trusted-agent-hub/installed/example/',
+    'codex',
+    codexMcpRoot,
+    'mcp_server',
+  );
+  assert.strictEqual(
+    codexMcpResult,
+    path.resolve(home, '.trusted-agent-hub', 'installed', 'example'),
+  );
+  console.log('  ✓ resolveManifestDestination codex mcp_server correct');
 }
 
 // Rejects wrong client root (cursor destination with claude-code client)

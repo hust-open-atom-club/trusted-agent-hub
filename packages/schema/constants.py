@@ -347,11 +347,37 @@ CLIENT_LABELS: Final[dict[str, str]] = {
 # 详情页的安装目标选择与后端校验都以该映射为唯一依据。
 PACKAGE_TYPE_INSTALL_CLIENTS: Final[dict[str, tuple[str, ...]]] = {
     "skill": ("claude-code", "cursor", "codex"),
-    "mcp_server": ("claude-code", "cursor"),
+    "mcp_server": ("claude-code", "cursor", "codex"),
     "plugin": ("claude-code-plugin",),
     "subagent": ("claude-code",),
     "command": ("claude-code",),
     "prompt": ("claude-code",),
+}
+
+PACKAGE_TYPE_INSTALL_ROOTS: Final[dict[str, dict[str, str]]] = {
+    "skill": {
+        "claude-code": "~/.claude/skills/",
+        "claude-code-plugin": "~/.claude/skills/",
+        "cursor": "~/.cursor/skills/",
+        "codex": "~/.codex/skills/",
+    },
+    "mcp_server": {
+        "claude-code": "~/.claude/skills/",
+        "cursor": "~/.cursor/skills/",
+        "codex": "~/.trusted-agent-hub/installed/",
+    },
+    "plugin": {
+        "claude-code-plugin": "~/.claude/skills/",
+    },
+    "subagent": {
+        "claude-code": "~/.claude/skills/",
+    },
+    "command": {
+        "claude-code": "~/.claude/skills/",
+    },
+    "prompt": {
+        "claude-code": "~/.claude/skills/",
+    },
 }
 
 

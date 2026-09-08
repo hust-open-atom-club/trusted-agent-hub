@@ -123,6 +123,7 @@ export function getClientTargetPath(
   targets: ClientTarget[] | null | undefined,
   client: string,
   packageName: string,
+  packageType?: string | null,
 ): string {
   const match = (targets ?? []).find((t) => t.client === client);
   if (match?.destination) {
@@ -135,6 +136,9 @@ export function getClientTargetPath(
     cursor: '~/.cursor/skills/',
     codex: '~/.codex/skills/',
   };
+  if (packageType === 'mcp_server' && client === 'codex') {
+    roots.codex = '~/.trusted-agent-hub/installed/';
+  }
   const root = roots[client] ?? '~/.claude/skills/';
   return `${root}${packageName}/`;
 }

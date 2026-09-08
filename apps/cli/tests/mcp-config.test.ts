@@ -27,6 +27,12 @@ import {
   resolveMcpConfigPath,
   writeMergedMcpConfig,
 } from '../src/config-writer';
+import {
+  hasCodexMcpSection,
+  removeCodexMcpSections,
+  resolveCodexConfigPath,
+  writeCodexMcpSections,
+} from '../src/codex-config-writer';
 import { LocalInstallStore } from '../src/local-install-store';
 
 const TEST_HOME = path.join(
@@ -253,6 +259,113 @@ runTest('describeMcpDiff marks add vs overwrite', () => {
   assert.ok(diff.some((l) => l.includes('新增 MCP server: fresh')));
 });
 
+runTest('writeCodexMcpSections writes and preserves unrelated TOML', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-1');
+  const configPath = resolveCodexConfigPath(home);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    '# keep this comment\nmodel = "gpt-5"\n\n[mcp_servers.existing]\ncommand = "old"\n',
+    'utf-8',
+  );
+
+  const result = await writeCodexMcpSections(
+    configPath,
+    {
+      memory: {
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-memory'],
+        env: { MEMORY_FILE_PATH: '/tmp/memory.json' },
+      },
+    },
+    home,
+  );
+
+  assert.ok(result.backupPath);
+  const text = fs.readFileSync(configPath, 'utf-8');
+  assert.ok(text.includes('# keep this comment'));
+  assert.ok(text.includes('model = "gpt-5"'));
+  assert.ok(text.includes('[mcp_servers.existing]'));
+  assert.ok(text.includes('[mcp_servers.memory]'));
+  assert.ok(text.includes('MEMORY_FILE_PATH = "/tmp/memory.json"'));
+});
+
+runTest('removeCodexMcpSections removes only requested Codex servers', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-2');
+  const configPath = resolveCodexConfigPath(home);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    '# top comment\n[mcp_servers.a]\ncommand = "a"\n\n[mcp_servers.b]\ncommand = "b"\n',
+    'utf-8',
+  );
+
+  await removeCodexMcpSections(configPath, ['a']);
+  const text = fs.readFileSync(configPath, 'utf-8');
+  assert.ok(text.includes('# top comment'));
+  assert.ok(!text.includes('[mcp_servers.a]'));
+  assert.ok(text.includes('[mcp_servers.b]'));
+});
+
+runTest('hasCodexMcpSection detects Codex MCP sections', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-3');
+  const configPath = resolveCodexConfigPath(home);
+  await writeCodexMcpSections(
+    configPath,
+    { memory: { command: 'npx', args: ['-y', 'memory'] } },
+    home,
+  );
+
+  assert.strictEqual(await hasCodexMcpSection(configPath, 'memory'), true);
+  assert.strictEqual(await hasCodexMcpSection(configPath, 'missing'), false);
+});
+
+runTest('hasCodexMcpSection tolerates inline comments on table headers', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-4');
+  const configPath = resolveCodexConfigPath(home);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    '[mcp_servers.memory] # managed by tah\ncommand = "node"\n',
+    'utf-8',
+  );
+  assert.strictEqual(await hasCodexMcpSection(configPath, 'memory'), true);
+});
+
+runTest('Codex MCP section names are quoted when not bare TOML keys', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-5');
+  const configPath = resolveCodexConfigPath(home);
+  await writeCodexMcpSections(
+    configPath,
+    { 'bad.name': { command: 'node' } },
+    home,
+  );
+  const text = fs.readFileSync(configPath, 'utf-8');
+  assert.ok(text.startsWith('[mcp_servers."bad.name"]'));
+  assert.ok(!text.includes('[mcp_servers.bad.name]'));
+});
+
+runTest('writeCodexMcpSections rejects malformed existing config', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-6');
+  const configPath = resolveCodexConfigPath(home);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, 'model = "unterminated\n', 'utf-8');
+
+  await assert.rejects(
+    writeCodexMcpSections(
+      configPath,
+      { memory: { command: 'npx' } },
+      home,
+    ),
+    (err: unknown) =>
+      err instanceof Error && err.message.includes('Cannot parse Codex config'),
+  );
+  assert.strictEqual(
+    fs.readFileSync(configPath, 'utf-8'),
+    'model = "unterminated\n',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Install → verify → uninstall closure with MCP config
 // ---------------------------------------------------------------------------
@@ -331,6 +444,126 @@ runTest('install skips MCP write when confirmation is denied', async () => {
   const result = await executor.installWithManifest(manifest, 'claude-code', {});
   assert.strictEqual(result.record.config_file, undefined);
   assert.strictEqual(fs.existsSync(resolveMcpConfigPath('claude-code', home)!), false);
+});
+
+runTest('install writes Codex TOML config after confirmation', async () => {
+  const home = path.join(TEST_HOME, 'e2e-codex-1');
+  const manifest = makeNpmManifest({
+    compatibility: ['codex'],
+    installation: {
+      method: 'npm_install',
+      target_client: 'codex',
+      steps: [
+        {
+          action: 'npm_install',
+          package: 'mcp-demo',
+          version: '1.0.0',
+          registry: 'https://registry.npmjs.org',
+        },
+      ],
+      pre_install_message: null,
+      post_install_message: null,
+    },
+  });
+  const apiClient = createApiClient(mockFetch(manifest));
+  const executor = new InstallExecutor(apiClient, {
+    homeDir: home,
+    confirmManagedInstall: async () => true,
+    confirmMcpWrite: async () => true,
+    runCommand: async (cmd, args) => {
+      const prefixIdx = args.indexOf('--prefix');
+      if (prefixIdx >= 0) {
+        fs.mkdirSync(args[prefixIdx + 1], { recursive: true });
+        fs.writeFileSync(path.join(args[prefixIdx + 1], 'package.json'), '{}', 'utf-8');
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const result = await executor.installWithManifest(manifest, 'codex', {});
+  assert.strictEqual(result.record.client, 'codex');
+  assert.strictEqual(result.record.config_file, resolveCodexConfigPath(home));
+  assert.deepStrictEqual(result.record.config_entries, ['mcp-demo']);
+  assert.strictEqual(
+    await hasCodexMcpSection(result.record.config_file!, 'mcp-demo'),
+    true,
+  );
+  const installedConfig = fs.readFileSync(result.record.config_file!, 'utf-8');
+  assert.ok(
+    installedConfig.includes(
+      `cwd = ${JSON.stringify(result.record.install_path)}`,
+    ),
+  );
+
+  const verify = new VerifyExecutor(apiClient, { homeDir: home });
+  const v1 = await verify.verify(manifest.name, 'codex');
+  assert.strictEqual(v1.status, 'valid', v1.message);
+
+  await removeCodexMcpSections(result.record.config_file!, ['mcp-demo']);
+  const v2 = await verify.verify(manifest.name, 'codex');
+  assert.strictEqual(v2.status, 'manifest_mismatch');
+
+  await writeCodexMcpSections(
+    result.record.config_file!,
+    { 'mcp-demo': { command: 'node', args: ['server.js'] } },
+    home,
+  );
+  const uninstall = new UninstallExecutor({ homeDir: home });
+  const u = await uninstall.uninstall(manifest.name, 'codex', { yes: true });
+  assert.strictEqual(u.status, 'uninstalled', u.message);
+  assert.strictEqual(
+    await hasCodexMcpSection(result.record.config_file!, 'mcp-demo'),
+    false,
+  );
+});
+
+runTest('Codex save failure restores pre-existing config backup', async () => {
+  const home = path.join(TEST_HOME, 'e2e-codex-2');
+  const configPath = resolveCodexConfigPath(home);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  const original = '# keep me\n[mcp_servers.mcp-demo]\ncommand = "old"\n';
+  fs.writeFileSync(configPath, original, 'utf-8');
+
+  const manifest = makeNpmManifest({
+    compatibility: ['codex'],
+    installation: {
+      method: 'npm_install',
+      target_client: 'codex',
+      steps: [
+        {
+          action: 'npm_install',
+          package: 'mcp-demo',
+          version: '1.0.0',
+          registry: 'https://registry.npmjs.org',
+        },
+      ],
+      pre_install_message: null,
+      post_install_message: null,
+    },
+  });
+  const apiClient = createApiClient(mockFetch(manifest));
+  const executor = new InstallExecutor(apiClient, {
+    homeDir: home,
+    confirmManagedInstall: async () => true,
+    confirmMcpWrite: async () => true,
+    beforeSaveRecord: () => {
+      throw new Error('simulated record save failure');
+    },
+    runCommand: async (cmd, args) => {
+      const prefixIdx = args.indexOf('--prefix');
+      if (prefixIdx >= 0) {
+        fs.mkdirSync(args[prefixIdx + 1], { recursive: true });
+        fs.writeFileSync(path.join(args[prefixIdx + 1], 'package.json'), '{}', 'utf-8');
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  await assert.rejects(
+    () => executor.installWithManifest(manifest, 'codex', {}),
+    (err: unknown) => err instanceof Error && err.message.includes('simulated record save failure'),
+  );
+  assert.strictEqual(fs.readFileSync(configPath, 'utf-8'), original);
 });
 
 runTest('record-save failure rolls back written MCP entries', async () => {

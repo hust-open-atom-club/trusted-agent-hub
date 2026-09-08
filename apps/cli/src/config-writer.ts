@@ -94,6 +94,7 @@ export async function backupConfigFile(
   homeDir: string,
 ): Promise<string | null> {
   if (!fs.existsSync(filePath)) return null;
+  const sourceMode = (await fs.promises.stat(filePath)).mode & 0o7777;
   const backupsRoot = path.join(homeDir, '.trusted-agent-hub', 'backups');
   await fs.promises.mkdir(backupsRoot, { recursive: true });
   const backupPath = path.join(
@@ -101,6 +102,7 @@ export async function backupConfigFile(
     `${path.basename(filePath)}.${Date.now()}.bak`,
   );
   await fs.promises.copyFile(filePath, backupPath);
+  await fs.promises.chmod(backupPath, sourceMode);
   return backupPath;
 }
 

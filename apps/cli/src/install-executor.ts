@@ -58,13 +58,21 @@ import {
 import { isAllowedUrl } from './network-policy';
 import {
   describeMcpDiff,
+  expandHomePath,
   mcpServersFromManifest,
   readJsonConfig,
   removeMcpEntries,
   resolveMcpConfigPath,
+  restoreConfigBackup,
   writeMergedMcpConfig,
   type McpWriteSummary,
 } from './config-writer';
+import {
+  removeCodexMcpSections,
+  resolveCodexConfigPath,
+  writeCodexMcpSections,
+  type CodexMcpEntry,
+} from './codex-config-writer';
 
 const streamPipeline = promisify(pipeline);
 
@@ -310,7 +318,7 @@ export class InstallExecutor {
     // The server sends paths like `~/.claude/skills/<package>/` — we strip
     // the logical root prefix and join the remainder to the real HOME-based
     // client root.  The copy step is required for `copy_directory` manifests.
-    const clientRoot = path.resolve(this.homeDir, clientRootRel);
+    const clientRoot = getClientRoot(clientType, this.homeDir, manifest.type);
     const copyStep = manifest.installation.steps.find(
       (s): s is CopyStep => s.action === 'copy',
     );
@@ -325,6 +333,7 @@ export class InstallExecutor {
       copyStep.destination,
       clientType,
       clientRoot,
+      manifest.type,
     );
 
     if (overwriteConsent) {
@@ -354,6 +363,7 @@ export class InstallExecutor {
       configFile: string;
       configEntries: string[];
       backupPath: string | null;
+      backend: 'json' | 'codex-toml';
     } | null = null;
 
     try {
@@ -447,12 +457,15 @@ export class InstallExecutor {
       mcpInfo = await this.writeMcpConfigsIfPresent(
         manifest,
         clientType,
+        targetDir,
       );
       const record: LocalInstallRecord = {
         package_name: manifest.name,
         version: manifest.version,
         client: clientType,
+        package_type: manifest.type,
         install_path: targetDir,
+        install_root: clientRoot,
         sha256: actualSha256,
         integrity_verified: true,
         installed_at: new Date().toISOString(),
@@ -519,10 +532,7 @@ export class InstallExecutor {
       }
       if (mcpInfo) {
         try {
-          await removeMcpEntries(
-            mcpInfo.configFile,
-            mcpInfo.configEntries,
-          );
+          await this.rollbackMcpConfig(mcpInfo);
         } catch { /* best-effort rollback */ }
       }
       throw err;
@@ -730,6 +740,7 @@ export class InstallExecutor {
     const mcpInfo = await this.writeMcpConfigsIfPresent(
       manifest,
       clientType,
+      result.targetDir,
     );
     if (mcpInfo) {
       result.record.config_file = mcpInfo.configFile;
@@ -745,10 +756,7 @@ export class InstallExecutor {
     } catch (err) {
       if (mcpInfo) {
         try {
-          await removeMcpEntries(
-            mcpInfo.configFile,
-            mcpInfo.configEntries,
-          );
+          await this.rollbackMcpConfig(mcpInfo);
         } catch { /* best-effort rollback */ }
       }
       throw err;
@@ -772,13 +780,83 @@ export class InstallExecutor {
   private async writeMcpConfigsIfPresent(
     manifest: InstallManifest,
     clientType: string,
+    installDir?: string,
   ): Promise<{
     configFile: string;
     configEntries: string[];
     backupPath: string | null;
+    backend: 'json' | 'codex-toml';
   } | null> {
     const entries = mcpServersFromManifest(manifest);
     if (!entries) return null;
+
+    if (clientType === 'codex') {
+      const configPath = resolveCodexConfigPath(this.homeDir);
+      const codexEntries: Record<string, CodexMcpEntry> = {};
+      for (const [name, entry] of Object.entries(entries)) {
+        const expandedEntry: CodexMcpEntry = {
+          ...entry,
+          command: entry.command
+            ? expandHomePath(entry.command, this.homeDir)
+            : undefined,
+          args: entry.args?.map((arg) =>
+            expandHomePath(arg, this.homeDir),
+          ),
+          env: entry.env
+            ? Object.fromEntries(
+                Object.entries(entry.env).map(([key, value]) => [
+                  key,
+                  expandHomePath(value, this.homeDir),
+                ]),
+              )
+            : undefined,
+        };
+        if (expandedEntry.command && !expandedEntry.url && installDir) {
+          expandedEntry.cwd = installDir;
+        }
+        codexEntries[name] = expandedEntry;
+      }
+      const diff = Object.keys(codexEntries).map(
+        (key) => `  • 新增/覆盖 Codex MCP server: ${key}`,
+      );
+      if (!this.confirmMcpWrite) {
+        console.warn(
+          '  ⚠ Manifest declares MCP servers, but no confirmation gate is configured — skipping config write.',
+        );
+        return null;
+      }
+      const ok = await this.confirmMcpWrite({
+        filePath: configPath,
+        keys: Object.keys(entries),
+        diff,
+      });
+      if (!ok) {
+        console.warn('  ⚠ MCP config write skipped (not confirmed).');
+        return null;
+      }
+
+      try {
+        const result = await writeCodexMcpSections(
+          configPath,
+          codexEntries,
+          this.homeDir,
+        );
+        return {
+          configFile: result.filePath,
+          configEntries: result.keys,
+          backupPath: result.backupPath,
+          backend: 'codex-toml',
+        };
+      } catch (err) {
+        if (err instanceof InstallError) throw err;
+        throw new InstallError(
+          `Codex MCP config write failed: ${err instanceof Error ? err.message : String(err)}`,
+          'mcp_config_write_failed',
+          err,
+        );
+      }
+    }
+
     const configPath = resolveMcpConfigPath(clientType, this.homeDir);
     if (!configPath) return null;
 
@@ -810,6 +888,7 @@ export class InstallExecutor {
         configFile: result.filePath,
         configEntries: Object.keys(entries),
         backupPath: result.backupPath,
+        backend: 'json',
       };
     } catch (err) {
       if (err instanceof InstallError) throw err;
@@ -819,6 +898,31 @@ export class InstallExecutor {
         err,
       );
     }
+  }
+
+  private async removeMcpConfigForBackend(info: {
+    configFile: string;
+    configEntries: string[];
+    backend: 'json' | 'codex-toml';
+  }): Promise<void> {
+    if (info.backend === 'codex-toml') {
+      await removeCodexMcpSections(info.configFile, info.configEntries);
+      return;
+    }
+    await removeMcpEntries(info.configFile, info.configEntries);
+  }
+
+  private async rollbackMcpConfig(info: {
+    configFile: string;
+    configEntries: string[];
+    backupPath: string | null;
+    backend: 'json' | 'codex-toml';
+  }): Promise<void> {
+    if (info.backupPath) {
+      await restoreConfigBackup(info.backupPath, info.configFile);
+      return;
+    }
+    await this.removeMcpConfigForBackend(info);
   }
 
   // -----------------------------------------------------------------------

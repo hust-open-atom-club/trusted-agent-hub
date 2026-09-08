@@ -824,7 +824,7 @@ function SubmitForm() {
                       : pkgType === 'skill'
                         ? 'Skill 可安装到 Claude Code、Cursor 或 Codex。'
                         : pkgType === 'mcp_server'
-                          ? 'MCP Server 暂仅开放 Claude Code 与 Cursor；Codex 配置方案明确后再开放。'
+                          ? 'MCP Server 可安装到 Claude Code、Cursor 或 Codex。Codex 会把服务文件装入受管目录并通过 ~/.codex/config.toml 注册；存量包需重新上传并声明 Codex 兼容才会显示该选项。'
                         : '该类型仅支持安装到 Claude Code。'}
                     {' '}至少保留一个客户端。
                   </span>

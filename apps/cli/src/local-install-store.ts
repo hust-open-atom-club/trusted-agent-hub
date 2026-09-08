@@ -40,7 +40,9 @@ export interface LocalInstallRecord {
   package_name: string;
   version: string;
   client: string;
+  package_type?: string;
   install_path: string;
+  install_root?: string;
   sha256: string;            // artifact SHA-256
   integrity_verified: boolean;
   installed_at: string;       // ISO 8601 — original install time
@@ -61,7 +63,9 @@ export const RECORD_COMPARE_FIELDS: readonly (keyof LocalInstallRecord)[] = [
   'package_name',
   'version',
   'client',
+  'package_type',
   'install_path',
+  'install_root',
   'sha256',
   'integrity_verified',
   'installed_at',
@@ -230,11 +234,35 @@ function validateRecord(record: unknown, index: number): LocalInstallRecord {
     );
   }
 
+  const package_type =
+    r.package_type === undefined || r.package_type === null
+      ? undefined
+      : r.package_type;
+  if (package_type !== undefined && (typeof package_type !== 'string' || package_type.length === 0)) {
+    throw new RecordStoreError(
+      `Record at index ${index}: "package_type" must be a non-empty string if present`,
+      'record_invalid',
+    );
+  }
+
+  const install_root =
+    r.install_root === undefined || r.install_root === null
+      ? undefined
+      : r.install_root;
+  if (install_root !== undefined && (typeof install_root !== 'string' || install_root.length === 0)) {
+    throw new RecordStoreError(
+      `Record at index ${index}: "install_root" must be a non-empty string if present`,
+      'record_invalid',
+    );
+  }
+
   return {
     package_name: r.package_name as string,
     version: r.version as string,
     client: r.client as string,
+    package_type,
     install_path: r.install_path as string,
+    install_root,
     sha256: r.sha256 as string,
     integrity_verified: r.integrity_verified as boolean,
     installed_at: r.installed_at as string,

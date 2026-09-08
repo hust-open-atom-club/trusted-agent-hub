@@ -15,7 +15,6 @@
 
 import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
 
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
@@ -26,7 +25,7 @@ import {
 } from './content-integrity';
 import {
   isStrictChildPath,
-  getClientRoot,
+  getRecordInstallRoot,
   isSupportedClient,
 } from './client-paths';
 import { sanitizeOutput } from './safe-output';
@@ -157,14 +156,11 @@ export class LocalInstallInspector {
     }
 
     // 3. Resolve install root; install_path must be strict child.
-    //    copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed
+    //    copy_directory → client root (or TAH-managed root for Codex MCP
+    //    payloads); managed methods → ~/.trusted-agent-hub/installed
     let clientRoot: string;
     try {
-      if ((record.method ?? 'copy_directory') === 'copy_directory') {
-        clientRoot = getClientRoot(record.client, this.homeDir);
-      } else {
-        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
-      }
+      clientRoot = getRecordInstallRoot(record, this.homeDir);
     } catch {
       return makeResult(
         record,

@@ -12,10 +12,10 @@ from pydantic import ValidationError
 
 from packages.schema.extract_skills import extract_single_skill
 from schema.constants import CLIENTS
-from src.models.common import Client, PackageListQuery
+from src.models.common import Client, PackageListQuery, PackageType
 from src.models.packages import Author
 from src.models.producer import CreatePackageRequest
-from src.services.install import CLIENT_INSTALL_ROOTS
+from src.services.install import CLIENT_INSTALL_ROOTS, get_client_install_root
 from src.services.producer import (
     ProducerService,
     ProducerServiceError,
@@ -45,6 +45,33 @@ class _VersionRepository:
     ) -> None:
         assert version_id == "version-1"
         self.updates.append(updates)
+
+
+class _CreatePackageRepository:
+    """Minimal repository used to exercise ProducerService.create_package."""
+
+    def __init__(self) -> None:
+        self.created: dict[str, object] = {}
+
+    def package_name_exists(self, name: str) -> bool:
+        assert name == "supported-codex-mcp"
+        return False
+
+    def create_package(self, **kwargs: object) -> dict[str, object]:
+        self.created = kwargs
+        return {
+            "id": "package-1",
+            "name": str(kwargs["name"]),
+            "type": kwargs["type"],
+            "description": str(kwargs["description"]),
+            "status": "draft",
+            "license": kwargs.get("license"),
+            "keywords": kwargs.get("keywords", []),
+            "category": kwargs.get("category"),
+            "author": kwargs.get("author"),
+            "created_at": "2026-09-08T00:00:00Z",
+            "updated_at": "2026-09-08T00:00:00Z",
+        }
 
 
 def test_author_name_and_email_are_optional_legacy_fields() -> None:
@@ -120,50 +147,60 @@ def test_extractor_uses_codex_target_for_codex_only_skill(
     ]
 
 
-def test_json_schema_rejects_codex_for_mcp_server() -> None:
+def test_json_schema_accepts_codex_for_mcp_server() -> None:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     mcp_server = json.loads(
         (SCHEMA_EXAMPLES / "mcp-server-basic.json").read_text(
             encoding="utf-8"
         )
     )
-    mcp_server["compatibility"] = ["claude-code"]
+    mcp_server["compatibility"] = ["claude-code", "codex"]
     mcp_server["installation"]["targets"] = [
         {
             "client": "codex",
-            "destination": "~/.codex/skills/not-supported/",
+            "destination": "~/.trusted-agent-hub/installed/supported-codex-mcp/",
         }
     ]
 
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(mcp_server, schema)
+    jsonschema.validate(mcp_server, schema)
 
 
 def test_api_install_root_for_codex_skills() -> None:
     assert CLIENT_INSTALL_ROOTS["codex"] == "~/.codex/skills/"
+    assert get_client_install_root("codex", "mcp_server") == (
+        "~/.trusted-agent-hub/installed/"
+    )
 
 
-def test_create_api_rejects_codex_install_target_for_mcp_server() -> None:
+def test_create_api_accepts_codex_install_target_for_mcp_server() -> None:
     request = CreatePackageRequest.model_validate(
         {
-            "name": "unsupported-codex-mcp",
+            "name": "supported-codex-mcp",
             "type": "mcp_server",
-            "description": "An MCP server with an invalid Codex target.",
-            "compatibility": ["claude-code"],
+            "description": "An MCP server with a valid Codex target.",
+            "compatibility": ["claude-code", "codex"],
             "installation": {
                 "method": "copy_directory",
                 "targets": [
                     {
                         "client": "codex",
-                        "destination": "~/.codex/skills/not-supported/",
+                        "destination": "~/.trusted-agent-hub/installed/supported-codex-mcp/",
                     }
                 ],
             },
         }
     )
 
-    with pytest.raises(ProducerServiceError):
-        ProducerService(object()).create_package(request)  # type: ignore[arg-type]
+    repository = _CreatePackageRepository()
+    service = ProducerService(repository)  # type: ignore[arg-type]
+    response = service.create_package(request)
+    assert response.id == "package-1"
+    assert response.type == PackageType.MCP_SERVER
+    installation = repository.created["installation"]
+    assert isinstance(installation, dict)
+    targets = installation.get("targets")
+    assert targets is not None
+    assert targets[0]["client"] in ("codex", Client.CODEX)
 
 
 def test_project_homepage_deduplicates_source_repository() -> None:

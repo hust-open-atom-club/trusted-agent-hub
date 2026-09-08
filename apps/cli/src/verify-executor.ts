@@ -22,10 +22,11 @@ import * as path from 'path';
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
 import { computeDirectoryDigest, ContentIntegrityError, validateAncestorChain } from './content-integrity';
-import { isStrictChildPath, getClientRoot, isSupportedClient, resolveManifestDestination } from './client-paths';
+import { isStrictChildPath, getRecordInstallRoot, isSupportedClient, resolveManifestDestination } from './client-paths';
 import { validateManifest, ManifestValidationError } from './manifest-types';
 import type { InstallManifest, CopyStep } from './manifest-types';
 import { readJsonConfig } from './config-writer';
+import { hasCodexMcpSection } from './codex-config-writer';
 import { ApiError } from './api-client';
 import { sanitizeOutput } from './safe-output';
 
@@ -209,14 +210,11 @@ export class VerifyExecutor {
     }
 
     // 3. Check install_path is a strict child of the install root
-    //    (copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed)
+    //    (copy_directory → client root or TAH-managed root for Codex MCP
+    //    payloads; managed methods → ~/.trusted-agent-hub/installed)
     let clientRoot: string;
     try {
-      if ((record.method ?? 'copy_directory') === 'copy_directory') {
-        clientRoot = getClientRoot(record.client, this.homeDir);
-      } else {
-        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
-      }
+      clientRoot = getRecordInstallRoot(record, this.homeDir);
     } catch {
       return result(
         'unsupported_client',
@@ -621,6 +619,7 @@ export class VerifyExecutor {
           copyStep.destination,
           record.client,
           clientRoot,
+          manifest.type,
         );
       } catch {
         return result(
@@ -658,28 +657,49 @@ export class VerifyExecutor {
     // 12.5 Verify MCP config entries recorded at install time still exist
     if (record.config_file && record.config_entries?.length) {
       try {
-        const config = await readJsonConfig(record.config_file);
-        const mcpServers =
-          config.mcpServers &&
-          typeof config.mcpServers === 'object' &&
-          !Array.isArray(config.mcpServers)
-            ? (config.mcpServers as Record<string, unknown>)
-            : {};
-        for (const key of record.config_entries) {
-          if (!(key in mcpServers)) {
-            return result(
-              'manifest_mismatch',
-              packageName,
-              client,
-              `MCP config entry "${key}" is missing from ${record.config_file}.`,
-              {
-                version: record.version,
-                installPath: record.install_path,
-                artifactSha256: record.sha256,
-                expectedContentSha256,
-                actualContentSha256: actualDigest,
-              },
-            );
+        if (record.client === 'codex') {
+          for (const key of record.config_entries) {
+            const exists = await hasCodexMcpSection(record.config_file, key);
+            if (!exists) {
+              return result(
+                'manifest_mismatch',
+                packageName,
+                client,
+                `MCP config entry "${key}" is missing from ${record.config_file}.`,
+                {
+                  version: record.version,
+                  installPath: record.install_path,
+                  artifactSha256: record.sha256,
+                  expectedContentSha256,
+                  actualContentSha256: actualDigest,
+                },
+              );
+            }
+          }
+        } else {
+          const config = await readJsonConfig(record.config_file);
+          const mcpServers =
+            config.mcpServers &&
+            typeof config.mcpServers === 'object' &&
+            !Array.isArray(config.mcpServers)
+              ? (config.mcpServers as Record<string, unknown>)
+              : {};
+          for (const key of record.config_entries) {
+            if (!(key in mcpServers)) {
+              return result(
+                'manifest_mismatch',
+                packageName,
+                client,
+                `MCP config entry "${key}" is missing from ${record.config_file}.`,
+                {
+                  version: record.version,
+                  installPath: record.install_path,
+                  artifactSha256: record.sha256,
+                  expectedContentSha256,
+                  actualContentSha256: actualDigest,
+                },
+              );
+            }
           }
         }
       } catch {

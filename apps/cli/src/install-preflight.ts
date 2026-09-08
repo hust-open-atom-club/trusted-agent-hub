@@ -3,7 +3,11 @@ import * as path from 'path';
 import * as os from 'os';
 
 import type { CopyStep, InstallManifest } from './manifest-types';
-import { CLIENT_INSTALL_ROOTS, resolveManifestDestination } from './client-paths';
+import {
+  CLIENT_INSTALL_ROOTS,
+  getClientRoot,
+  resolveManifestDestination,
+} from './client-paths';
 import { managedInstallDir } from './executors/types';
 import { LocalInstallStore } from './local-install-store';
 import type { LocalInstallRecord } from './local-install-store';
@@ -93,8 +97,13 @@ export function getInstallTargetDir(
     if (!copyStep) {
       throw new PreflightError('Install manifest is missing the copy step', 'missing_copy_step');
     }
-    const clientRoot = path.resolve(homeDir, clientRootRel);
-    return resolveManifestDestination(copyStep.destination, clientType, clientRoot);
+    const clientRoot = getClientRoot(clientType, homeDir, manifest.type);
+    return resolveManifestDestination(
+      copyStep.destination,
+      clientType,
+      clientRoot,
+      manifest.type,
+    );
   }
 
   const methodDir = NON_COPY_METHOD_DIRS[manifest.installation.method];

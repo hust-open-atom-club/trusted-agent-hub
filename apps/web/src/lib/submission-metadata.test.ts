@@ -10,7 +10,7 @@ import {
 } from './submission-metadata';
 
 describe('submission client choices', () => {
-  it('allows Codex for Skills but not MCP servers', () => {
+  it('allows Codex for Skills and MCP servers', () => {
     expect(getAllowedSubmissionClients('skill')).toEqual([
       'claude-code',
       'cursor',
@@ -19,6 +19,7 @@ describe('submission client choices', () => {
     expect(getAllowedSubmissionClients('mcp_server')).toEqual([
       'claude-code',
       'cursor',
+      'codex',
     ]);
   });
 

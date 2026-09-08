@@ -25,6 +25,7 @@ from schema.constants import (
     STATUS_TRANSITIONS, VersionStatus, AuditAction,
     GRADE_TO_RISK_LEVEL, GRADE_TO_RECOMMENDATION,
     PACKAGE_TYPE_INSTALL_CLIENTS,
+    PACKAGE_TYPE_INSTALL_ROOTS,
     HASH_SCOPE_ARTIFACT_ARCHIVE,
 )
 
@@ -598,12 +599,10 @@ class ProducerService:
         target_client = str(compatibility[0])
         data["compatibility"] = compatibility
 
-        client_roots = {
-            "claude-code": "~/.claude/skills/",
-            "claude-code-plugin": "~/.claude/skills/",
-            "cursor": "~/.cursor/skills/",
-            "codex": "~/.codex/skills/",
-        }
+        client_roots = PACKAGE_TYPE_INSTALL_ROOTS.get(
+            package_type,
+            PACKAGE_TYPE_INSTALL_ROOTS["skill"],
+        )
         destination_root = client_roots.get(target_client, "~/.claude/skills/")
         archive_name = str(artifact.get("download_url", "")).rsplit("/", 1)[-1]
         data["installation"] = {

@@ -51,7 +51,9 @@ function makeRecord(overrides: Partial<LocalInstallRecord> = {}): LocalInstallRe
     package_name: 'test-pkg',
     version: '1.0.0',
     client: 'claude-code',
+    package_type: 'skill',
     install_path: '/home/user/.claude/skills/test-pkg',
+    install_root: '/home/user/.claude/skills',
     sha256: 'a'.repeat(64),
     integrity_verified: true,
     installed_at: '2026-07-22T00:00:00.000Z',
@@ -236,6 +238,31 @@ async function main() {
       }
     } finally {
       cleanup(home);
+    }
+  });
+
+  runTest('Non-string package_type and install_root throw record_invalid', () => {
+    for (const field of ['package_type', 'install_root'] as const) {
+      const home = makeTmpDir();
+      try {
+        const store = new LocalInstallStore(home);
+        const rec = makeRecord();
+        (rec as any)[field] = 123;
+
+        const filePath = store.getPath();
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, JSON.stringify([rec]), 'utf-8');
+
+        try {
+          store.load();
+          assert.fail('Should have thrown');
+        } catch (e: unknown) {
+          assert.ok(e instanceof RecordStoreError);
+          assert.strictEqual((e as RecordStoreError).code, 'record_invalid');
+        }
+      } finally {
+        cleanup(home);
+      }
     }
   });
 
