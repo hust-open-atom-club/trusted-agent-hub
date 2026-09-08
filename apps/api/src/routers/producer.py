@@ -16,6 +16,7 @@ from typing import Callable
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import Field
 
+from schema.constants import UserRole
 from src.database import (
     create_session_factory,
     get_runtime_engine,
@@ -393,9 +394,10 @@ def list_versions(
 ) -> list[dict[str, object]]:
     """获取版本列表（按提交时间倒序）。
 
-    支持两种查询模式：
+    submitter 只能查看自己的版本；reviewer/admin 可查看全量版本。
+    reviewer/admin 支持以下筛选：
     - 按提交者筛选：?submitter_id=xxx
-    - 按状态筛选：?status=pending_review（审核员用）
+    - 按状态筛选：?status=pending_review
     - 按时间范围筛选：?since=...&until=...
     - 组合筛选：?status=pending_review&grade=D
     """
@@ -408,13 +410,27 @@ def list_versions(
     except Exception:
         pass
 
+    is_reviewer_or_admin = _user.role in (
+        UserRole.ADMIN.value,
+        UserRole.REVIEWER.value,
+    )
+
+    # The endpoint serves both the submitter's own-submissions page and the
+    # reviewer/admin queue.  Keep the ownership boundary independent of the
+    # query string: omitting submitter_id must never turn this into a global
+    # listing for a submitter.
+    if not is_reviewer_or_admin:
+        return service.list_my_versions(_user.id, limit=limit, offset=offset)
+
     if submitter_id is not None:
-        from schema.constants import UserRole
-        if _user.role != UserRole.ADMIN.value and _user.role != UserRole.REVIEWER.value:
-            submitter_id = _user.id
         return service.list_my_versions(submitter_id, limit=limit, offset=offset)
 
-    if status is not None or since is not None or until is not None:
+    if (
+        status is not None
+        or grade is not None
+        or since is not None
+        or until is not None
+    ):
         return service.list_versions_by_status(
             status=status,
             grade=grade,
