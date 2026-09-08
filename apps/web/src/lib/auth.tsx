@@ -34,6 +34,15 @@ interface AuthContextValue extends AuthState {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Keep the access-token cookie alive for the refresh session so Middleware
+// can pass an expired JWT to AuthProvider's browser refresh flow.
+const ACCESS_TOKEN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+
+function setAccessTokenCookie(token: string) {
+  document.cookie =
+    `tah_token=${token}; path=/; max-age=${ACCESS_TOKEN_COOKIE_MAX_AGE}; SameSite=Lax`;
+}
+
 function parseJwt(token: string): { sub: string; role: string; email: string; display_name: string; exp: number } | null {
   try {
     const payload = token.split('.')[1];
@@ -58,7 +67,7 @@ function deriveUser(token: string): AuthUser | null {
 
 function storeSession(token: string) {
   localStorage.setItem('tah_token', token);
-  document.cookie = `tah_token=${token}; path=/; max-age=${2 * 60 * 60}; SameSite=Lax`;
+  setAccessTokenCookie(token);
 }
 
 function clearStoredSession() {
@@ -274,8 +283,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!document.cookie.includes('tah_token=')) {
-        document.cookie =
-          `tah_token=${token}; path=/; max-age=${2 * 60 * 60}; SameSite=Lax`;
+        setAccessTokenCookie(token);
       }
       setState({ user, token, loading: false });
 
