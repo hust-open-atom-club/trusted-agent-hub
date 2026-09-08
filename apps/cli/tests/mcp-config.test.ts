@@ -366,6 +366,25 @@ runTest('writeCodexMcpSections rejects malformed existing config', async () => {
   );
 });
 
+runTest('writeCodexMcpSections refuses to overwrite dotted-key MCP servers', async () => {
+  const home = path.join(TEST_HOME, 'codex-unit-7');
+  const configPath = resolveCodexConfigPath(home);
+  const original = 'mcp_servers.memory.command = "node"\n';
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, original, 'utf-8');
+
+  await assert.rejects(
+    writeCodexMcpSections(
+      configPath,
+      { memory: { command: 'npx', args: ['-y', 'memory'] } },
+      home,
+    ),
+    (err: unknown) =>
+      err instanceof Error && err.message.includes('dotted or inline TOML syntax'),
+  );
+  assert.strictEqual(fs.readFileSync(configPath, 'utf-8'), original);
+});
+
 // ---------------------------------------------------------------------------
 // Install → verify → uninstall closure with MCP config
 // ---------------------------------------------------------------------------

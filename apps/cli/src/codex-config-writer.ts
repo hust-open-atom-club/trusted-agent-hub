@@ -41,10 +41,13 @@ async function atomicWriteText(filePath: string, value: string): Promise<void> {
   await fs.promises.rename(tmpPath, filePath);
 }
 
-function validateCodexConfig(text: string, filePath: string): void {
-  if (!text) return;
+function validateCodexConfig(
+  text: string,
+  filePath: string,
+): Record<string, unknown> {
+  if (!text) return {};
   try {
-    parse(text);
+    return parse(text) as Record<string, unknown>;
   } catch (err) {
     throw new ConfigWriteError(
       `Cannot parse Codex config ${filePath}: ${
@@ -53,6 +56,15 @@ function validateCodexConfig(text: string, filePath: string): void {
       'codex_config_parse_error',
     );
   }
+}
+
+function mcpServersFromConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  return config.mcp_servers && typeof config.mcp_servers === 'object' &&
+    !Array.isArray(config.mcp_servers)
+    ? config.mcp_servers as Record<string, unknown>
+    : {};
 }
 
 const BARE_TOML_KEY = /^[A-Za-z0-9_-]+$/;
@@ -221,14 +233,29 @@ export async function writeCodexMcpSections(
   homeDir: string,
 ): Promise<{ filePath: string; backupPath: string | null; keys: string[] }> {
   const text = await readCodexConfig(filePath);
-  validateCodexConfig(text, filePath);
-  const backupPath = await backupConfigFile(filePath, homeDir);
+  const config = validateCodexConfig(text, filePath);
+  const existingMcpServers = mcpServersFromConfig(config);
+  const lines = splitLines(text).lines;
+  for (const name of Object.keys(entries)) {
+    if (
+      Object.prototype.hasOwnProperty.call(existingMcpServers, name) &&
+      !hasCodexMcpSections(lines, name)
+    ) {
+      throw new ConfigWriteError(
+        `Cannot update Codex MCP server "${name}" declared with dotted or inline TOML syntax. Convert it to a dedicated table before retrying.`,
+        'codex_mcp_unsupported_syntax',
+      );
+    }
+  }
+
   let output = text;
   for (const [name, entry] of Object.entries(entries)) {
     output = output ? upsertCodexMcpSection(output, name, entry)
       : stringify({ mcp_servers: { [name]: entry } });
   }
   if (!output.endsWith('\n')) output += '\n';
+  validateCodexConfig(output, filePath);
+  const backupPath = await backupConfigFile(filePath, homeDir);
   await atomicWriteText(filePath, output);
   return {
     filePath,
@@ -257,13 +284,10 @@ export async function hasCodexMcpSection(
 ): Promise<boolean> {
   const text = await readCodexConfig(filePath);
   if (!text) return false;
-  const config = parse(text) as Record<string, unknown>;
+  const config = validateCodexConfig(text, filePath);
   return hasCodexMcpSections(splitLines(text).lines, key) ||
     Object.prototype.hasOwnProperty.call(
-      config.mcp_servers && typeof config.mcp_servers === 'object' &&
-        !Array.isArray(config.mcp_servers)
-        ? (config.mcp_servers as Record<string, unknown>)
-        : {},
+      mcpServersFromConfig(config),
       key,
     );
 }
