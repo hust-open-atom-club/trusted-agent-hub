@@ -145,9 +145,31 @@ describe('getClientsForType', () => {
     expect(getClientsForType('skill')).toEqual(['claude-code', 'cursor', 'codex']);
   });
 
+  it('allows MCP servers to target Claude Code, Cursor, and Codex', () => {
+    expect(getClientsForType('mcp_server')).toEqual([
+      'claude-code',
+      'cursor',
+      'codex',
+    ]);
+  });
+
   it('returns an empty list for unknown types', () => {
     expect(getClientsForType('unknown')).toEqual([]);
     expect(getClientsForType(null)).toEqual([]);
+  });
+});
+
+describe('getClientTargetPath with package type', () => {
+  it('stores Codex MCP payloads under the TAH managed directory', () => {
+    expect(
+      getClientTargetPath(null, 'codex', 'demo', 'mcp_server'),
+    ).toBe('~/.trusted-agent-hub/installed/demo/');
+  });
+
+  it('uses the Codex skills directory for skill packages', () => {
+    expect(getClientTargetPath(null, 'codex', 'demo', 'skill')).toBe(
+      '~/.codex/skills/demo/',
+    );
   });
 });
 

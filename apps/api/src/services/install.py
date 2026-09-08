@@ -9,6 +9,7 @@ from schema.constants import (
     GRADE_TO_RECOMMENDATION,
     GRADE_TO_RISK_LEVEL,
     PACKAGE_TYPE_INSTALL_CLIENTS,
+    PACKAGE_TYPE_INSTALL_ROOTS,
 )
 from src.errors import ConsumerAPIError
 from src.models.install import (
@@ -51,6 +52,16 @@ CLIENT_INSTALL_ROOTS = {
     "cursor": "~/.cursor/skills/",
     "codex": "~/.codex/skills/",
 }
+
+def get_client_install_root(
+    client: str,
+    package_type: str | None = None,
+) -> str | None:
+    if package_type:
+        roots = PACKAGE_TYPE_INSTALL_ROOTS.get(package_type)
+        if roots and client in roots:
+            return roots[client]
+    return CLIENT_INSTALL_ROOTS.get(client)
 
 
 class InstallManifestService:
@@ -146,6 +157,7 @@ class InstallManifestService:
                     manifest_source,
                     integrity,
                     steps_client,
+                    package.type,
                 ):
                     invalid_fields.append("installation.steps")
         if installation is None:
@@ -279,6 +291,7 @@ class InstallManifestService:
         source,
         integrity,
         target_client: str,
+        package_type: str,
     ) -> bool:
         """按安装方式校验步骤序列与制品字段的一致性。"""
         actions = [step.root.action for step in steps]
@@ -302,7 +315,7 @@ class InstallManifestService:
                 or verify_step.checksum != integrity.sha256
             ):
                 return False
-            client_root = CLIENT_INSTALL_ROOTS.get(target_client)
+            client_root = get_client_install_root(target_client, package_type)
             return (
                 client_root is not None
                 and InstallManifestService._is_strict_child_path(

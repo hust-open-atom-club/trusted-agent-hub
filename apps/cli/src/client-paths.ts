@@ -34,6 +34,93 @@ export const CLIENT_MANIFEST_ROOTS: Record<string, string> = {
   codex: '~/.codex/skills/',
 } as const;
 
+/**
+ * Package-type-aware roots. Codex skills live under `.codex/skills`; copied
+ * MCP server payloads are managed under `.trusted-agent-hub/installed` and
+ * registered through `~/.codex/config.toml`.
+ */
+export const PACKAGE_TYPE_INSTALL_ROOTS: Record<string, Record<string, string>> = {
+  skill: {
+    'claude-code': '.claude/skills',
+    'claude-code-plugin': '.claude/skills',
+    cursor: '.cursor/skills',
+    codex: '.codex/skills',
+  },
+  mcp_server: {
+    'claude-code': '.claude/skills',
+    cursor: '.cursor/skills',
+    codex: '.trusted-agent-hub/installed',
+  },
+  plugin: {
+    'claude-code-plugin': '.claude/skills',
+  },
+  subagent: {
+    'claude-code': '.claude/skills',
+  },
+  command: {
+    'claude-code': '.claude/skills',
+  },
+  prompt: {
+    'claude-code': '.claude/skills',
+  },
+};
+
+export const PACKAGE_TYPE_MANIFEST_ROOTS: Record<string, Record<string, string>> = {
+  skill: {
+    'claude-code': '~/.claude/skills/',
+    'claude-code-plugin': '~/.claude/skills/',
+    cursor: '~/.cursor/skills/',
+    codex: '~/.codex/skills/',
+  },
+  mcp_server: {
+    'claude-code': '~/.claude/skills/',
+    cursor: '~/.cursor/skills/',
+    codex: '~/.trusted-agent-hub/installed/',
+  },
+  plugin: {
+    'claude-code-plugin': '~/.claude/skills/',
+  },
+  subagent: {
+    'claude-code': '~/.claude/skills/',
+  },
+  command: {
+    'claude-code': '~/.claude/skills/',
+  },
+  prompt: {
+    'claude-code': '~/.claude/skills/',
+  },
+};
+
+function getClientInstallRootRel(
+  clientType: string,
+  packageType?: string,
+): string | undefined {
+  if (packageType) {
+    const roots = PACKAGE_TYPE_INSTALL_ROOTS[packageType];
+    if (roots && roots[clientType]) return roots[clientType];
+  }
+  return CLIENT_INSTALL_ROOTS[clientType];
+}
+
+function getClientManifestRoot(
+  clientType: string,
+  packageType?: string,
+): string | undefined {
+  if (packageType) {
+    const roots = PACKAGE_TYPE_MANIFEST_ROOTS[packageType];
+    if (roots && roots[clientType]) return roots[clientType];
+  }
+  return CLIENT_MANIFEST_ROOTS[clientType];
+}
+
+/** Codex state root, honoring the official CODEX_HOME override. */
+export function getCodexStateRoot(homeDir?: string): string {
+  if (process.env.CODEX_HOME) {
+    return path.resolve(process.env.CODEX_HOME);
+  }
+  return path.resolve(homeDir || os.homedir(), '.codex');
+}
+
 // ---------------------------------------------------------------------------
 // Supported clients (derived from CLIENT_INSTALL_ROOTS keys)
 // ---------------------------------------------------------------------------
@@ -64,15 +151,59 @@ export class ClientPathError extends Error {
 // ---------------------------------------------------------------------------
 
 /** Resolve the client-specific root directory. */
-export function getClientRoot(clientType: string, homeDir?: string): string {
-  const rel = CLIENT_INSTALL_ROOTS[clientType];
+export function getClientRoot(
+  clientType: string,
+  homeDir?: string,
+  packageType?: string,
+): string {
+  const rel = getClientInstallRootRel(clientType, packageType);
   if (!rel) {
     throw new ClientPathError(
       `Unsupported client: "${clientType}". Supported clients: ${SUPPORTED_CLIENTS.join(', ')}`,
       'unsupported_client',
     );
   }
+  if (clientType === 'codex' && rel.startsWith('.codex')) {
+    const codexRelative = rel.replace(/^\.codex[\\/]?/, '');
+    return path.resolve(getCodexStateRoot(homeDir), codexRelative);
+  }
   return path.resolve(homeDir || os.homedir(), rel);
+}
+
+/**
+ * Resolve the install root recorded for a package. Prefer the persisted
+ * `install_root` so clients with type-specific roots (for example Codex MCP
+ * servers) do not get rejected as being outside the generic client root.
+ */
+export function getRecordInstallRoot(
+  record: {
+    client: string;
+    package_type?: string;
+    install_root?: string;
+    method?: string;
+  },
+  homeDir?: string,
+): string {
+  if ((record.method ?? 'copy_directory') !== 'copy_directory') {
+    return path.join(homeDir || os.homedir(), '.trusted-agent-hub', 'installed');
+  }
+  const resolvedHome = homeDir || os.homedir();
+  const expectedRoot = getClientRoot(
+    record.client,
+    resolvedHome,
+    record.package_type,
+  );
+  if (record.install_root) {
+    const recordedRoot = path.resolve(record.install_root);
+    if (recordedRoot !== path.resolve(expectedRoot)) {
+      throw new ClientPathError(
+        `Recorded install root "${record.install_root}" does not match expected root "${expectedRoot}"`,
+        'unsafe_install_root',
+      );
+    }
+    return recordedRoot;
+  }
+  return expectedRoot;
 }
 
 /**
@@ -99,8 +230,9 @@ export function resolveManifestDestination(
   destination: string,
   clientType: string,
   clientRoot: string,
+  packageType?: string,
 ): string {
-  const manifestRoot = CLIENT_MANIFEST_ROOTS[clientType];
+  const manifestRoot = getClientManifestRoot(clientType, packageType);
   if (!manifestRoot) {
     throw new ClientPathError(
       `Unsupported client: "${clientType}"`,

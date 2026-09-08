@@ -96,12 +96,41 @@ export async function backupConfigFile(
   if (!fs.existsSync(filePath)) return null;
   const backupsRoot = path.join(homeDir, '.trusted-agent-hub', 'backups');
   await fs.promises.mkdir(backupsRoot, { recursive: true });
-  const backupPath = path.join(
-    backupsRoot,
-    `${path.basename(filePath)}.${Date.now()}.bak`,
+
+  // Backups may contain MCP environment secrets. Create the destination as
+  // private before copying any bytes so a broadly-readable source mode is
+  // never visible on the backup, even briefly.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const backupPath = path.join(
+      backupsRoot,
+      `${path.basename(filePath)}.${Date.now()}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.bak`,
+    );
+    let backupHandle: fs.promises.FileHandle;
+    try {
+      backupHandle = await fs.promises.open(backupPath, 'wx', 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw err;
+    }
+
+    try {
+      const source = await fs.promises.readFile(filePath);
+      await backupHandle.writeFile(source);
+      await backupHandle.chmod(0o600);
+      await backupHandle.sync();
+      await backupHandle.close();
+      return backupPath;
+    } catch (err) {
+      try { await backupHandle.close(); } catch { /* best-effort */ }
+      try { await fs.promises.rm(backupPath, { force: true }); } catch { /* best-effort */ }
+      throw err;
+    }
+  }
+
+  throw new ConfigWriteError(
+    `Could not create a unique backup for ${filePath}`,
+    'backup_create_failed',
   );
-  await fs.promises.copyFile(filePath, backupPath);
-  return backupPath;
 }
 
 export async function writeMergedMcpConfig(

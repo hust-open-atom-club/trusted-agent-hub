@@ -38,12 +38,13 @@ import {
 } from './content-integrity';
 import {
   isStrictChildPath,
-  getClientRoot,
+  getRecordInstallRoot,
   isSupportedClient,
 } from './client-paths';
 import { sanitizeOutput } from './safe-output';
 import type { ConfirmCallback } from './confirm';
 import { removeMcpEntries } from './config-writer';
+import { removeCodexMcpSections } from './codex-config-writer';
 
 // ---------------------------------------------------------------------------
 // Status
@@ -305,14 +306,11 @@ export class UninstallExecutor {
     }
 
     // 3. Resolve install root; install_path must be strict child.
-    //    copy_directory → client root; managed methods → ~/.trusted-agent-hub/installed
+    //    copy_directory → client root (or TAH-managed root for Codex MCP
+    //    payloads); managed methods → ~/.trusted-agent-hub/installed
     let clientRoot: string;
     try {
-      if ((record.method ?? 'copy_directory') === 'copy_directory') {
-        clientRoot = getClientRoot(record.client, this.homeDir);
-      } else {
-        clientRoot = path.join(this.homeDir, '.trusted-agent-hub', 'installed');
-      }
+      clientRoot = getRecordInstallRoot(record, this.homeDir);
     } catch {
       return makeResult('unsupported_client', {
         packageName,
@@ -583,7 +581,11 @@ export class UninstallExecutor {
     // 先移除 MCP 配置条目（若记录声明过），失败则保留记录供人工处理
     if (record.config_file && record.config_entries?.length) {
       try {
-        await removeMcpEntries(record.config_file, record.config_entries);
+        if (record.client === 'codex') {
+          await removeCodexMcpSections(record.config_file, record.config_entries);
+        } else {
+          await removeMcpEntries(record.config_file, record.config_entries);
+        }
       } catch {
         return makeResult('config_remove_failed', {
           ...context,
@@ -784,7 +786,11 @@ export class UninstallExecutor {
     // --- 移除 MCP 配置条目（若有），失败则回滚目录 -------------------------
     if (record.config_file && record.config_entries?.length) {
       try {
-        await removeMcpEntries(record.config_file, record.config_entries);
+        if (record.client === 'codex') {
+          await removeCodexMcpSections(record.config_file, record.config_entries);
+        } else {
+          await removeMcpEntries(record.config_file, record.config_entries);
+        }
       } catch {
         let canRestore = false;
         try {

@@ -347,6 +347,30 @@ def test_extractor_scans_tsx_as_executable_code() -> None:
         )
 
 
+def test_extractor_copies_skill_with_helper_scripts_instead_of_manual_install() -> None:
+    """SKILL.md 附带脚本时仍应作为技能目录复制，而不是 manual_steps。"""
+    with tempfile.TemporaryDirectory(prefix="tah-skill-code-") as tmp:
+        root = Path(tmp)
+        (root / "SKILL.md").write_text(
+            "---\n"
+            "name: writing-skills\n"
+            "description: Use when creating or editing skills.\n"
+            "---\n"
+            "# Writing Skills\n"
+            "Guidance for writing agent skills.\n",
+            encoding="utf-8",
+        )
+        (root / "render-graphs.js").write_text(
+            "#!/usr/bin/env node\nconsole.log('render')\n",
+            encoding="utf-8",
+        )
+
+        meta = extract_single_skill(root)
+
+        assert meta["type"] == "skill"
+        assert meta["installation"]["method"] == "copy_directory"
+
+
 def test_non_object_manifest_is_recoverable() -> None:
     with tempfile.TemporaryDirectory(prefix="tah-manifest-root-") as tmp:
         root = Path(tmp)

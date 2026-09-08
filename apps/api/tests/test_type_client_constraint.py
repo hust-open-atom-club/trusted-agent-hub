@@ -47,15 +47,16 @@ def test_normalize_defaults_to_type_clients() -> None:
     ]
 
 
-def test_codex_is_limited_to_skill_packages() -> None:
+def test_codex_is_allowed_for_skill_and_mcp_server_packages() -> None:
     assert ProducerService._normalize_compatibility("skill", ["codex"]) == [
         "codex"
     ]
-    with pytest.raises(ProducerServiceError):
-        ProducerService._normalize_compatibility("mcp_server", ["codex"])
+    assert ProducerService._normalize_compatibility("mcp_server", ["codex"]) == [
+        "codex"
+    ]
 
 
-def test_codex_install_target_is_limited_to_skill_packages() -> None:
+def test_codex_install_target_is_allowed_for_skill_and_mcp_server() -> None:
     installation = Installation.model_validate(
         {
             "method": "copy_directory",
@@ -70,10 +71,7 @@ def test_codex_install_target_is_limited_to_skill_packages() -> None:
     )
 
     ProducerService._validate_installation_clients("skill", installation)
-    with pytest.raises(ProducerServiceError):
-        ProducerService._validate_installation_clients(
-            "mcp_server", installation
-        )
+    ProducerService._validate_installation_clients("mcp_server", installation)
 
 
 def test_install_readiness_flags_type_incompatible_clients() -> None:

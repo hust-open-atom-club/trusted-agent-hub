@@ -1556,6 +1556,40 @@ async function test_installPreflightTargetResolution() {
   console.log('  ✓ Install preflight target resolution');
 }
 
+function test_codexMcpPreflightTargetResolution() {
+  const manifest = makeManifest({
+    name: 'codex-mcp',
+    type: 'mcp_server',
+    compatibility: ['codex'],
+    installation: {
+      method: 'copy_directory',
+      target_client: 'codex',
+      steps: [
+        { action: 'download', url: 'https://example.com/package.zip' },
+        {
+          action: 'verify',
+          algorithm: 'sha256',
+          checksum: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        },
+        { action: 'extract', archive: 'package.zip' },
+        {
+          action: 'copy',
+          source: 'package/',
+          destination: '~/.trusted-agent-hub/installed/codex-mcp/',
+        },
+      ],
+      pre_install_message: null,
+      post_install_message: null,
+    },
+  });
+  const target = getInstallTargetDir(manifest, 'codex', TEST_HOME);
+  assert.strictEqual(
+    target,
+    path.join(TEST_HOME, '.trusted-agent-hub', 'installed', 'codex-mcp'),
+  );
+  console.log('  ✓ Install preflight resolves Codex MCP managed target');
+}
+
 async function test_installPreflightRejectsRecordPathMismatch() {
   cleanup();
   const { manifest } = setup();
@@ -1739,6 +1773,71 @@ async function test_installWithManifest() {
   console.log('  ✓ installWithManifest (avoids double fetch)');
 }
 
+async function test_codexCopyMcpConfigUsesInstallCwd() {
+  cleanup();
+  const zipFiles = {
+    'mcp-demo/server.py': 'print("ok")\n',
+  };
+  const zipBuf = createPayloadZip(zipFiles);
+  const expectedSha = sha256(zipBuf);
+  const manifest = makeManifest({
+    name: 'mcp-demo',
+    type: 'mcp_server',
+    compatibility: ['codex'],
+    integrity: { sha256: expectedSha, download_size_bytes: zipBuf.length },
+    installation: {
+      method: 'copy_directory',
+      target_client: 'codex',
+      steps: [
+        { action: 'download', url: 'https://example.com/package.zip' },
+        { action: 'verify', algorithm: 'sha256', checksum: expectedSha },
+        { action: 'extract', archive: 'package.zip' },
+        {
+          action: 'copy',
+          source: 'mcp-demo/',
+          destination: '~/.trusted-agent-hub/installed/mcp-demo/',
+        },
+      ],
+      pre_install_message: null,
+      post_install_message: null,
+    },
+    dependencies: {
+      npm: null,
+      pip: null,
+      system: null,
+      docker: null,
+      mcp_servers: [
+        {
+          name: 'mcp-demo',
+          command: 'python',
+          args: ['server.py'],
+        },
+      ],
+    },
+  });
+
+  const fetcher = mockFetch(manifest, zipBuf);
+  const apiClient = createApiClient(fetcher);
+  const executor = new InstallExecutor(apiClient, {
+    homeDir: TEST_HOME,
+    fetchFn: fetcher,
+    confirmMcpWrite: async () => true,
+  });
+
+  const result = await executor.installWithManifest(manifest, 'codex', {});
+  const targetDir = result.record.install_path;
+  assert.ok(fs.existsSync(path.join(targetDir, 'server.py')));
+  assert.ok(result.record.config_file);
+  const configText = fs.readFileSync(result.record.config_file!, 'utf-8');
+  assert.ok(
+    configText.includes(`cwd = ${JSON.stringify(targetDir)}`),
+    `expected cwd ${targetDir} in Codex config`,
+  );
+
+  cleanup();
+  console.log('  ✓ Codex copy MCP config sets cwd to installed payload');
+}
+
 // ---------------------------------------------------------------------------
 // Test: version parameter flows through to API manifest request
 // ---------------------------------------------------------------------------
@@ -1828,12 +1927,14 @@ async function test_versionParamInManifestRequest() {
   test_manifestDestinationRejectsTraversal();
   test_manifestDestinationRejectsRelative();
   await test_installPreflightTargetResolution();
+  test_codexMcpPreflightTargetResolution();
   await test_installPreflightRejectsRecordPathMismatch();
   await test_installPreflightRejectsTargetOwnedByOther();
   await test_installOverwriteConsentBlocksChangedTarget();
   test_localRecords();
 
   await test_normalInstall();
+  await test_codexCopyMcpConfigUsesInstallCwd();
   await test_sha256Mismatch();
   await test_existingInstallPreservedOnEarlyFailure();
   await test_backupRestoredOnLateFailure();

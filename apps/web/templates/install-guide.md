@@ -67,7 +67,9 @@ This stores the Hub API address locally. After this step, package installation c
 - `claude-code`: installs skills and compatible capability packages into `~/.claude/skills/`.
 - `claude-code-plugin`: installs plugin packages into `~/.claude/skills/`; Claude Code discovers plugins that include `.claude-plugin/plugin.json`.
 - `cursor`: installs compatible skill packages into `~/.cursor/skills/`.
-- `codex`: installs compatible skill packages into `~/.codex/skills/`.
+- `codex`: installs compatible skill packages into `~/.codex/skills/`; MCP
+  server payloads are stored under `~/.trusted-agent-hub/installed/` and
+  registered in `~/.codex/config.toml`.
 
 If the package type and client are incompatible, do not improvise another destination. Report the incompatibility and stop.
 

@@ -64,6 +64,7 @@ export function buildRecord(
     package_name: ctx.manifest.name,
     version: ctx.manifest.version,
     client: ctx.clientType,
+    package_type: ctx.manifest.type,
     install_path: targetDir,
     sha256: NO_ARTIFACT_SHA256,
     integrity_verified: true,

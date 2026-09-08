@@ -363,7 +363,7 @@ export const CLIENT_LABELS: Record<Client, string> = {
  */
 export const PACKAGE_TYPE_INSTALL_CLIENTS: Record<PackageType, readonly string[]> = {
   skill: ['claude-code', 'cursor', 'codex'],
-  mcp_server: ['claude-code', 'cursor'],
+  mcp_server: ['claude-code', 'cursor', 'codex'],
   plugin: ['claude-code-plugin'],
   subagent: ['claude-code'],
   command: ['claude-code'],
