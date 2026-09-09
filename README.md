@@ -186,7 +186,8 @@ python -m src.scripts.seed_producer
   `INITIAL_ADMIN_*` 幂等创建首个管理员；邮箱与密码必须成对配置，密码至少 12
   位。管理员创建后建议清空 `INITIAL_ADMIN_PASSWORD`。
 - `SEED_ADMIN_*`、`SEED_REVIEWER_*`、`SEED_SUBMITTER_*` 均为可选开发账号，
-  每组邮箱与密码必须同时配置；项目不再内置固定测试账号或默认密码。
+  每组邮箱与密码必须同时配置；项目不再内置固定测试账号或默认密码。若需要保留演示
+  账号，请只在 API 环境中配置对应的 `SEED_*`，Web 不会读取或展示这些凭据。
 - `NEXT_PUBLIC_*` 会进入浏览器包，不能存放私密信息；修改这些值后必须重新构建
   Web 镜像。
 - 从本仓库运行 CLI 时会自动加载根目录 `.env`，但显式 Shell/CI 环境变量仍然优先；
