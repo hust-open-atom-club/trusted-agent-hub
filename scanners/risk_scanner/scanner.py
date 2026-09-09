@@ -269,7 +269,7 @@ class RiskScanner:
         A repository's own metadata cannot safely attest to the bytes currently
         being scanned. The scanner therefore computes a bounded content hash
         from the inventory and accepts the commit only from the acquisition
-        layer (``git rev-parse HEAD`` / GitHub zipball resolution).
+        layer (``git rev-parse HEAD`` / pinned GitHub API tree resolution).
         """
         # Calculate this once from the already bounded inventory.  The API may
         # request the hash again while persisting the source snapshot, but that

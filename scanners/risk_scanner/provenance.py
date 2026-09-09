@@ -60,14 +60,14 @@ def verify_acquired_repository(
 ) -> bool:
     """Verify that the acquired repository identity is internally consistent.
 
-    A successful git/zip acquisition plus a valid commit proves that the
-    bytes came from the canonical GitHub repository requested by the server.
-    It does *not* prove that the submitter or package author owns that
-    repository.
+    A successful git, ZIP, or pinned GitHub API acquisition plus a valid
+    commit proves that the bytes came from the canonical GitHub repository
+    requested by the server. It does *not* prove that the submitter or package
+    author owns that repository.
     """
     if not isinstance(parsed, dict):
         return False
-    if acquisition_method not in {"git", "zip"}:
+    if acquisition_method not in {"git", "zip", "github_api"}:
         return False
     if not _COMMIT_RE.fullmatch(str(commit_hash)):
         return False
