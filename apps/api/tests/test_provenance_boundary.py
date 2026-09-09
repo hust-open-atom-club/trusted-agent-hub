@@ -247,6 +247,12 @@ def test_repository_identity_does_not_depend_on_owner_verification() -> None:
         "git",
         "c" * 40,
     ) is True
+    assert verify_acquired_repository(
+        parsed,
+        "https://github.com/trusted/acquired",
+        "github_api",
+        "c" * 40,
+    ) is True
 
     facts = build_verification_facts(
         parsed=parsed,

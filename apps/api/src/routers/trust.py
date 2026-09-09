@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import http.client
 import importlib.util
 import io
 import json
 import logging
+import math
 import os
 import re
-import shutil
+import socket
 import stat
 import struct
 import sys
@@ -26,7 +29,9 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Any, Optional
@@ -87,8 +92,26 @@ _LLM_REVIEW_DEADLINE_SECONDS = 15 * 60
 _LLM_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _SOURCE_POLICY = ScanPolicy()
 _ZIP_READ_CHUNK_BYTES = 64 * 1024
+_GITHUB_API_TIMEOUT_SECONDS = 30
+_GITHUB_API_MAX_ATTEMPTS = 3
+_GITHUB_BLOB_WORKERS = 8
+_GITHUB_GLOBAL_MAX_CONCURRENT_REQUESTS = 8
+# Preserve headroom for repository metadata and other server activity instead
+# of allowing one scan to consume an entire GitHub rate-limit window.
+_GITHUB_AUTHENTICATED_REQUEST_BUDGET = 1_000
+_GITHUB_MAX_RATE_LIMIT_WAIT_SECONDS = 60.0
+_GITHUB_RATE_LIMIT_RESET_GRACE_SECONDS = 1.0
+_GITHUB_TREE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+_GITHUB_MAX_TREE_ENTRIES = 100_000
+_GITHUB_MAX_TREE_REQUESTS = 10_000
+_GITHUB_TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_MANIFEST_JSON_NESTING = 128
 _SCAN_PROGRESS_LOCK = threading.RLock()
+_GITHUB_API_CONCURRENCY_GATE = threading.BoundedSemaphore(
+    _GITHUB_GLOBAL_MAX_CONCURRENT_REQUESTS
+)
+_GITHUB_RATE_LIMIT_LOCK = threading.Lock()
+_GITHUB_RATE_LIMIT_UNTIL = 0.0
 
 _PUBLIC_LLM_PROGRESS_FIELDS = frozenset({
     "status",
@@ -195,6 +218,75 @@ def _heartbeat_llm_progress(scan_id: str, stop_event: threading.Event) -> None:
 
 class _DeterministicAcquisitionError(ValueError):
     """A source validation or budget failure that must not be retried."""
+
+
+class _GitHubAcquisitionError(RuntimeError):
+    """A GitHub API failure after all safe retry attempts are exhausted."""
+
+
+class _GitHubRateLimitError(_GitHubAcquisitionError):
+    """A GitHub cooldown is longer than this scan may safely wait."""
+
+
+class _GitHubRequestBudget:
+    """Thread-safe cap on actual GitHub HTTP attempts for one acquisition."""
+
+    def __init__(self, limit: int) -> None:
+        if limit < 1:
+            raise ValueError("GitHub request budget must be positive")
+        self.limit = limit
+        self._used = 0
+        self._lock = threading.Lock()
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+    @property
+    def remaining(self) -> int:
+        with self._lock:
+            return self.limit - self._used
+
+    def require_available(self, requests: int) -> None:
+        if requests < 0:
+            raise ValueError("Required GitHub request count must not be negative")
+        with self._lock:
+            if self._used + requests > self.limit:
+                raise _DeterministicAcquisitionError(
+                    "Selected source exceeds the per-scan GitHub API request "
+                    f"budget ({self.limit}); submit a /tree/... URL for the "
+                    "specific capability directory"
+                )
+
+    def consume(self) -> None:
+        with self._lock:
+            if self._used >= self.limit:
+                raise _DeterministicAcquisitionError(
+                    "GitHub API request retries exhausted the per-scan request "
+                    f"budget ({self.limit})"
+                )
+            self._used += 1
+
+
+@dataclass(frozen=True)
+class _GitTreeEntry:
+    path: str
+    mode: str
+    type: str
+    sha: str
+    size: int | None = None
+
+    @property
+    def is_regular_blob(self) -> bool:
+        return self.type == "blob" and self.mode in {"100644", "100755"}
+
+
+@dataclass(frozen=True)
+class _GitTreeSnapshot:
+    sha: str
+    entries: tuple[_GitTreeEntry, ...]
+    truncated: bool
 
 
 def _cleanup_expired_scans() -> None:
@@ -685,7 +777,7 @@ def _load_score_model() -> tuple[Callable[..., dict[str, Any]], str, str]:
 
 
 # ---------------------------------------------------------------------------
-# 远程仓库获取：固定 commit + 受限 ZIP 下载
+# 远程仓库获取：固定 commit + 认证 Trees/Blobs 或匿名受限 ZIP
 # ---------------------------------------------------------------------------
 
 
@@ -701,17 +793,123 @@ def _github_api_headers() -> dict[str, str]:
     return headers
 
 
+def _new_github_request_budget() -> _GitHubRequestBudget:
+    """Return the per-scan budget for authenticated Trees/Blobs acquisition."""
+    return _GitHubRequestBudget(_GITHUB_AUTHENTICATED_REQUEST_BUDGET)
+
+
+def _github_header_value(headers: Any, name: str) -> str | None:
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except (AttributeError, TypeError):
+        value = None
+    if value is not None:
+        return str(value).strip()
+    try:
+        for key, candidate in headers.items():
+            if str(key).casefold() == name.casefold():
+                return str(candidate).strip()
+    except (AttributeError, TypeError):
+        pass
+    return None
+
+
+def _github_rate_limit_deadline(
+    headers: Any,
+    status_code: int | None,
+    *,
+    now: float | None = None,
+) -> float | None:
+    """Derive GitHub's next safe request time from documented headers."""
+    current_time = _time.time() if now is None else now
+    retry_after_raw = _github_header_value(headers, "Retry-After")
+    remaining = _github_header_value(headers, "X-RateLimit-Remaining")
+    reset_raw = _github_header_value(headers, "X-RateLimit-Reset")
+
+    if status_code is None and remaining != "0":
+        return None
+    is_rate_limited = (
+        status_code == 429
+        or retry_after_raw is not None
+        or remaining == "0"
+    )
+    if not is_rate_limited:
+        return None
+
+    if retry_after_raw is not None:
+        try:
+            retry_after = float(retry_after_raw)
+        except ValueError:
+            retry_after = -1.0
+        if math.isfinite(retry_after) and retry_after >= 0:
+            return current_time + retry_after
+
+    if remaining == "0" and reset_raw is not None:
+        try:
+            reset_at = float(reset_raw)
+        except ValueError:
+            reset_at = -1.0
+        if math.isfinite(reset_at) and reset_at >= 0:
+            return max(
+                current_time,
+                reset_at + _GITHUB_RATE_LIMIT_RESET_GRACE_SECONDS,
+            )
+
+    # GitHub recommends waiting at least one minute for a secondary limit
+    # response that does not provide a usable retry timestamp.
+    return current_time + 60.0
+
+
+def _defer_github_requests_until(deadline: float) -> None:
+    global _GITHUB_RATE_LIMIT_UNTIL
+    with _GITHUB_RATE_LIMIT_LOCK:
+        _GITHUB_RATE_LIMIT_UNTIL = max(_GITHUB_RATE_LIMIT_UNTIL, deadline)
+
+
+def _observe_github_rate_limit_headers(
+    headers: Any,
+    status_code: int | None = None,
+) -> bool:
+    deadline = _github_rate_limit_deadline(headers, status_code)
+    if deadline is None:
+        return False
+    _defer_github_requests_until(deadline)
+    return True
+
+
+def _wait_for_github_rate_limit() -> None:
+    global _GITHUB_RATE_LIMIT_UNTIL
+    now = _time.time()
+    with _GITHUB_RATE_LIMIT_LOCK:
+        deadline = _GITHUB_RATE_LIMIT_UNTIL
+        if deadline <= now:
+            _GITHUB_RATE_LIMIT_UNTIL = 0.0
+            return
+    delay = max(deadline - now, 0.0)
+    if delay > _GITHUB_MAX_RATE_LIMIT_WAIT_SECONDS:
+        raise _GitHubRateLimitError(
+            "GitHub API rate limit will not reset within the allowed wait "
+            f"window ({math.ceil(delay)} seconds remaining)"
+        )
+    if delay:
+        _time.sleep(delay)
+
+
 def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
     """Resolve a repository's GitHub default branch before acquiring source."""
     api_url = (
         f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
     )
     try:
-        request = urllib.request.Request(api_url, headers=_github_api_headers())
-        with urllib.request.urlopen(request, timeout=20) as response:
-            buffer = io.BytesIO()
-            _copy_response_bounded(response, buffer, _SOURCE_POLICY.max_file_bytes)
-            payload = json.loads(buffer.getvalue().decode("utf-8"))
+        raw = _github_request_bytes(
+            api_url,
+            max_bytes=_SOURCE_POLICY.max_file_bytes,
+            timeout=20,
+            preserve_http_errors=True,
+        )
+        payload = json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise HTTPException(
@@ -724,6 +922,8 @@ def _fetch_repository_default_branch(parsed: dict[str, Any]) -> str:
         ) from exc
     except (
         urllib.error.URLError,
+        _GitHubAcquisitionError,
+        http.client.IncompleteRead,
         TimeoutError,
         OSError,
         UnicodeDecodeError,
@@ -799,18 +999,23 @@ def _is_full_commit_hash(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-f]{40}", value))
 
 
-def _fetch_repository_commit_hash(parsed: dict[str, Any]) -> str:
+def _fetch_repository_commit_hash(
+    parsed: dict[str, Any],
+    *,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> str:
     """Resolve the default branch to an immutable full commit hash."""
     encoded_ref = urllib.parse.quote(parsed["ref"], safe="")
     api_url = (
         f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
         f"/commits/{encoded_ref}"
     )
-    request = urllib.request.Request(api_url, headers=_github_api_headers())
-    with urllib.request.urlopen(request, timeout=20) as response:
-        buffer = io.BytesIO()
-        _copy_response_bounded(response, buffer, _SOURCE_POLICY.max_file_bytes)
-    payload = json.loads(buffer.getvalue().decode("utf-8"))
+    payload = _github_json_payload(
+        api_url,
+        max_bytes=_SOURCE_POLICY.max_file_bytes,
+        timeout=20,
+        request_budget=request_budget,
+    )
     commit_hash = payload.get("sha") if isinstance(payload, dict) else None
     if not isinstance(commit_hash, str) or not _is_full_commit_hash(commit_hash):
         raise ValueError("GitHub did not return a valid full commit hash")
@@ -847,8 +1052,797 @@ def _copy_response_bounded(response: Any, destination: Any, max_bytes: int) -> i
                 f"HTTP response exceeds {max_bytes} byte limit"
             )
         destination.write(chunk)
+    if declared_length is not None and total < declared_length:
+        raise http.client.IncompleteRead(b"", declared_length - total)
+    if declared_length is not None and total > declared_length:
+        raise _DeterministicAcquisitionError(
+            "HTTP response exceeded its declared Content-Length"
+        )
     destination.seek(0)
     return total
+
+
+def _github_request_bytes(
+    api_url: str,
+    *,
+    max_bytes: int,
+    expected_bytes: int | None = None,
+    accept: str = "application/vnd.github+json",
+    timeout: int = _GITHUB_API_TIMEOUT_SECONDS,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+    preserve_http_errors: bool = False,
+) -> bytes:
+    """Read a bounded GitHub API response with retries for interrupted streams."""
+    if expected_bytes is not None and not 0 <= expected_bytes <= max_bytes:
+        raise _DeterministicAcquisitionError(
+            "Expected GitHub response size is outside the byte limit"
+        )
+    attempts = max(1, max_attempts)
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        rate_limited = False
+        _wait_for_github_rate_limit()
+        if request_budget is not None:
+            request_budget.consume()
+        headers = _github_api_headers()
+        headers["Accept"] = accept
+        request = urllib.request.Request(api_url, headers=headers)
+        try:
+            with _GITHUB_API_CONCURRENCY_GATE:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    _observe_github_rate_limit_headers(
+                        getattr(response, "headers", None)
+                    )
+                    buffer = io.BytesIO()
+                    _copy_response_bounded(response, buffer, max_bytes)
+                    data = buffer.getvalue()
+                    if expected_bytes is None or len(data) == expected_bytes:
+                        return data
+                    last_error = http.client.IncompleteRead(
+                        data,
+                        max(expected_bytes - len(data), 0),
+                    )
+        except _DeterministicAcquisitionError:
+            raise
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            rate_limited = _observe_github_rate_limit_headers(
+                getattr(exc, "headers", None),
+                exc.code,
+            )
+            try:
+                exc.close()
+            except OSError:
+                pass
+            if not rate_limited and exc.code not in _GITHUB_TRANSIENT_STATUS_CODES:
+                if preserve_http_errors:
+                    raise
+                raise _GitHubAcquisitionError(
+                    f"GitHub API returned HTTP {exc.code}"
+                ) from exc
+        except (
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            OSError,
+        ) as exc:
+            last_error = exc
+
+        logging.warning(
+            "GitHub API request attempt %d/%d failed for %s: %s",
+            attempt,
+            attempts,
+            urllib.parse.urlsplit(api_url).path,
+            last_error,
+        )
+        if attempt < attempts and not rate_limited:
+            _time.sleep(min(0.25 * (2 ** (attempt - 1)), 2.0))
+
+    raise _GitHubAcquisitionError(
+        f"GitHub API request failed after {attempts} attempts"
+    ) from last_error
+
+
+def _github_json_payload(
+    api_url: str,
+    *,
+    max_bytes: int,
+    timeout: int = _GITHUB_API_TIMEOUT_SECONDS,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> Any:
+    raw = _github_request_bytes(
+        api_url,
+        max_bytes=max_bytes,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        request_budget=request_budget,
+    )
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise _GitHubAcquisitionError(
+            "GitHub API returned malformed JSON"
+        ) from exc
+
+
+def _validated_git_tree_entry(
+    raw_entry: Any,
+    *,
+    prefix: str = "",
+) -> _GitTreeEntry:
+    if not isinstance(raw_entry, dict):
+        raise _DeterministicAcquisitionError(
+            "GitHub tree contains a non-object entry"
+        )
+
+    relative_path = raw_entry.get("path")
+    if not isinstance(relative_path, str):
+        raise _DeterministicAcquisitionError(
+            "GitHub tree contains an invalid entry path"
+        )
+    try:
+        relative_path = require_safe_source_subdirectory(relative_path)
+    except ValueError as exc:
+        raise _DeterministicAcquisitionError(
+            f"GitHub tree contains an unsafe entry path: {relative_path!r}"
+        ) from exc
+    if relative_path == ".":
+        raise _DeterministicAcquisitionError(
+            "GitHub tree contains an invalid dot entry"
+        )
+
+    full_path = f"{prefix}/{relative_path}" if prefix else relative_path
+    try:
+        full_path = require_safe_source_subdirectory(full_path)
+    except ValueError as exc:
+        raise _DeterministicAcquisitionError(
+            f"GitHub tree contains an unsafe entry path: {full_path!r}"
+        ) from exc
+
+    entry_type = raw_entry.get("type")
+    mode = raw_entry.get("mode")
+    valid_modes = {
+        "tree": {"040000", "40000"},
+        "blob": {"100644", "100755", "120000"},
+        "commit": {"160000"},
+    }
+    if (
+        not isinstance(entry_type, str)
+        or entry_type not in valid_modes
+        or not isinstance(mode, str)
+        or mode not in valid_modes[entry_type]
+    ):
+        raise _DeterministicAcquisitionError(
+            f"GitHub tree contains an unsupported entry: {full_path!r}"
+        )
+
+    sha = raw_entry.get("sha")
+    if not isinstance(sha, str) or not _is_full_commit_hash(sha):
+        raise _DeterministicAcquisitionError(
+            f"GitHub tree contains an invalid object hash: {full_path!r}"
+        )
+
+    size = raw_entry.get("size")
+    if entry_type == "blob":
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise _DeterministicAcquisitionError(
+                f"GitHub tree contains an invalid blob size: {full_path!r}"
+            )
+    else:
+        size = None
+
+    return _GitTreeEntry(
+        path=full_path,
+        mode=mode,
+        type=entry_type,
+        sha=sha,
+        size=size,
+    )
+
+
+def _parse_git_tree_snapshot(
+    payload: Any,
+    *,
+    prefix: str = "",
+) -> _GitTreeSnapshot:
+    if not isinstance(payload, dict):
+        raise _GitHubAcquisitionError(
+            "GitHub did not return a tree object"
+        )
+    tree_sha = payload.get("sha")
+    if not isinstance(tree_sha, str) or not _is_full_commit_hash(tree_sha):
+        raise _GitHubAcquisitionError(
+            "GitHub did not return a valid tree hash"
+        )
+    raw_entries = payload.get("tree")
+    if not isinstance(raw_entries, list):
+        raise _GitHubAcquisitionError(
+            "GitHub did not return a tree entry list"
+        )
+    if len(raw_entries) > _GITHUB_MAX_TREE_ENTRIES:
+        raise _DeterministicAcquisitionError(
+            "GitHub tree metadata exceeds the entry limit"
+        )
+    truncated = payload.get("truncated", False)
+    if not isinstance(truncated, bool):
+        raise _GitHubAcquisitionError(
+            "GitHub returned an invalid tree truncation marker"
+        )
+
+    entries: list[_GitTreeEntry] = []
+    seen_paths: set[str] = set()
+    for raw_entry in raw_entries:
+        entry = _validated_git_tree_entry(raw_entry, prefix=prefix)
+        if entry.path in seen_paths:
+            raise _DeterministicAcquisitionError(
+                f"GitHub tree contains a duplicate entry: {entry.path!r}"
+            )
+        seen_paths.add(entry.path)
+        entries.append(entry)
+    entries.sort(key=lambda entry: entry.path)
+    return _GitTreeSnapshot(
+        sha=tree_sha,
+        entries=tuple(entries),
+        truncated=truncated,
+    )
+
+
+def _fetch_git_tree(
+    parsed: dict[str, Any],
+    treeish: str,
+    *,
+    recursive: bool,
+    prefix: str = "",
+    expected_tree_sha: str | None = None,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> _GitTreeSnapshot:
+    encoded_treeish = urllib.parse.quote(treeish, safe="")
+    api_url = (
+        f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
+        f"/git/trees/{encoded_treeish}"
+    )
+    if recursive:
+        api_url += "?recursive=1"
+    payload = _github_json_payload(
+        api_url,
+        max_bytes=_GITHUB_TREE_RESPONSE_MAX_BYTES,
+        max_attempts=max_attempts,
+        request_budget=request_budget,
+    )
+    snapshot = _parse_git_tree_snapshot(payload, prefix=prefix)
+    if expected_tree_sha is not None and snapshot.sha != expected_tree_sha:
+        raise _DeterministicAcquisitionError(
+            "GitHub returned a tree that does not match the pinned object"
+        )
+    return snapshot
+
+
+def _git_blob_sha(data: bytes) -> str:
+    try:
+        digest = hashlib.sha1(usedforsecurity=False)
+    except TypeError:  # pragma: no cover - compatibility with non-OpenSSL builds
+        digest = hashlib.sha1()
+    digest.update(f"blob {len(data)}\0".encode("ascii"))
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _fetch_git_blob(
+    parsed: dict[str, Any],
+    entry: _GitTreeEntry,
+    *,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> bytes:
+    if not entry.is_regular_blob or entry.size is None:
+        raise _DeterministicAcquisitionError(
+            f"GitHub tree entry is not a regular blob: {entry.path!r}"
+        )
+    encoded_sha = urllib.parse.quote(entry.sha, safe="")
+    api_url = (
+        f"https://api.github.com/repos/{parsed['owner']}/{parsed['repo']}"
+        f"/git/blobs/{encoded_sha}"
+    )
+    data = _github_request_bytes(
+        api_url,
+        max_bytes=entry.size,
+        expected_bytes=entry.size,
+        accept="application/vnd.github.raw+json",
+        max_attempts=max_attempts,
+        request_budget=request_budget,
+    )
+    if len(data) != entry.size:
+        raise _DeterministicAcquisitionError(
+            f"GitHub blob size changed while downloading: {entry.path!r}"
+        )
+    if _git_blob_sha(data) != entry.sha:
+        raise _DeterministicAcquisitionError(
+            f"GitHub blob hash mismatch: {entry.path!r}"
+        )
+    return data
+
+
+def _unique_git_tree_entries(
+    entries: list[_GitTreeEntry] | tuple[_GitTreeEntry, ...],
+) -> tuple[_GitTreeEntry, ...]:
+    by_path: dict[str, _GitTreeEntry] = {}
+    for entry in entries:
+        existing = by_path.get(entry.path)
+        if existing is not None and existing != entry:
+            raise _DeterministicAcquisitionError(
+                f"GitHub tree contains conflicting entries: {entry.path!r}"
+            )
+        by_path[entry.path] = entry
+        if len(by_path) > _GITHUB_MAX_TREE_ENTRIES:
+            raise _DeterministicAcquisitionError(
+                "GitHub tree metadata exceeds the entry limit"
+            )
+    return tuple(by_path[path] for path in sorted(by_path))
+
+
+def _walk_git_tree_nonrecursive(
+    parsed: dict[str, Any],
+    tree_sha: str,
+    *,
+    prefix: str = "",
+    initial_snapshot: _GitTreeSnapshot | None = None,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> tuple[_GitTreeEntry, ...]:
+    """Walk a tree without recursive responses when GitHub reports truncation."""
+    pending: list[tuple[str, str, _GitTreeSnapshot | None]] = [
+        (tree_sha, prefix, initial_snapshot)
+    ]
+    collected: list[_GitTreeEntry] = []
+    requests = 0
+    while pending:
+        current_sha, current_prefix, supplied_snapshot = pending.pop()
+        if supplied_snapshot is None:
+            requests += 1
+            if requests > _GITHUB_MAX_TREE_REQUESTS:
+                raise _DeterministicAcquisitionError(
+                    "GitHub tree traversal exceeds the request limit"
+                )
+            snapshot = _fetch_git_tree(
+                parsed,
+                current_sha,
+                recursive=False,
+                prefix=current_prefix,
+                expected_tree_sha=current_sha,
+                max_attempts=max_attempts,
+                request_budget=request_budget,
+            )
+        else:
+            snapshot = supplied_snapshot
+            if snapshot.sha != current_sha:
+                raise _DeterministicAcquisitionError(
+                    "GitHub tree traversal received a mismatched root"
+                )
+        if snapshot.truncated:
+            raise _DeterministicAcquisitionError(
+                "GitHub truncated a non-recursive tree response"
+            )
+        collected.extend(snapshot.entries)
+        if len(collected) > _GITHUB_MAX_TREE_ENTRIES:
+            raise _DeterministicAcquisitionError(
+                "GitHub tree metadata exceeds the entry limit"
+            )
+        for entry in reversed(snapshot.entries):
+            if entry.type == "tree":
+                pending.append((entry.sha, entry.path, None))
+    return _unique_git_tree_entries(collected)
+
+
+def _root_manifest_selection(
+    parsed: dict[str, Any],
+    entries: tuple[_GitTreeEntry, ...],
+    prefetched: dict[str, bytes],
+    *,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> str | None:
+    """Return an explicit or root-manifest source directory at the pinned tree."""
+    requested = parsed.get("subdir")
+    if requested is not None:
+        try:
+            return require_safe_source_subdirectory(requested)
+        except ValueError as exc:
+            raise _DeterministicAcquisitionError(
+                f"Invalid source subdirectory: {requested!r}"
+            ) from exc
+
+    manifest_entry = next(
+        (
+            entry
+            for entry in entries
+            if entry.path == "manifest.json" and entry.is_regular_blob
+        ),
+        None,
+    )
+    if (
+        manifest_entry is None
+        or manifest_entry.size is None
+        or manifest_entry.size > _SOURCE_POLICY.max_file_bytes
+    ):
+        return None
+    manifest_bytes = _fetch_git_blob(
+        parsed,
+        manifest_entry,
+        max_attempts=max_attempts,
+        request_budget=request_budget,
+    )
+    prefetched[manifest_entry.path] = manifest_bytes
+    try:
+        manifest_text = manifest_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    try:
+        return _root_manifest_subdirectory(manifest_text)
+    except ValueError as exc:
+        raise _DeterministicAcquisitionError(str(exc)) from exc
+
+
+def _entries_for_truncated_tree(
+    parsed: dict[str, Any],
+    root_tree_sha: str,
+    subdirectory: str | None,
+    *,
+    root_snapshot: _GitTreeSnapshot | None = None,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> tuple[_GitTreeEntry, ...]:
+    if root_snapshot is None:
+        root_snapshot = _fetch_git_tree(
+            parsed,
+            root_tree_sha,
+            recursive=False,
+            expected_tree_sha=root_tree_sha,
+            max_attempts=max_attempts,
+            request_budget=request_budget,
+        )
+    elif root_snapshot.sha != root_tree_sha:
+        raise _DeterministicAcquisitionError(
+            "GitHub truncated-tree fallback received a mismatched root"
+        )
+    if root_snapshot.truncated:
+        raise _DeterministicAcquisitionError(
+            "GitHub truncated a non-recursive root tree response"
+        )
+    if not subdirectory or subdirectory == ".":
+        return _walk_git_tree_nonrecursive(
+            parsed,
+            root_tree_sha,
+            initial_snapshot=root_snapshot,
+            max_attempts=max_attempts,
+            request_budget=request_budget,
+        )
+
+    collected: list[_GitTreeEntry] = list(root_snapshot.entries)
+    current_snapshot = root_snapshot
+    current_prefix = ""
+    target_entry: _GitTreeEntry | None = None
+    for segment in PurePosixPath(subdirectory).parts:
+        next_path = f"{current_prefix}/{segment}" if current_prefix else segment
+        target_entry = next(
+            (entry for entry in current_snapshot.entries if entry.path == next_path),
+            None,
+        )
+        if target_entry is None:
+            raise _DeterministicAcquisitionError(
+                f"Source subdirectory does not exist: {subdirectory!r}"
+            )
+        if target_entry.type != "tree":
+            raise _DeterministicAcquisitionError(
+                f"Source subdirectory is not a directory: {subdirectory!r}"
+            )
+        current_prefix = next_path
+        if current_prefix == subdirectory:
+            break
+        current_snapshot = _fetch_git_tree(
+            parsed,
+            target_entry.sha,
+            recursive=False,
+            prefix=current_prefix,
+            expected_tree_sha=target_entry.sha,
+            max_attempts=max_attempts,
+            request_budget=request_budget,
+        )
+        if current_snapshot.truncated:
+            raise _DeterministicAcquisitionError(
+                "GitHub truncated a non-recursive ancestor tree response"
+            )
+        collected.extend(current_snapshot.entries)
+
+    if target_entry is None:
+        raise _DeterministicAcquisitionError(
+            f"Source subdirectory does not exist: {subdirectory!r}"
+        )
+    target_snapshot = _fetch_git_tree(
+        parsed,
+        target_entry.sha,
+        recursive=True,
+        prefix=subdirectory,
+        expected_tree_sha=target_entry.sha,
+        max_attempts=max_attempts,
+        request_budget=request_budget,
+    )
+    if target_snapshot.truncated:
+        target_entries = _walk_git_tree_nonrecursive(
+            parsed,
+            target_entry.sha,
+            prefix=subdirectory,
+            max_attempts=max_attempts,
+            request_budget=request_budget,
+        )
+    else:
+        target_entries = target_snapshot.entries
+    collected.extend(target_entries)
+    return _unique_git_tree_entries(collected)
+
+
+_LEGAL_FILE_PREFIXES = ("license", "licence", "copying", "notice")
+
+
+def _select_repository_entries(
+    entries: tuple[_GitTreeEntry, ...],
+    subdirectory: str | None,
+    *,
+    policy: ScanPolicy = _SOURCE_POLICY,
+) -> tuple[_GitTreeEntry, ...]:
+    """Select file blobs for the requested scope plus required ancestor metadata."""
+    entries = _unique_git_tree_entries(entries)
+    by_path = {entry.path: entry for entry in entries}
+    regular_files = {
+        entry.path: entry for entry in entries if entry.is_regular_blob
+    }
+
+    selected: dict[str, _GitTreeEntry]
+    if not subdirectory or subdirectory == ".":
+        selected = dict(regular_files)
+    else:
+        target = by_path.get(subdirectory)
+        target_prefix = subdirectory.rstrip("/") + "/"
+        has_descendant = any(path.startswith(target_prefix) for path in by_path)
+        if target is not None and target.type != "tree":
+            raise _DeterministicAcquisitionError(
+                f"Source subdirectory is not a directory: {subdirectory!r}"
+            )
+        if target is None and not has_descendant:
+            raise _DeterministicAcquisitionError(
+                f"Source subdirectory does not exist: {subdirectory!r}"
+            )
+        selected = {
+            path: entry
+            for path, entry in regular_files.items()
+            if path.startswith(target_prefix)
+        }
+
+        required_paths = set(_parent_package_json_candidates(subdirectory))
+        required_paths.add("manifest.json")
+        for path in required_paths:
+            entry = regular_files.get(path)
+            if entry is not None:
+                selected[path] = entry
+
+        parts = PurePosixPath(subdirectory).parts
+        ancestor_directories = {""}
+        ancestor_directories.update(
+            PurePosixPath(*parts[:depth]).as_posix()
+            for depth in range(1, len(parts))
+        )
+        for path, entry in regular_files.items():
+            file_path = PurePosixPath(path)
+            parent = file_path.parent.as_posix()
+            if parent == ".":
+                parent = ""
+            if (
+                parent in ancestor_directories
+                and file_path.name.casefold().startswith(_LEGAL_FILE_PREFIXES)
+            ):
+                selected[path] = entry
+
+    if len(selected) > max(policy.max_files, 0):
+        raise _DeterministicAcquisitionError(
+            f"Selected source contains more than {policy.max_files} files"
+        )
+    total_size = sum(entry.size or 0 for entry in selected.values())
+    if total_size > max(policy.max_total_bytes, 0):
+        raise _DeterministicAcquisitionError(
+            f"Selected source exceeds {policy.max_total_bytes} byte limit"
+        )
+
+    selected_paths = set(selected)
+    normalized_paths: set[str] = set()
+    for path in sorted(selected_paths):
+        parts = PurePosixPath(path).parts
+        if len(parts) - 1 > policy.max_depth:
+            raise _DeterministicAcquisitionError(
+                f"Selected source entry exceeds depth limit: {path!r}"
+            )
+        normalized = os.path.normcase(str(Path(*parts)))
+        if normalized in normalized_paths:
+            raise _DeterministicAcquisitionError(
+                f"Selected source contains a platform path collision: {path!r}"
+            )
+        normalized_paths.add(normalized)
+        for depth in range(1, len(parts)):
+            ancestor = PurePosixPath(*parts[:depth]).as_posix()
+            if ancestor in selected_paths:
+                raise _DeterministicAcquisitionError(
+                    f"Selected source contains a file/directory collision: {path!r}"
+                )
+
+    return tuple(selected[path] for path in sorted(selected))
+
+
+def _repository_target_path(root: Path, relative_path: str) -> Path:
+    parts = PurePosixPath(relative_path).parts
+    target = root.joinpath(*parts).resolve()
+    if target == root or root not in target.parents:
+        raise _DeterministicAcquisitionError(
+            f"Selected source entry escapes the repository root: {relative_path!r}"
+        )
+    return target
+
+
+def _materialize_repository_entries(
+    parsed: dict[str, Any],
+    destination: str | Path,
+    entries: tuple[_GitTreeEntry, ...],
+    prefetched: dict[str, bytes],
+    *,
+    subdirectory: str | None,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> None:
+    root = Path(destination).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+
+    representative_by_sha: dict[str, _GitTreeEntry] = {}
+    downloaded_by_sha: dict[str, bytes] = {}
+    for entry in entries:
+        existing = representative_by_sha.get(entry.sha)
+        if existing is not None and existing.size != entry.size:
+            raise _DeterministicAcquisitionError(
+                f"GitHub tree reports conflicting blob sizes: {entry.path!r}"
+            )
+        representative_by_sha.setdefault(entry.sha, entry)
+        if entry.path in prefetched:
+            downloaded_by_sha[entry.sha] = prefetched[entry.path]
+
+    remaining = [
+        entry
+        for sha, entry in representative_by_sha.items()
+        if sha not in downloaded_by_sha
+    ]
+    if request_budget is not None:
+        request_budget.require_available(len(remaining))
+    if remaining:
+        worker_count = min(_GITHUB_BLOB_WORKERS, len(remaining))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    _fetch_git_blob,
+                    parsed,
+                    entry,
+                    max_attempts=max_attempts,
+                    request_budget=request_budget,
+                ): entry
+                for entry in remaining
+            }
+            try:
+                for future in as_completed(futures):
+                    entry = futures[future]
+                    downloaded_by_sha[entry.sha] = future.result()
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    for entry in entries:
+        data = downloaded_by_sha.get(entry.sha)
+        if data is None:
+            raise _DeterministicAcquisitionError(
+                f"Selected source blob was not downloaded: {entry.path!r}"
+            )
+        if (
+            entry.size is None
+            or len(data) != entry.size
+            or _git_blob_sha(data) != entry.sha
+        ):
+            raise _DeterministicAcquisitionError(
+                f"Selected source blob failed integrity verification: {entry.path!r}"
+            )
+        target = _repository_target_path(root, entry.path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("xb") as target_handle:
+            target_handle.write(data)
+
+    if subdirectory and subdirectory != ".":
+        target_directory = _repository_target_path(root, subdirectory)
+        target_directory.mkdir(parents=True, exist_ok=True)
+
+
+def _download_github_repository_files(
+    parsed: dict[str, Any],
+    tmp_dir: str,
+    *,
+    max_attempts: int = _GITHUB_API_MAX_ATTEMPTS,
+    request_budget: _GitHubRequestBudget | None = None,
+) -> bool:
+    """Acquire the pinned repository scope through Git Trees and Git Blobs."""
+    budget = request_budget or _new_github_request_budget()
+    try:
+        recursive_snapshot = _fetch_git_tree(
+            parsed,
+            parsed["ref"],
+            recursive=True,
+            max_attempts=max_attempts,
+            request_budget=budget,
+        )
+        prefetched: dict[str, bytes] = {}
+        if recursive_snapshot.truncated:
+            root_snapshot = _fetch_git_tree(
+                parsed,
+                recursive_snapshot.sha,
+                recursive=False,
+                expected_tree_sha=recursive_snapshot.sha,
+                max_attempts=max_attempts,
+                request_budget=budget,
+            )
+            subdirectory = _root_manifest_selection(
+                parsed,
+                root_snapshot.entries,
+                prefetched,
+                max_attempts=max_attempts,
+                request_budget=budget,
+            )
+            entries = _entries_for_truncated_tree(
+                parsed,
+                recursive_snapshot.sha,
+                subdirectory,
+                root_snapshot=root_snapshot,
+                max_attempts=max_attempts,
+                request_budget=budget,
+            )
+        else:
+            entries = recursive_snapshot.entries
+            subdirectory = _root_manifest_selection(
+                parsed,
+                entries,
+                prefetched,
+                max_attempts=max_attempts,
+                request_budget=budget,
+            )
+
+        selected = _select_repository_entries(
+            entries,
+            subdirectory,
+            policy=_SOURCE_POLICY,
+        )
+        _materialize_repository_entries(
+            parsed,
+            tmp_dir,
+            selected,
+            prefetched,
+            subdirectory=subdirectory,
+            max_attempts=max_attempts,
+            request_budget=budget,
+        )
+        print(
+            "[TAH-trust]     GitHub API acquisition OK: "
+            f"{len(selected)} files, {budget.used} requests, "
+            f"scope={subdirectory or '.'}"
+        )
+        return True
+    except _DeterministicAcquisitionError:
+        raise
+    except (_GitHubAcquisitionError, OSError) as exc:
+        print(f"[TAH-trust]     GitHub API acquisition failed: {exc}")
+        return False
 
 
 def _preflight_zip_entry_count(archive_file: Any, max_entries: int) -> None:
@@ -1095,7 +2089,8 @@ def _safe_extract_zip(
             raise _DeterministicAcquisitionError(
                 f"ZIP entry escapes extraction root: {name!r}"
             )
-        # GitHub zipballs add one wrapper directory which is removed later.
+        # Account for GitHub's wrapper directory, which acquisition removes
+        # after the complete archive has passed validation.
         if len(parts) - 1 > policy.max_depth + 1:
             raise _DeterministicAcquisitionError(
                 f"ZIP entry exceeds depth limit: {name!r}"
@@ -1192,15 +2187,21 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
 
     for attempt in range(1, max_attempts + 1):
         print(f"[TAH-trust]     ZIP download (attempt {attempt}/{max_attempts}) {api_url}")
+        rate_limited = False
         try:
+            _wait_for_github_rate_limit()
             req = urllib.request.Request(api_url, headers=headers)
             with tempfile.TemporaryFile() as archive_file:
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    _copy_response_bounded(
-                        resp,
-                        archive_file,
-                        _SOURCE_POLICY.max_total_bytes,
-                    )
+                with _GITHUB_API_CONCURRENCY_GATE:
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        _observe_github_rate_limit_headers(
+                            getattr(resp, "headers", None)
+                        )
+                        _copy_response_bounded(
+                            resp,
+                            archive_file,
+                            _SOURCE_POLICY.max_total_bytes,
+                        )
                 _preflight_zip_entry_count(
                     archive_file,
                     _SOURCE_POLICY.max_files,
@@ -1214,13 +2215,29 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
             raise
         except urllib.error.HTTPError as exc:
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
-            if exc.code not in {408, 429, 500, 502, 503, 504}:
+            rate_limited = _observe_github_rate_limit_headers(
+                getattr(exc, "headers", None),
+                exc.code,
+            )
+            try:
+                exc.close()
+            except OSError:
+                pass
+            if not rate_limited and exc.code not in _GITHUB_TRANSIENT_STATUS_CODES:
                 return False
             if attempt < max_attempts:
-                _time.sleep(3)
+                if not rate_limited:
+                    _time.sleep(3)
                 force_rmtree(tmp_dir)
                 os.makedirs(tmp_dir, exist_ok=True)
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            socket.timeout,
+        ) as exc:
             print(f"[TAH-trust]     ZIP attempt {attempt} failed: {exc}")
             if attempt < max_attempts:
                 _time.sleep(3)
@@ -1232,42 +2249,76 @@ def _download_zipball(parsed: dict[str, Any], tmp_dir: str, max_attempts: int = 
     return False
 
 
+def _flatten_zipball_root(tmp_dir: str) -> bool:
+    """Move a validated GitHub zipball's single wrapper into the scan root."""
+    root = Path(tmp_dir).resolve()
+    entries = list(root.iterdir())
+    if len(entries) != 1 or entries[0].is_symlink() or not entries[0].is_dir():
+        return False
+
+    wrapper = entries[0]
+    for item in wrapper.iterdir():
+        item.replace(root / item.name)
+    wrapper.rmdir()
+    return True
+
+
 def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
-    """Resolve a commit and acquire it through the budgeted ZIP path.
+    """Resolve a commit and acquire a bounded repository snapshot.
 
     Returns:
         (repo_root, source_method, commit_hash) — repo_root 是仓库内容根目录路径，
-        source_method 为 "zip"，commit_hash 为真实 40 位 git hash。
-        ZIP 使用默认分支解析出的不可变 commit，而不是可变分支名。
+        source_method 为 "github_api" 或 "zip"，commit_hash 为真实 40 位 git hash。
+        有 Token 时使用 Trees/Blobs；匿名时使用单请求 ZIP 回退。两者都使用
+        默认分支解析出的不可变 commit，而不是可变分支名。
         失败返回 (None, "", "")。
     """
     tmp_dir = tempfile.mkdtemp(prefix=f"tah_repo_")
+    use_github_api = bool(get_settings().github_token)
+    request_budget = _new_github_request_budget() if use_github_api else None
     try:
-        commit_hash = _fetch_repository_commit_hash(parsed)
+        commit_hash = _fetch_repository_commit_hash(
+            parsed,
+            request_budget=request_budget,
+        )
     except Exception as exc:
         print(f"[TAH-trust]     commit resolution failed: {exc}")
         force_rmtree(tmp_dir)
         return None, "", ""
 
-    print(f"[TAH-trust] === Budgeted ZIP acquisition: {commit_hash[:8]} ===")
     pinned = {**parsed, "ref": commit_hash}
     try:
-        downloaded = _download_zipball(pinned, tmp_dir)
+        if use_github_api:
+            print(
+                f"[TAH-trust] === Budgeted GitHub API acquisition: "
+                f"{commit_hash[:8]} ==="
+            )
+            downloaded = _download_github_repository_files(
+                pinned,
+                tmp_dir,
+                request_budget=request_budget,
+            )
+            method = "github_api"
+        else:
+            print(
+                f"[TAH-trust] === Anonymous bounded ZIP acquisition: "
+                f"{commit_hash[:8]} ==="
+            )
+            downloaded = _download_zipball(pinned, tmp_dir)
+            method = "zip"
+            if downloaded and not _flatten_zipball_root(tmp_dir):
+                print("[TAH-trust]     ZIP download lacks a single repository root")
+                downloaded = False
     except _DeterministicAcquisitionError:
         force_rmtree(tmp_dir)
         raise
+    except Exception as exc:
+        print(f"[TAH-trust]     unexpected acquisition failure: {exc}")
+        force_rmtree(tmp_dir)
+        return None, "", ""
     if downloaded:
-        # ZIP 解压后内容在一层子目录中 {owner}-{repo}-{hash}/
-        entries = os.listdir(tmp_dir)
-        if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
-            inner = os.path.join(tmp_dir, entries[0])
-            # 将内层目录内容移到 tmp_dir
-            for item in os.listdir(inner):
-                shutil.move(os.path.join(inner, item), os.path.join(tmp_dir, item))
-            os.rmdir(inner)
-            print(f"[TAH-trust]     ZIP commit: {commit_hash[:8]}")
-            return tmp_dir, "zip", commit_hash
-        print("[TAH-trust]     ZIP download lacks a single repository root")
+        print(f"[TAH-trust]     {method} commit: {commit_hash[:8]}")
+        return tmp_dir, method, commit_hash
 
     force_rmtree(tmp_dir)
     return None, "", ""
@@ -1431,7 +2482,7 @@ def _run_scan_task(
                 "无法解析或下载受限的仓库快照。"
                 "请检查 GitHub 连接。"
             )
-            print(f"[TAH-trust] *** 获取仓库失败（commit + budgeted ZIP）")
+            print(f"[TAH-trust] *** 获取仓库失败（commit + GitHub API/ZIP）")
             if on_complete:
                 on_complete(scan_id, None, _scans[scan_id]["error"])
             return

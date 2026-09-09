@@ -6,6 +6,7 @@ import io
 import stat
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -230,26 +231,113 @@ def test_acquisition_downloads_only_the_resolved_commit(
     commit_hash = "a" * 40
     acquisition_root = tmp_path / "acquired"
     observed_ref: list[str] = []
+    observed_budgets: list[object] = []
 
     def fake_mkdtemp(*, prefix: str) -> str:
         assert prefix == "tah_repo_"
         acquisition_root.mkdir()
         return str(acquisition_root)
 
-    def fake_download(parsed: dict[str, object], destination: str) -> bool:
+    def fake_download(
+        parsed: dict[str, object],
+        destination: str,
+        **_kwargs: object,
+    ) -> bool:
         observed_ref.append(str(parsed["ref"]))
-        wrapper = Path(destination) / "acme-demo-shortsha"
-        wrapper.mkdir()
-        (wrapper / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+        observed_budgets.append(_kwargs["request_budget"])
+        (Path(destination) / "SKILL.md").write_text("# demo\n", encoding="utf-8")
         return True
+
+    def fake_commit(
+        _parsed: dict[str, object],
+        **kwargs: object,
+    ) -> str:
+        observed_budgets.append(kwargs["request_budget"])
+        return commit_hash
 
     monkeypatch.setattr(trust.tempfile, "mkdtemp", fake_mkdtemp)
     monkeypatch.setattr(
         trust,
-        "_fetch_repository_commit_hash",
-        lambda _parsed: commit_hash,
+        "get_settings",
+        lambda: SimpleNamespace(github_token="token"),
     )
-    monkeypatch.setattr(trust, "_download_zipball", fake_download)
+    monkeypatch.setattr(
+        trust,
+        "_fetch_repository_commit_hash",
+        fake_commit,
+    )
+    monkeypatch.setattr(trust, "_download_github_repository_files", fake_download)
+
+    root, method, acquired_commit = trust._acquire_repo_source({
+        "owner": "acme",
+        "repo": "demo",
+        "ref": "main",
+    })
+
+    assert (root, method, acquired_commit) == (
+        str(acquisition_root),
+        "github_api",
+        commit_hash,
+    )
+    assert observed_ref == [commit_hash]
+    assert len(observed_budgets) == 2
+    assert observed_budgets[0] is observed_budgets[1]
+    assert (acquisition_root / "SKILL.md").is_file()
+
+
+def test_anonymous_acquisition_uses_a_pinned_zipball(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commit_hash = "b" * 40
+    acquisition_root = tmp_path / "anonymous-acquired"
+    observed_commit_budget: list[object] = []
+    requested_urls: list[str] = []
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(
+        archive_buffer,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr("acme-demo-shortsha/SKILL.md", b"# demo\n")
+    archive_bytes = archive_buffer.getvalue()
+
+    def fake_mkdtemp(*, prefix: str) -> str:
+        assert prefix == "tah_repo_"
+        acquisition_root.mkdir()
+        return str(acquisition_root)
+
+    def fake_commit(
+        _parsed: dict[str, object],
+        **kwargs: object,
+    ) -> str:
+        observed_commit_budget.append(kwargs["request_budget"])
+        return commit_hash
+
+    def fake_urlopen(request, timeout: int) -> _ChunkedResponse:
+        requested_urls.append(request.full_url)
+        assert timeout == 120
+        assert request.get_header("Authorization") is None
+        return _ChunkedResponse(archive_bytes, str(len(archive_bytes)))
+
+    monkeypatch.setattr(trust.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(
+        trust,
+        "get_settings",
+        lambda: SimpleNamespace(github_token=None),
+    )
+    monkeypatch.setattr(
+        trust,
+        "_new_github_request_budget",
+        lambda: pytest.fail("anonymous ZIP acquisition must not allocate API budget"),
+    )
+    monkeypatch.setattr(trust, "_fetch_repository_commit_hash", fake_commit)
+    monkeypatch.setattr(trust.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        trust,
+        "_download_github_repository_files",
+        lambda *_args, **_kwargs: pytest.fail("unexpected Trees/Blobs acquisition"),
+    )
 
     root, method, acquired_commit = trust._acquire_repo_source({
         "owner": "acme",
@@ -262,8 +350,12 @@ def test_acquisition_downloads_only_the_resolved_commit(
         "zip",
         commit_hash,
     )
-    assert observed_ref == [commit_hash]
+    assert requested_urls == [
+        f"https://api.github.com/repos/acme/demo/zipball/{commit_hash}"
+    ]
+    assert observed_commit_budget == [None]
     assert (acquisition_root / "SKILL.md").is_file()
+    assert not (acquisition_root / "acme-demo-shortsha").exists()
 
 
 def test_extractor_reuses_the_scanner_snapshot_without_disk_reads(
