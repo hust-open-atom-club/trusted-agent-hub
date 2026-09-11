@@ -194,6 +194,16 @@ python -m src.scripts.seed_producer
   已发布的 CLI 也可以使用 `tah use <api-url>` 保存服务地址。
 - 服务器首次部署只需创建并填写一次 `.env`。以后执行 `git pull` 时该文件会保留，
   再运行 `deploy/deploy.sh`（Linux）或 `deploy/build.ps1`（Windows）即可更新。
+- 浏览器会话使用 30 分钟 Access Token 和 3 小时 Refresh Token。Refresh Token
+  仅在换发 Access Token 时轮换，因此空闲会话最长保留 3 小时，并可能提前最多
+  30 分钟失效。这是滑动空闲超时，而非会话的绝对生命周期上限；普通 API 请求
+  不会写入 Refresh Token 表。
+- Compose 中的 `db-maintenance` 服务默认每 15 分钟执行一次
+  `apps/api/src/sql/cleanup_refresh_tokens.sql`，删除已使用和已过期的 Refresh Token。
+  可通过 `REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS` 调整周期，最小值为 60 秒。
+  启动时会每 5 秒探测一次 `refresh_tokens` 表，连续 12 次失败后进程退出并由
+  Compose 重启；`docker compose logs db-maintenance` 会显示每次探测和 `DELETE` 结果。
+  若生产数据库已提供 `pg_cron`，可以改由数据库调度同一 SQL，并停用外部维护任务。
 - 从旧版 Compose（项目名 `tah-dev`）升级时，数据卷会随项目名变为
   `trusted-agent-hub_*` 而新建。旧数据仍在 `tah-dev_pgdata` 等卷中；如需沿用，
   在 `.env` 中设置 `COMPOSE_PROJECT_NAME=tah-dev`，或手动迁移卷数据。
@@ -224,6 +234,11 @@ alembic upgrade head --sql > migration.sql
 `package_versions` 和 `scan_reports` 中的历史 JSON，因此完整离线建库脚本会跳过
 这一步数据清理。如果这些表中可能已有数据，必须执行在线 `alembic upgrade head`；
 不支持从已有 revision 生成跨越 `20260826_0010` 的增量离线 SQL。
+
+修订 `20260910_0001` 会递增所有现有用户的 `auth_version` 并清空
+`refresh_tokens`，使部署前签发的 Access Token 和 Refresh Token 同时失效。
+该会话撤销不可逆。多实例生产环境应先停止旧 API 实例或暂停认证流量，完成新版本
+部署和迁移后再恢复服务，避免旧实例在迁移之后继续签发旧时长的 Token。
 
 本次整理不兼容此前的旧 revision 链。已有本地数据库如无需要保留的数据，建议删除后
 重新创建；如果包含重要数据，应先备份，再按当前 schema 迁移数据。不要仅使用

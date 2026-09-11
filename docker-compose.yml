@@ -21,6 +21,25 @@ services:
       timeout: 5s
       retries: 5
 
+  db-maintenance:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      PGCONNECT_TIMEOUT: "5"
+      REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS: ${REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS:-900}
+    volumes:
+      - ./apps/api/src/sql/cleanup_refresh_tokens.sql:/maintenance/cleanup_refresh_tokens.sql:ro
+      - ./deploy/cleanup-refresh-tokens.sh:/maintenance/cleanup-refresh-tokens.sh:ro
+    command: ["sh", "/maintenance/cleanup-refresh-tokens.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build:
       context: .

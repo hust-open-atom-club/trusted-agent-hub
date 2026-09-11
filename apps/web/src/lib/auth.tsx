@@ -36,7 +36,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 // Keep the access-token cookie alive for the refresh session so Middleware
 // can pass an expired JWT to AuthProvider's browser refresh flow.
-const ACCESS_TOKEN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+const ACCESS_TOKEN_COOKIE_MAX_AGE = 3 * 60 * 60;
 
 function setAccessTokenCookie(token: string) {
   document.cookie =
@@ -162,17 +162,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const logout = useCallback(() => {
+  const clearSession = useCallback(() => {
     invalidateRequests();
     clearStoredSession();
     clearFetchCache();
+    setState({ user: null, token: null, loading: false });
+  }, [invalidateRequests]);
+
+  const logout = useCallback(() => {
+    clearSession();
     void fetch(`${API_BASE}/api/v0/auth/logout`, {
       method: 'POST',
       credentials: 'include',
       keepalive: true,
     }).catch(() => undefined);
-    setState({ user: null, token: null, loading: false });
-  }, [invalidateRequests]);
+  }, [clearSession]);
 
   const refreshAccessToken = useCallback(async (
     externalSignal?: AbortSignal | null,
@@ -197,7 +201,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (!request.isCurrent()) return null;
-        if (res.status === 401 || res.status === 403) return null;
+        if (res.status === 401 || res.status === 403) {
+          logout();
+          return null;
+        }
         if (!res.ok) throw await responseError(res, '会话刷新失败');
 
         const data = await res.json();
@@ -227,7 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return waitForAbort(shared, externalSignal);
-  }, [beginRequest]);
+  }, [beginRequest, logout]);
 
   useEffect(() => {
     if (state.loading) return;
@@ -274,7 +281,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (!token || !user) {
-        if (saved) {
+        if (localStorage.getItem('tah_token')) {
           logout();
         } else {
           setState((s) => ({ ...s, loading: false }));

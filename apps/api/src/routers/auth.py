@@ -18,6 +18,8 @@ import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from src.auth import (
     create_access_token,
@@ -32,14 +34,13 @@ from src.dependencies import BearerTokenInvalid, CurrentUser, get_current_user
 from src.models.common import StrictContractModel
 from src.repositories.orm_producer import RefreshTokenRow, UserRow
 from src.settings import get_settings
-from sqlalchemy import delete, or_, select
-from sqlalchemy.orm import Session
+from src.sql import CLEANUP_REFRESH_TOKENS_SQL
 
 router = APIRouter(prefix="/api/v0/auth", tags=["auth"])
 
 _REFRESH_COOKIE_NAME = "tah_refresh_token"
 _REFRESH_COOKIE_PATH = "/api/v0/auth"
-_REFRESH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60
+_REFRESH_COOKIE_MAX_AGE = 3 * 60 * 60
 
 
 # ── 请求/响应模型 ─────────────────────────────────────────
@@ -144,19 +145,10 @@ def _cleanup_refresh_tokens(session: Session) -> None:
     The indexed timestamp columns keep this maintenance bounded by the
     eligible rows instead of retaining every historical session forever.
     """
-    now = datetime.now(timezone.utc)
     # The application session factory intentionally disables autoflush. Flush
-    # first so a just-consumed token is visible to the cleanup predicate; the
-    # bulk delete then must not try to synchronize stale ORM instances.
+    # first so a just-consumed token is visible to the shared cleanup SQL.
     session.flush()
-    session.execute(
-        delete(RefreshTokenRow).where(
-            or_(
-                RefreshTokenRow.used_at.is_not(None),
-                RefreshTokenRow.expires_at <= now,
-            )
-        ).execution_options(synchronize_session=False)
-    )
+    session.execute(text(CLEANUP_REFRESH_TOKENS_SQL))
 
 
 def _token_response(session: Session, user: UserRow) -> TokenResponse:
@@ -267,7 +259,7 @@ def login(
     response: Response,
     browser_client: bool = Header(default=False, alias="X-TAH-Browser"),
 ) -> AuthTokenResponse:
-    """登录（邮箱+密码），返回 access token（2h）+ refresh token（7d）+ 用户信息。"""
+    """登录（邮箱+密码），返回 30 分钟 access token 和 3 小时 refresh token。"""
     session = _get_session()
     email = body.email.lower().strip()
 
@@ -369,7 +361,7 @@ def _rotate_refresh_token(refresh_token: str) -> TokenResponse:
         expires_at = int(payload.get("exp", 0))
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Refresh token 无效") from None
-    if time.time() > expires_at:
+    if time.time() >= expires_at:
         raise HTTPException(status_code=401, detail="Refresh token 已过期，请重新登录")
 
     if payload.get("token_type") != "refresh":

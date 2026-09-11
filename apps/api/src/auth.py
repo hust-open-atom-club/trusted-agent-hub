@@ -53,8 +53,8 @@ def needs_password_rehash(password_hash: str) -> bool:
 
 # ── JWT ───────────────────────────────────────────────────
 
-_ACCESS_TOKEN_TTL = timedelta(hours=2)
-_REFRESH_TOKEN_TTL = timedelta(days=7)
+_ACCESS_TOKEN_TTL = timedelta(minutes=30)
+_REFRESH_TOKEN_TTL = timedelta(hours=3)
 _ALGORITHM = "HS256"
 
 # JWT 签名密钥（生产环境应从环境变量/密钥管理服务读取）
@@ -82,7 +82,7 @@ def create_access_token(
     display_name: str = "",
     auth_version: int = 0,
 ) -> str:
-    """签发 access token（2h 有效）。"""
+    """签发 access token（30 分钟有效）。"""
     return _create_token(
         user_id,
         role,
@@ -101,7 +101,7 @@ def create_refresh_token(
     auth_version: int = 0,
     jti: str | None = None,
 ) -> str:
-    """签发 refresh token（7d 有效）。"""
+    """签发 refresh token（3 小时有效）。"""
     return _create_token(
         user_id,
         role,
