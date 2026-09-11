@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import Response
 from fastapi.testclient import TestClient
 from jose import jwt as jose_jwt
 
@@ -35,21 +36,35 @@ def _get_client() -> TestClient:
     return TestClient(app)
 
 
-def _db_execute(sql: str, params: tuple = ()) -> None:
+def _db_connect():
     import psycopg2
     from urllib.parse import urlparse
 
     settings = get_settings()
     url = urlparse(settings.database_url)
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=url.hostname, port=url.port or 5432,
         dbname=url.path.lstrip("/"), user=url.username, password=url.password,
     )
+
+
+def _db_execute(sql: str, params: tuple = ()) -> None:
+    conn = _db_connect()
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
     cur.close()
     conn.close()
+
+
+def _db_scalar(sql: str, params: tuple = ()) -> object:
+    conn = _db_connect()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    value = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return value
 
 
 def _register(client: TestClient, email: str, password: str = "Test123456") -> dict:
@@ -109,6 +124,29 @@ def _needs_db() -> None:
 # ═══════════════════════════════════════════════════════════
 # 注册 / 登录 / 刷新
 # ═══════════════════════════════════════════════════════════
+
+
+class TestShortSessionPolicy:
+
+    def test_issued_tokens_use_short_session_lifetimes(self):
+        from src.auth import create_access_token, create_refresh_token, decode_token
+
+        access = decode_token(create_access_token("user-ttl", "user"))
+        refresh = decode_token(create_refresh_token("user-ttl", "user"))
+
+        assert access["exp"] - access["iat"] == 30 * 60
+        assert refresh["exp"] - refresh["iat"] == 3 * 60 * 60
+
+    def test_refresh_cookie_uses_three_hour_max_age(self):
+        from src.routers.auth import _set_refresh_cookie
+
+        response = Response()
+        _set_refresh_cookie(response, "refresh-token")
+
+        set_cookie = response.headers["set-cookie"]
+        assert "Max-Age=10800" in set_cookie
+        assert "HttpOnly" in set_cookie
+
 
 class TestRegisterLoginRefresh:
 
@@ -277,6 +315,28 @@ class TestRegisterLoginRefresh:
         )
         # submitter 角色能过鉴权但无 reviewer 权限 → 403（而非 401），证明 token 有效
         assert resp.status_code == 403
+
+    def test_repeated_refresh_keeps_only_the_current_session_record(self):
+        """Repeated rotation replaces one session row instead of accumulating history."""
+        _needs_db()
+        client = _get_client()
+
+        data = _register(client, _random_email("refresh-count"))
+        refresh_token = data["refresh_token"]
+        user_id = data["user"]["id"]
+
+        for _ in range(5):
+            response = client.post(
+                "/api/v0/auth/refresh",
+                json={"refresh_token": refresh_token},
+            )
+            assert response.status_code == 200, response.text
+            refresh_token = response.json()["refresh_token"]
+
+        assert _db_scalar(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE user_id = %s",
+            (user_id,),
+        ) == 1
 
     def test_current_user_can_read_and_update_profile(self):
         """登录用户可以读取和修改昵称，但不能提交未声明的账号字段。"""

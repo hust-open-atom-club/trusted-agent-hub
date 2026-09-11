@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from src.database import create_engine_from_url
+from src.sql import CLEANUP_REFRESH_TOKENS_SQL
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -44,8 +46,9 @@ def _alembic_config(database_url: str) -> Config:
 def test_migration_graph_has_single_base_and_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config("sqlite+pysqlite:///:memory:"))
     assert script.get_bases() == ["20260826_0001"]
-    assert script.get_heads() == ["20260908_0002"]
+    assert script.get_heads() == ["20260910_0001"]
     assert [revision.revision for revision in script.walk_revisions()] == [
+        "20260910_0001",
         "20260908_0002",
         "20260908_0001",
         "20260826_0011",
@@ -62,6 +65,140 @@ def migrated_sqlite_engine(tmp_path: Path) -> Iterator[Engine]:
     engine = create_engine_from_url(database_url)
     yield engine
     engine.dispose()
+
+
+def test_short_session_migration_invalidates_existing_sessions(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-sessions.db"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    config = _alembic_config(database_url)
+    command.upgrade(config, "20260908_0002")
+
+    engine = create_engine_from_url(database_url)
+    now = datetime.now(timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO users
+                    (id, email, password_hash, role, display_name,
+                     auth_version, is_active, created_at)
+                VALUES
+                    (:id, :email, :password_hash, :role, :display_name,
+                     :auth_version, :is_active, :created_at)
+                """
+            ),
+            {
+                "id": "user-existing-session",
+                "email": "existing-session@example.com",
+                "password_hash": "hash",
+                "role": "user",
+                "display_name": "Existing Session",
+                "auth_version": 4,
+                "is_active": True,
+                "created_at": now,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO refresh_tokens
+                    (jti, user_id, expires_at, used_at, created_at)
+                VALUES
+                    (:jti, :user_id, :expires_at, NULL, :created_at)
+                """
+            ),
+            {
+                "jti": "existing-refresh-token",
+                "user_id": "user-existing-session",
+                "expires_at": now + timedelta(days=7),
+                "created_at": now,
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine_from_url(database_url)
+    with engine.connect() as connection:
+        auth_version = connection.scalar(
+            text(
+                "SELECT auth_version FROM users "
+                "WHERE id = 'user-existing-session'"
+            )
+        )
+        refresh_count = connection.scalar(text("SELECT COUNT(*) FROM refresh_tokens"))
+    engine.dispose()
+
+    assert auth_version == 5
+    assert refresh_count == 0
+
+
+def test_refresh_token_cleanup_sql_preserves_valid_sessions(
+    migrated_sqlite_engine: Engine,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    with migrated_sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO users
+                    (id, email, password_hash, role, display_name,
+                     auth_version, is_active, created_at)
+                VALUES
+                    (:id, :email, :password_hash, :role, :display_name,
+                     0, :is_active, :created_at)
+                """
+            ),
+            {
+                "id": "user-cleanup",
+                "email": "cleanup@example.com",
+                "password_hash": "hash",
+                "role": "user",
+                "display_name": "Cleanup User",
+                "is_active": True,
+                "created_at": now,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO refresh_tokens
+                    (jti, user_id, expires_at, used_at, created_at)
+                VALUES
+                    (:jti, :user_id, :expires_at, :used_at, :created_at)
+                """
+            ),
+            [
+                {
+                    "jti": "valid-token",
+                    "user_id": "user-cleanup",
+                    "expires_at": now + timedelta(hours=1),
+                    "used_at": None,
+                    "created_at": now,
+                },
+                {
+                    "jti": "expired-token",
+                    "user_id": "user-cleanup",
+                    "expires_at": now - timedelta(minutes=1),
+                    "used_at": None,
+                    "created_at": now,
+                },
+                {
+                    "jti": "used-token",
+                    "user_id": "user-cleanup",
+                    "expires_at": now + timedelta(hours=1),
+                    "used_at": now,
+                    "created_at": now,
+                },
+            ],
+        )
+        connection.execute(text(CLEANUP_REFRESH_TOKENS_SQL))
+        remaining_tokens = set(
+            connection.scalars(text("SELECT jti FROM refresh_tokens"))
+        )
+
+    assert remaining_tokens == {"valid-token"}
 
 
 def test_migration_foreign_keys_reference_parents_with_cascade(
@@ -419,6 +556,7 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
         names = set(wheel.namelist())
         assert "src/migrations/env.py" in names
         assert "src/migrations/script.py.mako" in names
+        assert "src/sql/cleanup_refresh_tokens.sql" in names
         migration_files = {
             name.removeprefix("src/migrations/versions/")
             for name in names
@@ -431,6 +569,7 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
             "20260826_0011_add_trust_model_fingerprint.py",
             "20260908_0001_add_user_auth_version.py",
             "20260908_0002_add_refresh_token_store.py",
+            "20260910_0001_enforce_short_sessions.py",
         }
         unpacked = tmp_path / "unpacked"
         wheel.extractall(unpacked)

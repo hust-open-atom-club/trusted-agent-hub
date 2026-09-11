@@ -31,6 +31,7 @@ function LoginProbe({ onReady }: { onReady: (login: Login) => void }) {
 
 afterEach(() => {
   localStorage.clear();
+  document.cookie = 'tah_token=; path=/; max-age=0';
   vi.restoreAllMocks();
 });
 
@@ -43,7 +44,7 @@ describe('AuthProvider refresh coordination', () => {
         email: 'user@example.com',
         role: 'user',
         display_name: 'User',
-        exp: Math.floor(Date.now() / 1000) + 2 * 60 * 60,
+        exp: Math.floor(Date.now() / 1000) + 30 * 60,
       })),
       'signature',
     ].join('.');
@@ -77,8 +78,52 @@ describe('AuthProvider refresh coordination', () => {
     await expect(loginSession('user@example.com', 'password')).resolves.toBe(true);
 
     expect(cookieSetter).toHaveBeenCalledWith(
-      `tah_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`,
+      `tah_token=${token}; path=/; max-age=${3 * 60 * 60}; SameSite=Lax`,
     );
+
+    view.unmount();
+  });
+
+  it('clears local storage and cookies when refresh is rejected', async () => {
+    const expiredToken = [
+      'header',
+      btoa(JSON.stringify({
+        sub: 'user-expired',
+        email: 'expired@example.com',
+        role: 'user',
+        display_name: 'Expired User',
+        exp: Math.floor(Date.now() / 1000) - 60,
+      })),
+      'signature',
+    ].join('.');
+    localStorage.setItem('tah_token', expiredToken);
+    document.cookie = `tah_token=${expiredToken}; path=/`;
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/v0/auth/refresh/browser')) {
+        return Promise.resolve(jsonResponse({ detail: 'expired' }, 401));
+      }
+      if (url.endsWith('/api/v0/auth/logout')) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onLoading = vi.fn();
+    const view = render(
+      <AuthProvider>
+        <ReadyProbe onLoading={onLoading} />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(onLoading).toHaveBeenCalledWith(false));
+    expect(localStorage.getItem('tah_token')).toBeNull();
+    expect(document.cookie).not.toContain('tah_token=');
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => (
+      String(input).endsWith('/api/v0/auth/logout')
+    ))).toBe(true));
 
     view.unmount();
   });
