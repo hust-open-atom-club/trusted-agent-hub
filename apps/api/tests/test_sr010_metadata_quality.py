@@ -220,3 +220,19 @@ class TestSR010MetadataQuality:
         )
         metadata_quality.run(s)
         assert s.findings == []
+
+    def test_malformed_metadata_is_a_rule_finding(self, tmp_path):
+        """A parse error is visible as an SR-010 finding and report signal."""
+        (tmp_path / "SKILL.md").write_text("# hi", encoding="utf-8")
+        s = MockScanner(
+            files={"manifest.json": '{"name": "demo",', "SKILL.md": "# hi"},
+            _package_metadata=_full_meta(),
+            target_dir=tmp_path,
+        )
+        s._metadata_parse_errors = [{"file": "manifest.json", "message": "invalid JSON: Expecting value"}]
+
+        metadata_quality.run(s)
+
+        assert len(s.findings) == 1
+        assert s.findings[0]["rule_id"] == "SR-010"
+        assert "manifest.json" in s.findings[0]["title"]

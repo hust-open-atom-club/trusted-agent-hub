@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr020-destructive-installer",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic destructive installer benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

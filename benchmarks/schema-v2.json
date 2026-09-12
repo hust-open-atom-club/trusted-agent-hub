@@ -11,12 +11,21 @@
     "cases"
   ],
   "oneOf": [
+    { "required": ["fixture_source_tree_sha256"] },
     { "required": ["fixture_source_commit_hash"] },
     { "required": ["scanner_source_commit_hash"] }
   ],
   "properties": {
     "$schema": { "type": "string", "minLength": 1 },
     "schema_version": { "const": "2.0" },
+    "coverage_config": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fixture_source_tree_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "fixture_source_commit_hash": {
       "type": "string",
       "pattern": "^[a-f0-9]{40}$"
@@ -47,7 +56,9 @@
         "minimum_root_precision": { "type": "number", "minimum": 0, "maximum": 1 },
         "minimum_root_recall": { "type": "number", "minimum": 0, "maximum": 1 },
         "maximum_benign_high_critical_false_positive_rate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "minimum_malicious_high_critical_recall": { "type": "number", "minimum": 0, "maximum": 1 }
+        "minimum_malicious_high_critical_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "require_complete_rule_coverage": { "type": "boolean" },
+        "require_independent_variants": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -219,6 +230,16 @@
           "enum": ["benign", "benign_capability", "malicious", "needs_context"]
         },
         "source": { "$ref": "#/$defs/source" },
+        "scan_context": {
+          "type": "object",
+          "properties": {
+            "source_commit_hash": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{40})?$"
+            }
+          },
+          "additionalProperties": false
+        },
         "content_tree_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "expected_target": { "$ref": "#/$defs/expectedTarget" },
         "enforcement": { "enum": ["blocking", "observe"] },

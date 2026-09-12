@@ -1,7 +1,8 @@
 {
   "$schema": "./schema-v2.json",
   "schema_version": "2.0",
-  "fixture_source_commit_hash": "f8e59b8aabfdce77eefb531ed1639da8f057bfe4",
+  "coverage_config": "coverage-v2.json",
+  "fixture_source_tree_sha256": "b3d24bfa6f6cf8689371a571e7863f0727c039daa50a1a9dddbd128947e6ef9e",
   "quality_gates": {
     "minimum_cases": 25,
     "minimum_benign_cases": 12,
@@ -11,7 +12,9 @@
     "minimum_root_precision": 0.95,
     "minimum_root_recall": 0.95,
     "maximum_benign_high_critical_false_positive_rate": 0.05,
-    "minimum_malicious_high_critical_recall": 0.9
+    "minimum_malicious_high_critical_recall": 0.9,
+    "require_complete_rule_coverage": true,
+    "require_independent_variants": true
   },
   "scoring_context": {
     "source": {
@@ -42,6 +45,230 @@
     }
   },
   "cases": [
+    {
+      "id": "sr001-prompt-injection",
+      "path": "corpus/malicious-code/sr001-prompt-injection",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Isolates an executable prompt override instruction without executing any command."
+      },
+      "content_tree_sha256": "eaa0a5d1ef481f3896878b815d6b3879901e5a8a72540e8e4d8f52efeab2d9e4",
+      "expected_target": {
+        "raw_rules": ["SR-001"],
+        "root_issues": [{"id": "sr001-prompt-injection", "rule_ids": ["SR-001"], "effective_severity": "critical"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr001-ordinary-prompt",
+      "path": "corpus/benign-code/sr001-ordinary-prompt",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Ordinary user-facing prompt prose asks for confirmation and does not override policy."
+      },
+      "content_tree_sha256": "8daedbe71a935f1c51bc4c0589e5ec7bef799d3e6cbc9b53fb3f63ccf962290d",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr004-hardcoded-key",
+      "path": "corpus/malicious-code/sr004-hardcoded-key",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Uses a clearly synthetic hardcoded API key-shaped value for static detection only."
+      },
+      "content_tree_sha256": "3467075c1c639c4c138a013f3b76e612b1766df77d8ce2bffe852fe5818b36a6",
+      "expected_target": {
+        "raw_rules": ["SR-004"],
+        "root_issues": [{"id": "sr004-hardcoded-key", "rule_ids": ["SR-004"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr004-runtime-token",
+      "path": "corpus/benign-code/sr004-runtime-token",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Generates a process-local token at runtime rather than embedding a credential in source."
+      },
+      "content_tree_sha256": "f3ae647661d19d8aaff8a58cfa0afdd2039d98cf22c0567753fcfcef8da5acf7",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr006-excessive-permission",
+      "path": "corpus/malicious-code/sr006-excessive-permission",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A skill declares browser access even though the fixture has no browser capability."
+      },
+      "content_tree_sha256": "4f957dd549d31bbc16327ce031b217f8a0433dcf987a78b48f4089d0c9a1f83c",
+      "expected_target": {
+        "raw_rules": ["SR-006"],
+        "root_issues": [{"id": "sr006-excessive-permission", "rule_ids": ["SR-006"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": ["browser"],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr006-minimal-permissions",
+      "path": "corpus/benign-code/sr006-minimal-permissions",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The skill declares only read access to its own package files and no broad permissions."
+      },
+      "content_tree_sha256": "682f8de2c1369679b9df34159d89ac9be733f1f62e26fb2003c4b78d1b38a773",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr008-unlocked-dependency",
+      "path": "corpus/malicious-code/sr008-unlocked-dependency",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The dependency uses a wildcard version and is intentionally not reproducibly locked."
+      },
+      "content_tree_sha256": "8803f6764567dd779fb6dc6e3d3aec8409a2cc17411ebd9b077bf9f131152434",
+      "expected_target": {
+        "raw_rules": ["SR-008"],
+        "root_issues": [
+          {"id": "sr008-unlocked-version", "rule_ids": ["SR-008"], "effective_severity": "medium"},
+          {"id": "sr008-wildcard-version", "rule_ids": ["SR-008"], "effective_severity": "medium"}
+        ],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr008-locked-dependency",
+      "path": "corpus/benign-code/sr008-locked-dependency",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The dependency uses an exact version and a neutral package name with no registry override."
+      },
+      "content_tree_sha256": "d467424d6f5a005ba814277d0ad543d8b9a09ed707cb2ae5535dd964eb1a7abc",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr009-missing-commit",
+      "path": "corpus/malicious-code/sr009-missing-commit",
+      "ground_truth": "needs_context",
+      "scan_context": {"source_commit_hash": ""},
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The scan deliberately omits acquisition commit provenance while retaining a complete content hash."
+      },
+      "content_tree_sha256": "07a5c72b936b9d4647c6926cacd88a64ee2174c52cc9bc09ed4f587db0976d37",
+      "expected_target": {
+        "raw_rules": ["SR-009"],
+        "root_issues": [{"id": "sr009-missing-commit", "rule_ids": ["SR-009"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr009-complete-source",
+      "path": "corpus/benign-code/sr009-complete-source",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The same source-integrity rule receives a valid acquired commit and complete scan input."
+      },
+      "content_tree_sha256": "b80d6b8b3989a101da098efb4730507ad99773a365605b5bd5792dcd54cf96aa",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
     {
       "id": "brainstorming-local-launcher",
       "path": "corpus/benign-code/brainstorming-local-launcher",
@@ -691,6 +918,512 @@
         ],
         "forbidden_effective_severities": ["critical"],
         "capabilities": ["credential.read"],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr010-malformed-metadata",
+      "path": "corpus/malicious-code/sr010-malformed-metadata",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Malformed manifest JSON is reported as an SR-010 finding without executing or loading package code."
+      },
+      "content_tree_sha256": "67ccaf0a4c719ec577a68218ba984e2fadc46da0c8cce91619ea3fb9c436b70b",
+      "expected_target": {
+        "raw_rules": ["SR-010"],
+        "root_issues": [{"id": "sr010-malformed-metadata", "rule_ids": ["SR-010"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr010-valid-metadata",
+      "path": "corpus/benign-code/sr010-valid-metadata",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Complete manifest metadata and the required skill document form the metadata near-miss."
+      },
+      "content_tree_sha256": "2820760938ca08de4772edb69ae0ec0b2d97f94d46307bb574c2af6c5bc17782",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr011-sensitive-output",
+      "path": "corpus/malicious-code/sr011-sensitive-output",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Prints a token-shaped runtime value directly to stdout without an escaping boundary."
+      },
+      "content_tree_sha256": "c6244b996bf0c3bd367c29d4df8007b5a406d12c627abc469f6a0cdd9f7a6ab4",
+      "expected_target": {
+        "raw_rules": ["SR-011"],
+        "root_issues": [{"id": "sr011-sensitive-output", "rule_ids": ["SR-011"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr011-escaped-output",
+      "path": "corpus/benign-code/sr011-escaped-output",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "The value is passed through an escaping helper before output and does not match the unsafe sink pattern."
+      },
+      "content_tree_sha256": "75ae3f7b99bc813fc193ec09b5321e4880d5a469855a6c14677fe37d2987a79d",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr012-system-prompt-leak",
+      "path": "corpus/malicious-code/sr012-system-prompt-leak",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Reads a system prompt resource through a code-side file helper for deterministic static detection."
+      },
+      "content_tree_sha256": "ca0ed5b8e71dad12e6ae23f3ff630de554667fa04069304fe044036d7c0a78f3",
+      "expected_target": {
+        "raw_rules": ["SR-012"],
+        "root_issues": [{"id": "sr012-system-prompt-leak", "rule_ids": ["SR-012"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr012-ordinary-prompt",
+      "path": "corpus/benign-code/sr012-ordinary-prompt",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Mentions system prompt terminology in ordinary prose without a read, write, or network API."
+      },
+      "content_tree_sha256": "3618c0efbdea3a47fcede88aa9bbb1f19de1a778e2106998d34844d6d335f26c",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr013-memory-poisoning",
+      "path": "corpus/malicious-code/sr013-memory-poisoning",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Calls an explicit persistent-memory editing API, without invoking it during benchmark collection."
+      },
+      "content_tree_sha256": "70288621179c05d58a90b522261148b3aed818cdb2c5f26177251a0bc85aa729",
+      "expected_target": {
+        "raw_rules": ["SR-013"],
+        "root_issues": [{"id": "sr013-memory-poisoning", "rule_ids": ["SR-013"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr013-own-state",
+      "path": "corpus/benign-code/sr013-own-state",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Writes a package-owned state file and does not target agent memory, context, or history."
+      },
+      "content_tree_sha256": "3afee4265629142d1d085c51a32fcb74e4f6c75a9cb4a6a3a18fc248db9abc82",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr015-agent-snooping",
+      "path": "corpus/malicious-code/sr015-agent-snooping",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Reads a shared .claude configuration path rather than information owned by the fixture itself."
+      },
+      "content_tree_sha256": "28eca58a3c4574d1a84bd60a6a31876c9085ad452770fe0063ea849b81b6cf07",
+      "expected_target": {
+        "raw_rules": ["SR-015"],
+        "root_issues": [{"id": "sr015-agent-snooping", "rule_ids": ["SR-015"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr015-own-info",
+      "path": "corpus/benign-code/sr015-own-info",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Reads a package-owned state path and contains no cross-agent or shared configuration access."
+      },
+      "content_tree_sha256": "bf00dafea3cafef85e5064b3c6bda6855f694a3bb9723350b097ca38114b06f7",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr017-hidden-tool",
+      "path": "corpus/malicious-code/sr017-hidden-tool",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Registers a code-side MCP tool that is absent from the declared manifest tool list."
+      },
+      "content_tree_sha256": "8be58f3ecfba737566910f0b682999d8b44e1897bbb2d0437c828ea718c2250f",
+      "expected_target": {
+        "raw_rules": ["SR-017"],
+        "root_issues": [{"id": "sr017-hidden-tool", "rule_ids": ["SR-017"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr017-plaintext-mcp",
+      "path": "corpus/malicious-code/sr017-plaintext-mcp",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Uses a remote plaintext MCP endpoint so transport protection is tested independently."
+      },
+      "content_tree_sha256": "44239feda2936179715048cadcc5e1149c97c15be9eacfdfb82d72a00d2f7fe7",
+      "expected_target": {
+        "raw_rules": ["SR-017"],
+        "root_issues": [{"id": "sr017-plaintext-mcp", "rule_ids": ["SR-017"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr017-tool-poisoning",
+      "path": "corpus/malicious-code/sr017-tool-poisoning",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Describes deletion capability while declaring read-only filesystem permission, creating a deterministic contradiction."
+      },
+      "content_tree_sha256": "53a5c4e0626c5dd563f381a1679ade31c517731e6f9f8d7ddcce0d32b1b48230",
+      "expected_target": {
+        "raw_rules": ["SR-017"],
+        "root_issues": [{"id": "sr017-tool-poisoning", "rule_ids": ["SR-017"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr017-legal-mcp",
+      "path": "corpus/benign-code/sr017-legal-mcp",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Declares one read-only MCP tool over HTTPS with a matching filesystem permission."
+      },
+      "content_tree_sha256": "1b344add9ef2bcf9b2942b7ba73a7e168a4920b115815e4c982f35dfacededb8",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr018-hook-injection",
+      "path": "corpus/malicious-code/sr018-hook-injection",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A plugin lifecycle hook contains shell metacharacters instead of a declarative event name."
+      },
+      "content_tree_sha256": "75b3ba1343f3207d4de0463236a6c46021ddcd16a875dc650ce770f30c96a14e",
+      "expected_target": {
+        "raw_rules": ["SR-018"],
+        "root_issues": [{"id": "sr018-hook-injection", "rule_ids": ["SR-018"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr018-path-traversal",
+      "path": "corpus/malicious-code/sr018-path-traversal",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A plugin component path escapes its package directory through a parent traversal segment."
+      },
+      "content_tree_sha256": "7873109013fa6ad26efccbf08aec1de08f3b889fc10a2d06b3f5d783ee0b2da9",
+      "expected_target": {
+        "raw_rules": ["SR-018"],
+        "root_issues": [{"id": "sr018-path-traversal", "rule_ids": ["SR-018"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr018-safe-plugin",
+      "path": "corpus/benign-code/sr018-safe-plugin",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Uses a named lifecycle event and a package-local component path without shell syntax."
+      },
+      "content_tree_sha256": "d272f9fa423ab2c3205d093853dfa230cda732111c1e4a8f50923e28c98282cd",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr019-unrestricted-subagent",
+      "path": "corpus/malicious-code/sr019-unrestricted-subagent",
+      "ground_truth": "malicious",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Runs a subagent autonomously for one hundred iterations without an approval boundary."
+      },
+      "content_tree_sha256": "fadb14b971bb2528e72eabe891ad150f4642740bce54c036d1213f3df937c817",
+      "expected_target": {
+        "raw_rules": ["SR-019"],
+        "root_issues": [{"id": "sr019-unrestricted-subagent", "rule_ids": ["SR-019"], "effective_severity": "high"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["D"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr019-scoped-subagent",
+      "path": "corpus/benign-code/sr019-scoped-subagent",
+      "ground_truth": "benign_capability",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Keeps a subagent supervised, project-scoped, low-iteration, and limited to a read tool."
+      },
+      "content_tree_sha256": "c80cbef6c64afaffce35f5a110a14c36697ad316324428b0b0b2908d7554c1d2",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr020-destructive-installer",
+      "path": "corpus/malicious-code/sr020-destructive-installer",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A package bin entry contains a recursive-removal pattern token for static installer review; it is not executable."
+      },
+      "content_tree_sha256": "95baabcbd2bf0abbdb293b9122cd96b356218eda61b235631c3ae8ea02aec293",
+      "expected_target": {
+        "raw_rules": ["SR-020"],
+        "root_issues": [{"id": "sr020-destructive-installer", "rule_ids": ["SR-020"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["C"],
+        "manual_review": "required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr020-nested-monorepo",
+      "path": "corpus/needs-context/sr020-nested-monorepo",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A nested package lifecycle script tests recursive discovery without inheriting parent files."
+      },
+      "content_tree_sha256": "d6227c17abe6c37c6e80420b8f1e3432476678a20555869caf7a958fe6e8f599",
+      "expected_target": {
+        "raw_rules": ["SR-020"],
+        "root_issues": [{"id": "sr020-nested-monorepo", "rule_ids": ["SR-020"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr020-safe-installer",
+      "path": "corpus/benign-code/sr020-safe-installer",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Contains no lifecycle script and no executable bin entry, so installation has no automatic action."
+      },
+      "content_tree_sha256": "8857c091036a88bfb487bdef2f04fce0bedc4aa604c459fbadc38dab7e37655b",
+      "expected_target": {
+        "raw_rules": [],
+        "root_issues": [],
+        "forbidden_effective_severities": ["critical", "high"],
+        "capabilities": [],
+        "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr005b-aliased-exec",
+      "path": "corpus/needs-context/sr005b-aliased-exec",
+      "ground_truth": "needs_context",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "Uses an import alias and shell-enabled subprocess call to exercise the AST detector independently of regex."
+      },
+      "content_tree_sha256": "c070d8028fc905503af94e59cb7af7b4149398c1df19b66391d47e844a91d377",
+      "expected_target": {
+        "raw_rules": ["SR-005b"],
+        "root_issues": [{"id": "sr005b-aliased-exec", "rule_ids": ["SR-005b"], "kind": "context_dependent", "disposition": "needs_context", "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": ["process.spawn"],
         "security_grade": ["C"],
         "manual_review": "required"
       },

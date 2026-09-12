@@ -44,6 +44,27 @@ def run(scanner: Any) -> None:
     rule_id = "SR-010"
     meta = scanner._package_metadata
 
+    # A malformed metadata document is a deterministic structure finding, not
+    # merely an advisory.  The scanner still records parse errors separately
+    # in metadata_validation so callers can distinguish this from missing
+    # metadata and preserve the original parser message.
+    parse_errors = getattr(scanner, "_metadata_parse_errors", [])
+    for error in parse_errors if isinstance(parse_errors, list) else []:
+        if not isinstance(error, dict):
+            continue
+        filename = str(error.get("file") or "metadata")
+        message = str(error.get("message") or "invalid metadata")
+        scanner._add_finding(
+            rule_id=rule_id,
+            severity="medium",
+            category="metadata_quality",
+            title=f"元数据格式无效: {filename}",
+            description=f"元数据文件 {filename} 无法解析: {message}",
+            location={"file": filename},
+            evidence=f"metadata parse error: {message}",
+            remediation="修复 metadata JSON 或 frontmatter，使其可被安全、确定性地解析。",
+        )
+
     manifest_file = (
         "manifest.json"
         if (scanner.target_dir / "manifest.json").is_file()
@@ -65,7 +86,17 @@ def run(scanner: Any) -> None:
             missing.append("license")
         # 与「缺少有效许可证」规则对齐：包内或父目录存在 LICENSE 文件
         # → license 视为已声明，不再列入缺失字段
-        if "license" in missing and _find_license_file(scanner.target_dir) is not None:
+        policy = getattr(scanner, "policy", None)
+        allow_parent_license = (
+            True if policy is None else bool(
+                getattr(policy, "allow_parent_license_files", True)
+            )
+        )
+        max_up = 5 if allow_parent_license else 0
+        if (
+            "license" in missing
+            and _find_license_file(scanner.target_dir, max_up) is not None
+        ):
             missing.remove("license")
 
         if missing:

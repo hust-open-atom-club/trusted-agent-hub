@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 
 from scanners.risk_scanner.common import (
+    BINARY_EXTENSIONS,
     GENERAL_RULE_EXCLUDED_FILES,
     NON_TEXT_EXTENSIONS,
     infer_file_type,
@@ -206,13 +207,16 @@ def build_inventory(
                 with os.scandir(current_dir) as entries:
                     for entry in entries:
                         try:
-                            if entry.name == ".git" or entry.is_symlink():
+                            relative_path = (
+                                relative_root / entry.name
+                            ).as_posix() if relative_root != Path(".") else entry.name
+                            if (
+                                entry.name == ".git"
+                                or entry.is_symlink()
+                            ):
                                 continue
                             if entry.is_dir(follow_symlinks=False):
                                 add_violation("max_depth")
-                                relative_path = (
-                                    relative_root / entry.name
-                                ).as_posix() if relative_root != Path(".") else entry.name
                                 add_skipped("max_depth_exceeded", relative_path)
                         except OSError:
                             continue
@@ -224,7 +228,13 @@ def build_inventory(
             with os.scandir(current_dir) as entries:
                 for entry in entries:
                     try:
-                        if entry.name == ".git" or entry.is_symlink():
+                        relative_path = (
+                            relative_root / entry.name
+                        ).as_posix() if relative_root != Path(".") else entry.name
+                        if (
+                            entry.name == ".git"
+                            or entry.is_symlink()
+                        ):
                             continue
                         if entry.is_dir(follow_symlinks=False):
                             child_root = (
@@ -302,7 +312,7 @@ def build_inventory(
             reason = "file_too_large"
             add_violation("max_file_bytes")
         elif ext in NON_TEXT_EXTENSIONS:
-            reason = "binary" if ext in {".exe", ".dll", ".so", ".bin", ".dylib"} else "known_non_text"
+            reason = "binary" if ext in BINARY_EXTENSIONS else "known_non_text"
         elif total_budget + size > policy.max_total_bytes:
             reason = "total_budget_exceeded"
             add_violation("max_total_bytes")

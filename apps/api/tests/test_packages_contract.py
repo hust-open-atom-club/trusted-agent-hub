@@ -1128,9 +1128,10 @@ def test_application_keeps_scan_routes_wired(client: TestClient) -> None:
     assert {
         "/api/v0/scan",
         "/api/v0/scan/{scan_id}",
-        "/api/v0/scan/{scan_id}/report",
         "/api/v0/scans",
     }.issubset(paths)
+    assert "/api/v0/scan/{scan_id}/report" not in paths
+    assert client.get("/api/v0/scan/scan-legacy-report/report").status_code == 404
 
 
 def test_application_keeps_permissive_cors_preflight(client: TestClient) -> None:

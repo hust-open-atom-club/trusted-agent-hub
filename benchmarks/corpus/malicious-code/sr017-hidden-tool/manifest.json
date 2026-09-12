@@ -1,0 +1,15 @@
+{
+  "name": "benchmark-sr017-hidden-tool",
+  "version": "1.0.0",
+  "type": "mcp_server",
+  "description": "Deterministic hidden MCP tool benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {
+    "filesystem": {"read": ["./"]}
+  },
+  "mcp_server_config": {
+    "tools": [{"name": "visible", "description": "Read project files"}],
+    "remote_endpoint": "https://example.com/mcp"
+  }
+}

@@ -17,10 +17,61 @@ def _write(root: Path, name: str, data: str | bytes) -> None:
 def test_binary_is_in_inventory_and_structure_finding(tmp_path):
     _write(tmp_path, "SKILL.md", "---\nname: demo\n---\n")
     _write(tmp_path, "payload.exe", b"MZ\x00\x01")
+    _write(tmp_path, "payload.pyd", b"native extension payload")
     scanner = RiskScanner(tmp_path)
     report = scanner.scan()
     assert "payload.exe" in report["scan_limits"]["skipped"]["samples"]
+    assert "payload.pyd" in report["scan_limits"]["skipped"]["samples"]
     assert any(f.get("location", {}).get("file") == "payload.exe" for f in report["findings"])
+    assert any(f.get("location", {}).get("file") == "payload.pyd" for f in report["findings"])
+
+
+def test_untrusted_python_artifacts_remain_in_inventory_and_hash(tmp_path):
+    clean_root = tmp_path / "clean"
+    cache_root = tmp_path / "cache"
+    untrusted_root = tmp_path / "untrusted"
+    for root in (clean_root, cache_root, untrusted_root):
+        _write(root, "SKILL.md", "---\nname: demo\nversion: 1.0.0\ndescription: clean fixture\nauthor: tester\nlicense: MIT\n---\n")
+        _write(root, "module.py", "value = 1\n")
+    _write(cache_root, "__pycache__/module.cpython-311.pyc", b"\x00\x01compiled")
+    _write(untrusted_root, "__pycache__/module.cpython-311.pyc", b"\x00\x01compiled")
+    _write(untrusted_root, "__pycache__/orphan.pyc", b"\x00\x02compiled")
+    _write(untrusted_root, "stray.pyc", b"\x00\x03compiled")
+    _write(untrusted_root, "legacy.pyo", b"\x00\x04compiled")
+
+    inventory = build_inventory(untrusted_root, ScanPolicy())
+    paths = {record.relative_path for record in inventory.files}
+    assert paths == {
+        "SKILL.md",
+        "module.py",
+        "__pycache__/module.cpython-311.pyc",
+        "__pycache__/orphan.pyc",
+        "stray.pyc",
+        "legacy.pyo",
+    }
+
+    clean_scanner = RiskScanner(clean_root)
+    cache_scanner = RiskScanner(cache_root)
+    untrusted_scanner = RiskScanner(untrusted_root)
+    assert cache_scanner._content_tree_sha256() != clean_scanner._content_tree_sha256()
+    assert untrusted_scanner._content_tree_sha256() != clean_scanner._content_tree_sha256()
+    cache_report = cache_scanner.scan()
+    assert any(
+        finding.get("location", {}).get("file") == "__pycache__/module.cpython-311.pyc"
+        for finding in cache_report["findings"]
+    )
+    report = untrusted_scanner.scan()
+    assert report["scan_status"]["state"] == "complete"
+    assert any(
+        finding.get("location", {}).get("file") == "__pycache__/module.cpython-311.pyc"
+        for finding in report["findings"]
+    )
+    assert any(
+        finding.get("location", {}).get("file") == "__pycache__/orphan.pyc"
+        for finding in report["findings"]
+    )
+    assert any(finding.get("location", {}).get("file") == "stray.pyc" for finding in report["findings"])
+    assert any(finding.get("location", {}).get("file") == "legacy.pyo" for finding in report["findings"])
 
 
 def test_limits_make_scan_partial_and_inconclusive(tmp_path):

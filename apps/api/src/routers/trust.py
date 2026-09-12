@@ -3,7 +3,6 @@
 端点:
     POST /scan              — 提交扫描任务（URL 或文件上传）
     GET  /scan/{scan_id}    — 查询扫描状态
-    GET  /scan/{scan_id}/report — 获取完整扫描报告
 """
 
 from __future__ import annotations
@@ -3189,69 +3188,6 @@ def get_scan_status(
         "llm_review": info.get("llm_review"),
         "error": info.get("error"),
     }
-
-
-# ---------------------------------------------------------------------------
-# GET /scan/{scan_id}/report
-# ---------------------------------------------------------------------------
-
-
-@router.get("/scan/{scan_id}/report")
-def get_scan_report(
-    scan_id: str,
-    _user: CurrentUser = Depends(require_role("submitter")),
-) -> Dict[str, Any]:
-    """获取完整的扫描报告 JSON。
-
-    仅在扫描完成 (status=complete) 时返回完整报告。
-    在扫描进行中时返回 202 Accepted 及当前状态。
-    扫描失败时返回 422 Unprocessable Entity 及错误信息。
-    """
-    _cleanup_expired_scans()
-    info = _scans.get(scan_id)
-    if not info:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=_scan_not_found_detail(scan_id),
-        )
-
-    verify_resource_access(_user, info.get("user_id", ""))
-
-    if info["status"] == "complete":
-        full_report = info.get("full_report")
-        if full_report:
-            # 剔除内部字段（本地代码目录路径），不对外暴露
-            report = dict(full_report)
-            report.pop("local_source_dir", None)
-            report.pop("file_contents", None)
-            report.pop("source_snapshot_sha256", None)
-            if isinstance(report.get("scan_report"), dict):
-                report["scan_report"] = dict(report["scan_report"])
-                report["scan_report"].pop("file_contents", None)
-            return redact_report(report)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Report data not found in memory.",
-            )
-
-    elif info["status"] == "error":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "scan_id": scan_id,
-                "status": "error",
-                "error": info.get("error", "Unknown error"),
-            },
-        )
-
-    else:
-        # 仍在进行中
-        return {
-            "scan_id": scan_id,
-            "status": info["status"],
-            "message": "Scan is still in progress. Poll /scan/{scan_id} for status updates.",
-        }
 
 
 # ---------------------------------------------------------------------------

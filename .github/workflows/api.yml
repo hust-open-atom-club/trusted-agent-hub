@@ -89,7 +89,10 @@ jobs:
       - name: Run full test suite
         run: pytest tests/ -q
       - name: Run scanner benchmark regression check
-        run: python ../../benchmarks/runner.py --config ../../benchmarks/labels-v2.json --check
+        run: |
+          python ../../benchmarks/runner.py --config ../../benchmarks/labels-v2.json --check --output "$RUNNER_TEMP/benchmark-1.json"
+          python ../../benchmarks/runner.py --config ../../benchmarks/labels-v2.json --check --output "$RUNNER_TEMP/benchmark-2.json"
+          python -c "import json, os, pathlib; a=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'benchmark-1.json').read_text()); b=json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'benchmark-2.json').read_text()); assert a.get('security_fingerprint') == b.get('security_fingerprint'), f'security fingerprint mismatch: {a.get(\"security_fingerprint\")} != {b.get(\"security_fingerprint\")}'"
       - name: Verify periodic refresh-token cleanup
         shell: bash
         working-directory: ${{ github.workspace }}

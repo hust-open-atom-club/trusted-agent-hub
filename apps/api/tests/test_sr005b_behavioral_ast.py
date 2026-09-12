@@ -16,7 +16,7 @@ class TestSR005bBehavioralAST:
         behavioral_ast.run(s)
         assert len(s.findings) == 1
         f = s.findings[0]
-        assert f["rule_id"] == "SR-005"
+        assert f["rule_id"] == "SR-005b"
         assert f["severity"] == "high"
         assert f["category"] == "remote_code_execution"
         assert "别名" in f["title"]
@@ -28,7 +28,7 @@ class TestSR005bBehavioralAST:
         })
         behavioral_ast.run(s)
         assert len(s.findings) == 1
-        assert s.findings[0]["rule_id"] == "SR-005"
+        assert s.findings[0]["rule_id"] == "SR-005b"
         assert "cmd.system" in s.findings[0]["title"]
 
     def test_reflective_getattr_call(self):

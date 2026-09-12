@@ -1,0 +1,2 @@
+Static-only evidence token: fs.rmSync(./cache, { recursive: true, force: true })
+This file is never executed; it exists only to exercise installer pattern matching.

@@ -34,9 +34,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scanners.risk_scanner.scanner import RiskScanner  # noqa: E402
+from scanners.risk_scanner.rule_runner import RULE_SPECS  # noqa: E402
+from scanners.risk_scanner.policy import ScanPolicy  # noqa: E402
+from scanners.risk_scanner.common import (  # noqa: E402
+    generated_artifact_source_path,
+    is_generated_artifact_path,
+)
 
 
 SEVERITIES = ("critical", "high", "medium", "low", "info")
+LEGACY_RULE_ALIASES = {"SR-005b": "SR-005"}
 SEVERITY_RANK = {severity: len(SEVERITIES) - index for index, severity in enumerate(SEVERITIES)}
 GROUND_TRUTH_BENIGN = frozenset({"benign", "benign_capability"})
 
@@ -46,8 +53,13 @@ class BenchmarkConfigError(ValueError):
 
 
 class _OfflineOSVResult:
-    vulnerability_ids: list[str] = []
-    error: str | None = None
+    def __init__(
+        self,
+        vulnerability_ids: list[str] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.vulnerability_ids = vulnerability_ids or []
+        self.error = error
 
 
 class _OfflineOSVClient:
@@ -60,6 +72,9 @@ class _OfflineOSVClient:
         self.limit_reached = False
 
     def query(self, _dependency: Any) -> _OfflineOSVResult:
+        if self.queried >= self.max_queries:
+            self.limit_reached = True
+            return _OfflineOSVResult([], "query_limit_exceeded")
         self.queried += 1
         return _OfflineOSVResult()
 
@@ -89,6 +104,306 @@ def _with_rates(metric: dict[str, int]) -> dict[str, float | int]:
         **metric,
         "precision": round(tp / (tp + fp), 4) if tp + fp else 1.0,
         "recall": round(tp / (tp + fn), 4) if tp + fn else 1.0,
+    }
+
+
+def _rule_family_id(rule_id: str) -> str:
+    """Return the numeric SR family for a registered detector variant."""
+    return rule_id[:-1] if rule_id.endswith("b") else rule_id
+
+
+def _case_source_commit_hash(case: dict[str, Any], default: str) -> str:
+    """Allow a labeled case to model missing acquisition provenance."""
+    context = case.get("scan_context") or {}
+    if isinstance(context, dict) and "source_commit_hash" in context:
+        return str(context["source_commit_hash"])
+    return default
+
+
+def _fixture_source_reference(config: dict[str, Any]) -> tuple[str, str]:
+    """Return the stable fixture identity, preferring content over Git history."""
+    tree_hash = config.get("fixture_source_tree_sha256")
+    if tree_hash:
+        return "tree", str(tree_hash)
+    commit_hash = config.get("fixture_source_commit_hash")
+    if commit_hash is None:
+        commit_hash = config["scanner_source_commit_hash"]
+    return "commit", str(commit_hash)
+
+
+def _default_benchmark_source_commit_hash(
+    reference_kind: str,
+    reference: str,
+) -> str:
+    """Provide deterministic acquisition context for fixture-only scans.
+
+    The scanner's source-integrity rule models an acquired commit, while the
+    benchmark corpus is intentionally identified by a content hash.  A
+    content-derived, commit-shaped value keeps ordinary fixtures in the
+    complete-source context without pretending that a branch-local commit is
+    the corpus identity.  Cases that model missing provenance override this
+    value through ``scan_context.source_commit_hash``.
+    """
+    if reference_kind == "commit":
+        return reference
+    return reference[:40]
+
+
+def _coverage_config_path(config: dict[str, Any], config_path: Path) -> Path:
+    reference = str(config.get("coverage_config") or "coverage-v2.json")
+    config_root = config_path.parent.resolve()
+    target = (config_root / reference).resolve()
+    try:
+        target.relative_to(config_root)
+    except ValueError as exc:
+        raise BenchmarkConfigError(
+            f"coverage config path escapes benchmark directory: {reference}"
+        ) from exc
+    return target
+
+
+def _load_coverage_config(
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    required: bool,
+) -> dict[str, Any] | None:
+    """Load and schema-validate the optional detector coverage map."""
+    coverage_path = _coverage_config_path(config, config_path)
+    if not coverage_path.is_file():
+        if required:
+            raise BenchmarkConfigError(
+                f"required rule coverage config is missing: {coverage_path.name}"
+            )
+        return None
+
+    coverage = _read_config(coverage_path)
+    schema_path = coverage_path.with_name("coverage-schema-v2.json")
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BenchmarkConfigError(f"cannot load coverage schema: {exc}") from exc
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError as exc:  # pragma: no cover - CI and dev dependencies include it
+        raise BenchmarkConfigError("jsonschema is required to validate rule coverage") from exc
+
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(coverage),
+        key=lambda item: list(item.absolute_path),
+    )
+    if errors:
+        rendered: list[str] = []
+        for error in errors[:20]:
+            location = ".".join(str(part) for part in error.absolute_path) or "<root>"
+            rendered.append(f"{location}: {error.message}")
+        if len(errors) > 20:
+            rendered.append(f"... and {len(errors) - 20} more error(s)")
+        raise BenchmarkConfigError(
+            "invalid rule coverage:\n- " + "\n- ".join(rendered)
+        )
+    return coverage
+
+
+def _validate_coverage_config(
+    coverage: dict[str, Any],
+    labels: dict[str, Any],
+) -> None:
+    """Validate coverage references against labels and the live rule registry."""
+    registered = {spec.rule_id for spec in RULE_SPECS}
+    configured_rules = coverage.get("rules") or {}
+    unknown_rules = sorted(set(configured_rules) - registered)
+    if unknown_rules:
+        raise BenchmarkConfigError(
+            "coverage contains unregistered rule(s): " + ", ".join(unknown_rules)
+        )
+
+    cases = {
+        str(case["id"]): case
+        for case in labels.get("cases", [])
+        if isinstance(case, dict) and "id" in case
+    }
+    if len(cases) != len(labels.get("cases", [])):
+        raise BenchmarkConfigError("coverage validation requires unique labeled case ids")
+
+    def case_ids(rule_id: str, entry: dict[str, Any], field: str) -> list[str]:
+        values = entry.get(field, [])
+        if not isinstance(values, list):
+            raise BenchmarkConfigError(f"coverage {rule_id}.{field} must be an array")
+        if len(values) != len(set(map(str, values))):
+            raise BenchmarkConfigError(f"coverage {rule_id}.{field} contains duplicate cases")
+        missing = sorted(set(map(str, values)) - set(cases))
+        if missing:
+            raise BenchmarkConfigError(
+                f"coverage {rule_id}.{field} references unknown case(s): {', '.join(missing)}"
+            )
+        return [str(value) for value in values]
+
+    for rule_id, entry in configured_rules.items():
+        positive = case_ids(rule_id, entry, "positive_cases")
+        negative = case_ids(rule_id, entry, "negative_cases")
+        context = case_ids(rule_id, entry, "context_cases")
+        if set(positive) & set(negative):
+            raise BenchmarkConfigError(
+                f"coverage {rule_id} uses the same case as positive and negative"
+            )
+        if not set(context) <= set(positive):
+            raise BenchmarkConfigError(
+                f"coverage {rule_id}.context_cases must be a subset of positive_cases"
+            )
+
+        for case_id in positive:
+            target = cases[case_id]["expected_target"]
+            expected = set(map(str, target.get("raw_rules", [])))
+            if rule_id not in expected:
+                raise BenchmarkConfigError(
+                    f"coverage {rule_id} positive case {case_id} does not expect the rule"
+                )
+        for case_id in negative:
+            case = cases[case_id]
+            if case["ground_truth"] not in GROUND_TRUTH_BENIGN:
+                raise BenchmarkConfigError(
+                    f"coverage {rule_id} negative case {case_id} must be benign"
+                )
+            expected = set(map(str, case["expected_target"].get("raw_rules", [])))
+            if rule_id in expected:
+                raise BenchmarkConfigError(
+                    f"coverage {rule_id} negative case {case_id} expects the rule"
+                )
+
+        for case_id in context:
+            case = cases[case_id]
+            roots = case["expected_target"].get("root_issues", [])
+            is_context = case["ground_truth"] == "needs_context" or any(
+                root.get("kind") == "context_dependent"
+                or root.get("disposition") == "needs_context"
+                for root in roots
+                if isinstance(root, dict)
+            )
+            if not is_context:
+                raise BenchmarkConfigError(
+                    f"coverage {rule_id} context case {case_id} is not context-dependent"
+                )
+
+    for variant in coverage.get("independent_variants", []):
+        rule_id = str(variant["rule_id"])
+        if rule_id not in registered:
+            raise BenchmarkConfigError(
+                f"independent variant uses unregistered rule: {rule_id}"
+            )
+        entry = configured_rules.get(rule_id) or {}
+        positive = set(map(str, entry.get("positive_cases", [])))
+        variant_cases = set(map(str, variant.get("positive_cases", [])))
+        if not variant_cases <= positive:
+            raise BenchmarkConfigError(
+                f"independent variant cases for {rule_id} must be positive cases"
+            )
+        forbidden = set(map(str, variant.get("forbidden_rules", [])))
+        if rule_id in forbidden:
+            raise BenchmarkConfigError(
+                f"independent variant for {rule_id} cannot forbid itself"
+            )
+        for case_id in variant_cases:
+            expected = set(map(str, cases[case_id]["expected_target"].get("raw_rules", [])))
+            if rule_id not in expected or expected & forbidden:
+                raise BenchmarkConfigError(
+                    f"independent variant case {case_id} is not exclusive for {rule_id}"
+                )
+
+    if (labels.get("quality_gates") or {}).get("require_independent_variants"):
+        configured_variants = {
+            str(variant["rule_id"])
+            for variant in coverage.get("independent_variants", [])
+        }
+        required_variants = {
+            spec.rule_id for spec in RULE_SPECS if spec.rule_id.endswith("b")
+        }
+        missing_variants = sorted(required_variants - configured_variants)
+        if missing_variants:
+            raise BenchmarkConfigError(
+                "missing independent detector variant(s): "
+                + ", ".join(missing_variants)
+            )
+
+
+def _compute_rule_coverage(
+    coverage: dict[str, Any] | None,
+    evaluations: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Calculate per-detector coverage using only explicitly scoped cases."""
+    if coverage is None:
+        return None
+
+    configured_rules = coverage.get("rules") or {}
+    rows: list[dict[str, Any]] = []
+    for spec in RULE_SPECS:
+        rule_id = spec.rule_id
+        entry = configured_rules.get(rule_id) or {}
+        positive = [str(value) for value in entry.get("positive_cases", [])]
+        negative = [str(value) for value in entry.get("negative_cases", [])]
+        context = [str(value) for value in entry.get("context_cases", [])]
+        true_positive = sum(
+            rule_id in evaluations[case_id]["actual_rules"] for case_id in positive
+        )
+        false_negative = len(positive) - true_positive
+        false_positive = sum(
+            rule_id in evaluations[case_id]["actual_rules"] for case_id in negative
+        )
+        status = (
+            "untested" if not positive
+            else "incomplete" if not negative
+            else "complete"
+        )
+        rows.append({
+            "rule_id": rule_id,
+            "family_id": _rule_family_id(rule_id),
+            "positive_case_count": len(positive),
+            "negative_case_count": len(negative),
+            "context_case_count": len(context),
+            "true_positive": true_positive,
+            "false_positive": false_positive,
+            "false_negative": false_negative,
+            "precision": (
+                round(true_positive / (true_positive + false_positive), 4)
+                if true_positive + false_positive else None
+            ),
+            "recall": (
+                round(true_positive / (true_positive + false_negative), 4)
+                if true_positive + false_negative else None
+            ),
+            "coverage_status": status,
+        })
+
+    independent_results: list[dict[str, Any]] = []
+    for variant in coverage.get("independent_variants", []):
+        rule_id = str(variant["rule_id"])
+        forbidden = set(map(str, variant.get("forbidden_rules", [])))
+        case_results = []
+        for case_id in map(str, variant.get("positive_cases", [])):
+            actual = evaluations[case_id]["actual_rules"]
+            passed = rule_id in actual and not (actual & forbidden)
+            case_results.append({"case_id": case_id, "passed": passed})
+        independent_results.append({
+            "rule_id": rule_id,
+            "cases": case_results,
+            "status": "complete" if case_results and all(
+                item["passed"] for item in case_results
+            ) else "failed",
+        })
+
+    untested = [row["rule_id"] for row in rows if row["coverage_status"] == "untested"]
+    incomplete = [row["rule_id"] for row in rows if row["coverage_status"] == "incomplete"]
+    independent_failed = [
+        item["rule_id"] for item in independent_results if item["status"] != "complete"
+    ]
+    return {
+        "registry_count": len(RULE_SPECS),
+        "family_count": len({_rule_family_id(spec.rule_id) for spec in RULE_SPECS}),
+        "rules": rows,
+        "untested_rules": untested,
+        "incomplete_rules": incomplete,
+        "independent_variants": independent_results,
+        "status": "complete" if not untested and not incomplete and not independent_failed else "incomplete",
     }
 
 
@@ -176,6 +491,94 @@ def _benchmark_check_failures(result: dict[str, Any]) -> list[str]:
                     f"{label} outside quality gate "
                     f"(actual={actual:.4f}, {direction}={threshold:.4f})"
                 )
+
+        rule_coverage = (result.get("coverage") or {}).get("rule_coverage")
+        coverage_gate_enabled = bool(
+            gates.get("require_complete_rule_coverage")
+            or gates.get("require_independent_variants")
+        )
+        if coverage_gate_enabled:
+            if not isinstance(rule_coverage, dict):
+                failures.append("missing rule coverage report")
+            elif gates.get("require_complete_rule_coverage"):
+                untested = list(rule_coverage.get("untested_rules") or [])
+                incomplete = list(rule_coverage.get("incomplete_rules") or [])
+                rows = [
+                    row for row in rule_coverage.get("rules", [])
+                    if isinstance(row, dict)
+                ]
+                covered_rule_ids = {
+                    str(row.get("rule_id")) for row in rows if row.get("rule_id")
+                }
+                missing_rows = sorted(
+                    {spec.rule_id for spec in RULE_SPECS} - covered_rule_ids
+                )
+                if missing_rows:
+                    failures.append(
+                        "missing rule coverage rows: " + ", ".join(missing_rows)
+                    )
+                row_untested = {
+                    str(row["rule_id"])
+                    for row in rows
+                    if row.get("coverage_status") == "untested" and row.get("rule_id")
+                }
+                row_incomplete = {
+                    str(row["rule_id"])
+                    for row in rows
+                    if row.get("coverage_status") == "incomplete" and row.get("rule_id")
+                }
+                untested = sorted(set(map(str, untested)) | row_untested)
+                incomplete = sorted(set(map(str, incomplete)) | row_incomplete)
+                if untested:
+                    failures.append("untested rules: " + ", ".join(map(str, untested)))
+                if incomplete:
+                    failures.append("incomplete rules: " + ", ".join(map(str, incomplete)))
+                coverage_status = str(rule_coverage.get("status") or "")
+                if coverage_status and coverage_status != "complete":
+                    failures.append(f"rule coverage status is {coverage_status}")
+                mismatches = [
+                    f"{row.get('rule_id')} (fp={int(row.get('false_positive', 0))}, "
+                    f"fn={int(row.get('false_negative', 0))})"
+                    for row in rows
+                    if int(row.get("false_positive", 0))
+                    or int(row.get("false_negative", 0))
+                ]
+                if mismatches:
+                    failures.append(
+                        "rule coverage mismatches: " + ", ".join(mismatches)
+                    )
+
+        if (
+            coverage_gate_enabled
+            and isinstance(rule_coverage, dict)
+            and gates.get("require_independent_variants")
+        ):
+            variants = rule_coverage.get("independent_variants") or []
+            configured_variants = {
+                str(item.get("rule_id"))
+                for item in variants
+                if isinstance(item, dict) and item.get("rule_id")
+            }
+            required_variants = {
+                spec.rule_id for spec in RULE_SPECS if spec.rule_id.endswith("b")
+            }
+            missing_variants = sorted(required_variants - configured_variants)
+            if missing_variants:
+                failures.append(
+                    "missing independent detector variants: "
+                    + ", ".join(missing_variants)
+                )
+            failed_variants = [
+                str(item.get("rule_id"))
+                for item in variants
+                if isinstance(item, dict)
+                if item.get("status") != "complete"
+            ]
+            if failed_variants:
+                failures.append(
+                    "independent detector variants failed: "
+                    + ", ".join(failed_variants)
+                )
     else:
         overall = result.get("overall") or {}
         if int(overall.get("fp", 0)):
@@ -241,16 +644,37 @@ def _validate_v2_config(config: dict[str, Any], config_path: Path) -> None:
             raise BenchmarkConfigError(
                 f"case {case['id']} path escapes benchmark directory: {case['path']}"
             ) from exc
+        case_context = case.get("scan_context") or {}
+        if isinstance(case_context, dict) and "source_commit_hash" in case_context:
+            case_commit = str(case_context["source_commit_hash"])
+            if case_commit and not len(case_commit) == 40:
+                raise BenchmarkConfigError(
+                    f"case {case['id']} scan_context.source_commit_hash must be empty or a 40-character hash"
+                )
 
-    fixture_commit = config.get("fixture_source_commit_hash")
-    if fixture_commit is None:
-        fixture_commit = config["scanner_source_commit_hash"]
-    _verify_fixture_revision(str(fixture_commit), config_root)
+    _fixture_reference_kind, fixture_reference = _fixture_source_reference(config)
+    _verify_fixture_revision(fixture_reference, config_root)
+
+    gates = config.get("quality_gates") or {}
+    require_coverage = bool(
+        gates.get("require_complete_rule_coverage")
+        or gates.get("require_independent_variants")
+    )
+    coverage = _load_coverage_config(config, config_path, required=require_coverage)
+    if coverage is not None:
+        _validate_coverage_config(coverage, config)
 
 
 def _tree_fingerprint(entries: list[tuple[str, bytes]]) -> str:
     digest = hashlib.sha256()
+    entry_names = {name for name, _ in entries}
     for name, content in sorted(entries):
+        source_name = generated_artifact_source_path(name)
+        if is_generated_artifact_path(
+            name,
+            source_exists=source_name in entry_names if source_name else False,
+        ):
+            continue
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
         digest.update(str(len(content)).encode("ascii"))
@@ -259,16 +683,60 @@ def _tree_fingerprint(entries: list[tuple[str, bytes]]) -> str:
     return digest.hexdigest()
 
 
-def _verify_fixture_revision(commit_hash: str, benchmark_root: Path) -> None:
+def _fixture_tree_entries(root: Path) -> list[tuple[str, bytes]]:
+    """Represent regular files and symlinks without following links."""
+    root = root.resolve()
+
+    def normalize_bytes(payload: bytes) -> bytes:
+        # Git checkouts may materialize committed text as CRLF on Windows.
+        # Provenance identifies fixture content, not the checkout EOL policy.
+        return payload.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+    entries: list[tuple[str, bytes]] = []
+    for path in root.rglob("*"):
+        relative_to_root = path.relative_to(root).as_posix()
+        source_relative = generated_artifact_source_path(relative_to_root)
+        source_exists = False
+        if source_relative:
+            source_path = root / source_relative
+            try:
+                source_exists = source_path.is_file() and not source_path.is_symlink()
+            except OSError:
+                source_exists = False
+        if is_generated_artifact_path(
+            relative_to_root,
+            source_exists=source_exists,
+        ):
+            continue
+        name = path.relative_to(ROOT).as_posix()
+        if path.is_symlink():
+            try:
+                target = str(path.readlink()).replace("\\", "/")
+            except OSError:
+                target = "<unreadable>"
+            entries.append((name, b"symlink\0" + target.encode("utf-8")))
+        elif path.is_file():
+            entries.append((name, b"file\0" + normalize_bytes(path.read_bytes())))
+    return entries
+
+
+def _verify_fixture_tree_hash(tree_hash: str, benchmark_root: Path) -> None:
     corpus_root = benchmark_root / "corpus"
-    current_entries = [
-        (
-            path.relative_to(ROOT).as_posix(),
-            path.read_bytes(),
+    if not corpus_root.is_dir():
+        raise BenchmarkConfigError(
+            "fixture source tree hash cannot be verified: benchmarks/corpus is missing"
         )
-        for path in corpus_root.rglob("*")
-        if path.is_file()
-    ]
+    actual = _tree_fingerprint(_fixture_tree_entries(corpus_root))
+    if actual != tree_hash:
+        raise BenchmarkConfigError(
+            "fixture source tree hash does not match benchmarks/corpus "
+            f"(expected={tree_hash}, actual={actual})"
+        )
+
+
+def _verify_fixture_commit(commit_hash: str, benchmark_root: Path) -> None:
+    corpus_root = benchmark_root / "corpus"
+    current_entries = _fixture_tree_entries(corpus_root)
     try:
         archive = subprocess.run(
             ["git", "archive", "--format=tar", commit_hash, "benchmarks/corpus"],
@@ -289,12 +757,33 @@ def _verify_fixture_revision(commit_hash: str, benchmark_root: Path) -> None:
     committed_entries: list[tuple[str, bytes]] = []
     try:
         with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as bundle:
-            for member in bundle.getmembers():
+            members = bundle.getmembers()
+            archive_file_names = {
+                member.name
+                for member in members
+                if member.isfile()
+            }
+            for member in members:
+                source_name = generated_artifact_source_path(member.name)
+                if is_generated_artifact_path(
+                    member.name,
+                    source_exists=source_name in archive_file_names if source_name else False,
+                ):
+                    continue
+                if member.issym() or member.islnk():
+                    committed_entries.append(
+                        (
+                            member.name,
+                            b"symlink\0" + member.linkname.replace("\\", "/").encode("utf-8"),
+                        )
+                    )
+                    continue
                 if not member.isfile():
                     continue
                 source = bundle.extractfile(member)
                 if source is not None:
-                    committed_entries.append((member.name, source.read()))
+                    payload = source.read().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                    committed_entries.append((member.name, b"file\0" + payload))
     except tarfile.TarError as exc:
         raise BenchmarkConfigError(
             f"fixture source commit {commit_hash} produced an invalid archive"
@@ -304,6 +793,14 @@ def _verify_fixture_revision(commit_hash: str, benchmark_root: Path) -> None:
         raise BenchmarkConfigError(
             f"fixture source commit {commit_hash} does not match benchmarks/corpus"
         )
+
+
+def _verify_fixture_revision(reference: str, benchmark_root: Path) -> None:
+    """Verify a content-tree identity or a legacy Git commit reference."""
+    if len(reference) == 64 and all(char in "0123456789abcdef" for char in reference):
+        _verify_fixture_tree_hash(reference, benchmark_root)
+        return
+    _verify_fixture_commit(reference, benchmark_root)
 
 
 def _scanner_implementation_fingerprint() -> str:
@@ -316,8 +813,17 @@ def _scanner_implementation_fingerprint() -> str:
     ])
 
 
-def _scan_target(target: Path, source_commit_hash: str = "") -> tuple[Any, dict[str, Any], float, int]:
-    scanner = RiskScanner(target, source_commit_hash=source_commit_hash)
+def _scan_target(
+    target: Path,
+    source_commit_hash: str = "",
+    *,
+    policy: ScanPolicy | None = None,
+) -> tuple[Any, dict[str, Any], float, int]:
+    scanner = RiskScanner(
+        target,
+        source_commit_hash=source_commit_hash,
+        policy=policy,
+    )
     scanner.osv_client = _OfflineOSVClient(max_queries=scanner.policy.max_osv_queries)
     tracemalloc.start()
     started = time.perf_counter()
@@ -357,9 +863,13 @@ def _run_v1(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
         for finding in report.get("findings", []):
             detector_ids = finding.get("detector_ids")
             if isinstance(detector_ids, list) and detector_ids:
-                actual.update(str(value) for value in detector_ids)
+                actual.update(
+                    LEGACY_RULE_ALIASES.get(str(value), str(value))
+                    for value in detector_ids
+                )
             elif finding.get("rule_id"):
-                actual.add(str(finding["rule_id"]))
+                rule_id = str(finding["rule_id"])
+                actual.add(LEGACY_RULE_ALIASES.get(rule_id, rule_id))
         _evaluate_case(expected, actual, metrics)
         state = (report.get("scan_status") or {}).get("state", "failed")
         incomplete += state != "complete"
@@ -551,8 +1061,15 @@ def _content_tree_hash(scanner: Any) -> str:
     however, must describe the same fixture on Windows and Linux checkouts.
     """
     digest = hashlib.sha256()
+    inventory_paths = {record.relative_path for record in scanner.inventory.files}
     for record in sorted(scanner.inventory.files, key=lambda item: item.relative_path):
         path = record.absolute_path
+        source_path = generated_artifact_source_path(record.relative_path)
+        if is_generated_artifact_path(
+            record.relative_path,
+            source_exists=source_path in inventory_paths if source_path else False,
+        ):
+            continue
         if path.is_symlink() or not path.is_file():
             continue
         payload = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
@@ -772,9 +1289,10 @@ def _security_fingerprint(result: dict[str, Any]) -> str:
 
 def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     _validate_v2_config(config, config_path)
-    source_commit_hash = str(
-        config.get("fixture_source_commit_hash")
-        or config["scanner_source_commit_hash"]
+    fixture_reference_kind, fixture_reference = _fixture_source_reference(config)
+    source_commit_hash = _default_benchmark_source_commit_hash(
+        fixture_reference_kind,
+        fixture_reference,
     )
     scoring_context = config["scoring_context"]
     raw_metrics: dict[str, dict[str, int]] = {}
@@ -793,12 +1311,30 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     case_durations: dict[str, float] = {}
     peak_memory = 0
     case_results: list[dict[str, Any]] = []
+    evaluations_by_case: dict[str, dict[str, Any]] = {}
+    coverage_config = _load_coverage_config(
+        config,
+        config_path,
+        required=bool(
+            (config.get("quality_gates") or {}).get(
+                "require_complete_rule_coverage", False
+            )
+            or (config.get("quality_gates") or {}).get(
+                "require_independent_variants", False
+            )
+        ),
+    )
 
     for case in config["cases"]:
         target = (config_path.parent / str(case["path"])).resolve()
-        scanner, report, elapsed_ms, peak = _scan_target(target, source_commit_hash)
+        case_source_commit_hash = _case_source_commit_hash(case, source_commit_hash)
+        scanner, report, elapsed_ms, peak = _scan_target(
+            target,
+            case_source_commit_hash,
+            policy=ScanPolicy(allow_parent_license_files=False),
+        )
         grade, manual_review = _score_case(
-            scanner, report, scoring_context, source_commit_hash
+            scanner, report, scoring_context, case_source_commit_hash
         )
         content_hash = _content_tree_hash(scanner)
         case_result, evaluation = _evaluate_v2_case(
@@ -809,6 +1345,7 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             content_hash=content_hash,
         )
         case_results.append(case_result)
+        evaluations_by_case[str(case["id"])] = evaluation
         durations.append(elapsed_ms)
         case_durations[str(case["id"])] = round(elapsed_ms, 2)
         peak_memory = max(peak_memory, peak)
@@ -882,10 +1419,13 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             "rule_exception_ratio": round(rule_failures / rule_total, 4) if rule_total else 0.0,
             "failed_rule_executions": rule_failures,
             "total_rule_executions": rule_total,
+            "rule_coverage": _compute_rule_coverage(
+                coverage_config,
+                evaluations_by_case,
+            ),
         },
         "integrity": {
             "content_hash_mismatches": content_hash_mismatches,
-            "fixture_source_commit_hash": source_commit_hash,
             "fixture_revision_verified": True,
             "scanner_implementation_sha256": _scanner_implementation_fingerprint(),
             "offline_osv": True,
@@ -898,6 +1438,10 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             "max_memory_bytes": peak_memory,
         },
     }
+    if fixture_reference_kind == "tree":
+        result["integrity"]["fixture_source_tree_sha256"] = fixture_reference
+    else:
+        result["integrity"]["fixture_source_commit_hash"] = fixture_reference
     result["security_fingerprint"] = _security_fingerprint(result)
     return result
 

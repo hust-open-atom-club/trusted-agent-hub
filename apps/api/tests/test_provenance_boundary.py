@@ -90,13 +90,39 @@ class _DetailRepository:
             "provenance_claims": {
                 "source": {"repository_url": "https://u:p@example.test/repo"},
             },
+            "trust_score": {
+                "score": 91,
+                "risk_summary": {
+                    "level": "low_risk",
+                    "grade": "B",
+                    "install_recommendation": "review_recommended",
+                    "top_risks": ["api_key=raw-secret"],
+                },
+                "explanations": [{"evidence": "api_key=raw-secret"}],
+                "dimensions": {
+                    "scan_results": {"details": {"secret": "raw-secret"}},
+                },
+                "evidence_assessment": {"score": 1},
+                "acquisition_facts": {"integrity": {"sha256": "raw-secret"}},
+            },
+            "acquisition_facts": {"integrity": {"sha256": "raw-secret"}},
         }
 
     def get_scan_report(self, version_id: str) -> dict[str, object]:
         return {
             "scan_json": {
                 "summary": {"note": "Bearer SUPERSECRET"},
-                "findings": [{"evidence": "api_key: raw-secret"}],
+                "findings": [{
+                    "rule_id": "SR-004",
+                    "severity": "high",
+                    "title": "硬编码密钥",
+                    "location": {
+                        "file": "SKILL.md",
+                        "line": 1,
+                        "snippet": "api_key: raw-secret",
+                    },
+                    "evidence": "api_key: raw-secret",
+                }],
                 "file_contents": {"secret.txt": "Bearer SUPERSECRET"},
                 "provenance": {
                     "package_claims": {
@@ -363,11 +389,17 @@ def test_package_claims_are_redacted_before_audit_persistence() -> None:
 
 
 def test_version_detail_redacts_all_scan_projections() -> None:
-    detail = ProducerService(_DetailRepository()).get_version_detail("ver-1")
+    detail = ProducerService(_DetailRepository()).get_version_detail(
+        "ver-1",
+        include_scan_report=True,
+    )
 
     assert detail is not None
     assert detail["scan_summary"]["note"] == "Bearer [REDACTED]"
     assert detail["findings"][0]["evidence"] == "api_key: [REDACTED]"
+    assert detail["trust_score"]["explanations"][0]["evidence"] == (
+        "api_key=raw-secret"
+    )
     assert "file_contents" not in detail["scan_report"]
     assert detail["scan_report"]["provenance"]["package_claims"]["integrity"][
         "token"
@@ -375,6 +407,45 @@ def test_version_detail_redacts_all_scan_projections() -> None:
     assert detail["provenance_claims"]["source"]["repository_url"] == (
         "https://u:[REDACTED]@example.test/repo"
     )
+
+
+def test_submitter_version_detail_keeps_status_but_hides_scan_projection() -> None:
+    detail = ProducerService(_DetailRepository()).get_version_detail("ver-1")
+
+    assert detail is not None
+    assert detail["scan_summary"]["note"] == "Bearer [REDACTED]"
+    assert "scan_report" not in detail
+    assert "findings" not in detail
+    assert "source_snapshot_id" not in detail
+
+
+def test_submitter_version_detail_returns_only_redacted_finding_projection() -> None:
+    detail = ProducerService(_DetailRepository()).get_version_detail(
+        "ver-1",
+        include_submitter_findings=True,
+    )
+
+    assert detail is not None
+    assert detail["findings"] == [{
+        "rule_id": "SR-004",
+        "severity": "high",
+        "location": {"file": "SKILL.md", "line": 1},
+        "file": "SKILL.md",
+        "line": 1,
+    }]
+    assert "evidence" not in detail["findings"][0]
+    assert "description" not in detail["findings"][0]
+    assert detail["trust_score"] == {
+        "score": 91,
+        "risk_summary": {
+            "level": "low_risk",
+            "grade": "B",
+            "install_recommendation": "review_recommended",
+        },
+    }
+    assert "acquisition_facts" not in detail
+    assert "scan_report" not in detail
+    assert "source_snapshot_id" not in detail
 
 
 def test_artifact_hash_is_scoped_separately_from_scan_hash() -> None:

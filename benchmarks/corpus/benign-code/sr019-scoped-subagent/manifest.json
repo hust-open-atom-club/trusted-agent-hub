@@ -1,0 +1,16 @@
+{
+  "name": "benchmark-sr019-scoped-subagent",
+  "version": "1.0.0",
+  "type": "subagent",
+  "description": "Deterministic scoped subagent benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "subagent_config": {
+    "interaction_mode": "supervised",
+    "max_iterations": 10,
+    "tools": ["Read"],
+    "scope": "project",
+    "system_prompt_path": "./system.md"
+  }
+}

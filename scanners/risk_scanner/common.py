@@ -4,11 +4,11 @@ Common utilities for risk scanner rules.
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 NON_TEXT_EXTENSIONS = frozenset({
-    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".pyo", ".pyd",
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",
     ".ttf", ".otf", ".woff", ".woff2",
     ".mp4", ".mov", ".webm", ".mp3", ".wav", ".ogg",
@@ -21,7 +21,7 @@ SCRIPT_EXTENSIONS = frozenset({".sh", ".bash", ".zsh", ".bat", ".ps1"})
 # rule.  Shell and PowerShell files are source code and must be analyzed by
 # the content-aware rules instead of being penalized by extension alone.
 BINARY_EXTENSIONS = frozenset({
-    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".pyo", ".pyd",
 })
 
 # Compatibility alias for downstream callers during the terminology cleanup.
@@ -40,6 +40,60 @@ GENERAL_RULE_EXCLUDED_FILES = frozenset({
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "poetry.lock", "Pipfile.lock", "Gemfile.lock",
 })
+
+# These helpers are intentionally limited to benchmark fixture hash
+# normalisation. Production inventory and content hashing must retain every
+# untrusted bytecode/native artifact, including a cache beside its source file.
+# Native extensions are never eligible for this benchmark-only normalisation.
+GENERATED_ARTIFACT_DIR_NAMES = frozenset({"__pycache__"})
+GENERATED_ARTIFACT_EXTENSIONS = frozenset({".pyc", ".pyo"})
+
+
+def generated_artifact_source_path(path: str | Path) -> str | None:
+    """Return a benchmark cache's associated source path, if it has one."""
+    normalized = (
+        path.as_posix()
+        if isinstance(path, Path)
+        else str(path).replace("\\", "/")
+    )
+    pure_path = PurePosixPath(normalized)
+    if pure_path.suffix.casefold() not in GENERATED_ARTIFACT_EXTENSIONS:
+        return None
+
+    cache_index = next(
+        (
+            index
+            for index, part in enumerate(pure_path.parts)
+            if part.casefold() in GENERATED_ARTIFACT_DIR_NAMES
+        ),
+        None,
+    )
+    if cache_index is None:
+        return None
+
+    cache_stem = pure_path.name[: -len(pure_path.suffix)]
+    module_name = cache_stem.split(".", 1)[0]
+    if not module_name:
+        return None
+    return PurePosixPath(
+        *pure_path.parts[:cache_index],
+        f"{module_name}.py",
+    ).as_posix()
+
+
+def is_generated_artifact_path(
+    path: str | Path,
+    *,
+    source_exists: bool | None = None,
+) -> bool:
+    """Return whether a benchmark cache is confirmed by its source file.
+
+    This helper must not be used by the production scanner to omit files.
+    """
+    return (
+        generated_artifact_source_path(path) is not None
+        and source_exists is True
+    )
 
 # Compatibility aliases for downstream integrations during migration.
 SKIP_READ_EXTENSIONS = NON_TEXT_EXTENSIONS

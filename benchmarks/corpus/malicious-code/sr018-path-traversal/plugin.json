@@ -1,0 +1,15 @@
+{
+  "name": "benchmark-sr018-path-traversal",
+  "version": "1.0.0",
+  "type": "plugin",
+  "description": "Deterministic plugin path benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "plugin_config": {
+    "hooks": [],
+    "components": {
+      "skills": ["../outside-skill"]
+    }
+  }
+}

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, authFetch } from '@/lib/api-fetch';
-import type { Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord } from '@/types';
+import type { SubmitterFinding, SubmitterVersionDetail, ReviewRecord } from '@/types';
 
 import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
@@ -48,6 +48,14 @@ const SEVERITY_CLASS: Record<string, string> = {
   info: 'severity-info',
 };
 
+const SEVERITY_LABELS: Record<string, string> = {
+  critical: '严重',
+  high: '高',
+  medium: '中',
+  low: '低',
+  info: '提示',
+};
+
 const CONCLUSION_LABELS: Record<string, { text: string; className: string }> = {
   approved: { text: '审核通过', className: 'conclusion-approved' },
   rejected: { text: '已驳回', className: 'conclusion-rejected' },
@@ -70,7 +78,7 @@ function StatusContent() {
   const versionId = searchParams.get('vid') || '';
   const { user, token, loading: authLoading } = useAuth();
 
-  const [detail, setDetail] = useState<VersionDetail | null>(null);
+  const [detail, setDetail] = useState<SubmitterVersionDetail | null>(null);
   const [packageName, setPackageName] = useState<string | null>(null);
   const [reviewComment, setReviewComment] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -295,6 +303,9 @@ function StatusContent() {
       ? `v${detail.version}`
       : '版本状态';
   const isScanning = detail.status === 'scanning';
+  const findings = detail.findings ?? [];
+  const hasFindingProjection = Array.isArray(detail.findings);
+  const findingTotal = detail.scan_summary?.total ?? findings.length;
 
   return (
     <div className="status-page">
@@ -475,42 +486,56 @@ function StatusContent() {
         </div>
       )}
 
-      {detail.scan_summary && detail.scan_summary.findings && detail.scan_summary.findings.length > 0 && (
+      {hasFindingProjection && !isScanning && (
         <div className="findings-section">
           <h2>
-            扫描发现 ({detail.scan_summary.total} 项)
-            {detail.scan_summary.pass_rate !== undefined && (
+            扫描发现 ({findingTotal} 项)
+            {detail.scan_summary?.pass_rate !== undefined && (
               <span style={{ fontSize: '0.83rem', fontWeight: 400, color: 'var(--color-muted)', marginLeft: '0.5rem' }}>
                 通过率 {Math.round(detail.scan_summary.pass_rate)}%
               </span>
             )}
           </h2>
+          <p style={{ fontSize: '0.8rem', color: 'var(--color-muted)', margin: '0 0 0.9rem' }}>
+            仅展示规则、严重级别、文件位置和修复建议，不包含源码或审核内部信息。
+          </p>
 
-          {detail.scan_summary.findings.map((f: Finding, i: number) => (
-            <div key={i} className="finding-card">
-              <div className="finding-card-header">
-                <span className={`finding-rule-id ${SEVERITY_CLASS[f.severity] || ''}`}>
-                  {f.rule_id}
-                </span>
-                <span className="finding-title">{f.title}</span>
-                {f.file && (
-                  <span className="finding-location">
-                    {f.file}{f.line ? `:${f.line}` : ''}
-                  </span>
-                )}
-              </div>
-              {f.evidence && (
-                <div className="finding-evidence">{f.evidence}</div>
-              )}
-              {f.suggestion && (
-                <p className="finding-suggestion">{f.suggestion}</p>
-              )}
-            </div>
-          ))}
+          {findings.length > 0 ? (
+            findings.map((f: SubmitterFinding, i: number) => {
+              const file = f.file ?? f.location?.file;
+              const line = f.line ?? f.location?.line;
+              const severity = f.severity;
+              const recommendation = f.suggestion ?? f.remediation;
+              return (
+                <div key={f.id ?? `${f.rule_id}-${i}`} className="finding-card">
+                  <div className="finding-card-header">
+                    <span className={`finding-rule-id ${SEVERITY_CLASS[f.severity] || ''}`}>
+                      {f.rule_id}
+                    </span>
+                    <span className={`finding-severity-chip ${severity}`}>
+                      {SEVERITY_LABELS[severity] ?? severity}
+                    </span>
+                    {file && (
+                      <span className="finding-location">
+                        {file}{line ? `:${line}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  {recommendation && (
+                    <p className="finding-suggestion">{recommendation}</p>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <p style={{ fontSize: '0.9rem', color: 'var(--color-muted)', margin: 0 }}>
+              未发现需要展示的安全风险。
+            </p>
+          )}
         </div>
       )}
 
-      {(!detail.scan_summary || !detail.scan_summary.findings) && isScanning && (
+      {!hasFindingProjection && isScanning && (
         scanPollingStopped ? (
           <div className="empty-state">
             <div className="empty-state-icon">&#x23F0;</div>

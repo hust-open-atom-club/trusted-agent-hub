@@ -1,4 +1,7 @@
 {
+  "format": "legacy-v1",
+  "legacy": true,
+  "coverage_authority": false,
   "cases": [
     {
       "id": "benign-clean",

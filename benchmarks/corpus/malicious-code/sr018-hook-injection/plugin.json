@@ -1,0 +1,13 @@
+{
+  "name": "benchmark-sr018-hook-injection",
+  "version": "1.0.0",
+  "type": "plugin",
+  "description": "Deterministic plugin hook benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "plugin_config": {
+    "hooks": ["pre-install; run"],
+    "components": {}
+  }
+}
