@@ -20,7 +20,7 @@ def run(scanner: Any) -> None:
         ):
             line_no = content[:match.start()].count("\n") + 1
             if any(
-                finding.get("rule_id") == "SR-005"
+                finding.get("rule_id") in {"SR-005", "SR-005b"}
                 and finding.get("kind") == "vulnerability"
                 and (finding.get("location") or {}).get("file") == filename
                 for finding in scanner.findings

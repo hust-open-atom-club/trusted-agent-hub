@@ -432,15 +432,7 @@ class RiskScanner:
             )
 
     def _record_structured_analysis_errors(self) -> None:
-        """Expose parser failures as coverage signals, not security findings.
-
-        Metadata parse failures are already handled by SR-010 and surfaced in
-        ``metadata_validation``.  They are expected input findings rather than
-        scanner execution failures, so they must not turn an otherwise complete
-        metadata audit into an incomplete scan.  Code/parser failures continue
-        to be recorded as scanner errors and therefore remain quality-gate
-        failures.
-        """
+        """Treat metadata parser failures as coverage signals, not scanner failures."""
         metadata_errors = {
             str(item.get("file"))
             for item in getattr(self, "_metadata_parse_errors", [])

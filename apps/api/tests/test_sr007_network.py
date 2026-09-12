@@ -1,7 +1,11 @@
 """SR-007: Network access without domain whitelist rule unit tests."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from scanners.risk_scanner.analyzers.python_ast import analyze_python
+from scanners.risk_scanner.rules import behavioral_ast
 from scanners.risk_scanner.rules import network
 from tests.scanner_mock import MockScanner
 
@@ -57,3 +61,22 @@ class TestSR007Network:
         s = MockScanner(files={"SKILL.md": "# hi"}, target_dir=tmp_path)
         network.run(s)
         assert s.findings == []
+
+    def test_public_listener_is_covered_by_ast_rce_finding(self):
+        content = (
+            "import os as o\n"
+            "o.system(request.args.get('cmd'))\n"
+            "app.listen('0.0.0.0')\n"
+        )
+        scanner = MockScanner(files={"app.py": content})
+        scanner.analysis = SimpleNamespace(
+            python_ast={"app.py": analyze_python("app.py", content)}
+        )
+
+        behavioral_ast.run(scanner)
+        assert scanner.findings[0]["rule_id"] == "SR-005b"
+        assert scanner.findings[0]["kind"] == "vulnerability"
+
+        network.run(scanner)
+
+        assert [finding["rule_id"] for finding in scanner.findings] == ["SR-005b"]

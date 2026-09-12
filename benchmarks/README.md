@@ -4,7 +4,7 @@ This directory contains the authoritative `labels-v2.json` deterministic,
 human-labeled quality benchmark for the risk scanner. It measures whether the
 scanner identifies the right issue, at the right severity and package grade,
 without teaching the benchmark that a known false positive or false negative is
-correct. The v2 corpus currently contains 58 cases; the acceptance criterion is
+correct. The v2 corpus currently contains 59 cases; the acceptance criterion is
 the coverage map, not a fixed case count.
 
 ## Running the benchmark

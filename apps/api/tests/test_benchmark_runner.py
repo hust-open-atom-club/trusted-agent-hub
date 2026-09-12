@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -195,16 +194,22 @@ def test_v2_fixture_revision_must_contain_the_labeled_corpus():
         _validate_v2_config(config, V2_CONFIG)
 
 
-def test_v2_legacy_commit_field_remains_a_valid_alias():
+def test_v2_legacy_commit_field_remains_a_valid_alias(monkeypatch):
     config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
     config.pop("fixture_source_tree_sha256")
-    config["scanner_source_commit_hash"] = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        text=True,
-    ).strip()
+    config["scanner_source_commit_hash"] = "a" * 40
+
+    verified: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        "benchmarks.runner._verify_fixture_revision",
+        lambda reference, benchmark_root: verified.append(
+            (reference, benchmark_root)
+        ),
+    )
 
     _validate_v2_config(config, V2_CONFIG)
+
+    assert verified == [("a" * 40, V2_CONFIG.parent.resolve())]
 
 
 def test_legacy_finding_fallbacks_are_explicit_and_stable():
@@ -389,20 +394,20 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
     second = run_benchmark(V2_CONFIG)
 
     assert first["corpus"] == {
-        "case_count": 58,
+        "case_count": 59,
         "ground_truth_distribution": {
-            "benign": 8,
+            "benign": 9,
             "benign_capability": 18,
             "malicious": 19,
             "needs_context": 13,
         },
-        "enforcement_distribution": {"blocking": 58, "observe": 0},
+        "enforcement_distribution": {"blocking": 59, "observe": 0},
     }
     assert first["coverage"]["complete_scan_ratio"] == 1.0
     assert first["coverage"]["rule_exception_ratio"] == 0.0
     assert first["integrity"] == {
         "content_hash_mismatches": 0,
-        "fixture_source_tree_sha256": "b3d24bfa6f6cf8689371a571e7863f0727c039daa50a1a9dddbd128947e6ef9e",
+        "fixture_source_tree_sha256": "5825ddb429d469d15747f98994a3662162f2c8f14f2785af8572adf8a5bd70cc",
         "fixture_revision_verified": True,
         "scanner_implementation_sha256": first["integrity"]["scanner_implementation_sha256"],
         "offline_osv": True,
@@ -428,7 +433,7 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         for case in first["cases"]
         if case["enforcement"] == "observe"
     )
-    assert sum(first["metrics"]["grade_distribution"].values()) == 58
+    assert sum(first["metrics"]["grade_distribution"].values()) == 59
     assert "severity_confusion_matrix" in first["metrics"]
     rule_coverage = first["coverage"]["rule_coverage"]
     assert rule_coverage["registry_count"] == 21

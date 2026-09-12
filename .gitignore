@@ -96,6 +96,10 @@ apps/api/data/
 *.tar.gz
 .turbo/
 
+# The benchmark includes one source-matched cache as an explicit policy fixture.
+!benchmarks/corpus/benign-code/sr010-generated-cache/__pycache__/
+!benchmarks/corpus/benign-code/sr010-generated-cache/__pycache__/module.cpython-311.pyc
+
 # ============================================================
 # AI询问相关背景信息
 # ============================================================

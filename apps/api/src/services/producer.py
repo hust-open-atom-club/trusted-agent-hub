@@ -93,13 +93,7 @@ def _project_submitter_trust_score(value: object) -> dict[str, object]:
 
 
 def _project_submitter_findings(value: object) -> list[dict[str, object]]:
-    """Return a bounded finding projection safe for the owning submitter.
-
-    Submitters may inspect findings for their own version, but scanner internals
-    (detector hits, LLM evidence, source/sink symbols, evidence, and source
-    excerpts) are reviewer data. Locations retain only file and line so the
-    status page can point to the affected area without exposing code context.
-    """
+    """Return a bounded, redacted finding projection for the owning submitter."""
     if not isinstance(value, list):
         return []
 
@@ -931,6 +925,7 @@ class ProducerService:
         self,
         version_id: str,
         *,
+        version: dict[str, object] | None = None,
         include_scan_report: bool = False,
         include_submitter_findings: bool = False,
     ) -> dict[str, object] | None:
@@ -941,14 +936,11 @@ class ProducerService:
         verified that the caller owns the version and returns a reduced,
         redacted finding projection.
         """
-        version = self.repository.get_version(version_id)
+        if version is None:
+            version = self.repository.get_version(version_id)
         if version is None:
             return None
 
-        # A submitter still needs the version status, score, and safe summary
-        # to follow their submission. Full scanner configuration, provenance
-        # details, and source-context handles remain reviewer data; the owner
-        # may receive only the reduced finding projection below.
         if not include_scan_report:
             for key in (
                 "scan_report",
@@ -981,8 +973,7 @@ class ProducerService:
                 safe_scan_json.pop("file_contents", None)
                 summary = safe_scan_json.get("summary", {})
                 if isinstance(summary, dict):
-                    # Older reports may have embedded findings in summary;
-                    # never include those in the submitter-safe projection.
+                    # Exclude legacy embedded findings from the submitter summary.
                     version["scan_summary"] = {
                         key: value
                         for key, value in summary.items()
@@ -990,8 +981,7 @@ class ProducerService:
                     }
                 report_findings = safe_scan_json.get("findings")
                 if not isinstance(report_findings, list) and isinstance(summary, dict):
-                    # Keep older persisted reports visible after the findings
-                    # field moved out of the summary projection.
+                    # Preserve findings from reports written before the field moved.
                     report_findings = summary.get("findings", [])
                 if include_scan_report:
                     version["findings"] = (
@@ -1000,22 +990,18 @@ class ProducerService:
                     version["source_snapshot_id"] = safe_scan_json.get(
                         "source_snapshot_id"
                     )
-                    # Expose the redacted consumer-facing scan report to the
-                    # review UI, including scan coverage and provenance metadata
-                    # without exposing source contents.
+                    # Reviewers need the redacted report and its provenance metadata.
                     version["scan_report"] = safe_scan_json
                 elif include_submitter_findings:
                     version["findings"] = _project_submitter_findings(
                         report_findings
                     )
         if isinstance(version.get("provenance_claims"), dict):
-            # Older rows may have been written before the persistence-side
-            # redaction was added; never expose those claims verbatim.
+            # Redact claims persisted before write-time redaction was added.
             version["provenance_claims"] = redact_report(
                 version["provenance_claims"]
             )
-        # 确保 trust_score 存在；submitters receive only the status-page
-        # conclusion, never the stored scoring explanations or dimensions.
+        # Submitters only need the status-page conclusion.
         if not version.get("trust_score"):
             version["trust_score"] = {"risk_summary": None}
         if not include_scan_report:

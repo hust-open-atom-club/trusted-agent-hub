@@ -382,6 +382,7 @@ def get_version(
     service = ProducerService(repo)
     detail = service.get_version_detail(
         version_id,
+        version=version,
         include_scan_report=include_scan_report,
         include_submitter_findings=not include_scan_report,
     )

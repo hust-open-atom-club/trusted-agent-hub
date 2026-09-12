@@ -2,7 +2,7 @@
   "$schema": "./schema-v2.json",
   "schema_version": "2.0",
   "coverage_config": "coverage-v2.json",
-  "fixture_source_tree_sha256": "b3d24bfa6f6cf8689371a571e7863f0727c039daa50a1a9dddbd128947e6ef9e",
+  "fixture_source_tree_sha256": "5825ddb429d469d15747f98994a3662162f2c8f14f2785af8572adf8a5bd70cc",
   "quality_gates": {
     "minimum_cases": 25,
     "minimum_benign_cases": 12,
@@ -963,6 +963,28 @@
         "forbidden_effective_severities": ["critical", "high"],
         "capabilities": [],
         "security_grade": ["B", "C"],
+        "manual_review": "not_required"
+      },
+      "enforcement": "blocking"
+    },
+    {
+      "id": "sr010-generated-cache",
+      "path": "corpus/benign-code/sr010-generated-cache",
+      "ground_truth": "benign",
+      "source": {
+        "origin": "synthetic",
+        "reference": "benchmarks/README.md#issue-54-rule-coverage",
+        "revision": "fixture-v2",
+        "license": "Apache-2.0",
+        "annotation": "A benign package includes a source-matched Python cache to pin the production structural policy."
+      },
+      "content_tree_sha256": "537a17e3b243daa548e2ebfa6a7747af19d5f48fc8b87ef473b4403db7bad401",
+      "expected_target": {
+        "raw_rules": ["SR-010"],
+        "root_issues": [{"id": "sr010-generated-cache", "rule_ids": ["SR-010"], "effective_severity": "medium"}],
+        "forbidden_effective_severities": [],
+        "capabilities": [],
+        "security_grade": ["B"],
         "manual_review": "not_required"
       },
       "enforcement": "blocking"

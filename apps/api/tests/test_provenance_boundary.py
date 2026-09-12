@@ -133,6 +133,20 @@ class _DetailRepository:
         }
 
 
+class _CountingDetailRepository(_DetailRepository):
+    def __init__(self) -> None:
+        self.version_calls = 0
+        self.scan_calls = 0
+
+    def get_version(self, version_id: str) -> dict[str, object]:
+        self.version_calls += 1
+        return super().get_version(version_id)
+
+    def get_scan_report(self, version_id: str) -> dict[str, object]:
+        self.scan_calls += 1
+        return super().get_scan_report(version_id)
+
+
 def test_acquisition_facts_ignore_manifest_provenance_claims() -> None:
     facts = _build_acquisition_facts(
         {
@@ -407,6 +421,21 @@ def test_version_detail_redacts_all_scan_projections() -> None:
     assert detail["provenance_claims"]["source"]["repository_url"] == (
         "https://u:[REDACTED]@example.test/repo"
     )
+
+
+def test_version_detail_reuses_prefetched_version() -> None:
+    repository = _CountingDetailRepository()
+    version = repository.get_version("ver-1")
+
+    detail = ProducerService(repository).get_version_detail(
+        "ver-1",
+        version=version,
+        include_scan_report=True,
+    )
+
+    assert detail is not None
+    assert repository.version_calls == 1
+    assert repository.scan_calls == 1
 
 
 def test_submitter_version_detail_keeps_status_but_hides_scan_projection() -> None:

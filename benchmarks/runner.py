@@ -36,7 +36,7 @@ if str(ROOT) not in sys.path:
 from scanners.risk_scanner.scanner import RiskScanner  # noqa: E402
 from scanners.risk_scanner.rule_runner import RULE_SPECS  # noqa: E402
 from scanners.risk_scanner.policy import ScanPolicy  # noqa: E402
-from scanners.risk_scanner.common import (  # noqa: E402
+from benchmarks.fixture_paths import (  # noqa: E402
     generated_artifact_source_path,
     is_generated_artifact_path,
 )
