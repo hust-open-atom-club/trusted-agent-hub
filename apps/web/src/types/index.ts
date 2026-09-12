@@ -142,6 +142,32 @@ export interface Finding {
   occurrences?: FindingOccurrences;
 }
 
+/** Least-privilege finding projection returned to the owning submitter. */
+export interface SubmitterFinding {
+  id?: string;
+  rule_id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info' | string;
+  file?: string;
+  line?: number;
+  location?: Pick<FindingLocation, 'file' | 'line'>;
+  suggestion?: string;
+  remediation?: string;
+  cwe_id?: string;
+}
+
+/** Least-privilege trust-score projection returned to the owning submitter. */
+export interface SubmitterTrustScore {
+  score?: number;
+  level?: string;
+  grade?: string;
+  recommendation?: string;
+  risk_summary?: {
+    level?: string;
+    grade?: string;
+    install_recommendation?: string;
+  } | null;
+}
+
 export interface ScanSummary {
   total?: number;
   critical?: number;
@@ -150,7 +176,6 @@ export interface ScanSummary {
   low?: number;
   info?: number;
   pass_rate?: number;
-  findings?: Finding[];
   occurrences_total?: number;
 }
 
@@ -390,6 +415,11 @@ export interface VersionDetail {
   created_at?: string | null;
 }
 
+export type SubmitterVersionDetail = Omit<VersionDetail, 'findings' | 'trust_score'> & {
+  findings?: SubmitterFinding[];
+  trust_score?: SubmitterTrustScore | null;
+};
+
 export interface ScanReport {
   scan_id?: string;
   package_name?: string | null;
@@ -511,7 +541,7 @@ export interface ScanStatus {
 }
 
 export interface ScanLimits {
-  configured?: Record<string, number | null> | null;
+  configured?: ScanLimitsConfigured | null;
   observed?: {
     discovered_files?: number | null;
     discovered_count?: number | null;
@@ -526,6 +556,17 @@ export interface ScanLimits {
     by_reason?: Record<string, number>;
     samples?: string[];
   } | null;
+}
+
+export interface ScanLimitsConfigured {
+  max_file_bytes?: number | null;
+  max_total_bytes?: number | null;
+  max_files?: number | null;
+  max_depth?: number | null;
+  max_findings?: number | null;
+  max_osv_queries?: number | null;
+  max_skipped_samples?: number | null;
+  allow_parent_license_files?: boolean | null;
 }
 
 export interface RuleExecution {

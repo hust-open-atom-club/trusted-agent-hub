@@ -1,0 +1,13 @@
+{
+  "name": "benchmark-sr017-plaintext-mcp",
+  "version": "1.0.0",
+  "type": "mcp_server",
+  "description": "Deterministic plaintext MCP benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "mcp_server_config": {
+    "tools": [],
+    "remote_endpoint": "http://remote.example.invalid/mcp"
+  }
+}

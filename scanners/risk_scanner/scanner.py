@@ -1,5 +1,5 @@
 """
-Risk Scanner — 自动风险扫描器 v0.8.0
+Risk Scanner — 自动风险扫描器 v0.13.0
 
 遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
@@ -70,7 +70,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.12.0"
+SCANNER_VERSION = "0.13.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -432,8 +432,19 @@ class RiskScanner:
             )
 
     def _record_structured_analysis_errors(self) -> None:
-        """Expose parser failures as coverage signals, not security findings."""
+        """Treat metadata parser failures as coverage signals, not scanner failures."""
+        metadata_errors = {
+            str(item.get("file"))
+            for item in getattr(self, "_metadata_parse_errors", [])
+            if isinstance(item, dict) and item.get("file")
+        }
         for error in getattr(self.analysis, "parse_errors", []) if self.analysis is not None else []:
+            if (
+                isinstance(error, dict)
+                and str(error.get("file")) in metadata_errors
+                and str(error.get("parser")) in {"json", "pyyaml", "tomllib"}
+            ):
+                continue
             self.scanner_errors.append({
                 "phase": "structured_analysis",
                 "error_type": "ParseError",

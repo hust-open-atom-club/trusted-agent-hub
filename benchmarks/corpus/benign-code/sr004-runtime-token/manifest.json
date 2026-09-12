@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr004-runtime-token",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic runtime token benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

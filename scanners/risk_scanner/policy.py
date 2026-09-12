@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -14,10 +15,14 @@ class ScanPolicy:
     max_findings: int = 10000
     max_osv_queries: int = 10
     max_skipped_samples: int = 20
+    # Real repository extraction may intentionally inherit a repository-level
+    # LICENSE. Benchmark fixtures disable this so their labels cannot depend
+    # on files outside the fixture root.
+    allow_parent_license_files: bool = True
 
     def __post_init__(self) -> None:
         if self.max_osv_queries < 1:
             raise ValueError("max_osv_queries must be at least 1")
 
-    def as_dict(self) -> dict[str, int]:
+    def as_dict(self) -> dict[str, Any]:
         return asdict(self)

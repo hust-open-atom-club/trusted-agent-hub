@@ -446,6 +446,7 @@ class ScanLimitsConfigured(StrictContractModel):
     max_findings: int | None = None
     max_osv_queries: int | None = None
     max_skipped_samples: int | None = None
+    allow_parent_license_files: bool | None = None
 
 
 class ScanLimitsObserved(StrictContractModel):

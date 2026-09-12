@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr010-generated-cache",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic generated-cache benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

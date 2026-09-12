@@ -124,7 +124,7 @@ class TestSR005RCE:
         })
         run_ast(s)
         assert len(s.findings) >= 1
-        assert s.findings[0]["rule_id"] == "SR-005"
+        assert s.findings[0]["rule_id"] == "SR-005b"
 
     # ── Negative cases (regex layer) ──────────────────────
 

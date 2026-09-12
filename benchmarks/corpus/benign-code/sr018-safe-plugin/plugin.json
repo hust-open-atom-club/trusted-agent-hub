@@ -1,0 +1,15 @@
+{
+  "name": "benchmark-sr018-safe-plugin",
+  "version": "1.0.0",
+  "type": "plugin",
+  "description": "Deterministic safe plugin benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "plugin_config": {
+    "hooks": ["post-install"],
+    "components": {
+      "skills": ["./skills/review"]
+    }
+  }
+}

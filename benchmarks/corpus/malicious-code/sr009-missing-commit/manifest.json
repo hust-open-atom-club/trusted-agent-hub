@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr009-missing-commit",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic source integrity benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

@@ -42,7 +42,7 @@ def _resolve_name(node: ast.expr) -> str | None:
 
 
 def run(scanner: Any) -> None:
-    rule_id = "SR-005"
+    rule_id = "SR-005b"
 
     # Production scans consume the shared analyzer facts.  The fallback keeps
     # this rule usable with the lightweight MockScanner used by unit tests and
@@ -105,7 +105,7 @@ def _report_analysis(scanner: Any, fname: str, result: Any) -> None:
             "high" if source_semantics["kind"] == "vulnerability" else "medium"
         )
         scanner._add_finding(
-            rule_id="SR-005",
+            rule_id="SR-005b",
             severity=severity,
             category="remote_code_execution",
             title=title,

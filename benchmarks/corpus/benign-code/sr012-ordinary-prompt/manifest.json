@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr012-ordinary-prompt",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic ordinary system prompt benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

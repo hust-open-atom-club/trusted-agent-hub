@@ -5,7 +5,7 @@
     POST /packages/{id}/versions      — 创建新版本
     POST /versions/{id}/submit        — 提交审核（触发扫描）
     GET  /packages/{id}               — 包详情
-    GET  /versions/{id}               — 版本详情（含扫描报告）
+    GET  /versions/{id}               — 版本详情（reviewer/admin 含完整扫描报告）
 """
 
 from __future__ import annotations
@@ -311,7 +311,7 @@ def get_version_file_context(
     version_id: str,
     path: str = Query(..., min_length=1, max_length=512, description="仓库内相对路径"),
     line: int = Query(default=1, ge=1, le=1_000_000, description="目标行号"),
-    _user: CurrentUser = Depends(require_role("submitter")),
+    _user: CurrentUser = Depends(require_role("reviewer")),
 ) -> dict[str, object]:
     """返回审核用的脱敏、截断代码上下文，不返回完整源码。"""
     repo = _get_producer_repository()
@@ -360,19 +360,36 @@ def get_version(
     version_id: str,
     _user: CurrentUser = Depends(require_role("submitter")),
 ) -> dict[str, object]:
-    """获取版本详情，含扫描报告摘要和信任评分。仅所有者或 reviewer/admin 可访问。"""
+    """获取版本详情；本人可看脱敏发现，完整报告仅 reviewer/admin 可看。"""
     repo = _get_producer_repository()
+    version = repo.get_version(version_id)
+    if version is None:
+        raise HTTPException(
+            status_code=404, detail=f"版本 {version_id} 不存在"
+        )
+    pkg_id = version.get("package_id")
+    if not pkg_id:
+        raise HTTPException(status_code=404, detail="版本所属包不存在")
+    pkg = repo.get_package(str(pkg_id))
+    if pkg is None:
+        raise HTTPException(status_code=404, detail="版本所属包不存在")
+    verify_resource_access(_user, pkg.get("submitter_id", ""))
+
+    include_scan_report = _user.role in (
+        UserRole.ADMIN.value,
+        UserRole.REVIEWER.value,
+    )
     service = ProducerService(repo)
-    detail = service.get_version_detail(version_id)
+    detail = service.get_version_detail(
+        version_id,
+        version=version,
+        include_scan_report=include_scan_report,
+        include_submitter_findings=not include_scan_report,
+    )
     if detail is None:
         raise HTTPException(
             status_code=404, detail=f"版本 {version_id} 不存在"
         )
-    pkg_id = detail.get("package_id")
-    if pkg_id:
-        pkg = repo.get_package(str(pkg_id))
-        if pkg:
-            verify_resource_access(_user, pkg.get("submitter_id", ""))
     return detail
 
 

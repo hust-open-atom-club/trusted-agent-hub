@@ -10,13 +10,18 @@ from benchmarks.runner import (
     BenchmarkConfigError,
     _actual_root_issues,
     _benchmark_check_failures,
+    _compute_rule_coverage,
     _evaluate_case,
     _evaluate_v2_case,
+    _content_tree_hash,
     _OfflineOSVClient,
+    _scan_target,
+    _tree_fingerprint,
     _validate_v2_config,
     _with_rates,
     run_benchmark,
 )
+from scanners.risk_scanner.policy import ScanPolicy
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -111,6 +116,61 @@ def test_v2_quality_gates_prevent_silently_shrinking_the_corpus():
     ]
 
 
+def test_v2_coverage_gate_rejects_untested_rules_and_variants():
+    result = _v2_result(enforcement="blocking")
+    result["quality_gates"] = {
+        "require_complete_rule_coverage": True,
+        "require_independent_variants": True,
+    }
+    result["coverage"]["rule_coverage"] = {
+        "untested_rules": ["SR-001"],
+        "incomplete_rules": ["SR-002"],
+        "rules": [{"rule_id": "SR-003", "false_positive": 1, "false_negative": 2}],
+        "independent_variants": [{"rule_id": "SR-005b", "status": "failed"}],
+    }
+
+    assert _benchmark_check_failures(result) == [
+        "missing rule coverage rows: SR-001, SR-002, SR-004, SR-005, SR-005b, SR-006, SR-007, SR-008, SR-009, SR-010, SR-011, SR-012, SR-013, SR-014, SR-015, SR-016, SR-017, SR-018, SR-019, SR-020",
+        "untested rules: SR-001",
+        "incomplete rules: SR-002",
+        "rule coverage mismatches: SR-003 (fp=1, fn=2)",
+        "independent detector variants failed: SR-005b",
+    ]
+
+
+def test_independent_variant_gate_requires_rule_coverage_report():
+    result = _v2_result(enforcement="blocking")
+    result["quality_gates"] = {"require_independent_variants": True}
+
+    assert _benchmark_check_failures(result) == [
+        "missing rule coverage report",
+    ]
+
+
+def test_independent_variant_gate_requires_coverage_config():
+    config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
+    config["quality_gates"]["require_complete_rule_coverage"] = False
+    config["quality_gates"]["require_independent_variants"] = True
+    config["coverage_config"] = "missing-coverage.json"
+
+    with pytest.raises(BenchmarkConfigError, match="required rule coverage config"):
+        _validate_v2_config(config, V2_CONFIG)
+
+
+def test_rule_coverage_does_not_report_perfect_metrics_without_cases():
+    coverage = _compute_rule_coverage({"rules": {}}, {})
+
+    assert coverage is not None
+    assert coverage["registry_count"] == 21
+    assert coverage["family_count"] == 20
+    first_rule = coverage["rules"][0]
+    assert first_rule["positive_case_count"] == 0
+    assert first_rule["negative_case_count"] == 0
+    assert first_rule["precision"] is None
+    assert first_rule["recall"] is None
+    assert first_rule["coverage_status"] == "untested"
+
+
 def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
     config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
     invalid_case = deepcopy(config)
@@ -128,19 +188,28 @@ def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
 
 def test_v2_fixture_revision_must_contain_the_labeled_corpus():
     config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
-    config["fixture_source_commit_hash"] = "0" * 40
+    config["fixture_source_tree_sha256"] = "0" * 64
 
-    with pytest.raises(BenchmarkConfigError, match="fixture source commit"):
+    with pytest.raises(BenchmarkConfigError, match="fixture source tree hash"):
         _validate_v2_config(config, V2_CONFIG)
 
 
-def test_v2_legacy_commit_field_remains_a_valid_alias():
+def test_v2_legacy_commit_field_remains_a_valid_alias(monkeypatch):
     config = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
-    config["scanner_source_commit_hash"] = config.pop(
-        "fixture_source_commit_hash"
+    config.pop("fixture_source_tree_sha256")
+    config["scanner_source_commit_hash"] = "a" * 40
+
+    verified: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        "benchmarks.runner._verify_fixture_revision",
+        lambda reference, benchmark_root: verified.append(
+            (reference, benchmark_root)
+        ),
     )
 
     _validate_v2_config(config, V2_CONFIG)
+
+    assert verified == [("a" * 40, V2_CONFIG.parent.resolve())]
 
 
 def test_legacy_finding_fallbacks_are_explicit_and_stable():
@@ -255,25 +324,90 @@ def test_osv_fixture_never_uses_the_network(monkeypatch):
     assert client.failures == 0
 
 
+def test_offline_osv_client_enforces_query_limit():
+    client = _OfflineOSVClient(max_queries=1)
+
+    first = client.query(object())
+    limited = client.query(object())
+
+    assert first.error is None
+    assert limited.error == "query_limit_exceeded"
+    assert client.queried == 1
+    assert client.limit_reached is True
+
+
+def test_generated_artifacts_are_excluded_from_benchmark_hashes_but_not_scans(tmp_path):
+    clean_root = tmp_path / "clean"
+    cache_root = tmp_path / "cache"
+    untrusted_root = tmp_path / "untrusted"
+    for root in (clean_root, cache_root, untrusted_root):
+        root.mkdir(parents=True)
+        (root / "module.py").write_text("value = 1\n", encoding="utf-8")
+    (cache_root / "__pycache__").mkdir()
+    (cache_root / "__pycache__" / "module.cpython-311.pyc").write_bytes(b"compiled")
+    (untrusted_root / "__pycache__").mkdir()
+    (untrusted_root / "__pycache__" / "module.cpython-311.pyc").write_bytes(b"compiled")
+    (untrusted_root / "__pycache__" / "orphan.pyc").write_bytes(b"compiled")
+    (untrusted_root / "stray.pyc").write_bytes(b"compiled")
+
+    clean_scanner, _, _, _ = _scan_target(clean_root)
+    cache_scanner, cache_report, _, _ = _scan_target(cache_root)
+    untrusted_scanner, _, _, _ = _scan_target(untrusted_root)
+
+    assert "__pycache__/module.cpython-311.pyc" in cache_scanner.discovered_files
+    assert any(
+        finding.get("location", {}).get("file") == "__pycache__/module.cpython-311.pyc"
+        for finding in cache_report["findings"]
+    )
+    assert _content_tree_hash(clean_scanner) == _content_tree_hash(cache_scanner)
+    assert _content_tree_hash(clean_scanner) != _content_tree_hash(untrusted_scanner)
+    assert _tree_fingerprint([
+        ("module.py", b"value = 1\n"),
+        ("__pycache__/module.pyc", b"compiled"),
+    ]) == _tree_fingerprint([("module.py", b"value = 1\n")])
+    assert _tree_fingerprint([
+        ("module.py", b"value = 1\n"),
+        ("__pycache__/module.pyc", b"compiled"),
+        ("__pycache__/orphan.pyc", b"compiled"),
+    ]) != _tree_fingerprint([("module.py", b"value = 1\n")])
+
+
+def test_legacy_and_v2_scan_targets_keep_distinct_parent_license_policies(tmp_path):
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: demo\nversion: 1.0.0\ndescription: policy fixture\nauthor: tester\nlicense: MIT\n---\n",
+        encoding="utf-8",
+    )
+
+    legacy_scanner, _, _, _ = _scan_target(tmp_path)
+    v2_scanner, _, _, _ = _scan_target(
+        tmp_path,
+        "a" * 40,
+        policy=ScanPolicy(allow_parent_license_files=False),
+    )
+
+    assert legacy_scanner.policy.allow_parent_license_files is True
+    assert v2_scanner.policy.allow_parent_license_files is False
+
+
 def test_v2_corpus_is_complete_checkable_and_deterministic():
     first = run_benchmark(V2_CONFIG)
     second = run_benchmark(V2_CONFIG)
 
     assert first["corpus"] == {
-        "case_count": 25,
+        "case_count": 59,
         "ground_truth_distribution": {
-            "benign": 3,
-            "benign_capability": 9,
-            "malicious": 9,
-            "needs_context": 4,
+            "benign": 9,
+            "benign_capability": 18,
+            "malicious": 19,
+            "needs_context": 13,
         },
-        "enforcement_distribution": {"blocking": 25, "observe": 0},
+        "enforcement_distribution": {"blocking": 59, "observe": 0},
     }
     assert first["coverage"]["complete_scan_ratio"] == 1.0
     assert first["coverage"]["rule_exception_ratio"] == 0.0
     assert first["integrity"] == {
         "content_hash_mismatches": 0,
-        "fixture_source_commit_hash": "f8e59b8aabfdce77eefb531ed1639da8f057bfe4",
+        "fixture_source_tree_sha256": "5825ddb429d469d15747f98994a3662162f2c8f14f2785af8572adf8a5bd70cc",
         "fixture_revision_verified": True,
         "scanner_implementation_sha256": first["integrity"]["scanner_implementation_sha256"],
         "offline_osv": True,
@@ -291,14 +425,47 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         "minimum_root_recall": 0.95,
         "maximum_benign_high_critical_false_positive_rate": 0.05,
         "minimum_malicious_high_critical_recall": 0.9,
+        "require_complete_rule_coverage": True,
+        "require_independent_variants": True,
     }
     assert all(
         case.get("known_gap", {}).get("planned_pr")
         for case in first["cases"]
         if case["enforcement"] == "observe"
     )
-    assert sum(first["metrics"]["grade_distribution"].values()) == 25
+    assert sum(first["metrics"]["grade_distribution"].values()) == 59
     assert "severity_confusion_matrix" in first["metrics"]
+    rule_coverage = first["coverage"]["rule_coverage"]
+    assert rule_coverage["registry_count"] == 21
+    assert rule_coverage["family_count"] == 20
+    assert rule_coverage["status"] == "complete"
+    assert rule_coverage["untested_rules"] == []
+    assert rule_coverage["incomplete_rules"] == []
+    rows_by_rule = {row["rule_id"]: row for row in rule_coverage["rules"]}
+    assert rows_by_rule["SR-001"]["negative_case_count"] == 1
+    assert rows_by_rule["SR-004"]["negative_case_count"] == 1
+    assert rows_by_rule["SR-005b"]["positive_case_count"] == 1
+    assert all(
+        set((
+            "rule_id",
+            "positive_case_count",
+            "negative_case_count",
+            "context_case_count",
+            "true_positive",
+            "false_positive",
+            "false_negative",
+            "coverage_status",
+        )) <= row.keys()
+        and row["coverage_status"] == "complete"
+        for row in rule_coverage["rules"]
+    )
+    assert rule_coverage["independent_variants"] == [
+        {
+            "rule_id": "SR-005b",
+            "cases": [{"case_id": "sr005b-aliased-exec", "passed": True}],
+            "status": "complete",
+        }
+    ]
     assert first["security_fingerprint"] == second["security_fingerprint"]
 
 

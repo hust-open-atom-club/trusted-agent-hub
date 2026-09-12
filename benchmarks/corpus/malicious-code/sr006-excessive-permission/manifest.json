@@ -1,0 +1,11 @@
+{
+  "name": "benchmark-sr006-excessive-permission",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic excessive permission benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {
+    "browser": {"allowed": true}
+  }
+}

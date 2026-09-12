@@ -1,9 +1,11 @@
 # Scanner benchmark corpus
 
-This directory contains a deterministic, human-labeled quality benchmark for
-the risk scanner. It measures whether the scanner identifies the right issue,
-at the right severity and package grade, without teaching the benchmark that a
-known false positive or false negative is correct.
+This directory contains the authoritative `labels-v2.json` deterministic,
+human-labeled quality benchmark for the risk scanner. It measures whether the
+scanner identifies the right issue, at the right severity and package grade,
+without teaching the benchmark that a known false positive or false negative is
+correct. The v2 corpus currently contains 59 cases; the acceptance criterion is
+the coverage map, not a fixed case count.
 
 ## Running the benchmark
 
@@ -36,6 +38,10 @@ The legacy format remains available and is still accepted:
 python benchmarks/runner.py --config benchmarks/expected-results.json --check
 ```
 
+`expected-results.json` is explicitly marked `legacy-v1` and is retained only
+for compatibility. It is not a complete rule-coverage source and must not be
+used as the benchmark authority.
+
 ## Offline and deterministic execution
 
 Corpus files are scanned as text; none of the commands or services in a sample
@@ -47,14 +53,20 @@ model client.
 Each case records the scanner's content-tree SHA-256. Fixture drift is fatal in
 check mode regardless of enforcement. The scoring engine receives the same
 fixed source, verification, author, review, and feedback inputs on every run.
-`fixture_source_commit_hash` must point to a Git commit whose
-`benchmarks/corpus` tree is byte-for-byte identical to the working corpus; the
-runner verifies this before scanning. `scanner_implementation_sha256` identifies
-the scanner and trust-score source actually executed, including uncommitted
-changes. Existing schema-v2 configs may still use
-`scanner_source_commit_hash` as a deprecated alias for the fixture commit.
-`security_fingerprint` hashes all security results while excluding duration and
-peak-memory measurements, which naturally vary between runs.
+The authoritative v2 labels use `fixture_source_tree_sha256`, a normalized
+content-tree identity independent of branch history, merge strategy, and text
+EOL policy. The runner verifies it before scanning and preserves symlink
+targets without following them. Older schema-v2 configs may still use
+`fixture_source_commit_hash` or the deprecated `scanner_source_commit_hash`
+commit references; those remain compatibility-only and should not be used for
+the authoritative labels. For ordinary fixture cases, the runner derives a
+deterministic acquisition-context value from the tree hash; cases that model
+missing source provenance override it explicitly in `scan_context`. This
+context value is not used as the corpus identity. `scanner_implementation_sha256`
+identifies the scanner and trust-score source actually executed, including
+uncommitted changes. `security_fingerprint` hashes all security results while
+excluding duration and peak-memory measurements, which naturally vary between
+runs.
 
 ## Label meanings
 
@@ -95,6 +107,8 @@ The runner emits:
   unexpected roots;
 - final grade distribution;
 - incomplete-scan and rule-exception ratios; and
+- a registry-derived detector coverage table with positive, negative, context,
+  true-positive, false-positive, false-negative, and coverage-status fields;
 - per-case duration, aggregate duration, and peak traced memory.
 
 Both blocking and observe cases contribute to metrics. Enforcement controls CI
@@ -102,6 +116,25 @@ behavior, not measurement. `labels-v2.json` also pins minimum corpus sizes,
 minimum raw/root precision and recall, a maximum benign high/critical
 false-positive rate, and a minimum malicious high/critical recall. This makes
 quality regression measurable even when individual detector rules still fire.
+
+`coverage-v2.json` maps every detector in
+`scanners.risk_scanner.rule_runner.RULE_SPECS` to explicit positive and
+rule-specific benign near-miss cases. Only those listed near-misses contribute
+to detector-level false positives; unrelated benign cases are not mechanically
+reused. A rule without a positive is `untested`, and one without a related
+negative is `incomplete`; either state fails `--check`. `SR-005b` also has an
+independent AST alias case that forbids an `SR-005` result.
+
+The complete corpus intentionally does not disguise failure injection as a
+successful scan. `apps/api/tests/test_benchmark_resilience.py` keeps a separate
+static resilience matrix for malformed metadata, nested fixtures with parent
+files, symlinks, file/directory limits, rule exceptions, OSV no-result/failure/
+query-limit responses, and unavailable or timed-out LLM review. Its expected
+contract is: a deterministic OSV no-result is complete/benign; malformed
+metadata is an SR-010 finding but remains complete; external symlinks, resource
+limits, rule exceptions, OSV failures/limits, and review timeouts are explicit
+partial or inconclusive states. Injecting any partial or exception result into
+the blocking v2 benchmark must fail its coverage gate.
 
 ## Human annotation workflow
 
@@ -116,7 +149,9 @@ quality regression measurable even when individual detector rules still fire.
    to make a case pass.
 4. Put a new or unresolved behavior in `observe` with its follow-up PR. Use
    `blocking` only after the current implementation satisfies the reviewed
-   target.
+   target. Fault-injection cases for OSV failure/limits, timeouts, rule
+   exceptions, and unavailable LLM fallback belong in resilience tests rather
+   than the all-complete main corpus.
 5. Insert a temporary 64-zero content hash, run without `--check`, copy the
    case's reported `actual.content_tree_sha256`, and review the diff before
    replacing the placeholder.
@@ -130,9 +165,10 @@ being removed.
 
 ## Corpus layout and provenance
 
-`corpus/benign-code` contains eight benign scenarios, and
-`corpus/malicious-code` contains six malicious scenarios.
-`corpus/needs-context` covers operator-controlled execution. Five two-sided
+`corpus/benign-code` contains the benign controls and rule-specific near-misses;
+`corpus/malicious-code` contains deterministic security positives; and
+`corpus/needs-context` covers operator-controlled or deployment-dependent
+behavior. Five original two-sided
 families under `corpus/contrast-pairs` vary only the decisive source or sink:
 
 - loopback bind versus public bind;

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 NON_TEXT_EXTENSIONS = frozenset({
-    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".pyo", ".pyd",
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",
     ".ttf", ".otf", ".woff", ".woff2",
     ".mp4", ".mov", ".webm", ".mp3", ".wav", ".ogg",
@@ -21,7 +21,7 @@ SCRIPT_EXTENSIONS = frozenset({".sh", ".bash", ".zsh", ".bat", ".ps1"})
 # rule.  Shell and PowerShell files are source code and must be analyzed by
 # the content-aware rules instead of being penalized by extension alone.
 BINARY_EXTENSIONS = frozenset({
-    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".pyo", ".pyd",
 })
 
 # Compatibility alias for downstream callers during the terminology cleanup.

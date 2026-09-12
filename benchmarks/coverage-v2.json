@@ -1,0 +1,119 @@
+{
+  "$schema": "./coverage-schema-v2.json",
+  "schema_version": "2.0",
+  "registry_source": "scanners.risk_scanner.rule_runner.RULE_SPECS",
+  "rules": {
+    "SR-001": {
+      "positive_cases": ["sr001-prompt-injection"],
+      "negative_cases": ["sr001-ordinary-prompt"],
+      "context_cases": []
+    },
+    "SR-002": {
+      "positive_cases": ["download-then-execute"],
+      "negative_cases": ["webapp-testing-local-service"],
+      "context_cases": []
+    },
+    "SR-003": {
+      "positive_cases": ["environment-credential-exfiltration", "pair-token-github"],
+      "negative_cases": ["pair-token-generated"],
+      "context_cases": ["pair-token-github"]
+    },
+    "SR-004": {
+      "positive_cases": ["sr004-hardcoded-key"],
+      "negative_cases": ["sr004-runtime-token"],
+      "context_cases": []
+    },
+    "SR-005": {
+      "positive_cases": ["http-param-exec", "configured-operator-hook", "pair-command-operator-env"],
+      "negative_cases": ["webapp-testing-local-service"],
+      "context_cases": ["configured-operator-hook", "pair-command-operator-env"]
+    },
+    "SR-005b": {
+      "positive_cases": ["sr005b-aliased-exec"],
+      "negative_cases": ["webapp-testing-local-service"],
+      "context_cases": ["sr005b-aliased-exec"]
+    },
+    "SR-006": {
+      "positive_cases": ["sr006-excessive-permission"],
+      "negative_cases": ["sr006-minimal-permissions"],
+      "context_cases": ["sr006-excessive-permission"]
+    },
+    "SR-007": {
+      "positive_cases": ["pair-bind-public"],
+      "negative_cases": ["pair-bind-localhost"],
+      "context_cases": ["pair-bind-public"]
+    },
+    "SR-008": {
+      "positive_cases": ["sr008-unlocked-dependency"],
+      "negative_cases": ["sr008-locked-dependency"],
+      "context_cases": ["sr008-unlocked-dependency"]
+    },
+    "SR-009": {
+      "positive_cases": ["sr009-missing-commit"],
+      "negative_cases": ["sr009-complete-source"],
+      "context_cases": ["sr009-missing-commit"]
+    },
+    "SR-010": {
+      "positive_cases": ["sr010-malformed-metadata"],
+      "negative_cases": ["sr010-valid-metadata"],
+      "context_cases": ["sr010-malformed-metadata"]
+    },
+    "SR-011": {
+      "positive_cases": ["sr011-sensitive-output"],
+      "negative_cases": ["sr011-escaped-output"],
+      "context_cases": []
+    },
+    "SR-012": {
+      "positive_cases": ["sr012-system-prompt-leak"],
+      "negative_cases": ["sr012-ordinary-prompt"],
+      "context_cases": []
+    },
+    "SR-013": {
+      "positive_cases": ["sr013-memory-poisoning"],
+      "negative_cases": ["sr013-own-state"],
+      "context_cases": []
+    },
+    "SR-014": {
+      "positive_cases": ["cloud-metadata-ssrf"],
+      "negative_cases": ["pair-origin-compare"],
+      "context_cases": []
+    },
+    "SR-015": {
+      "positive_cases": ["sr015-agent-snooping"],
+      "negative_cases": ["sr015-own-info"],
+      "context_cases": []
+    },
+    "SR-016": {
+      "positive_cases": ["user-path-recursive-delete"],
+      "negative_cases": ["pair-delete-own-state"],
+      "context_cases": []
+    },
+    "SR-017": {
+      "positive_cases": ["sr017-hidden-tool", "sr017-plaintext-mcp", "sr017-tool-poisoning"],
+      "negative_cases": ["sr017-legal-mcp"],
+      "context_cases": []
+    },
+    "SR-018": {
+      "positive_cases": ["sr018-hook-injection", "sr018-path-traversal"],
+      "negative_cases": ["sr018-safe-plugin"],
+      "context_cases": ["sr018-hook-injection", "sr018-path-traversal"]
+    },
+    "SR-019": {
+      "positive_cases": ["sr019-unrestricted-subagent"],
+      "negative_cases": ["sr019-scoped-subagent"],
+      "context_cases": []
+    },
+    "SR-020": {
+      "positive_cases": ["sr020-destructive-installer", "sr020-nested-monorepo"],
+      "negative_cases": ["sr020-safe-installer"],
+      "context_cases": ["sr020-destructive-installer", "sr020-nested-monorepo"]
+    }
+  },
+  "independent_variants": [
+    {
+      "rule_id": "SR-005b",
+      "positive_cases": ["sr005b-aliased-exec"],
+      "forbidden_rules": ["SR-005"]
+    }
+  ]
+}

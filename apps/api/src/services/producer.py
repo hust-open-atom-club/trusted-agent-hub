@@ -37,6 +37,102 @@ _SEMVER_RE = re.compile(
 )
 
 logger = logging.getLogger(__name__)
+
+
+_SUBMITTER_FINDING_FIELDS = (
+    "id",
+    "rule_id",
+    "file",
+    "line",
+    "suggestion",
+    "remediation",
+    "cwe_id",
+)
+
+_SUBMITTER_SEVERITIES = frozenset({
+    "critical",
+    "high",
+    "medium",
+    "low",
+    "info",
+})
+
+_SUBMITTER_TRUST_SCORE_FIELDS = ("score", "level", "grade", "recommendation")
+_SUBMITTER_RISK_SUMMARY_FIELDS = (
+    "level",
+    "grade",
+    "install_recommendation",
+)
+
+
+def _project_submitter_trust_score(value: object) -> dict[str, object]:
+    """Return only the score conclusion needed by the submitter status page."""
+    if not isinstance(value, dict):
+        return {"risk_summary": None}
+
+    projected: dict[str, object] = {}
+    for key in _SUBMITTER_TRUST_SCORE_FIELDS:
+        raw = value.get(key)
+        if key == "score":
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                if 0 <= float(raw) <= 100:
+                    projected[key] = raw
+        elif isinstance(raw, str) and raw:
+            projected[key] = raw
+
+    risk_summary = value.get("risk_summary")
+    if isinstance(risk_summary, dict):
+        projected["risk_summary"] = {
+            key: deepcopy(risk_summary[key])
+            for key in _SUBMITTER_RISK_SUMMARY_FIELDS
+            if isinstance(risk_summary.get(key), str) and risk_summary[key]
+        }
+    else:
+        projected["risk_summary"] = None
+    return projected
+
+
+def _project_submitter_findings(value: object) -> list[dict[str, object]]:
+    """Return a bounded, redacted finding projection for the owning submitter."""
+    if not isinstance(value, list):
+        return []
+
+    projected: list[dict[str, object]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        raw = redact_report(raw)
+        finding = {
+            key: deepcopy(raw[key])
+            for key in _SUBMITTER_FINDING_FIELDS
+            if key in raw
+        }
+        # ``severity`` is the public effective severity. Never forward the
+        # detector's static severity or other review workflow metadata.
+        effective_severity = raw.get("effective_severity")
+        if (
+            not isinstance(effective_severity, str)
+            or effective_severity not in _SUBMITTER_SEVERITIES
+        ):
+            effective_severity = raw.get("severity")
+        if (
+            isinstance(effective_severity, str)
+            and effective_severity in _SUBMITTER_SEVERITIES
+        ):
+            finding["severity"] = effective_severity
+        location = raw.get("location")
+        if isinstance(location, dict):
+            safe_location = {
+                key: deepcopy(location[key])
+                for key in ("file", "line")
+                if key in location
+            }
+            if safe_location:
+                finding["location"] = safe_location
+                finding.setdefault("file", safe_location.get("file"))
+                finding.setdefault("line", safe_location.get("line"))
+        projected.append(finding)
+    return projected
 _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
 
@@ -825,10 +921,49 @@ class ProducerService:
     def get_package_detail(self, package_id: str) -> dict[str, object] | None:
         return self.repository.get_package(package_id)
 
-    def get_version_detail(self, version_id: str) -> dict[str, object] | None:
-        version = self.repository.get_version(version_id)
+    def get_version_detail(
+        self,
+        version_id: str,
+        *,
+        version: dict[str, object] | None = None,
+        include_scan_report: bool = False,
+        include_submitter_findings: bool = False,
+    ) -> dict[str, object] | None:
+        """Return version metadata with an authorized scan projection.
+
+        ``include_scan_report`` is reserved for reviewer/admin consumers.
+        ``include_submitter_findings`` is used only after the router has
+        verified that the caller owns the version and returns a reduced,
+        redacted finding projection.
+        """
+        if version is None:
+            version = self.repository.get_version(version_id)
         if version is None:
             return None
+
+        if not include_scan_report:
+            for key in (
+                "scan_report",
+                "scan_file_contents",
+                "findings",
+                "source_snapshot_id",
+                "acquisition_facts",
+                "trust_score_refresh",
+            ):
+                version.pop(key, None)
+            existing_summary = version.get("scan_summary")
+            if isinstance(existing_summary, dict):
+                legacy_findings = existing_summary.get("findings")
+                version["scan_summary"] = {
+                    key: value
+                    for key, value in existing_summary.items()
+                    if key != "findings"
+                }
+                if include_submitter_findings and isinstance(legacy_findings, list):
+                    version["findings"] = _project_submitter_findings(
+                        redact_report({"findings": legacy_findings})["findings"]
+                    )
+
         # 附加扫描报告摘要
         scan = self.repository.get_scan_report(version_id)
         if scan:
@@ -836,24 +971,43 @@ class ProducerService:
             if isinstance(scan_json, dict):
                 safe_scan_json = redact_report(dict(scan_json))
                 safe_scan_json.pop("file_contents", None)
-                version["scan_summary"] = safe_scan_json.get("summary", {})
-                version["findings"] = safe_scan_json.get("findings", [])
-                version["source_snapshot_id"] = safe_scan_json.get(
-                    "source_snapshot_id"
-                )
-                # Expose the redacted consumer-facing scan report to the
-                # review UI, including scan coverage and provenance metadata
-                # without exposing source contents.
-                version["scan_report"] = safe_scan_json
+                summary = safe_scan_json.get("summary", {})
+                if isinstance(summary, dict):
+                    # Exclude legacy embedded findings from the submitter summary.
+                    version["scan_summary"] = {
+                        key: value
+                        for key, value in summary.items()
+                        if key != "findings"
+                    }
+                report_findings = safe_scan_json.get("findings")
+                if not isinstance(report_findings, list) and isinstance(summary, dict):
+                    # Preserve findings from reports written before the field moved.
+                    report_findings = summary.get("findings", [])
+                if include_scan_report:
+                    version["findings"] = (
+                        report_findings if isinstance(report_findings, list) else []
+                    )
+                    version["source_snapshot_id"] = safe_scan_json.get(
+                        "source_snapshot_id"
+                    )
+                    # Reviewers need the redacted report and its provenance metadata.
+                    version["scan_report"] = safe_scan_json
+                elif include_submitter_findings:
+                    version["findings"] = _project_submitter_findings(
+                        report_findings
+                    )
         if isinstance(version.get("provenance_claims"), dict):
-            # Older rows may have been written before the persistence-side
-            # redaction was added; never expose those claims verbatim.
+            # Redact claims persisted before write-time redaction was added.
             version["provenance_claims"] = redact_report(
                 version["provenance_claims"]
             )
-        # 确保 trust_score 存在
+        # Submitters only need the status-page conclusion.
         if not version.get("trust_score"):
             version["trust_score"] = {"risk_summary": None}
+        if not include_scan_report:
+            version["trust_score"] = _project_submitter_trust_score(
+                version.get("trust_score")
+            )
         # 计算生效评级
         trust_data = version.get("trust_score", {})
         auto_grade = None

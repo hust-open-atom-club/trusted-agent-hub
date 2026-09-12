@@ -1,0 +1,12 @@
+{
+  "name": "benchmark-sr008-unlocked-dependency",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic supply chain benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {},
+  "dependencies": {
+    "pypi": [{"name": "demo-library", "version": "*"}]
+  }
+}

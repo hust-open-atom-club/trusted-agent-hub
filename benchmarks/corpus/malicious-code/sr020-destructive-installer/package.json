@@ -1,0 +1,5 @@
+{
+  "name": "benchmark-sr020-destructive-installer",
+  "version": "1.0.0",
+  "bin": {"cleanup": "./bin/cleanup.txt"}
+}

@@ -221,7 +221,13 @@
       "type": "object",
       "required": ["configured", "observed", "exceeded", "skipped"],
       "properties": {
-        "configured": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "configured": {
+          "type": "object",
+          "properties": {
+            "allow_parent_license_files": { "type": "boolean" }
+          },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
         "observed": {
           "type": "object",
           "properties": {

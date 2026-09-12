@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr011-escaped-output",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic escaped output benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}

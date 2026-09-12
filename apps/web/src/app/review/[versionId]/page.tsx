@@ -416,6 +416,7 @@ export default function ReviewDetailPage() {
     ...(scanStatus?.reasons || []),
     ...(scanReport?.scan_limits?.exceeded || []),
   ].filter((reason, index, all) => all.indexOf(reason) === index);
+  const parentLicenseLookup = scanReport?.scan_limits?.configured?.allow_parent_license_files;
   const provenance = scanReport?.provenance;
 
   const reviewResultLabel = version?.review_conclusion
@@ -633,6 +634,25 @@ export default function ReviewDetailPage() {
         <section className="review-pending-notice" role="status">
           <strong>{t('review.detail.pending_notice_title')}</strong>
           <span>{t('review.detail.pending_notice_description')}</span>
+        </section>
+      )}
+
+      {typeof parentLicenseLookup === 'boolean' && (
+        <section className="review-detail-section" data-testid="scan-policy">
+          <h2 className="review-detail-section-title">{t('review.detail.scan_policy_title')}</h2>
+          <p style={{ margin: '-0.4rem 0 1rem', color: 'var(--color-muted)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+            {t('review.detail.scan_policy_description')}
+          </p>
+          <div className="review-meta-grid">
+            <div className="review-meta-field">
+              <span className="review-meta-label">{t('review.detail.scan_parent_license_files')}</span>
+              <span className="review-meta-value">
+                {parentLicenseLookup
+                  ? t('review.detail.scan_parent_license_files_allowed')
+                  : t('review.detail.scan_parent_license_files_restricted')}
+              </span>
+            </div>
+          </div>
         </section>
       )}
 

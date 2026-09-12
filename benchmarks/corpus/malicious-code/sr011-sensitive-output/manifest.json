@@ -1,0 +1,9 @@
+{
+  "name": "benchmark-sr011-sensitive-output",
+  "version": "1.0.0",
+  "type": "skill",
+  "description": "Deterministic output handling benchmark fixture.",
+  "author": "TrustedAgentHub",
+  "license": "Apache-2.0",
+  "permissions": {}
+}
