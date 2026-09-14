@@ -1,4 +1,4 @@
-"""Artifact packaging service — clone repo, zip skill dir, compute SHA-256."""
+"""Artifact packaging service — zip an acquired source dir and compute SHA-256."""
 
 from __future__ import annotations
 
@@ -6,12 +6,9 @@ import hashlib
 import os
 import shutil
 import stat
-import subprocess
-import tempfile
 import time
 import zipfile
 from pathlib import Path
-from datetime import datetime, timezone
 
 from src.models.common import require_safe_source_subdirectory
 from src.settings import get_settings
@@ -54,7 +51,7 @@ def force_rmtree(path: str | os.PathLike[str]) -> None:
 
 
 def _find_skill_dir(repo_dir: Path) -> Path:
-    """Find the top-level skill directory inside a cloned repo.
+    """Find the top-level skill directory inside an acquired source tree.
 
     Heuristic: look for a directory containing SKILL.md, package.json,
     manifest.json, or pyproject.toml.  If the repo root itself is a skill,
@@ -142,12 +139,13 @@ def build_artifact(
     local_source_dir: str | None = None,
     source_subdirectory: str | None = None,
 ) -> dict[str, object]:
-    """Clone repo, zip the skill directory, compute SHA-256.
+    """Zip an already acquired source snapshot and compute SHA-256.
 
-    When ``local_source_dir`` points to an existing directory (e.g. the code
-    already fetched during the initial scan), it is used directly instead of
-    re-cloning, avoiding a second network fetch. Falls back to git clone when
-    the directory is missing or not provided.
+    When local_source_dir points to an existing directory (e.g. the code
+    already fetched during the initial scan), it is used directly. Source
+    acquisition belongs to the scanner, which applies the authenticated and
+    bounded GitHub API/ZIP policy. This service deliberately has no URL-only
+    network fallback.
 
     Returns a dict with:
       download_url  — relative URL path for the download endpoint
@@ -176,62 +174,24 @@ def build_artifact(
             "download_size_bytes": size,
         }
 
-    # ── 本地目录优先：复用初始扫描已获取的代码，不再重新拉取 ──
-    if local_source_dir:
-        source_dir = Path(local_source_dir).resolve()
-        if source_dir.is_dir():
-            skill_dir = _resolve_source_dir(source_dir, source_subdirectory)
-            _create_zip(
-                skill_dir,
-                zip_path,
-                package_name=package_name,
-                repository_root=source_dir,
-                external_legal_files=_find_external_legal_files(skill_dir, source_dir),
-            )
-            sha256 = _sha256_file(zip_path)
-            size = zip_path.stat().st_size
-            return {
-                "download_url": f"/api/v0/artifacts/{zip_name}",
-                "sha256": sha256,
-                "download_size_bytes": size,
-            }
-        print(f"[TAH-artifacts] local_source_dir 不存在，回退 git clone: {source_dir}")
-
-    with tempfile.TemporaryDirectory(prefix="tah-artifact-") as tmp:
-        tmp_dir = Path(tmp)
-
-        # Clone the repo (shallow, no checkout yet)
-        _run(
-            ["git", "clone", "--depth=1", repo_url, str(tmp_dir / "repo")],
-            cwd=tmp,
-            description=f"Clone {repo_url}",
+    if not local_source_dir:
+        raise ArtifactError(
+            "A bounded local source snapshot is required for artifact packaging"
         )
 
-        repo_dir = tmp_dir / "repo"
-
-        # Fetch and checkout the exact commit
-        _run(
-            ["git", "fetch", "--depth=1", "origin", commit_hash],
-            cwd=str(repo_dir),
-            description="Fetch exact commit",
+    source_dir = Path(local_source_dir).resolve()
+    if not source_dir.is_dir():
+        raise ArtifactError(
+            f"local_source_dir does not exist: {source_dir}"
         )
-        _run(
-            ["git", "checkout", commit_hash],
-            cwd=str(repo_dir),
-            description=f"Checkout {commit_hash[:8]}",
-        )
-
-        # Find skill directory
-        skill_dir = _resolve_source_dir(repo_dir, source_subdirectory)
-
-        # Create ZIP
-        _create_zip(
-            skill_dir,
-            zip_path,
-            package_name=package_name,
-            repository_root=repo_dir,
-            external_legal_files=_find_external_legal_files(skill_dir, repo_dir),
-        )
+    skill_dir = _resolve_source_dir(source_dir, source_subdirectory)
+    _create_zip(
+        skill_dir,
+        zip_path,
+        package_name=package_name,
+        repository_root=source_dir,
+        external_legal_files=_find_external_legal_files(skill_dir, source_dir),
+    )
 
     sha256 = _sha256_file(zip_path)
     size = zip_path.stat().st_size
@@ -296,24 +256,3 @@ def _sha256_file(path: Path) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
-
-
-def _run(cmd: list[str], *, cwd: str, description: str) -> None:
-    """Run a subprocess, raise ArtifactError on failure."""
-    try:
-        subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise ArtifactError(
-            f"{description} failed: {exc.stderr.strip()}"
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ArtifactError(
-            f"{description} timed out"
-        ) from exc

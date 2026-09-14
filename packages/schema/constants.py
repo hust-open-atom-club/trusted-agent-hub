@@ -248,6 +248,7 @@ class AuditAction(StrEnum):
     SUBMIT = "submit"
     SCAN_START = "scan_start"
     SCAN_COMPLETE = "scan_complete"
+    SCAN_DELETE = "scan_delete"
     APPROVE = "approve"
     REJECT = "reject"
     REQUEST_CHANGES = "request_changes"

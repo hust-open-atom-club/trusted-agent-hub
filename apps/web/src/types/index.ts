@@ -46,6 +46,32 @@ export interface PackageListResponse {
   total_pages: number;
 }
 
+/* ── 扫描任务 ── */
+
+export interface ScanTaskItem {
+  scan_id: string;
+  status: string;
+  package_name: string | null;
+  created_at: string;
+  updated_at: string | null;
+  finished_at: string | null;
+  expires_at: string | null;
+  client_request_id: string | null;
+  execution_deadline_at: string | null;
+  lifecycle: string;
+  auto_refresh: boolean;
+  delete_allowed: boolean;
+  owner_user_id: string | null;
+}
+
+export interface ScanTaskPage {
+  items: ScanTaskItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 /* ── 扫描发现 ── */
 
 export interface FindingLocation {

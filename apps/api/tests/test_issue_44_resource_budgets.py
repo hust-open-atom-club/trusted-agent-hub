@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import stat
 import zipfile
 from pathlib import Path
@@ -155,6 +156,10 @@ def test_zipball_does_not_misreport_a_policy_failure_as_network_error(
 def test_scan_task_reports_a_policy_failure_as_a_security_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This is an in-memory pipeline test.  CI may configure PostgreSQL for
+    # integration tests, but this record is intentionally not registered in
+    # scan_tasks, so do not route its state updates through persistence.
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: None)
     scan_id = "scan-policy-failure"
     trust._scans[scan_id] = {
         "status": "pending",
@@ -178,6 +183,7 @@ def test_scan_task_reports_a_policy_failure_as_a_security_error(
                 "owner": "acme",
                 "repo": "demo",
                 "ref": "main",
+                "commit_hash": "a" * 40,
                 "subdir": None,
             },
             on_complete=lambda completed_id, report, error: callbacks.append(
@@ -233,8 +239,9 @@ def test_acquisition_downloads_only_the_resolved_commit(
     observed_ref: list[str] = []
     observed_budgets: list[object] = []
 
-    def fake_mkdtemp(*, prefix: str) -> str:
+    def fake_mkdtemp(*, prefix: str, dir: str) -> str:
         assert prefix == "tah_repo_"
+        assert Path(dir) == trust._scan_temp_root_path()
         acquisition_root.mkdir()
         return str(acquisition_root)
 
@@ -302,8 +309,9 @@ def test_anonymous_acquisition_uses_a_pinned_zipball(
         archive.writestr("acme-demo-shortsha/SKILL.md", b"# demo\n")
     archive_bytes = archive_buffer.getvalue()
 
-    def fake_mkdtemp(*, prefix: str) -> str:
+    def fake_mkdtemp(*, prefix: str, dir: str) -> str:
         assert prefix == "tah_repo_"
+        assert Path(dir) == trust._scan_temp_root_path()
         acquisition_root.mkdir()
         return str(acquisition_root)
 
@@ -356,6 +364,42 @@ def test_anonymous_acquisition_uses_a_pinned_zipball(
     assert observed_commit_budget == [None]
     assert (acquisition_root / "SKILL.md").is_file()
     assert not (acquisition_root / "acme-demo-shortsha").exists()
+
+
+def test_scan_temp_cleanup_is_bounded_and_preserves_active_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "scan-repositories"
+    root.mkdir()
+    stale = root / "tah_repo_stale"
+    active = root / "tah_repo_active"
+    fresh = root / "tah_repo_fresh"
+    unrelated = root / "keep-me"
+    for directory in (stale, active, fresh):
+        directory.mkdir()
+        (directory / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+    unrelated.mkdir()
+
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ROOT", root)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ORPHAN_TTL_SECONDS", 60)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_CLEANUP_BATCH_SIZE", 10)
+    now = 10_000.0
+    os.utime(stale, (now - 120, now - 120))
+    os.utime(active, (now - 120, now - 120))
+    os.utime(fresh, (now - 10, now - 10))
+    trust._scans["active-scan"] = {
+        "full_report": {"local_source_dir": str(active)},
+    }
+
+    try:
+        assert trust._cleanup_orphan_scan_temp_dirs(now=now) == 1
+        assert not stale.exists()
+        assert active.exists()
+        assert fresh.exists()
+        assert unrelated.exists()
+    finally:
+        trust._scans.pop("active-scan", None)
 
 
 def test_extractor_reuses_the_scanner_snapshot_without_disk_reads(

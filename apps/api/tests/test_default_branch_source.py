@@ -77,6 +77,27 @@ def test_default_branch_with_slash_keeps_its_subdirectory(
     assert resolved["subdir"] == "skills/hello"
 
 
+def test_github_url_normalization_preserves_branch_and_subdirectory_case() -> None:
+    parsed = trust._parse_github_url(
+        "HTTPS://GITHUB.COM/AcMe/DeMo/tree/Release/Main/Skills/Hello/"
+    )
+
+    assert parsed == {
+        "base_url": "https://github.com/acme/demo",
+        "owner": "acme",
+        "repo": "demo",
+        "tree_path": "Release/Main/Skills/Hello",
+    }
+    assert trust._canonical_github_url(
+        "https://github.com/ACME/DEMO"
+    ) == "https://github.com/acme/demo"
+    assert trust._canonical_github_url(
+        "https://github.com/ACME/DEMO/tree/Release/Main/Skills/Hello"
+    ) != trust._canonical_github_url(
+        "https://github.com/acme/demo/tree/release/main/skills/hello"
+    )
+
+
 def test_non_default_tree_path_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         trust,
@@ -241,6 +262,48 @@ def test_acquisition_metadata_overrides_repository_claims() -> None:
     assert metadata["source"]["repository_url"].endswith("untrusted/other")
 
 
+def test_scan_reuse_requires_exact_subdirectory_and_commit_identity() -> None:
+    commit_hash = "a" * 40
+    scan_info = {
+        "repo_url": "https://github.com/acme/demo",
+        "full_report": {
+            "repo_url": "https://github.com/acme/demo",
+            "source_subdirectory": "skills/demo",
+            "commit_hash": commit_hash,
+        },
+    }
+    resolved = {"owner": "acme", "repo": "demo", "subdir": "skills/demo"}
+
+    assert trust._scan_source_matches(
+        scan_info,
+        "https://github.com/acme/demo",
+        resolved_source=resolved,
+        expected_source={"subdirectory": "skills/demo"},
+        expected_commit_hash=commit_hash,
+    ) is True
+    assert trust._scan_source_matches(
+        scan_info,
+        "https://github.com/acme/demo",
+        resolved_source={"owner": "acme", "repo": "demo", "subdir": None},
+        expected_source={"subdirectory": None},
+        expected_commit_hash=commit_hash,
+    ) is False
+    assert trust._scan_source_matches(
+        scan_info,
+        "https://github.com/acme/demo",
+        resolved_source=resolved,
+        expected_source={"subdirectory": "skills/other"},
+        expected_commit_hash=commit_hash,
+    ) is False
+    assert trust._scan_source_matches(
+        scan_info,
+        "https://github.com/acme/demo",
+        resolved_source=resolved,
+        expected_source={"subdirectory": "skills/demo"},
+        expected_commit_hash="b" * 40,
+    ) is False
+
+
 class _ProducerRepository:
     def __init__(self) -> None:
         self.version: dict[str, object] = {
@@ -262,6 +325,9 @@ class _ProducerRepository:
 
     def get_version(self, _version_id: str) -> dict[str, object]:
         return self.version
+
+    def get_scan_report(self, _version_id: str) -> None:
+        return None
 
     def get_package(self, _package_id: str) -> dict[str, str]:
         return {"name": "demo"}

@@ -132,6 +132,10 @@ def _mock_repository_default_branch(monkeypatch, default_branch: str = "main"):
         "src.routers.trust._fetch_repository_default_branch",
         lambda _parsed: default_branch,
     )
+    monkeypatch.setattr(
+        "src.routers.trust._fetch_repository_commit_hash",
+        lambda _parsed: "a" * 40,
+    )
 
 
 def _set_version_status(version_id: str, status: str):

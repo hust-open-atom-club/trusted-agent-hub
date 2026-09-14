@@ -5,11 +5,16 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 
-from src.repositories.producer_sqlalchemy import ProducerRepository
+from src.repositories.producer_sqlalchemy import (
+    ProducerRepository,
+    ScanTaskSourceConflictError,
+)
 from src.services.source_snapshots import SourceSnapshotStore
 from scanners.risk_scanner.redaction import redact_report
 from src.models.producer import (
@@ -235,6 +240,14 @@ class ProducerServiceError(Exception):
     """供给侧业务逻辑错误。"""
 
 
+class ProducerPersistenceError(ProducerServiceError):
+    """A submission could not be committed to the database."""
+
+
+class ProducerSourceConflictError(ProducerServiceError):
+    """A retained scan task already exists for the same source identity."""
+
+
 class ProducerService:
     """供给侧业务逻辑服务。"""
 
@@ -383,13 +396,20 @@ class ProducerService:
 
     # ── 提交审核 ──────────────────────────────────────────
 
-    def submit_version(self, version_id: str, user_id: str | None = None) -> tuple[str, str | None, str]:
+    def submit_version(
+        self,
+        version_id: str,
+        user_id: str | None = None,
+        *,
+        scan_task: dict[str, object] | None = None,
+    ) -> tuple[str, str | None, str]:
         """校验状态并触发扫描。
 
         Returns:
             (repo_url_or_local_path, scan_id, next_status)
             next_status 告知调用方当前版本所处的中间状态：
-            - draft → "submitted"（需 router 进一步置为 scanning）
+            - legacy callers: draft → "submitted"（需 router 进一步置为 scanning）
+            - transactional scan-task callers: any accepted state → "scanning"
             - resubmitted / changes_requested / error → "scanning"（一跳直达）
         """
         version = self.repository.get_version(version_id)
@@ -423,7 +443,96 @@ class ProducerService:
                 "版本缺少源码地址（source.repository_url），无法提交扫描"
             )
 
-        # 更新状态
+        # 生成 scan_id（由 router 层传给 _run_scan_task）
+        scan_id = f"scan-{uuid.uuid4().hex[:12]}"
+        if scan_task is not None:
+            owner_user_id = str(
+                scan_task.get("owner_user_id") or user_id or ""
+            )
+            if not owner_user_id:
+                raise ProducerServiceError(
+                    "缺少扫描任务所属用户，无法提交扫描"
+                )
+            existing_scan_id = str(
+                scan_task.get("existing_scan_id") or ""
+            ).strip()
+            if existing_scan_id:
+                try:
+                    self.repository.attach_scan_task_to_version(
+                        scan_id=existing_scan_id,
+                        version_id=version_id,
+                        owner_user_id=owner_user_id,
+                        expected_statuses={current_status},
+                        operator_id=user_id or "system",
+                    )
+                except (LookupError, ValueError) as exc:
+                    raise ProducerServiceError(str(exc)) from exc
+                except Exception as exc:
+                    raise ProducerPersistenceError(
+                        "扫描任务与版本关联失败，版本状态未改变"
+                    ) from exc
+                return repo_url, existing_scan_id, "scanning"
+
+            client_request_id = str(
+                scan_task.get("client_request_id")
+                or f"producer:{version_id}:{scan_id}"
+            )
+            expires_at = scan_task.get("expires_at")
+            if not isinstance(expires_at, datetime):
+                expires_at = None
+            source_ref = scan_task.get("source_ref")
+            commit_hash = scan_task.get("commit_hash")
+            source_subdirectory = scan_task.get("source_subdirectory")
+            if (
+                not isinstance(source_ref, str)
+                or not source_ref.strip()
+                or not isinstance(commit_hash, str)
+                or not re.fullmatch(r"[0-9a-f]{40}", commit_hash.strip().lower())
+            ):
+                raise ProducerServiceError(
+                    "扫描任务缺少已解析的不可变源码提交身份"
+                )
+            if source_subdirectory is not None and not isinstance(
+                source_subdirectory, str
+            ):
+                raise ProducerServiceError(
+                    "扫描任务的源码子目录无效"
+                )
+            try:
+                self.repository.create_version_scan_task(
+                    version_id=version_id,
+                    scan_id=scan_id,
+                    owner_user_id=owner_user_id,
+                    client_request_id=client_request_id,
+                    repo_url=repo_url,
+                    source_ref=source_ref.strip(),
+                    commit_hash=commit_hash.strip().lower(),
+                    source_subdirectory=(
+                        source_subdirectory.strip()
+                        if isinstance(source_subdirectory, str)
+                        and source_subdirectory.strip()
+                        else None
+                    ),
+                    expected_statuses={current_status},
+                    operator_id=user_id or "system",
+                    expires_at=expires_at,
+                )
+            except (LookupError, ValueError) as exc:
+                raise ProducerServiceError(str(exc)) from exc
+            except ScanTaskSourceConflictError as exc:
+                raise ProducerSourceConflictError(
+                    "该源码已有扫描任务，不允许重复扫描；"
+                    "请先删除原扫描任务后再提交"
+                ) from exc
+            except Exception as exc:
+                raise ProducerPersistenceError(
+                    "扫描任务持久化失败，版本状态未改变"
+                ) from exc
+            return repo_url, scan_id, "scanning"
+
+        # Legacy callers that do not provide a scan-task transaction retain
+        # the old status/audit behavior.  The HTTP producer route always uses
+        # the atomic branch above.
         self.repository.update_version_status(version_id, next_status)
         self.repository.create_audit_log(
             action=AuditAction.SUBMIT.value,
@@ -431,10 +540,6 @@ class ProducerService:
             target_id=version_id,
             operator_id=user_id or "system",
         )
-
-        # 生成 scan_id（由 router 层传给 _run_scan_task）
-        import uuid
-        scan_id = f"scan-{uuid.uuid4().hex[:12]}"
         return repo_url, scan_id, next_status
 
     # ── 扫描完成回调 ──────────────────────────────────────
@@ -448,6 +553,41 @@ class ProducerService:
         """
         from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
+        scan_id = (
+            str(full_report.get("scan_id")).strip()
+            if full_report.get("scan_id") is not None
+            else ""
+        )
+        completion_audit_key = (
+            f"scan-complete:{scan_id}" if scan_id else None
+        )
+        # A callback can be replayed after the process dies between the
+        # version update and the delivery marker.  Once this scan already
+        # reached pending_review, only repair the idempotent audit record.
+        if scan_id:
+            existing_version = self.repository.get_version(version_id)
+            existing_report = self.repository.get_scan_report(version_id)
+            existing_scan_json = (
+                existing_report.get("scan_json")
+                if isinstance(existing_report, dict)
+                else None
+            )
+            if (
+                isinstance(existing_version, dict)
+                and existing_version.get("status") == "pending_review"
+                and isinstance(existing_scan_json, dict)
+                and existing_scan_json.get("scan_id") == scan_id
+            ):
+                self.repository.create_audit_log(
+                    action=AuditAction.SCAN_COMPLETE.value,
+                    target_type="version",
+                    target_id=version_id,
+                    operator_id="system",
+                    detail={"scan_id": scan_id},
+                    idempotency_key=completion_audit_key,
+                )
+                return
+
         raw_scan_report = full_report.get("scan_report", {})
         scan_report = (
             redact_report(raw_scan_report)
@@ -458,6 +598,13 @@ class ProducerService:
         report_path = full_report.get("report_path", "")
         # 初始扫描保留的本地代码目录（打包产物时优先复用，不再重新拉取）
         local_source_dir = full_report.get("local_source_dir")
+        source_reacquisition_attempted = (
+            full_report.get("_source_reacquisition_attempted") is True
+        )
+        source_reacquisition_error = str(
+            full_report.get("_source_reacquisition_error")
+            or "无法按固定 commit 重新获取扫描源码"
+        )
         acquisition_facts = full_report.get("acquisition_facts")
         package_claims = full_report.get("package_claims")
 
@@ -534,6 +681,11 @@ class ProducerService:
             if install_method == "copy_directory":
                 if repo_url and package_name and pkg_version:
                     try:
+                        if source_reacquisition_attempted and (
+                            not isinstance(local_source_dir, str)
+                            or not Path(local_source_dir).is_dir()
+                        ):
+                            raise ArtifactError(source_reacquisition_error)
                         artifact_kwargs = {
                             "repo_url": repo_url,
                             "commit_hash": str(commit_hash),
@@ -568,9 +720,17 @@ class ProducerService:
                             target_id=version_id,
                             operator_id="system",
                             detail={
+                                "scan_id": scan_id or None,
                                 "error": f"artifact packaging failed: {exc}"
                             },
+                            idempotency_key=completion_audit_key,
                         )
+                        # Packaging failures are terminal and must not retry.
+                        if scan_id:
+                            self._terminalize_scan_task_on_packaging_failure(
+                                scan_id,
+                                f"安装产物打包失败: {exc}",
+                            )
                         return
                     finally:
                         # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
@@ -627,7 +787,7 @@ class ProducerService:
             target_id=version_id,
             operator_id="system",
             detail={
-                "scan_id": full_report.get("scan_id"),
+                "scan_id": scan_id or None,
                 "findings_count": (
                     scan_report.get("summary", {}).get("total", 0)
                     if isinstance(scan_report, dict)
@@ -642,6 +802,7 @@ class ProducerService:
                     else None
                 ),
             },
+            idempotency_key=completion_audit_key,
         )
 
     def _apply_artifact_to_version(
@@ -801,17 +962,80 @@ class ProducerService:
         data["installation"] = installation
         self.repository.update_version_data(version_id, data)
 
-    def handle_scan_error(self, version_id: str, error: str) -> None:
-        """扫描失败回调。"""
+    def handle_scan_error(
+        self,
+        version_id: str,
+        error: str,
+        *,
+        scan_id: str | None = None,
+    ) -> None:
+        """扫描失败回调，支持按 scan_id 幂等重放。"""
         self.repository.update_version_status(version_id, "error")
-        self.repository.update_version_data(version_id, {"scan_error": error})
+        error_updates: dict[str, object] = {"scan_error": error}
+        if scan_id:
+            error_updates["scan_error_scan_id"] = scan_id
+        self.repository.update_version_data(version_id, error_updates)
         self.repository.create_audit_log(
             action=AuditAction.SCAN_COMPLETE.value,
             target_type="version",
             target_id=version_id,
             operator_id="system",
-            detail={"error": error},
+            detail={"scan_id": scan_id, "error": error},
+            idempotency_key=(
+                f"scan-complete:{scan_id}" if scan_id else None
+            ),
         )
+
+    def _terminalize_scan_task_on_packaging_failure(
+        self,
+        scan_id: str,
+        error: str,
+    ) -> None:
+        """Finalize a scan whose completion callback failed during packaging."""
+        from src.routers.trust import (
+            _get_scan_task_repository,
+            _remember_scan_info,
+            _update_scan_state,
+        )
+
+        repository = _get_scan_task_repository()
+        if repository is not None:
+            try:
+                terminalized = repository.terminalize_scan_task_after_packaging_failure(
+                    scan_id, error
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to terminalize scan task %s after a packaging failure",
+                    scan_id,
+                )
+                return
+            if terminalized:
+                task = repository.get_scan_task(scan_id)
+                if task is not None:
+                    from src.routers.trust import _scan_info_from_task
+
+                    _remember_scan_info(_scan_info_from_task(task))
+            return
+
+        try:
+            _update_scan_state(
+                scan_id,
+                {
+                    "status": "error",
+                    "error": error,
+                    "callback_status": "delivered",
+                    "callback_next_attempt_at": None,
+                    "callback_last_error": None,
+                },
+                required=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to terminalize in-memory scan task %s after a "
+                "packaging failure",
+                scan_id,
+            )
 
     # ── 手动评级 ────────────────────────────────────────────
 
@@ -1346,43 +1570,103 @@ class ProducerService:
 
     def _try_rebuild_artifact(self, version_id: str) -> bool:
         """发布兜底：安装资料缺失/产物丢失时补打包。成功返回 True。"""
-        from src.services.artifacts import ArtifactError, build_artifact
+        from src.models.common import require_safe_source_subdirectory
+        from src.routers.trust import (
+            _acquire_repo_source,
+            _normalized_commit_hash,
+            _parse_github_url,
+        )
+        from src.services.artifacts import build_artifact, force_rmtree
 
         version = self.repository.get_version(version_id)
         if version is None:
             return False
         source = version.get("source", {})
-        repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
-        commit_hash = source.get("commit_hash", "") if isinstance(source, dict) else ""
-        source_subdirectory = source.get("subdirectory", "") if isinstance(source, dict) else ""
-        if not repo_url or not commit_hash or len(commit_hash) != 40:
+        source = source if isinstance(source, dict) else {}
+        acquisition_facts = version.get("acquisition_facts")
+        acquired_source = (
+            acquisition_facts.get("source")
+            if isinstance(acquisition_facts, dict)
+            else None
+        )
+        acquired_source = acquired_source if isinstance(acquired_source, dict) else {}
+        repo_url = source.get("repository_url") or acquired_source.get("repository_url")
+        commit_hash = source.get("commit_hash") or acquired_source.get("commit_hash")
+        source_subdirectory = source.get("subdirectory")
+        if source_subdirectory is None:
+            source_subdirectory = acquired_source.get("subdirectory")
+        if not isinstance(repo_url, str) or not repo_url.strip():
             return False
+        normalized_commit = _normalized_commit_hash(commit_hash)
+        if normalized_commit is None:
+            return False
+        if source_subdirectory in (None, "", "."):
+            normalized_subdirectory = None
+        elif isinstance(source_subdirectory, str):
+            try:
+                normalized_subdirectory = require_safe_source_subdirectory(
+                    source_subdirectory.strip()
+                )
+            except ValueError:
+                return False
+        else:
+            return False
+
         package = self.repository.get_package(version.get("package_id", ""))
         package_name = package.get("name", "") if package else ""
         pkg_version = version.get("version", "")
         if not package_name or not pkg_version:
             return False
+
+        local_source_dir: str | None = None
         try:
+            # Reuse the scanner's bounded, optionally authenticated GitHub
+            # acquisition path. Supplying commit_hash is important: this
+            # descriptor must never resolve a moving default branch again.
+            parsed_source = _parse_github_url(repo_url)
+            parsed_source.update(
+                {
+                    "tree_path": None,
+                    "ref": normalized_commit,
+                    "subdir": normalized_subdirectory,
+                    "commit_hash": normalized_commit,
+                    "repository_verified": True,
+                    "repository_resolved": True,
+                }
+            )
+            local_source_dir, _method, acquired_commit = _acquire_repo_source(
+                parsed_source
+            )
+            if not local_source_dir or acquired_commit != normalized_commit:
+                return False
             artifact_kwargs = {
                 "repo_url": repo_url,
-                "commit_hash": str(commit_hash),
+                "commit_hash": normalized_commit,
                 "package_name": str(package_name),
                 "version": str(pkg_version),
+                "local_source_dir": local_source_dir,
             }
-            if source_subdirectory:
-                artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
-            artifact = build_artifact(
-                **artifact_kwargs,
+            if normalized_subdirectory:
+                artifact_kwargs["source_subdirectory"] = normalized_subdirectory
+            artifact = build_artifact(**artifact_kwargs)
+        except Exception as exc:
+            logger.warning(
+                "artifact rebuild source acquisition failed for %s: %s",
+                version_id,
+                exc,
             )
-        except ArtifactError:
             return False
+        finally:
+            if local_source_dir:
+                force_rmtree(local_source_dir)
+
         self._apply_artifact_to_version(
             version_id,
             artifact,
             str(package_name),
             str(pkg_version),
-            commit_hash,
-            str(source_subdirectory) if source_subdirectory else None,
+            normalized_commit,
+            normalized_subdirectory,
         )
         return True
 

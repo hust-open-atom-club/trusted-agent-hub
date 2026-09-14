@@ -10,8 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Callable
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import Field
@@ -23,7 +22,11 @@ from src.database import (
 )
 from src.auth import require_role, verify_resource_access
 from src.dependencies import CurrentUser
-from src.models.common import ErrorEnvelope, StrictContractModel
+from src.models.common import (
+    ErrorEnvelope,
+    StrictContractModel,
+    require_safe_source_subdirectory,
+)
 from src.models.producer import (
     CreatePackageRequest,
     CreateVersionRequest,
@@ -32,13 +35,19 @@ from src.models.producer import (
     VersionResponse,
 )
 from src.repositories.producer_sqlalchemy import ProducerRepository
-from src.services.producer import ProducerService, ProducerServiceError
+from src.services.producer import (
+    ProducerPersistenceError,
+    ProducerService,
+    ProducerServiceError,
+    ProducerSourceConflictError,
+)
 from src.settings import get_settings
 
 # ── 延迟导入 trust 模块的 _run_scan_task ──────────────────
 # 避免循环导入，在 submit 端点内 import
 
 router = APIRouter(prefix="/api/v0/producer", tags=["producer"])
+logger = logging.getLogger(__name__)
 
 
 def _get_producer_repository() -> ProducerRepository:
@@ -156,20 +165,205 @@ def submit_version(
         if isinstance(source_data, dict)
         else ""
     )
+    source_subdirectory_present = (
+        isinstance(source_data, dict) and "subdirectory" in source_data
+    )
+    source_subdirectory: str | None = None
+    if source_subdirectory_present:
+        raw_subdirectory = source_data.get("subdirectory")
+        if raw_subdirectory is not None and not isinstance(raw_subdirectory, str):
+            raise HTTPException(
+                status_code=400,
+                detail="Version source subdirectory is invalid",
+            )
+        if isinstance(raw_subdirectory, str):
+            try:
+                normalized_subdirectory = require_safe_source_subdirectory(
+                    raw_subdirectory.strip()
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Version source subdirectory is invalid",
+                ) from exc
+            source_subdirectory = (
+                None if normalized_subdirectory == "." else normalized_subdirectory
+            )
     resolved_source = None
     if source_url:
         from src.routers.trust import (
             _parse_github_url,
+            _pin_resolved_source,
             _resolve_default_branch_source,
         )
 
         resolved_source = _resolve_default_branch_source(
             _parse_github_url(str(source_url))
         )
+        try:
+            resolved_source = _pin_resolved_source(resolved_source)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="无法将源码仓库解析为不可变提交版本",
+            ) from exc
+        url_subdirectory = resolved_source.get("subdir")
+        url_subdirectory_present = url_subdirectory not in (None, "")
+        if not url_subdirectory_present:
+            normalized_url_subdirectory = None
+        elif isinstance(url_subdirectory, str):
+            try:
+                normalized_url_subdirectory = require_safe_source_subdirectory(
+                    url_subdirectory
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="URL source subdirectory is invalid",
+                ) from exc
+            if normalized_url_subdirectory == ".":
+                normalized_url_subdirectory = None
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="URL source subdirectory is invalid",
+            )
+        if (
+            source_subdirectory_present
+            and url_subdirectory_present
+            and normalized_url_subdirectory != source_subdirectory
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="URL source subdirectory conflicts with version source.subdirectory",
+            )
+        if source_subdirectory_present:
+            resolved_source["subdir"] = source_subdirectory
+
+    # A scan ID is a user-owned capability.  Resolve it before changing the
+    # version state so a guessed/stolen ID cannot be used to attach another
+    # user's report to this submission.  The database-backed lookup also makes
+    # reuse work after the process-local scan cache has been rebuilt.
+    initial_sid = body.initial_scan_id.strip() if body and body.initial_scan_id else None
+    initial_info = None
+    scan_owner_id = _user.id
+    if initial_sid:
+        from src.routers.trust import (
+            _authorized_scan_info,
+            _scan_source_matches,
+        )
+
+        initial_info = _authorized_scan_info(initial_sid, _user)
+        if initial_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"扫描任务 {initial_sid} 不存在或已过期",
+            )
+        scan_owner_id = str(
+            initial_info.get("owner_user_id")
+            or initial_info.get("user_id")
+            or ""
+        ).strip()
+        if not scan_owner_id:
+            raise HTTPException(
+                status_code=503,
+                detail="Scan task has no owner",
+            )
+        if initial_info.get("status") != "complete" or not initial_info.get(
+            "full_report"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="只有已完成的扫描任务才能复用",
+            )
+        if resolved_source is None or not source_url:
+            raise HTTPException(
+                status_code=400,
+                detail="复用扫描结果时必须提供源码仓库地址",
+            )
+        expected_commit_hash = (
+            resolved_source.get("commit_hash")
+            if isinstance(resolved_source, dict)
+            else None
+        )
+        if not source_url or not _scan_source_matches(
+            initial_info,
+            str(source_url),
+            resolved_source=resolved_source,
+            expected_source=source_data if isinstance(source_data, dict) else None,
+            expected_commit_hash=expected_commit_hash,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="扫描任务与当前版本的源码仓库不匹配",
+            )
+
+    # Reject duplicates before moving the version or creating a scan task.
+    if not initial_sid and source_url:
+        from src.routers.trust import (
+            _find_scan_task_by_source_identity,
+            _scan_lifecycle,
+        )
+
+        duplicate_info = _find_scan_task_by_source_identity(
+            _user.id,
+            str(source_url),
+            source_subdirectory,
+        )
+        if duplicate_info is not None:
+            duplicate_lifecycle = _scan_lifecycle(duplicate_info)
+            suffix = (
+                "；请先删除原扫描任务后再提交"
+                if duplicate_lifecycle in {
+                    "llm_timeout",
+                    "total_timeout",
+                    "error",
+                    "complete_unsubmitted",
+                }
+                else ""
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"该源码已有扫描任务 {duplicate_info.get('scan_id')} "
+                    f"（{duplicate_lifecycle}），不允许重复扫描{suffix}。"
+                ),
+            )
 
     service = ProducerService(repo)
     try:
-        repo_url, scan_id, next_status = service.submit_version(version_id, user_id=_user.id)
+        repo_url, scan_id, _ = service.submit_version(
+            version_id,
+            user_id=_user.id,
+            scan_task=(
+                {
+                    "owner_user_id": scan_owner_id,
+                    "existing_scan_id": initial_sid,
+                }
+                if initial_sid
+                else {
+                    "owner_user_id": _user.id,
+                    "source_ref": resolved_source.get("ref")
+                    if isinstance(resolved_source, dict)
+                    else None,
+                    "commit_hash": resolved_source.get("commit_hash")
+                    if isinstance(resolved_source, dict)
+                    else None,
+                    "source_subdirectory": resolved_source.get("subdir")
+                    if isinstance(resolved_source, dict)
+                    else None,
+                }
+            ),
+        )
+    except ProducerPersistenceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="扫描任务持久化暂时不可用，版本状态未改变",
+        ) from exc
+    except ProducerSourceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -178,81 +372,203 @@ def submit_version(
     version_row = repo.get_version(version_id)
     signals: dict[str, object] = {}
     if version_row:
-        signals = collect_platform_signals(
-            repo,
-            version_id=version_id,
-            package_id=str(version_row.get("package_id", "")),
-            submitter_id=_user.id,
-        )
-
-    if next_status != "scanning":
-        repo.update_version_status(version_id, "scanning")
-
-    # 构建回调闭包
-    def on_scan_done(
-        sid: str, report: dict[str, object] | None, error: str | None
-    ) -> None:
-        if error is not None:
-            service.handle_scan_error(version_id, error)
-        elif report is not None:
-            service.handle_scan_complete(version_id, report)
+        try:
+            signals = collect_platform_signals(
+                repo,
+                version_id=version_id,
+                package_id=str(version_row.get("package_id", "")),
+                submitter_id=_user.id,
+            )
+        except Exception:  # pragma: no cover - scan dispatch must remain durable
+            # A signal read is advisory.  It must not strand the atomically
+            # created scan task before BackgroundTasks gets its work item.
+            logger.exception("Failed to collect platform signals for %s", version_id)
+            signals = {}
 
     # ── 检查是否可以复用初始扫描结果 ──
-    initial_sid = body.initial_scan_id if body else None
-    if initial_sid:
-        from src.routers.trust import _scans
-        initial_info = _scans.get(initial_sid)
-        if initial_info and initial_info.get("status") == "complete":
-            full_report = initial_info.get("full_report")
-            if full_report:
-                # 创建新的 service 实例（避免闭包引用问题）
-                _repo = _get_producer_repository()
-                _svc = ProducerService(_repo)
-                _svc.handle_scan_complete(version_id, full_report)
+    if initial_sid and initial_info is not None:
+        from src.routers.trust import (
+            _deliver_scan_callback,
+            _get_scan_task_repository,
+            _load_scan_info,
+            _remember_scan_info,
+            _schedule_scan_callback_retry,
+            _scan_info_from_task,
+            _update_scan_state,
+            _version_scan_completion_callback,
+        )
+
+        try:
+            # The association was committed by submit_version above.  Mirror
+            # it before invoking user-visible side effects as a guard for
+            # process-local state and for repositories with old task rows.
+            _update_scan_state(
+                initial_sid,
+                {"version_id": version_id},
+                required=True,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="扫描任务关联暂时不可用，回调尚未执行",
+            ) from exc
+
+        callback_info = _load_scan_info(initial_sid) or initial_info
+        callback_lease_token: str | None = None
+        callback_repository = _get_scan_task_repository()
+        if callback_repository is not None:
+            claim_callback = getattr(
+                callback_repository,
+                "claim_scan_callback_task",
+                None,
+            )
+            claimed_callback = (
+                claim_callback(
+                    initial_sid,
+                    lease_seconds=30 * 60,
+                )
+                if claim_callback is not None
+                else None
+            )
+            if claimed_callback is None and claim_callback is not None:
+                latest_info = _load_scan_info(initial_sid)
+                if latest_info and latest_info.get("callback_status") == "delivered":
+                    latest_version = repo.get_version(version_id) or {}
+                    latest_status = str(
+                        latest_version.get("status") or "scanning"
+                    )
+                    return SubmitResponse(
+                        version_id=version_id,
+                        status=(
+                            "pending_review"
+                            if latest_status == "pending_review"
+                            else "error"
+                        ),
+                        scan_id=initial_sid,
+                        message=(
+                            "扫描结果已复用，版本已进入待审核"
+                            if latest_status == "pending_review"
+                            else "复用扫描结果处理失败"
+                        ),
+                    )
                 return SubmitResponse(
                     version_id=version_id,
-                    status="pending_review",
+                    status="scanning",
                     scan_id=initial_sid,
-                    message="复用初次扫描结果，已跳过重复扫描",
+                    message="扫描结果复用回调正在处理中，请稍后查询状态",
                 )
+            if claimed_callback is not None:
+                callback_info = _scan_info_from_task(claimed_callback)
+                _remember_scan_info(callback_info)
+                callback_lease_token = (
+                    callback_info.get("lease_token")
+                    if isinstance(callback_info.get("lease_token"), str)
+                    else None
+                )
+                # The persisted report deliberately omits local_source_dir.
+                # Reload after remembering the claimed row so an in-process
+                # scan can contribute its complete runtime report before the
+                # callback decides whether it must reacquire the source.
+                merged_callback_info = _load_scan_info(initial_sid)
+                if merged_callback_info is not None:
+                    callback_info = merged_callback_info
+                if callback_lease_token:
+                    callback_info["lease_token"] = callback_lease_token
+
+        full_report = callback_info.get("full_report")
+        if not isinstance(full_report, dict):
+            raise HTTPException(
+                status_code=503,
+                detail="扫描报告暂时不可用，回调已保留待重试",
+            )
+        delivered = False
+        try:
+            delivered = _deliver_scan_callback(
+                initial_sid,
+                full_report,
+                None,
+                _version_scan_completion_callback(version_id),
+                lease_token=callback_lease_token,
+            )
+        finally:
+            if callback_lease_token:
+                from src.routers.trust import _release_scan_lease
+
+                _release_scan_lease(initial_sid, callback_lease_token)
+        if not delivered:
+            _schedule_scan_callback_retry(initial_sid)
+        current_version = repo.get_version(version_id) or {}
+        actual_status = str(current_version.get("status") or "scanning")
+        response_status = (
+            (
+                "pending_review"
+                if actual_status == "pending_review"
+                else "error"
+            )
+            if delivered
+            else actual_status
+        )
+        return SubmitResponse(
+            version_id=version_id,
+            status=response_status,
+            scan_id=initial_sid,
+            message=(
+                "复用初次扫描结果，已跳过重复扫描"
+                if delivered and response_status == "pending_review"
+                else "复用扫描结果处理失败"
+                if delivered
+                else "复用扫描结果的回调待重试"
+            ),
+        )
 
     # 否则正常启动后台扫描
-    from src.routers.trust import _run_scan_task, _scans, _SCAN_TTL_SECONDS
+    from src.routers.trust import (
+        _enqueue_scan_task,
+        _load_scan_info,
+        _update_scan_state,
+        _version_scan_completion_callback,
+    )
     from schema.constants import AuditAction
-    import time as _time
 
-    _scans[scan_id] = {
-        "status": "pending",
-        "package_name": None,
-        "created_at": version.get("submitted_at") or datetime.now(timezone.utc).isoformat(),
-        "finished_at": None,
-        "full_report": None,
-        "summary": None,
-        "trust_score": None,
-        "error": None,
-        "expires_at": _time.time() + _SCAN_TTL_SECONDS,
-        "user_id": _user.id,
-        "source_owner_id": source_owner_id,
-    }
+    scan_info = _load_scan_info(scan_id)
+    if scan_info is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Scan task persistence is temporarily unavailable.",
+        )
+    _update_scan_state(
+        scan_id,
+        {"source_owner_id": source_owner_id},
+    )
 
     # 扫描任务真正启动时补写 SCAN_START 审计，与 scan_complete 的 detail.scan_id
     # 形成证据链：submit → scan_start → scan_complete
-    repo.create_audit_log(
-        action=AuditAction.SCAN_START.value,
-        target_type="version",
-        target_id=version_id,
-        operator_id=_user.id,
-        detail={"scan_id": scan_id},
-    )
+    try:
+        repo.create_audit_log(
+            action=AuditAction.SCAN_START.value,
+            target_type="version",
+            target_id=version_id,
+            operator_id=_user.id,
+            detail={"scan_id": scan_id},
+        )
+    except Exception:  # pragma: no cover - task dispatch must remain durable
+        # The task row is the scheduling source of truth.  Audit logging can
+        # be retried/reconciled separately and must not strand the scan.
+        logger.exception("Failed to write scan-start audit for %s", version_id)
 
-    background_tasks.add_task(
-        _run_scan_task,
-        scan_id,
-        repo_url,
-        on_complete=on_scan_done,
+    enqueued = _enqueue_scan_task(
+        background_tasks,
+        scan_info,
+        source=repo_url,
+        on_complete=_version_scan_completion_callback(version_id),
         signals=signals,
         resolved_source=resolved_source,
     )
+    if not enqueued:
+        raise HTTPException(
+            status_code=503,
+            detail="扫描任务已被其他执行器接管，请稍后查询状态",
+        )
 
     return SubmitResponse(
         version_id=version_id,

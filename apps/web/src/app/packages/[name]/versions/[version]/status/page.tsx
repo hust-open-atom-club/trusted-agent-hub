@@ -6,11 +6,12 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, authFetch } from '@/lib/api-fetch';
 import type { SubmitterFinding, SubmitterVersionDetail, ReviewRecord } from '@/types';
+import { SCAN_TOTAL_TIMEOUT_MS } from '@/lib/scan-polling';
 
 import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
 const POLL_INTERVAL_MS = 10_000;
-const MAX_SCAN_POLLS = 90; // 90 × 10s = 15 分钟，随后执行最后一次查询
+const MAX_SCAN_POLLS = Math.ceil(SCAN_TOTAL_TIMEOUT_MS / POLL_INTERVAL_MS);
 const TERMINAL_STATUSES = new Set(['approved', 'published', 'yanked', 'rejected', 'changes_requested', 'error']);
 
 const STATUS_LABELS: Record<string, string> = {
@@ -407,7 +408,7 @@ function StatusContent() {
                   <div className="status-alert">
                     <div className="status-alert-title">&#x23F0; 扫描仍在后台进行</div>
                     <div className="status-alert-detail">
-                      页面已在等待 15 分钟后停止自动刷新；后台任务未被判定为失败。
+                      页面已在等待 30 分钟后停止自动刷新；后台任务会依据服务端总时长规则结束。
                     </div>
                     <div className="status-alert-contact">
                       请稍后点击"刷新状态"查看结果。
@@ -424,7 +425,7 @@ function StatusContent() {
                       系统正在对您的代码进行安全扫描，包括提示注入检测、危险命令识别和凭据泄露检查...
                     </p>
                     <p className="scanning-estimate">
-                      LLM 复核最长约 15 分钟 · 页面每 10 秒自动刷新
+                      LLM 复核最长约 15 分钟；扫描总时长最长 30 分钟 · 页面每 10 秒自动刷新
                     </p>
                   </>
                 )}
@@ -550,7 +551,7 @@ function StatusContent() {
               <span className="scanning-dot" />
             </div>
             <p>扫描进行中，完成后将自动展示发现详情。</p>
-            <p className="scanning-estimate">LLM 复核最长约 15 分钟 · 页面每 10 秒自动刷新</p>
+            <p className="scanning-estimate">LLM 复核最长约 15 分钟；扫描总时长最长 30 分钟 · 页面每 10 秒自动刷新</p>
           </div>
         )
       )}

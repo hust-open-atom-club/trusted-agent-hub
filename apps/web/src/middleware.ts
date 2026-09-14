@@ -28,6 +28,7 @@ const PROTECTED: { path: string; minRole: string }[] = [
   { path: '/account', minRole: 'user' },
   { path: '/submit', minRole: 'submitter' },
   { path: '/submissions', minRole: 'submitter' },
+  { path: '/scans', minRole: 'submitter' },
   { path: '/packages', minRole: 'submitter' },
   { path: '/review', minRole: 'reviewer' },
   { path: '/admin', minRole: 'admin' },
@@ -79,5 +80,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/account/:path*', '/submit/:path*', '/submissions/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
+  matcher: ['/account/:path*', '/submit/:path*', '/submissions/:path*', '/scans/:path*', '/packages/:path*', '/review/:path*', '/admin/:path*'],
 };

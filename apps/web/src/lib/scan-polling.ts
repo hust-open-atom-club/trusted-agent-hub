@@ -1,9 +1,24 @@
-export const SCAN_FRONTEND_WAIT_MS = 15 * 60 * 1000;
+// Keep the page polling for the full backend execution budget. Terminal
+// failures stop polling immediately and remain available from the scan list.
+export const SCAN_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
+export const SCAN_FRONTEND_WAIT_MS = SCAN_TOTAL_TIMEOUT_MS;
+export const SCAN_TERMINAL_FAILURE_STATUSES = [
+  'error',
+  'llm_timeout',
+  'total_timeout',
+] as const;
+
+export function isScanTerminalFailure(status: string): boolean {
+  return (SCAN_TERMINAL_FAILURE_STATUSES as readonly string[]).includes(status);
+}
 
 const EARLY_SCAN_POLL_MS = 2_500;
 const EARLY_LLM_POLL_MS = 5_000;
 const MID_LLM_POLL_MS = 10_000;
 const LATE_LLM_POLL_MS = 15_000;
+// Callback delivery retries use a small server-side backoff, so a fixed
+// 5s client interval tracks it without hammering the API.
+const CALLBACK_PENDING_POLL_MS = 5_000;
 
 export interface LLMReviewProgress {
   status?: 'running' | 'completed' | 'degraded' | 'timeout' | string;
@@ -23,6 +38,17 @@ export interface ScanStatusPayload {
   scan_id: string;
   status: string;
   package_name?: string;
+  created_at?: string;
+  updated_at?: string;
+  finished_at?: string;
+  expires_at?: string;
+  client_request_id?: string;
+  execution_deadline_at?: string;
+  lifecycle?: string;
+  auto_refresh?: boolean;
+  delete_allowed?: boolean;
+  source_ref?: string | null;
+  source_subdirectory?: string | null;
   trust_score?: {
     grade: string | null;
     level: string | null;
@@ -47,9 +73,16 @@ function timestampMs(value: string | undefined): number | null {
 }
 
 export function scanPollIntervalMs(
-  scan: Pick<ScanStatusPayload, 'status' | 'llm_review'>,
+  scan: Pick<ScanStatusPayload, 'status' | 'lifecycle' | 'llm_review'>,
   nowMs = Date.now(),
 ): number {
+  if (isScanTerminalFailure(scan.status)) return 0;
+  if (scan.status === 'complete') {
+    // The scan finished but its submission callback may still be in
+    // flight (lifecycle=callback_pending). Poll at a fixed slow interval
+    // until the callback settles; a hard 0 here would hammer the API.
+    return scan.lifecycle === 'callback_pending' ? CALLBACK_PENDING_POLL_MS : 0;
+  }
   if (scan.status !== 'llm_review') return EARLY_SCAN_POLL_MS;
 
   const startedAt = timestampMs(scan.llm_review?.started_at) ?? nowMs;
@@ -57,6 +90,16 @@ export function scanPollIntervalMs(
   if (elapsedMs < 2 * 60 * 1000) return EARLY_LLM_POLL_MS;
   if (elapsedMs < 5 * 60 * 1000) return MID_LLM_POLL_MS;
   return LATE_LLM_POLL_MS;
+}
+
+// A 0ms interval means "stop polling" to callers, never "poll as fast as
+// possible": a loop that fed it straight into setTimeout would hammer the
+// API. The wait loop clamps the delay instead of trusting its callers to
+// have short-circuited terminal states.
+export const SCAN_MIN_POLL_MS = 1_000;
+
+export function scanPollDelayMs(internalMs: number, remainingMs: number): number {
+  return Math.max(SCAN_MIN_POLL_MS, Math.min(internalMs, remainingMs));
 }
 
 export function formatElapsed(startedAt: string | undefined, nowMs = Date.now()): string {
@@ -81,6 +124,9 @@ const SCAN_STATUS_LABELS: Record<string, string> = {
   scanning: '正在进行静态扫描',
   scoring: '正在计算信任评分',
   saving: '正在保存扫描报告',
+  llm_timeout: 'LLM 审查超时，扫描已结束',
+  total_timeout: '扫描总时长超时，扫描已结束',
+  error: '扫描失败，扫描已结束',
 };
 
 export function formatScanStatusMessage(

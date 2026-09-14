@@ -24,9 +24,9 @@ while :; do
     --tuples-only \
     --no-align \
     --set=ON_ERROR_STOP=1 \
-    --command="SELECT to_regclass('public.refresh_tokens') IS NOT NULL") \
+    --command="SELECT to_regclass('public.refresh_tokens') IS NOT NULL AND to_regclass('public.scan_tasks') IS NOT NULL") \
     && [ "$ready_result" = "t" ]; then
-    echo "[db-maintenance] refresh_tokens table is ready."
+    echo "[db-maintenance] refresh_tokens table is ready; scan_tasks table is ready."
     break
   fi
 
@@ -46,6 +46,12 @@ while :; do
     --no-psqlrc \
     --set=ON_ERROR_STOP=1 \
     --file=/maintenance/cleanup_refresh_tokens.sql
+  echo "[db-maintenance] refresh-token cleanup completed."
+  echo "[db-maintenance] running scan-task cleanup."
+  psql \
+    --no-psqlrc \
+    --set=ON_ERROR_STOP=1 \
+    --file=/maintenance/cleanup_scan_tasks.sql
   echo "[db-maintenance] next cleanup in $cleanup_interval seconds."
   sleep "$cleanup_interval"
 done

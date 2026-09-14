@@ -77,6 +77,9 @@ export default function Navbar() {
             <li>
               <Link href="/submissions">{t('nav.submissions')}</Link>
             </li>
+            <li>
+              <Link href="/scans">{t('nav.scans')}</Link>
+            </li>
           </>
         )}
         {roleLevel <= ROLE_LEVEL.reviewer && (
