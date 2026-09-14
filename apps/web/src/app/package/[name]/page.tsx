@@ -18,7 +18,6 @@ import {
   getInstallMethodInfo,
   getSelectableClients,
 } from '@/lib/install-info';
-import ScoreBadge from '@/components/ScoreBadge';
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
@@ -30,12 +29,8 @@ import PackageIcon from './PackageIcon';
 import PackageReadingNav, { type ReadingNavItem } from './PackageReadingNav';
 import {
   getFeedbackSummary,
-  getGradeClass,
   getPublicPermissionSummary,
   type PermissionSummaryItem,
-  getRiskLabelKey,
-  getTrustAdvice,
-  getTypeLabelKey,
 } from './detail-view-model';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -246,14 +241,6 @@ export default function PackageDetailPage() {
     : (selectableClients[0] ?? 'claude-code');
   const effectiveGrade = versionDetail?.effective_grade ?? pkg.grade;
   const riskLevel = versionDetail?.risk_level ?? pkg.risk_level;
-  const gradeClass = getGradeClass(effectiveGrade);
-  const riskLabel = tt(getRiskLabelKey(riskLevel), { defaultValue: riskLevel ?? tt('detail.unknown') });
-  const typeLabel = tt(getTypeLabelKey(pkg.type), { defaultValue: pkg.type });
-  const trustAdvice = versionDetail?.install_recommendation
-    ? tt(`trust_score.recommendation.${versionDetail.install_recommendation}`, {
-        defaultValue: versionDetail.install_recommendation,
-      })
-    : tt(getTrustAdvice(effectiveGrade));
   const permissionSummary = getPublicPermissionSummary(versionDetail?.permission_summary);
   const feedbackSummary = getFeedbackSummary(pkg.feedback_counts);
   const installCommand = buildInstallCommand(pkg.name, selectableClients, install?.method, effectiveClient);
@@ -287,18 +274,6 @@ export default function PackageDetailPage() {
             </p>
           )}
           <p className="detail-description">{pkg.description}</p>
-          <div className="detail-badge-row">
-            <span className={`detail-risk-chip ${gradeClass}`}>
-              {tt('detail.grade_risk', { grade: effectiveGrade ?? '--', risk: riskLabel })}
-            </span>
-            {selectableClients.length > 0 && (
-              <span className="detail-client-chip">
-                {tt('detail.compatible_clients_label', {
-                  clients: selectableClients.map(clientLabel).join(', '),
-                })}
-              </span>
-            )}
-          </div>
           <div className="detail-meta-grid">
             <div className="detail-meta-item">
               <span className="detail-meta-label">{tt('detail.meta.version')}</span>
@@ -307,10 +282,6 @@ export default function PackageDetailPage() {
             <div className="detail-meta-item">
               <span className="detail-meta-label">{tt('detail.meta.license')}</span>
               <span className="detail-meta-value">{pkg.license}</span>
-            </div>
-            <div className="detail-meta-item">
-              <span className="detail-meta-label">{tt('detail.meta.type')}</span>
-              <span className="detail-meta-value">{typeLabel}</span>
             </div>
             <div className="detail-meta-item">
               <span className="detail-meta-label">{tt('detail.meta.installs')}</span>
@@ -349,15 +320,19 @@ export default function PackageDetailPage() {
             )}
           </DetailSection>
 
-          <DetailSection id="trust" title={tt('detail.trust_conclusion')} kicker={riskLabel}>
-            <div className="detail-trust-panel">
-              <TrustScoreDetail
-                mode="public"
-                effectiveGrade={effectiveGrade}
-                publicRiskLevel={riskLevel}
-                publicInstallRecommendation={versionDetail?.install_recommendation}
-              />
-            </div>
+          <DetailSection id="trust" title={tt('detail.trust_conclusion')}>
+            {effectiveGrade || riskLevel || versionDetail?.install_recommendation ? (
+              <div className="detail-trust-panel">
+                <TrustScoreDetail
+                  mode="public"
+                  effectiveGrade={effectiveGrade}
+                  publicRiskLevel={riskLevel}
+                  publicInstallRecommendation={versionDetail?.install_recommendation}
+                />
+              </div>
+            ) : (
+              <p className="detail-muted">{tt('detail.empty.trust_score')}</p>
+            )}
           </DetailSection>
 
           <DetailSection id="permissions" title={tt('detail.nav.permissions')} kicker={tt('detail.section.permissions_kicker')}>
@@ -410,7 +385,7 @@ export default function PackageDetailPage() {
           </DetailSection>
         </motion.main>
 
-        <motion.aside className="detail-rail" aria-label={tt('detail.rail.trust_summary')} variants={listStagger}>
+        <motion.aside className="detail-rail" aria-label={tt('detail.rail.install')} variants={listStagger}>
           <motion.div className="rail-card rail-install-card" variants={softPanel}>
             <div className="rail-card-heading">
               <span>{tt('detail.rail.install')}</span>
@@ -433,26 +408,12 @@ export default function PackageDetailPage() {
               </label>
             )}
             <InstallCommandBlock command={installCommand} packageName={pkg.name} client={effectiveClient} />
-            <div className="rail-target-path">
-              <span>{tt('detail.install.target_path')}</span>
-              <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name, pkg.type)}</code>
-            </div>
-          </motion.div>
-
-          <motion.div className={`rail-card rail-trust-card ${gradeClass}`} variants={softPanel}>
-            <div className="rail-card-heading">
-              <span>{tt('detail.rail.trust_summary')}</span>
-              <ScoreBadge grade={effectiveGrade} />
-            </div>
-            <p className="rail-trust-advice">{trustAdvice}</p>
-            <div className="rail-permission-list">
-              {permissionSummary.map((item) => (
-                <div className={`rail-permission-item ${item.tone}`} key={item.labelKey}>
-                  <span>{tt(item.labelKey)}</span>
-                  <strong>{permissionSummaryText(item)}</strong>
-                </div>
-              ))}
-            </div>
+            {!install?.targets?.length && (
+              <div className="rail-target-path">
+                <span>{tt('detail.install.target_path')}</span>
+                <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name, pkg.type)}</code>
+              </div>
+            )}
           </motion.div>
         </motion.aside>
       </motion.div>

@@ -42,7 +42,7 @@ describe('TrustScoreDetail', () => {
     expect(screen.getByText('建议查看详情后安装')).toBeInTheDocument();
   });
 
-  it('shows only the effective conclusion in public mode', () => {
+  it('shows each public conclusion fact exactly once', () => {
     const modelFingerprint = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
     render(
       <TrustScoreDetail
@@ -69,15 +69,18 @@ describe('TrustScoreDetail', () => {
 
     const summary = screen.getByTestId('public-trust-summary');
     expect(summary).toHaveTextContent('评级 A · 可信');
-    expect(summary).toHaveTextContent('生效评级A');
-    expect(summary).toHaveTextContent('评级说明可信');
     expect(summary).toHaveTextContent('安装建议可安全安装');
     expect(summary).toHaveTextContent('不代表绝对安全保证');
+    expect(summary).not.toHaveTextContent('生效评级');
+    expect(summary).not.toHaveTextContent('评级说明');
     expect(summary).not.toHaveTextContent('100/100');
     expect(summary).not.toHaveTextContent('自动评级');
     expect(summary).not.toHaveTextContent('人工评级');
     expect(summary).not.toHaveTextContent('模型指纹');
     expect(summary).not.toHaveTextContent('Uses shell permission');
+
+    expect(screen.getAllByText('评级 A · 可信')).toHaveLength(1);
+    expect(screen.getAllByText('可安全安装')).toHaveLength(1);
   });
 
   it('lists top risks and explanation messages', () => {
