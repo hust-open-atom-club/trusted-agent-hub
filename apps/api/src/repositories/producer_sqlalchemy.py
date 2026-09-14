@@ -320,11 +320,24 @@ class ProducerRepository:
             return True
 
     def delete_version(self, version_id: str) -> bool:
-        """删除指定版本。"""
+        """删除指定版本，并给关联扫描任务回填保留期（不物理删，保留审计）。"""
         with self.session_factory() as session:
             ver = session.get(PackageVersionRow, version_id)
             if ver is None:
                 return False
+            current_time = _utc_now()
+            # scan_tasks.version_id drops to NULL via FK ondelete=SET NULL.
+            # Backfill retention now so the detached rows do not hold the
+            # source-identity dedup key forever.
+            for scan_row in session.scalars(
+                select(ScanTaskRow).where(
+                    ScanTaskRow.version_id == version_id,
+                    ScanTaskRow.expires_at.is_(None),
+                )
+            ):
+                finished = scan_row.finished_at or current_time
+                scan_row.expires_at = finished + _SCAN_TASK_RETENTION
+                scan_row.updated_at = current_time
             session.delete(ver)
             session.commit()
             return True
@@ -912,6 +925,38 @@ class ProducerRepository:
             )
             session.commit()
             return int(result.rowcount or 0)
+
+    def backfill_orphan_scan_task_retention(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Give detached version-scans a retention deadline.
+
+        A scan task attached to a version runs with ``expires_at = NULL``
+        while the version lives.  When the version is removed through a
+        path that bypasses ``delete_version`` (legacy rows, manual SQL), the
+        FK ``ondelete=SET NULL`` leaves an orphan holding the dedup key
+        forever.  This maintenance pass writes ``expires_at`` so the normal
+        expiry cleaner can reclaim them.
+        """
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            orphan_rows = session.scalars(
+                select(ScanTaskRow).where(
+                    ScanTaskRow.expires_at.is_(None),
+                    ScanTaskRow.version_id.is_(None),
+                    ScanTaskRow.status.in_(
+                        {"complete"} | _SCAN_TASK_FAILURE_STATUSES
+                    ),
+                )
+            ).all()
+            for row in orphan_rows:
+                finished = row.finished_at or current_time
+                row.expires_at = finished + _SCAN_TASK_RETENTION
+                row.updated_at = current_time
+            session.commit()
+            return len(orphan_rows)
 
     def list_scan_tasks_for_dedup(
         self,
