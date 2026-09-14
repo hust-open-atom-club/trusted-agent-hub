@@ -86,15 +86,15 @@ export default function TrustScoreDetail({
           overflow: 'hidden',
         }}
       >
-        <div style={{
-          padding: '1rem 1.25rem',
-          borderBottom: '1px solid var(--color-rule)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-        }}>
-          {grade && gradeColor && (
+        {grade && gradeColor && (
+          <div style={{
+            padding: '1rem 1.25rem',
+            borderBottom: '1px solid var(--color-rule)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            flexWrap: 'wrap',
+          }}>
             <span style={{
               display: 'inline-flex',
               padding: '0.2rem 0.75rem',
@@ -110,13 +110,8 @@ export default function TrustScoreDetail({
                 risk: t(`trust_score.level.${riskLevel}`, riskLevel),
               })}
             </span>
-          )}
-          {recommendation && (
-            <strong style={{ fontSize: '0.82rem', color: 'var(--color-ink-2)' }}>
-              {t(`trust_score.recommendation.${recommendation}`, recommendation)}
-            </strong>
-          )}
-        </div>
+          </div>
+        )}
         <dl style={{
           display: 'grid',
           gridTemplateColumns: 'max-content 1fr',
@@ -125,12 +120,6 @@ export default function TrustScoreDetail({
           padding: '0.9rem 1.25rem 0.6rem',
           fontSize: '0.78rem',
         }}>
-          <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.effective_grade')}</dt>
-          <dd style={{ margin: 0, fontWeight: 700 }}>{grade ?? '—'}</dd>
-          <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.rating_explanation')}</dt>
-          <dd style={{ margin: 0, fontWeight: 600 }}>
-            {riskLevel ? t(`trust_score.level.${riskLevel}`, riskLevel) : '—'}
-          </dd>
           <dt style={{ color: 'var(--color-muted)' }}>{t('trust_score.public.install_advice')}</dt>
           <dd style={{ margin: 0, fontWeight: 600 }}>
             {recommendation

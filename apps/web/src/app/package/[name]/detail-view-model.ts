@@ -5,23 +5,6 @@ import type {
   VersionSource,
 } from '@/types';
 
-export const TYPE_LABELS: Record<string, string> = {
-  skill: 'search.skill',
-  mcp_server: 'search.mcp_server',
-  plugin: 'search.plugin',
-  subagent: 'search.subagent',
-  command: 'search.command',
-  prompt: 'search.prompt',
-};
-
-export const RISK_LEVEL_LABELS: Record<string, string> = {
-  trusted: 'trust_score.level.trusted',
-  low_risk: 'trust_score.level.low_risk',
-  medium_risk: 'trust_score.level.medium_risk',
-  high_risk: 'trust_score.level.high_risk',
-  untrusted: 'trust_score.level.untrusted',
-};
-
 export type PermissionTone = 'safe' | 'caution' | 'danger';
 
 export interface PermissionSummaryItem {
@@ -71,32 +54,6 @@ export function getFeedbackSummary(
     key: 'detail.feedback_summary.counts',
     values: { positive: counts.positive, negative: counts.negative },
   };
-}
-
-export function getGradeClass(grade: string | null): string {
-  if (grade === null) return 'unknown';
-  const g = grade.toUpperCase();
-  if (g === 'A' || g === 'B') return 'trusted';
-  if (g === 'C') return 'caution';
-  if (g === 'D' || g === 'E') return 'danger';
-  return 'unknown';
-}
-
-export function getRiskLabelKey(riskLevel: string | null): string {
-  return riskLevel ? (RISK_LEVEL_LABELS[riskLevel] ?? `detail.fallback.${riskLevel}`) : 'detail.unknown';
-}
-
-export function getTypeLabelKey(type: string): string {
-  return TYPE_LABELS[type] ?? `detail.fallback.${type}`;
-}
-
-export function getTrustAdvice(grade: string | null): string {
-  if (grade === null) return 'detail.trust_advice.unknown';
-  if (grade === 'A') return 'detail.trust_advice.A';
-  if (grade === 'B') return 'detail.trust_advice.B';
-  if (grade === 'C') return 'detail.trust_advice.C';
-  if (grade === 'D') return 'detail.trust_advice.D';
-  return 'detail.trust_advice.E';
 }
 
 export function getPermissionSummary(perms?: VersionPermissions | null): PermissionSummaryItem[] {

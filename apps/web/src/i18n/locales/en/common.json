@@ -210,13 +210,13 @@
     "not_found": "Package not found",
     "not_found_hint": "The package \"{{name}}\" does not exist.",
     "trust_score": "Trust Score",
+    "trust_conclusion": "Trust conclusion",
     "source_repo": "Source Repository",
     "url": "URL",
     "ref": "Ref",
     "verified_owner": "Verified owner",
     "stars": "Stars",
     "compatible_clients": "Compatible Clients",
-    "compatible_clients_label": "Compatible clients: {{clients}}",
     "permissions": "Permissions",
     "filesystem": "Filesystem",
     "shell": "Shell",
@@ -258,9 +258,6 @@
     "grade_risk": "Grade {{grade}} · {{risk}}",
     "verified_source": "Verified source",
     "calculated": "Calculated",
-    "fallback": {
-      "custom": "custom"
-    },
     "nav": {
       "overview": "Overview",
       "trust": "Trust conclusion",
@@ -283,7 +280,6 @@
     "meta": {
       "version": "Version",
       "license": "License",
-      "type": "Type",
       "installs": "Installs",
       "feedback": "Feedback"
     },
@@ -412,18 +408,9 @@
     },
     "rail": {
       "install": "Install",
-      "trust_summary": "Trust Summary",
       "source": "Source",
       "sections": "Sections",
       "review": "Review"
-    },
-    "trust_advice": {
-      "unknown": "This package has not been evaluated yet.",
-      "A": "This package has passed all security scans and is safe to install.",
-      "B": "Low risk. Review permissions before installing.",
-      "C": "Medium risk. Review the details and confirm before installing.",
-      "D": "High risk. Installation is not recommended without thorough review.",
-      "E": "Untrusted. Installation is blocked by safety policy."
     }
   },
   "feedback": {
@@ -1017,8 +1004,6 @@
   },
   "trust_score": {
     "public": {
-      "effective_grade": "Effective grade",
-      "rating_explanation": "Rating",
       "install_advice": "Install advice",
       "disclaimer": "This advice is based on the current scan and rating rules and is not an absolute security guarantee."
     },

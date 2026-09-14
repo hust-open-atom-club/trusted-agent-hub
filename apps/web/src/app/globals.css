@@ -1782,53 +1782,9 @@ h3 {
   margin-bottom: 1rem;
 }
 
-.detail-badge-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 1.15rem;
-}
-
-.detail-risk-chip,
-.detail-client-chip,
-.detail-verified-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 0.3rem 0.75rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-rule);
-  background: var(--color-paper);
-  color: var(--color-ink-2);
-  font-size: 0.78rem;
-  font-weight: 700;
-  max-width: 100%;
-  white-space: normal;
-}
-
-.detail-risk-chip.trusted,
-.detail-verified-chip {
-  background: var(--color-success-light);
-  border-color: color-mix(in oklch, var(--color-success) 34%, var(--color-rule));
-  color: var(--color-success);
-}
-
-.detail-risk-chip.caution {
-  background: var(--color-warning-light);
-  border-color: color-mix(in oklch, var(--color-warning) 34%, var(--color-rule));
-  color: var(--color-warning);
-}
-
-.detail-risk-chip.danger {
-  background: var(--color-danger-light);
-  border-color: color-mix(in oklch, var(--color-danger) 34%, var(--color-rule));
-  color: var(--color-danger);
-}
-
 .detail-meta-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
 }
 
@@ -2515,7 +2471,6 @@ h3 {
 }
 
 .permission-summary-card span,
-.rail-permission-item span,
 .rail-card-heading span,
 .rail-target-path span,
 .rail-select-label {
@@ -2527,8 +2482,7 @@ h3 {
   letter-spacing: 0.04em;
 }
 
-.permission-summary-card strong,
-.rail-permission-item strong {
+.permission-summary-card strong {
   display: block;
   margin-top: 0.25rem;
   color: var(--color-ink);
@@ -2537,19 +2491,16 @@ h3 {
   overflow-wrap: anywhere;
 }
 
-.permission-summary-card.safe,
-.rail-permission-item.safe {
+.permission-summary-card.safe {
   border-color: color-mix(in oklch, var(--color-success) 26%, var(--color-rule));
 }
 
-.permission-summary-card.caution,
-.rail-permission-item.caution {
+.permission-summary-card.caution {
   border-color: color-mix(in oklch, var(--color-warning) 34%, var(--color-rule));
   background: var(--color-warning-light);
 }
 
-.permission-summary-card.danger,
-.rail-permission-item.danger {
+.permission-summary-card.danger {
   border-color: color-mix(in oklch, var(--color-danger) 34%, var(--color-rule));
   background: var(--color-danger-light);
 }
@@ -2738,38 +2689,6 @@ h3 {
 .rail-target-path code {
   display: block;
   margin: 0.3rem 0 0;
-}
-
-.rail-trust-card.trusted {
-  border-top: 3px solid var(--color-success);
-}
-
-.rail-trust-card.caution {
-  border-top: 3px solid var(--color-warning);
-}
-
-.rail-trust-card.danger {
-  border-top: 3px solid var(--color-danger);
-}
-
-.rail-trust-advice {
-  margin-bottom: 0.8rem;
-  color: var(--color-ink-2);
-  font-size: 0.86rem;
-  line-height: 1.6;
-}
-
-.rail-permission-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-
-.rail-permission-item {
-  padding: 0.65rem;
-  background: var(--color-paper);
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-sm);
 }
 
 .rail-source-card {

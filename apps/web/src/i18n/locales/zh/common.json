@@ -210,13 +210,13 @@
     "not_found": "包不存在",
     "not_found_hint": "包 \"{{name}}\" 不存在。",
     "trust_score": "信任评分",
+    "trust_conclusion": "信任结论",
     "source_repo": "来源仓库",
     "url": "地址",
     "ref": "引用",
     "verified_owner": "已验证所有者",
     "stars": "星标",
     "compatible_clients": "兼容客户端",
-    "compatible_clients_label": "兼容客户端：{{clients}}",
     "permissions": "权限声明",
     "filesystem": "文件系统",
     "shell": "Shell",
@@ -258,9 +258,6 @@
     "grade_risk": "评级 {{grade}} · {{risk}}",
     "verified_source": "来源已验证",
     "calculated": "计算时间",
-    "fallback": {
-      "custom": "custom"
-    },
     "nav": {
       "overview": "概览",
       "trust": "信任结论",
@@ -283,7 +280,6 @@
     "meta": {
       "version": "版本",
       "license": "许可证",
-      "type": "类型",
       "installs": "安装",
       "feedback": "反馈"
     },
@@ -412,18 +408,9 @@
     },
     "rail": {
       "install": "安装",
-      "trust_summary": "信任摘要",
       "source": "来源",
       "sections": "页面章节",
       "review": "需查看"
-    },
-    "trust_advice": {
-      "unknown": "此包尚未经过评估。",
-      "A": "此包已通过所有安全扫描，可安全安装。",
-      "B": "低风险。安装前建议查看权限。",
-      "C": "中等风险。请阅读详情并确认后再安装。",
-      "D": "高风险。未经详细审查不建议安装。",
-      "E": "不可信。安全策略会阻止安装。"
     }
   },
   "feedback": {
@@ -1017,8 +1004,6 @@
   },
   "trust_score": {
     "public": {
-      "effective_grade": "生效评级",
-      "rating_explanation": "评级说明",
       "install_advice": "安装建议",
       "disclaimer": "该建议基于当前扫描和评分规则，不代表绝对安全保证"
     },
