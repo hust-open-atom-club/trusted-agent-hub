@@ -1321,6 +1321,112 @@ def test_new_request_id_cannot_duplicate_a_retained_source(
     assert "不允许重复扫描" in str(raised.value.detail)
 
 
+def test_concurrent_source_insert_conflict_returns_409_not_500(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A losing concurrent insert surfaces as 409, not a NameError/500."""
+    repository, _ = scan_repository
+    repository.create_scan_task(
+        scan_id="scan-race-original",
+        owner_user_id="scan-user-1",
+        client_request_id="race-original",
+        repo_url="https://github.com/acme/demo",
+    )
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    # Simulate the race window: the pre-insert dedup query misses the
+    # concurrent task, so registration reaches the unique source index.
+    monkeypatch.setattr(
+        trust,
+        "_find_scan_task_by_source",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_resolve_default_branch_source",
+        lambda parsed: {
+            **parsed,
+            "ref": "main",
+            "subdir": None,
+            "repository_resolved": True,
+        },
+    )
+    monkeypatch.setattr(
+        trust,
+        "_fetch_repository_commit_hash",
+        lambda _parsed: "a" * 40,
+    )
+    trust._scans.clear()
+
+    with pytest.raises(HTTPException) as raised:
+        trust.submit_scan(
+            BackgroundTasks(),
+            repo_url="https://github.com/acme/demo",
+            idempotency_key="race-second-request",
+            _user=SimpleNamespace(id="scan-user-1", role="submitter"),
+        )
+    assert raised.value.status_code == 409
+    assert "不允许重复扫描" in str(raised.value.detail)
+
+
+def test_slashed_ref_dedup_miss_still_returns_409(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A default branch containing ``/`` must not break dedup into a 500."""
+    repository, _ = scan_repository
+    repository.create_scan_task(
+        scan_id="scan-slashed-ref",
+        owner_user_id="scan-user-1",
+        client_request_id="slashed-ref-original",
+        repo_url="https://github.com/acme/demo/tree/release/1.0",
+        source_ref="release/1.0",
+    )
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    monkeypatch.setattr(
+        trust,
+        "_resolve_default_branch_source",
+        lambda parsed: {
+            **parsed,
+            "ref": "release/1.0",
+            "subdir": None,
+            "repository_resolved": True,
+        },
+    )
+    monkeypatch.setattr(
+        trust,
+        "_fetch_repository_commit_hash",
+        lambda _parsed: "b" * 40,
+    )
+    trust._scans.clear()
+
+    # With the ref known, the whole ``tree/<ref>`` prefix is stripped, so a
+    # slashed default branch no longer masquerades as a subdirectory.
+    assert trust._scan_dedup_identity(
+        "https://github.com/acme/demo/tree/release/1.0",
+        None,
+        "release/1.0",
+    ) == trust._scan_dedup_identity("https://github.com/acme/demo")
+    assert trust._scan_dedup_identity(
+        "https://github.com/acme/demo/tree/release/1.0/skills/x",
+        None,
+        "release/1.0",
+    ) == trust._scan_dedup_identity("https://github.com/acme/demo", "skills/x")
+
+    # The second scan of the bare repository URL misses the URL-only
+    # pre-check (the slashed ref still looks like a subdirectory there) and
+    # must fall back to a 409 conflict instead of a 500.
+    with pytest.raises(HTTPException) as raised:
+        trust.submit_scan(
+            BackgroundTasks(),
+            repo_url="https://github.com/acme/demo",
+            idempotency_key="slashed-ref-second",
+            _user=SimpleNamespace(id="scan-user-1", role="submitter"),
+        )
+    assert raised.value.status_code == 409
+    assert "不允许重复扫描" in str(raised.value.detail)
+
+
 def test_total_timeout_marks_active_task_and_sets_failure_retention(
     scan_repository: tuple[ProducerRepository, object],
     monkeypatch: pytest.MonkeyPatch,
