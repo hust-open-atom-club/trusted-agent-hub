@@ -874,13 +874,52 @@ def _merge_runtime_scan_info(
     return merged
 
 
+_MEMORY_LIGHT_FIELDS = frozenset(
+    {
+        "full_report",
+        "package_metadata",
+        "summary",
+        "trust_score",
+        "llm_review",
+        "capabilities",
+        "local_source_dir",
+        "acquisition_facts",
+        "package_claims",
+    }
+)
+
+
+def _memory_scan_info(info: dict[str, Any]) -> dict[str, Any]:
+    """Return a memory-safe copy without the heavy report fields.
+
+    The database owns the full report; the process-local mirror only keeps
+    status/progress/lease fields so a large scan backlog cannot inflate
+    resident memory.  Callers that need the report re-read it from the
+    database via ``_load_scan_info``.
+    """
+    return {k: v for k, v in info.items() if k not in _MEMORY_LIGHT_FIELDS}
+
+
 def _remember_scan_info(info: dict[str, Any]) -> None:
     scan_id = str(info.get("scan_id") or "")
     if not scan_id:
         return
+    # Memory-only mode (no scan_tasks persistence) is the only mode allowed
+    # to keep the report in the mirror: the pipeline callback reads it from
+    # there because no database exists to consult later.
+    repository = _get_scan_task_repository()
+    keep_heavy = repository is None
     with _SCAN_PROGRESS_LOCK:
         current = _scans.get(scan_id)
-        _scans[scan_id] = _merge_runtime_scan_info(info, current)
+        persisted_info = info if keep_heavy else _memory_scan_info(info)
+        # In memory-only mode the mirror is the only record, so the previous
+        # mirror entry is passed through untouched; otherwise both sides go
+        # in as light copies.
+        if current and not keep_heavy:
+            current_arg = _memory_scan_info(current)
+        else:
+            current_arg = current
+        _scans[scan_id] = _merge_runtime_scan_info(persisted_info, current_arg)
 
 
 def _load_scan_info(scan_id: str) -> dict[str, Any] | None:
@@ -1146,6 +1185,8 @@ def _register_scan_task(
         "source_owner_id": owner_user_id,
     }
     with _SCAN_PROGRESS_LOCK:
+        # Memory-only mode has no database to consult later, so the heavy
+        # report fields must stay in the runtime record here.
         _scans[scan_id] = info
     return info, True
 
@@ -1731,13 +1772,12 @@ def _find_scan_task_by_source(
     repository = _get_scan_task_repository()
     if repository is not None:
         tasks = repository.list_scan_tasks_for_dedup(
-            owner_user_id=owner_user_id
+            owner_user_id=owner_user_id,
+            repo_url=repo_url,
         )
         for task in tasks:
             info = _scan_info_from_task(task)
-            if retained(info) and _scan_request_urls_match(
-                info.get("repo_url"), repo_url
-            ):
+            if retained(info):
                 return info
         return None
 
@@ -1770,8 +1810,12 @@ def _find_scan_task_by_source_identity(
 
     repository = _get_scan_task_repository()
     if repository is not None:
+        request_identity = _scan_dedup_identity(repo_url, source_subdirectory)
+        effective_subdirectory = request_identity[1] if request_identity else ""
         tasks = repository.list_scan_tasks_for_dedup(
-            owner_user_id=owner_user_id
+            owner_user_id=owner_user_id,
+            repo_url=repo_url,
+            source_subdirectory=effective_subdirectory,
         )
         for task in tasks:
             info = _scan_info_from_task(task)
@@ -4292,17 +4336,26 @@ def _prepare_scan_callback_report(
     subdirectory to acquire a new bounded API/ZIP snapshot. Never hand the
     artifact service an untrusted URL-only fallback.
     """
+    # The caller-supplied report (the runtime pipeline's final result) is
+    # authoritative; the process-local mirror is light and carries no
+    # report, and the database copy would be one update behind.  Only the
+    # lease/progress fields are taken from the runtime mirror.
     with _SCAN_PROGRESS_LOCK:
         runtime_info = dict(_scans.get(scan_id) or {})
     if not runtime_info:
         loaded_info = _load_scan_info(scan_id)
         runtime_info = loaded_info or {}
 
-    runtime_report = runtime_info.get("full_report")
-    callback_report: dict[str, Any] = (
-        deepcopy(runtime_report) if isinstance(runtime_report, dict) else {}
+    callback_report = deepcopy(report)
+    callback_report.update(
+        {
+            k: v
+            for k, v in (runtime_info.get("full_report") or {}).items()
+            if k not in callback_report
+            and isinstance(runtime_info.get("full_report"), dict)
+            and k not in ("local_source_dir",)
+        }
     )
-    callback_report.update(deepcopy(report))
 
     local_source_dir = callback_report.get("local_source_dir")
     controlled_dir = _controlled_scan_temp_dir(

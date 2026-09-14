@@ -917,15 +917,76 @@ class ProducerRepository:
         self,
         *,
         owner_user_id: str,
+        repo_url: str | None = None,
+        source_subdirectory: str | None = None,
     ) -> list[dict[str, object]]:
-        """Return unpaginated owner tasks for source-level duplicate checks."""
+        """Return lightweight owner tasks for source-level duplicate checks.
+
+        Only the dedup columns are loaded — ``report_json`` and other heavy
+        fields stay unread.  With ``repo_url`` the repository filter is
+        pushed down to SQL via the indexed ``dedup_repo_url`` column,
+        and with ``source_subdirectory`` the subdirectory half of the
+        identity key follows it.  The repo, callback and lease columns are
+        part of the projection because the duplicate prechecks
+        (``_scan_source_identity_match``, ``_scan_lifecycle``,
+        ``_scan_delete_allowed``) read them.
+        """
+        dedup_url = (
+            _scan_task_dedup_url(repo_url) if repo_url is not None else None
+        )
+        normalized_subdirectory: str | None = None
+        subdirectory_filter_given = False
+        if source_subdirectory not in (None, ""):
+            from src.models.common import require_safe_source_subdirectory
+
+            try:
+                normalized_subdirectory = require_safe_source_subdirectory(
+                    str(source_subdirectory).strip()
+                )
+            except ValueError:
+                return []
+            if normalized_subdirectory == ".":
+                normalized_subdirectory = None
+            subdirectory_filter_given = True
+        elif source_subdirectory == "":
+            subdirectory_filter_given = True
         with self.session_factory() as session:
-            rows = session.scalars(
-                select(ScanTaskRow)
-                .where(ScanTaskRow.owner_user_id == owner_user_id)
-                .order_by(ScanTaskRow.created_at.desc())
-            ).all()
-            return [_scan_task_data(row) for row in rows]
+            statement = select(
+                ScanTaskRow.id.label("scan_id"),
+                ScanTaskRow.owner_user_id,
+                ScanTaskRow.dedup_repo_url,
+                ScanTaskRow.repo_url,
+                ScanTaskRow.source_ref,
+                ScanTaskRow.commit_hash,
+                ScanTaskRow.source_subdirectory,
+                ScanTaskRow.version_id,
+                ScanTaskRow.status,
+                ScanTaskRow.callback_status,
+                ScanTaskRow.completion_delivered_at,
+                ScanTaskRow.lease_until,
+                ScanTaskRow.created_at,
+                ScanTaskRow.updated_at,
+                ScanTaskRow.finished_at,
+                ScanTaskRow.expires_at,
+            ).where(ScanTaskRow.owner_user_id == owner_user_id)
+            if dedup_url is not None:
+                statement = statement.where(
+                    ScanTaskRow.dedup_repo_url == dedup_url
+                )
+            if subdirectory_filter_given:
+                if normalized_subdirectory is None:
+                    statement = statement.where(
+                        ScanTaskRow.source_subdirectory.is_(None)
+                    )
+                else:
+                    statement = statement.where(
+                        ScanTaskRow.source_subdirectory
+                        == normalized_subdirectory
+                    )
+            rows = session.execute(
+                statement.order_by(ScanTaskRow.created_at.desc())
+            ).mappings()
+            return [dict(row) for row in rows]
 
     def delete_scan_task(
         self,
@@ -1317,22 +1378,27 @@ class ProducerRepository:
         self,
         *,
         owner_user_id: str | None = None,
-        limit: int = 50,
+        limit: int | None = None,
         offset: int = 0,
     ) -> list[dict[str, object]]:
-        """List persisted scans, optionally restricted to one owner."""
+        """List persisted scans, optionally restricted to one owner.
+
+        ``limit=None`` returns the full set; the legacy array contract uses
+        it because silently truncating the list would hide retained tasks
+        behind a 409.
+        """
         with self.session_factory() as session:
             statement = select(ScanTaskRow)
             if owner_user_id is not None:
                 statement = statement.where(
                     ScanTaskRow.owner_user_id == owner_user_id
                 )
-            rows = session.scalars(
-                statement
-                .order_by(ScanTaskRow.created_at.desc())
-                .offset(offset)
-                .limit(limit)
-            ).all()
+            statement = statement.order_by(ScanTaskRow.created_at.desc())
+            if limit is not None:
+                statement = statement.offset(offset).limit(limit)
+            elif offset:
+                statement = statement.offset(offset)
+            rows = session.scalars(statement).all()
             return [_scan_task_data(row) for row in rows]
 
     def count_scan_tasks(self, *, owner_user_id: str | None = None) -> int:
