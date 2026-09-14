@@ -20,7 +20,7 @@ interface AuditLogEntry {
 }
 
 const ACTION_OPTIONS_KEYS = [
-  '', 'publish', 'yank', 'approve', 'reject', 'request_changes', 'submit', 'scan_start', 'scan_complete',
+  '', 'publish', 'yank', 'approve', 'reject', 'request_changes', 'submit', 'scan_start', 'scan_complete', 'scan_delete',
 ] as const;
 
 const PAGE_SIZES = [10, 30, 50, 100];
@@ -67,6 +67,7 @@ export default function AdminAuditLogsPage() {
     submit: t('admin.audit.action.submitted'),
     scan_start: t('admin.audit.action.scan_start'),
     scan_complete: t('admin.audit.action.scan_complete'),
+    scan_delete: t('admin.audit.action.scan_delete'),
     approved: t('admin.audit.action.approve'),
     rejected: t('admin.audit.action.reject'),
     changes_requested: t('admin.audit.action.changes_requested'),

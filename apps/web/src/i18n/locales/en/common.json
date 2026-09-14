@@ -589,7 +589,8 @@
         "changes_requested": "Changes Requested",
         "submitted": "Submitted",
         "scan_start": "Scan Started",
-        "scan_complete": "Scan Complete"
+        "scan_complete": "Scan Complete",
+        "scan_delete": "Delete scan task"
       }
     },
     "grade": {
