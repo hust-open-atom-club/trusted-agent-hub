@@ -135,12 +135,18 @@ def test_scan_task_updates_and_expiration_cleanup(
         repository.update_scan_task("scan-update-1", {"owner_user_id": "other"})
 
 
+DRAFT_VERSION_ID = "atomic-version"
+DRAFT_PACKAGE_ID = "atomic-package"
+
+
 def _create_draft_version(repository: ProducerRepository) -> None:
+    if repository.get_version(DRAFT_VERSION_ID) is not None:
+        return
     with repository.session_factory() as session:
         session.add(
             PackageRow(
-                id="atomic-package",
-                name="atomic-package",
+                id=DRAFT_PACKAGE_ID,
+                name=DRAFT_PACKAGE_ID,
                 status="draft",
                 latest_version="1.0.0",
                 data={"submitter_id": "scan-user-1"},
@@ -148,8 +154,8 @@ def _create_draft_version(repository: ProducerRepository) -> None:
         )
         session.add(
             PackageVersionRow(
-                id="atomic-version",
-                package_id="atomic-package",
+                id=DRAFT_VERSION_ID,
+                package_id=DRAFT_PACKAGE_ID,
                 version="1.0.0",
                 status="draft",
                 data={
@@ -170,7 +176,7 @@ def test_version_scan_task_transaction_updates_version_and_audit_together(
     _create_draft_version(repository)
 
     task = repository.create_version_scan_task(
-        version_id="atomic-version",
+        version_id=DRAFT_VERSION_ID,
         scan_id="scan-atomic-1",
         owner_user_id="scan-user-1",
         client_request_id="atomic-request-1",
@@ -180,9 +186,9 @@ def test_version_scan_task_transaction_updates_version_and_audit_together(
     )
 
     assert task["status"] == "pending"
-    assert repository.get_version("atomic-version")["status"] == "scanning"
-    assert repository.get_scan_task("scan-atomic-1")["version_id"] == "atomic-version"
-    assert repository.list_audit_logs(target_id="atomic-version")[0]["action"] == "submit"
+    assert repository.get_version(DRAFT_VERSION_ID)["status"] == "scanning"
+    assert repository.get_scan_task("scan-atomic-1")["version_id"] == DRAFT_VERSION_ID
+    assert repository.list_audit_logs(target_id=DRAFT_VERSION_ID)[0]["action"] == "submit"
 
 
 def test_version_scan_task_transaction_rolls_back_version_on_task_failure(
@@ -199,7 +205,7 @@ def test_version_scan_task_transaction_rolls_back_version_on_task_failure(
 
     with pytest.raises(IntegrityError):
         repository.create_version_scan_task(
-            version_id="atomic-version",
+            version_id=DRAFT_VERSION_ID,
             scan_id="scan-atomic-2",
             owner_user_id="scan-user-1",
             client_request_id="atomic-request-duplicate",
@@ -208,9 +214,9 @@ def test_version_scan_task_transaction_rolls_back_version_on_task_failure(
             operator_id="scan-user-1",
         )
 
-    assert repository.get_version("atomic-version")["status"] == "draft"
+    assert repository.get_version(DRAFT_VERSION_ID)["status"] == "draft"
     assert repository.get_scan_task("scan-atomic-2") is None
-    assert repository.list_audit_logs(target_id="atomic-version") == []
+    assert repository.list_audit_logs(target_id=DRAFT_VERSION_ID) == []
 
 
 def test_reused_scan_is_attached_before_callback_can_be_delivered(
@@ -236,7 +242,7 @@ def test_reused_scan_is_attached_before_callback_can_be_delivered(
     repo_url, scan_id, next_status = ProducerService(
         repository
     ).submit_version(
-        "atomic-version",
+        DRAFT_VERSION_ID,
         user_id="scan-user-1",
         scan_task={
             "owner_user_id": "scan-user-1",
@@ -247,9 +253,9 @@ def test_reused_scan_is_attached_before_callback_can_be_delivered(
     assert repo_url == "https://github.com/acme/demo"
     assert scan_id == "scan-reused-1"
     assert next_status == "scanning"
-    assert repository.get_version("atomic-version")["status"] == "scanning"
+    assert repository.get_version(DRAFT_VERSION_ID)["status"] == "scanning"
     reused = repository.get_scan_task("scan-reused-1")
-    assert reused["version_id"] == "atomic-version"
+    assert reused["version_id"] == DRAFT_VERSION_ID
     assert reused["callback_status"] == "pending"
     assert reused["completion_delivered_at"] is None
 
@@ -637,7 +643,7 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
     commit_hash = "e" * 40
     source_url = "https://github.com/acme/demo"
     repository.update_version_data(
-        "atomic-version",
+        DRAFT_VERSION_ID,
         {
             "source": {
                 "repository_url": source_url,
@@ -722,7 +728,7 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
 
     try:
         response = producer_router.submit_version(
-            "atomic-version",
+            DRAFT_VERSION_ID,
             BackgroundTasks(),
             body=producer_router.SubmitVersionRequest(
                 initial_scan_id=scan_id,
@@ -732,9 +738,9 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
         assert response.status == "error"
         attached = repository.get_scan_task(scan_id)
         assert attached["owner_user_id"] == "scan-user-1"
-        assert attached["version_id"] == "atomic-version"
+        assert attached["version_id"] == DRAFT_VERSION_ID
         submit_audits = repository.list_audit_logs(
-            target_id="atomic-version",
+            target_id=DRAFT_VERSION_ID,
             action="submit",
         )
         assert submit_audits[-1]["operator_id"] == "scan-user-2"
@@ -888,7 +894,7 @@ def test_expired_attached_failure_with_pending_callback_remains_recoverable(
         owner_user_id="scan-user-1",
         client_request_id=f"request-expired-{status_value}-pending",
         repo_url=f"https://github.com/acme/{status_value}-pending",
-        version_id="atomic-version",
+        version_id=DRAFT_VERSION_ID,
         status=status_value,
         callback_status="pending",
         created_at=created_at,
@@ -899,7 +905,7 @@ def test_expired_attached_failure_with_pending_callback_remains_recoverable(
         owner_user_id="scan-user-1",
         client_request_id=f"request-expired-{status_value}-delivered",
         repo_url=f"https://github.com/acme/{status_value}-delivered",
-        version_id="atomic-version",
+        version_id=DRAFT_VERSION_ID,
         status=status_value,
         callback_status="delivered",
         created_at=created_at,
@@ -1136,7 +1142,7 @@ def test_scan_lifecycle_retention_and_cleanup_follow_policy(
         owner_user_id="scan-user-1",
         client_request_id="policy-attached",
         repo_url="https://github.com/acme/attached",
-        version_id="atomic-version",
+        version_id=DRAFT_VERSION_ID,
         status="complete",
         callback_status="delivered",
         created_at=old,
@@ -1210,7 +1216,7 @@ def test_scan_task_delete_is_terminal_only_and_preserves_attached_version(
         owner_user_id="scan-user-1",
         client_request_id="delete-attached",
         repo_url="https://github.com/acme/delete-attached",
-        version_id="atomic-version",
+        version_id=DRAFT_VERSION_ID,
         status="complete",
         callback_status="delivered",
         created_at=now,
@@ -1226,7 +1232,7 @@ def test_scan_task_delete_is_terminal_only_and_preserves_attached_version(
     )
     assert deleted is not None
     assert repository.get_scan_task("scan-delete-attached") is None
-    assert repository.get_version("atomic-version")["status"] == "draft"
+    assert repository.get_version(DRAFT_VERSION_ID)["status"] == "draft"
 
 
 def test_scan_status_projection_exposes_each_policy_row() -> None:

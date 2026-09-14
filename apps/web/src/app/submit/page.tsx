@@ -91,6 +91,39 @@ type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' 
 
 class TerminalScanError extends Error {}
 
+interface ScanConflictDetail {
+  message: string;
+  conflict_scan_id: string;
+  lifecycle: string;
+  delete_allowed: boolean;
+}
+
+function parseScanConflictDetail(raw: unknown): ScanConflictDetail | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const d = raw as Record<string, unknown>;
+  if (typeof d.conflict_scan_id !== 'string' || !d.conflict_scan_id) return null;
+  return {
+    message:
+      typeof d.message === 'string' && d.message
+        ? d.message
+        : '该源码已有扫描任务，不允许重复扫描',
+    conflict_scan_id: d.conflict_scan_id,
+    lifecycle: typeof d.lifecycle === 'string' ? d.lifecycle : 'unknown',
+    delete_allowed: d.delete_allowed === true,
+  };
+}
+
+/** Extract the error message from a submission response body, keeping the
+ * structured scan-conflict detail (dict) readable instead of "[object Object]". */
+function submissionErrorMessage(detail: unknown, fallback: string): ScanConflictDetail {
+  return parseScanConflictDetail(detail) ?? {
+    message: typeof detail === 'string' && detail ? detail : fallback,
+    conflict_scan_id: '',
+    lifecycle: 'unknown',
+    delete_allowed: false,
+  };
+}
+
 function isPlaceholderStr(v: string | undefined | null): boolean {
   if (!v || v.trim() === '') return true;
   const normalized = v.trim().toLowerCase();
@@ -133,6 +166,8 @@ function SubmitForm() {
   const [pkgKeywords, setPkgKeywords] = useState('');
 
   const [error, setError] = useState('');
+  const [conflict, setConflict] = useState<ScanConflictDetail | null>(null);
+  const [conflictBusy, setConflictBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [activeScanId, setActiveScanId] = useState('');
   const [scanTerminal, setScanTerminal] = useState(false);
@@ -202,7 +237,15 @@ function SubmitForm() {
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      throw new Error(e.detail || '扫描提交失败');
+      const conflictDetail = parseScanConflictDetail(e.detail);
+      if (conflictDetail) {
+        throw Object.assign(new Error(conflictDetail.message), {
+          conflictDetail,
+        });
+      }
+      throw new Error(
+        typeof e.detail === 'string' && e.detail ? e.detail : '扫描提交失败',
+      );
     }
     const payload = await r.json() as {
       scan_id?: unknown;
@@ -390,8 +433,65 @@ function SubmitForm() {
       setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
       setPhase('background');
     } catch (err: unknown) {
+      const conflictDetail = (
+        err as { conflictDetail?: ScanConflictDetail | null } | null
+      )?.conflictDetail;
+      if (conflictDetail && conflictDetail.delete_allowed) {
+        setConflict(conflictDetail);
+      } else {
+        setConflict(null);
+      }
       setError(err instanceof Error ? err.message : '扫描失败');
       setPhase(err instanceof TerminalScanError ? 'background' : 'input');
+    }
+  };
+
+  const handleDeleteConflictedTask = async () => {
+    if (!conflict || conflictBusy) return;
+    setConflictBusy(true);
+    setError('');
+    try {
+      const r = await authFetch(
+        `${API_BASE}/api/v0/scan/${conflict.conflict_scan_id}`,
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(
+          typeof e.detail === 'string' && e.detail
+            ? e.detail
+            : '删除旧扫描任务失败',
+        );
+      }
+      const retryRequestId = createClientRequestId();
+      writePendingScanState({
+        scanId: null,
+        clientRequestId: retryRequestId,
+        repoUrl: repoUrl.trim(),
+      });
+      setConflict(null);
+      setPhase('scanning');
+      setStatusMsg('旧扫描任务已删除，正在重新提交扫描...');
+      const scanId = await submitScanRequest(
+        repoUrl.trim(),
+        retryRequestId,
+      );
+      if (await pollScanUntilSettled(scanId)) return;
+      setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
+      setPhase('background');
+    } catch (err: unknown) {
+      const retryConflict = (
+        err as { conflictDetail?: ScanConflictDetail | null } | null
+      )?.conflictDetail;
+      if (retryConflict && retryConflict.delete_allowed) {
+        setConflict(retryConflict);
+      } else {
+        setConflict(null);
+      }
+      setError(err instanceof Error ? err.message : '删除旧扫描任务失败');
+      setPhase('input');
+    } finally {
+      setConflictBusy(false);
     }
   };
 
@@ -475,6 +575,7 @@ function SubmitForm() {
       setError('请至少选择一个兼容客户端'); return;
     }
     setError('');
+    setConflict(null);
     setPhase('submitting');
 
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
@@ -518,14 +619,21 @@ function SubmitForm() {
           field_source: fs,
         };
         const verRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${packageId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
-        if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
+        if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
         const verData = await verRes.json();
         const versionId: string = verData.id;
         const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
           body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
         });
-        if (!subRes.ok) { const e = await subRes.json().catch(() => ({ detail: '提交审核失败' })); throw new Error(e.detail || `提交审核失败 (${subRes.status})`); }
+        if (!subRes.ok) {
+          const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));
+          const subConflict = parseScanConflictDetail(e.detail);
+          if (subConflict) { setConflict(subConflict); setPhase('input'); }
+          throw new Error(
+            subConflict?.message ?? `提交审核失败 (${subRes.status})`,
+          );
+        }
         setPhase('done');
         setTimeout(() => {
           router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
@@ -561,7 +669,7 @@ function SubmitForm() {
         field_source: fs,
       };
       const verRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${createdPkgId}/versions`, { method: 'POST', headers, body: JSON.stringify(verBody) });
-      if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(e.detail || `创建版本失败 (${verRes.status})`); }
+      if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
       const verData = await verRes.json();
       const versionId: string = verData.id;
 
@@ -569,7 +677,14 @@ function SubmitForm() {
         method: 'POST', headers,
         body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
       });
-      if (!subRes.ok) { const e = await subRes.json().catch(() => ({ detail: '提交审核失败' })); throw new Error(e.detail || `提交审核失败 (${subRes.status})`); }
+      if (!subRes.ok) {
+        const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));
+        const subConflict = parseScanConflictDetail(e.detail);
+        if (subConflict) { setConflict(subConflict); setPhase('input'); }
+        throw new Error(
+          subConflict?.message ?? `提交审核失败 (${subRes.status})`,
+        );
+      }
 
       setPhase('done');
       setTimeout(() => {
@@ -625,6 +740,18 @@ function SubmitForm() {
         </div>
 
         {error && <div className="submit-error">{error}</div>}
+        {error && conflict?.delete_allowed && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className="scanner-submit-btn"
+              onClick={handleDeleteConflictedTask}
+              disabled={conflictBusy}
+            >
+              {conflictBusy ? '正在删除旧任务...' : '删除旧任务并重试'}
+            </button>
+          </div>
+        )}
 
         {/* ══ Phase: 输入 ══ */}
         {phase === 'input' && (
