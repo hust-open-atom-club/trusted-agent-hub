@@ -34,6 +34,7 @@ services:
       REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS: ${REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS:-900}
     volumes:
       - ./apps/api/src/sql/cleanup_refresh_tokens.sql:/maintenance/cleanup_refresh_tokens.sql:ro
+      - ./apps/api/src/sql/cleanup_scan_tasks.sql:/maintenance/cleanup_scan_tasks.sql:ro
       - ./deploy/cleanup-refresh-tokens.sh:/maintenance/cleanup-refresh-tokens.sh:ro
     command: ["sh", "/maintenance/cleanup-refresh-tokens.sh"]
     depends_on:

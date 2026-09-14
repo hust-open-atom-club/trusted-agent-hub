@@ -199,12 +199,16 @@ python -m src.scripts.seed_producer
   仅在换发 Access Token 时轮换，因此空闲会话最长保留 3 小时，并可能提前最多
   30 分钟失效。这是滑动空闲超时，而非会话的绝对生命周期上限；普通 API 请求
   不会写入 Refresh Token 表。
-- Compose 中的 `db-maintenance` 服务默认每 15 分钟执行一次
-  `apps/api/src/sql/cleanup_refresh_tokens.sql`，删除已使用和已过期的 Refresh Token。
+- Compose 中的 `db-maintenance` 服务默认每 15 分钟执行一次数据库清理：
+  `apps/api/src/sql/cleanup_refresh_tokens.sql` 删除已使用和已过期的 Refresh Token，
+  `apps/api/src/sql/cleanup_scan_tasks.sql` 只删除已超过 30 天保留期的失败或未提交完成扫描任务及其报告；活动任务和已提交审核任务不会被该清理任务自动删除。
+  API 进程自身也会按 `_SCAN_MAINTENANCE_INTERVAL_SECONDS`（默认 10 分钟）执行相同的
+  `scan_tasks` 清理，因此未启用 `db-maintenance` 时仍会落实扫描任务保留期。
   可通过 `REFRESH_TOKEN_CLEANUP_INTERVAL_SECONDS` 调整周期，最小值为 60 秒。
-  启动时会每 5 秒探测一次 `refresh_tokens` 表，连续 12 次失败后进程退出并由
-  Compose 重启；`docker compose logs db-maintenance` 会显示每次探测和 `DELETE` 结果。
-  若生产数据库已提供 `pg_cron`，可以改由数据库调度同一 SQL，并停用外部维护任务。
+  启动时会每 5 秒探测一次 `refresh_tokens` 和 `scan_tasks` 表，连续 12 次失败后进程
+  退出并由 Compose 重启；`docker compose logs db-maintenance` 会显示每次探测和
+  `DELETE` 结果。若生产数据库已提供 `pg_cron`，可以改由数据库调度同一组 SQL，
+  并停用外部维护任务。
 - 从旧版 Compose（项目名 `tah-dev`）升级时，数据卷会随项目名变为
   `trusted-agent-hub_*` 而新建。旧数据仍在 `tah-dev_pgdata` 等卷中；如需沿用，
   在 `.env` 中设置 `COMPOSE_PROJECT_NAME=tah-dev`，或手动迁移卷数据。

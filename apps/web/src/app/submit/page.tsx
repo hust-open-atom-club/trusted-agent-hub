@@ -2,14 +2,22 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, authFetch } from '@/lib/api-fetch';
 import {
   formatScanStatusMessage,
+  isScanTerminalFailure,
+  scanPollDelayMs,
   scanPollIntervalMs,
   SCAN_FRONTEND_WAIT_MS,
   type ScanStatusPayload,
 } from '@/lib/scan-polling';
+import {
+  clearPendingScanState,
+  readPendingScanState,
+  writePendingScanState,
+} from '@/lib/pending-scan';
 import {
   CLIENT_LABELS,
   PACKAGE_TYPE_INSTALL_CLIENTS,
@@ -51,7 +59,13 @@ const SPDX_LICENSES = [
 ];
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[\w.]+)?(?:\+[\w.]+)?$/;
-const PENDING_SCAN_STORAGE_KEY = 'trusted-agent-hub:pending-scan-id';
+
+function createClientRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 type ScanResult = ScanStatusPayload;
 
@@ -75,6 +89,8 @@ interface PackageMetadata {
 
 type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' | 'done';
 
+class TerminalScanError extends Error {}
+
 function isPlaceholderStr(v: string | undefined | null): boolean {
   if (!v || v.trim() === '') return true;
   const normalized = v.trim().toLowerCase();
@@ -87,6 +103,7 @@ function SubmitForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { token } = useAuth();
+  const { t } = useTranslation();
   const packageId = searchParams.get('packageId') || '';
   const isNewVersion = !!packageId;
 
@@ -99,7 +116,7 @@ function SubmitForm() {
   >([]);
   const [selectedCapability, setSelectedCapability] = useState('');
   const [scanBase, setScanBase] = useState('');
-  const [scanRef, setScanRef] = useState('main');
+  const [scanRef, setScanRef] = useState('');
 
   const [pkgName, setPkgName] = useState('');
   const [pkgType, setPkgType] = useState('skill');
@@ -118,6 +135,7 @@ function SubmitForm() {
   const [error, setError] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
   const [activeScanId, setActiveScanId] = useState('');
+  const [scanTerminal, setScanTerminal] = useState(false);
   const [checkingBackground, setCheckingBackground] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
 
@@ -137,16 +155,6 @@ function SubmitForm() {
     }).catch(() => {});
   }, [isNewVersion, packageId, token]);
 
-  useEffect(() => {
-    try {
-      const pendingScanId = window.sessionStorage.getItem(PENDING_SCAN_STORAGE_KEY);
-      if (!pendingScanId) return;
-      setActiveScanId(pendingScanId);
-      setStatusMsg('扫描仍在后台进行，您可以刷新查看结果。');
-      setPhase('background');
-    } catch { /* sessionStorage 不可用时仍保留当前页面内的 scan_id */ }
-  }, []);
-
   /* ── 字段来源追踪 ── */
   const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
 
@@ -160,6 +168,60 @@ function SubmitForm() {
       throw new Error(body.detail || `扫描状态查询失败 (${response.status})`);
     }
     return response.json();
+  };
+
+  const setScanSourceFields = (url: string): void => {
+    const normalizedUrl = url.trim();
+    // The backend resolves the real default branch and returns it as
+    // source_ref; the regex here only captures an explicit /tree/<ref>
+    // spelling. Branch names may contain slashes, so the subdirectory is
+    // everything after the first tree segment.
+    const m = normalizedUrl.match(
+      /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\/tree\/([^/]+)(?:\/(.*))?)?$/,
+    );
+    setScanBase(m ? `https://github.com/${m[1]}` : normalizedUrl.replace(/\/tree\/.*$/, ''));
+    setScanRef(m?.[2] || '');
+  };
+
+  const submitScanRequest = async (
+    url: string,
+    clientRequestId: string,
+  ): Promise<string> => {
+    const normalizedUrl = url.trim();
+    const r = await authFetch(`${API_BASE}/api/v0/scan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'Idempotency-Key': clientRequestId,
+      },
+      body: JSON.stringify({
+        repo_url: normalizedUrl,
+        client_request_id: clientRequestId,
+      }),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(e.detail || '扫描提交失败');
+    }
+    const payload = await r.json() as {
+      scan_id?: unknown;
+      client_request_id?: unknown;
+    };
+    if (typeof payload.scan_id !== 'string' || !payload.scan_id) {
+      throw new Error('扫描提交响应缺少 scan_id');
+    }
+    const responseRequestId = typeof payload.client_request_id === 'string'
+      && payload.client_request_id
+      ? payload.client_request_id
+      : clientRequestId;
+    writePendingScanState({
+      scanId: payload.scan_id,
+      clientRequestId: responseRequestId,
+      repoUrl: normalizedUrl,
+    });
+    setActiveScanId(payload.scan_id);
+    return payload.scan_id;
   };
 
   const applyCompletedScan = async (
@@ -180,6 +242,7 @@ function SubmitForm() {
     } catch { /* 元数据获取失败不影响扫描结果展示 */ }
 
     setScanResult(data);
+    setScanTerminal(false);
     setMetadata(meta);
     setCapabilities(caps);
     setSelectedCapability('');
@@ -238,9 +301,7 @@ function SubmitForm() {
     if (cmV.length > 0) fs.compatibility = 'auto';
     setFieldSource(fs);
 
-    try {
-      window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
-    } catch { /* ignore */ }
+    clearPendingScanState();
     setPhase('confirm');
   };
 
@@ -249,63 +310,88 @@ function SubmitForm() {
     data: ScanStatusPayload,
   ): Promise<boolean> => {
     setStatusMsg(formatScanStatusMessage(data));
+    if (data.lifecycle === 'submitted_reviewing') {
+      clearPendingScanState();
+      setScanTerminal(true);
+      setStatusMsg(t('scans.status.submitted_reviewing_hint'));
+      setPhase('background');
+      return true;
+    }
+    if (data.lifecycle === 'callback_pending') {
+      // The scan finished but the submission callback has not been
+      // persisted yet. Keep polling so the user sees the real terminal
+      // state instead of a premature "submitted".
+      setStatusMsg(t('scans.status.callback_pending_hint'));
+      return false;
+    }
     if (data.status === 'complete') {
       await applyCompletedScan(scanId, data);
       return true;
     }
-    if (data.status === 'error') {
-      throw new Error(data.error || '扫描失败');
+    if (isScanTerminalFailure(data.status)) {
+      setScanTerminal(true);
+      throw new TerminalScanError(data.error || formatScanStatusMessage(data));
     }
     return false;
+  };
+
+  const pollScanUntilSettled = async (
+    scanId: string,
+    initial?: ScanStatusPayload,
+  ): Promise<boolean> => {
+    const pollingStartedAt = Date.now();
+    let latest: ScanStatusPayload = initial || { scan_id: scanId, status: 'pending' };
+    if (initial && await handlePolledStatus(scanId, initial)) return true;
+
+    while (Date.now() - pollingStartedAt < SCAN_FRONTEND_WAIT_MS) {
+      const remainingMs = SCAN_FRONTEND_WAIT_MS - (Date.now() - pollingStartedAt);
+      // scanPollIntervalMs returns 0 for states its callers are expected
+      // to have short-circuited; scanPollDelayMs clamps it so a missed
+      // terminal-state check degrades to a slow poll, never a 0ms loop.
+      const intervalMs = scanPollDelayMs(scanPollIntervalMs(latest), remainingMs);
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      latest = await fetchScanStatus(scanId);
+      if (await handlePolledStatus(scanId, latest)) return true;
+    }
+
+    // The final query closes the race where the backend completes as the
+    // frontend wait budget expires.
+    latest = await fetchScanStatus(scanId);
+    return handlePolledStatus(scanId, latest);
   };
 
   const runScan = async (url: string) => {
     setError('');
     setActiveScanId('');
-    try {
-      window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
-    } catch { /* ignore */ }
-    const body = { repo_url: url.trim() };
-
-    // 记录仓库 base 与 ref，供“多能力子目录重扫”拼接 URL
-    const m = url.trim().match(
-      /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\/tree\/([^/]+)(?:\/(.*))?)?$/,
-    );
-    setScanBase(m ? `https://github.com/${m[1]}` : url.trim().replace(/\/tree\/.*$/, ''));
-    setScanRef(m?.[2] || 'main');
+    setScanTerminal(false);
+    const normalizedUrl = url.trim();
+    const pending = readPendingScanState();
+    const clientRequestId = pending
+      && !pending.scanId
+      && pending.repoUrl === normalizedUrl
+      && pending.clientRequestId
+      ? pending.clientRequestId
+      : createClientRequestId();
+    // Persist before POST /scan.  If the browser refreshes after the request
+    // reaches the server but before its response arrives, the same key can
+    // recover the existing task instead of creating a duplicate scan.
+    writePendingScanState({
+      scanId: null,
+      clientRequestId,
+      repoUrl: normalizedUrl,
+    });
+    setScanSourceFields(normalizedUrl);
 
     setPhase('scanning');
     setStatusMsg('正在提交扫描任务...');
     try {
-      const r = await authFetch(`${API_BASE}/api/v0/scan`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
-      });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.detail || '扫描提交失败'); }
-      const { scan_id } = await r.json();
-      setActiveScanId(scan_id);
-
-      const pollingStartedAt = Date.now();
-      let latest: ScanStatusPayload = { scan_id, status: 'pending' };
-      while (Date.now() - pollingStartedAt < SCAN_FRONTEND_WAIT_MS) {
-        const remainingMs = SCAN_FRONTEND_WAIT_MS - (Date.now() - pollingStartedAt);
-        const intervalMs = Math.min(scanPollIntervalMs(latest), remainingMs);
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
-        latest = await fetchScanStatus(scan_id);
-        if (await handlePolledStatus(scan_id, latest)) return;
-      }
-
-      // The final query closes the race where the backend completes as the
-      // frontend wait budget expires.
-      latest = await fetchScanStatus(scan_id);
-      if (await handlePolledStatus(scan_id, latest)) return;
-      try {
-        window.sessionStorage.setItem(PENDING_SCAN_STORAGE_KEY, scan_id);
-      } catch { /* 当前页面仍会保留 scan_id */ }
+      const scanId = await submitScanRequest(normalizedUrl, clientRequestId);
+      if (await pollScanUntilSettled(scanId)) return;
       setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
       setPhase('background');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '扫描失败');
-      setPhase('input');
+      setPhase(err instanceof TerminalScanError ? 'background' : 'input');
     }
   };
 
@@ -315,20 +401,54 @@ function SubmitForm() {
     setError('');
     try {
       const latest = await fetchScanStatus(activeScanId);
-      if (latest.status === 'error') {
-        try {
-          window.sessionStorage.removeItem(PENDING_SCAN_STORAGE_KEY);
-        } catch { /* ignore */ }
-        setPhase('input');
-      }
       if (await handlePolledStatus(activeScanId, latest)) return;
       setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '扫描状态查询失败');
+      if (err instanceof TerminalScanError) setPhase('background');
     } finally {
       setCheckingBackground(false);
     }
   };
+
+  useEffect(() => {
+    if (!token) return;
+    const pending = readPendingScanState();
+    if (!pending) return;
+    if (pending.repoUrl) {
+      setRepoUrl(pending.repoUrl);
+      setScanSourceFields(pending.repoUrl);
+    }
+    if (pending.scanId) setActiveScanId(pending.scanId);
+    setStatusMsg('正在恢复扫描任务状态...');
+    setPhase('background');
+
+    let cancelled = false;
+    const recover = async () => {
+      try {
+        let scanId = pending.scanId;
+        if (!scanId) {
+          if (!pending.repoUrl || !pending.clientRequestId) {
+            throw new Error('无法恢复扫描请求，请重新发起扫描');
+          }
+          scanId = await submitScanRequest(pending.repoUrl, pending.clientRequestId);
+        }
+        if (cancelled) return;
+        setActiveScanId(scanId);
+        const settled = await pollScanUntilSettled(scanId);
+        if (!settled && !cancelled) {
+          setStatusMsg('扫描仍在后台进行，您可以稍后刷新查看结果。');
+          setPhase('background');
+        }
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : '扫描状态恢复失败');
+        setPhase(err instanceof TerminalScanError ? 'background' : 'input');
+      }
+    };
+    void recover();
+    return () => { cancelled = true; };
+  }, [token]);
 
   const handleStartScan = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -542,18 +662,31 @@ function SubmitForm() {
         {phase === 'background' && (
           <div className="scanner-status">
             <div>
-              <p className="scanner-status-title">扫描仍在后台进行</p>
+              <p className="scanner-status-title">
+                {scanTerminal ? '扫描任务已结束' : '扫描仍在后台进行'}
+              </p>
               <p className="scanner-status-msg">{statusMsg}</p>
               <p className="scanning-estimate">扫描 ID：{activeScanId}</p>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={checkBackgroundScan}
-                disabled={checkingBackground}
-                style={{ marginTop: '0.75rem' }}
-              >
-                {checkingBackground ? '查询中...' : '刷新查看结果'}
-              </button>
+              {scanTerminal ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => router.push('/scans')}
+                  style={{ marginTop: '0.75rem' }}
+                >
+                  {t('scans.goto_management')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={checkBackgroundScan}
+                  disabled={checkingBackground}
+                  style={{ marginTop: '0.75rem' }}
+                >
+                  {checkingBackground ? '查询中...' : '刷新查看结果'}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -590,8 +723,16 @@ function SubmitForm() {
                     setSelectedCapability(value);
                     if (value && scanBase) {
                       setPhase('scanning');
-                      setStatusMsg(`正在扫描子目录 ${value} ...`);
-                      runScan(`${scanBase}/tree/${scanRef}/${value}`);
+                      setStatusMsg(t('scans.scanning_subdirectory', { value }));
+                      // Prefer the backend-resolved default branch over any
+                      // local guess: source_ref comes from the completed
+                      // scan's immutable source identity.
+                      const resolvedRef = scanResult?.source_ref || scanRef;
+                      runScan(
+                        resolvedRef
+                          ? `${scanBase}/tree/${resolvedRef}/${value}`
+                          : `${scanBase}/${value}`,
+                      );
                     }
                   }}
                   style={{

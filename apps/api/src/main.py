@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
+import threading
 from typing import Dict
 
 from fastapi import FastAPI
@@ -22,18 +24,50 @@ from .routers.review import router as review_router
 from .routers.stats import router as stats_router
 from .routers.admin import router as admin_router
 from .routers.trust import router as trust_router
+from .routers.trust import v1_router as trust_v1_router
 from .routers.trust_scores import router as trust_scores_router
 from .settings import get_settings
 
 
+_logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(_application: FastAPI):
-    """Release process-wide database resources on application shutdown."""
+    """Start scan workers and release process-wide resources on shutdown."""
+    worker_stop = threading.Event()
+    worker_threads: list[threading.Thread] = []
     try:
         from src.auth import install as install_auth
         install_auth()
+        from src.routers.trust import (
+            recover_persisted_scan_tasks,
+            run_persisted_scan_recovery_loop,
+            run_scan_maintenance,
+            run_scan_maintenance_loop,
+        )
+        recover_persisted_scan_tasks()
+        try:
+            run_scan_maintenance()
+        except Exception:
+            _logger.exception("Initial scan maintenance failed")
+        for target, name in (
+            (run_persisted_scan_recovery_loop, "scan-recovery-loop"),
+            (run_scan_maintenance_loop, "scan-maintenance-loop"),
+        ):
+            thread = threading.Thread(
+                target=target,
+                args=(worker_stop,),
+                name=name,
+                daemon=True,
+            )
+            thread.start()
+            worker_threads.append(thread)
         yield
     finally:
+        worker_stop.set()
+        for thread in worker_threads:
+            thread.join(timeout=2.0)
         clear_runtime_dependencies()
 
 
@@ -66,6 +100,7 @@ def create_app() -> FastAPI:
     application.include_router(trust_scores_router, prefix="/api/v0")
     application.include_router(stats_router, prefix="/api/v0")
     application.include_router(trust_router, prefix="/api/v0")
+    application.include_router(trust_v1_router, prefix="/api/v1")
     application.include_router(producer_router)  # producer 路由自带 /api/v0 prefix
     application.include_router(review_router)
     application.include_router(admin_router)

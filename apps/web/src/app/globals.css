@@ -1664,12 +1664,9 @@ h3 {
   color: var(--color-danger);
 }
 
-.status-badge.draft {
-  background: var(--color-paper-3);
-  color: var(--color-muted);
-}
-
-.status-badge.yanked {
+.status-badge.draft,
+.status-badge.yanked,
+.status-badge.status-unknown {
   background: var(--color-paper-3);
   color: var(--color-muted);
 }

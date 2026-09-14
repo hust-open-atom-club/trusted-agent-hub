@@ -98,7 +98,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           for attempt in {1..70}; do
-            cleanup_runs=$(docker compose logs --no-color db-maintenance 2>&1 | grep -c "DELETE " || true)
+            cleanup_runs=$(docker compose logs --no-color db-maintenance 2>&1 | grep -Fc "refresh-token cleanup completed." || true)
             if [ "$cleanup_runs" -ge 2 ]; then
               docker compose ps
               docker compose logs --no-color db-maintenance

@@ -125,6 +125,8 @@ run_and_capture 23 "$success_output" \
   sh "$maintenance_script"
 assert_contains "refresh_tokens table is ready" "$success_output"
 assert_contains "running refresh-token cleanup" "$success_output"
+assert_contains "refresh-token cleanup completed." "$success_output"
+assert_contains "running scan-task cleanup" "$success_output"
 assert_contains "DELETE 2" "$success_output"
 assert_contains "next cleanup in 900 seconds" "$success_output"
 

@@ -2,16 +2,20 @@
 
 与消费侧 SqlAlchemyPackageRepository 并行，
 专门负责供给侧表（review_records / scan_reports / audit_logs / users）
+以及可恢复扫描任务（scan_tasks）的持久化，
 以及供给侧对 packages / package_versions 的写操作。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Collection, Mapping
+from datetime import datetime, timedelta, timezone
+import hashlib
+from typing import NoReturn
 from uuid import uuid4
 
-from sqlalchemy import select, func
+from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.repositories.orm import (
@@ -24,6 +28,7 @@ from src.repositories.orm_producer import (
     AuditLogRow,
     ReviewRecordRow,
     ScanReportRow,
+    ScanTaskRow,
     UserRow,
 )
 
@@ -60,6 +65,147 @@ def _serialize_dt(value: datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.isoformat().replace("+00:00", "Z")
+
+
+def _serialize_optional_dt(value: datetime | None) -> str | None:
+    return _serialize_dt(value) if value is not None else None
+
+
+def _scan_task_data(row: ScanTaskRow) -> dict[str, object]:
+    """Return the complete internal representation of a persisted scan."""
+    return {
+        "scan_id": row.id,
+        "owner_user_id": row.owner_user_id,
+        "client_request_id": row.client_request_id,
+        "repo_url": row.repo_url,
+        "dedup_repo_url": row.dedup_repo_url,
+        "source_ref": row.source_ref,
+        "commit_hash": row.commit_hash,
+        "source_subdirectory": row.source_subdirectory,
+        "version_id": row.version_id,
+        "status": row.status,
+        "package_name": row.package_name,
+        "created_at": _serialize_dt(row.created_at),
+        "updated_at": _serialize_dt(row.updated_at),
+        "lease_token": row.lease_token,
+        "lease_until": _serialize_optional_dt(row.lease_until),
+        "attempt_count": row.attempt_count,
+        "completion_delivered_at": _serialize_optional_dt(
+            row.completion_delivered_at
+        ),
+        "callback_status": row.callback_status,
+        "callback_attempt_count": row.callback_attempt_count,
+        "callback_next_attempt_at": _serialize_optional_dt(
+            row.callback_next_attempt_at
+        ),
+        "callback_last_error": row.callback_last_error,
+        "finished_at": _serialize_optional_dt(row.finished_at),
+        "expires_at": _serialize_optional_dt(row.expires_at),
+        "summary": row.summary,
+        "trust_score": row.trust_score,
+        "llm_review": row.llm_review,
+        "metadata_json": row.metadata_json,
+        "capabilities": row.capabilities,
+        "report_json": row.report_json,
+        "error": row.error,
+    }
+
+
+_SCAN_TASK_UPDATE_FIELDS = frozenset(
+    {
+        "status",
+        "package_name",
+        "version_id",
+        "source_ref",
+        "commit_hash",
+        "source_subdirectory",
+        "finished_at",
+        "expires_at",
+        "summary",
+        "trust_score",
+        "llm_review",
+        "metadata_json",
+        "capabilities",
+        "report_json",
+        "error",
+        "lease_token",
+        "lease_until",
+        "attempt_count",
+        "completion_delivered_at",
+        "callback_status",
+        "callback_attempt_count",
+        "callback_next_attempt_at",
+        "callback_last_error",
+    }
+)
+
+_SCAN_TASK_RETENTION = timedelta(days=30)
+_SCAN_TASK_EXECUTABLE_STATUSES = frozenset(
+    {
+        "pending",
+        "downloading",
+        "scanning",
+        "llm_review",
+        "scoring",
+        "saving",
+    }
+)
+_SCAN_TASK_FAILURE_STATUSES = frozenset({
+    "error",
+    "llm_timeout",
+    "total_timeout",
+})
+
+
+class ScanTaskSourceConflictError(Exception):
+    """A retained scan task already exists for the same source identity."""
+
+
+# Only these constraints map an integrity error to a scan conflict.
+_IDEMPOTENCY_CHECK_CONSTRAINT = "uq_scan_tasks_owner_request"
+_SOURCE_IDENTITY_CONSTRAINT = "uq_scan_tasks_source_identity"
+
+
+def _scan_integrity_constraint(exc: IntegrityError) -> str | None:
+    """Extract the violated unique-constraint name from an IntegrityError."""
+    if exc.orig is not None and hasattr(exc.orig, "constraint_name"):
+        name = getattr(exc.orig, "constraint_name", None)
+        if isinstance(name, str):
+            return name
+    message = str(exc.orig or exc)
+    for name in (_SOURCE_IDENTITY_CONSTRAINT, _IDEMPOTENCY_CHECK_CONSTRAINT):
+        if name in message:
+            return name
+    return None
+
+
+def _raise_scan_source_conflict(dedup_url: str) -> NoReturn:
+    """Raise when a retained task already owns this source identity."""
+    raise ScanTaskSourceConflictError(
+        f"A retained scan task already exists for {dedup_url}"
+    )
+
+
+def canonical_scan_repo_url(url: str) -> str:
+    """Normalize a GitHub URL to the repository key used by the migration."""
+    raw = url.strip()
+    lower = raw.casefold()
+    if not lower.startswith("https://github.com/"):
+        return raw.rstrip("/")
+    path = raw[len("https://github.com/"):].strip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return raw.rstrip("/")
+    owner = parts[0].casefold()
+    repo = parts[1].casefold()
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return f"https://github.com/{owner}/{repo}"
+
+
+def _scan_task_dedup_url(repo_url: str) -> str:
+    """Return the repository component of the source-identity key."""
+    return canonical_scan_repo_url(repo_url)
 
 
 class ProducerRepository:
@@ -504,6 +650,774 @@ class ProducerRepository:
                 "scanned_at": _serialize_dt(row.scanned_at),
             }
 
+    # ── 持久化扫描任务 ────────────────────────────────────
+
+    def create_scan_task(
+        self,
+        *,
+        scan_id: str,
+        owner_user_id: str,
+        client_request_id: str,
+        repo_url: str,
+        source_ref: str | None = None,
+        commit_hash: str | None = None,
+        source_subdirectory: str | None = None,
+        version_id: str | None = None,
+        status: str = "pending",
+        created_at: datetime | None = None,
+        expires_at: datetime | None = None,
+        callback_status: str | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        """Create a scan task, returning ``(task, created)``.
+
+        The unique owner/request constraint makes retries safe.  A losing
+        concurrent insert is resolved by reading the row created by the
+        winning request and returning it as an idempotent response.
+        """
+        now = created_at or _utc_now()
+        # Active tasks use the execution deadline; ``expires_at`` starts only
+        # after a terminal outcome.
+        if status in _SCAN_TASK_EXECUTABLE_STATUSES:
+            expiry = None
+        elif status in _SCAN_TASK_FAILURE_STATUSES:
+            expiry = expires_at or now + _SCAN_TASK_RETENTION
+        elif status == "complete":
+            expiry = None if version_id is not None else expires_at or now + _SCAN_TASK_RETENTION
+        else:
+            expiry = expires_at
+        callback_state = callback_status or (
+            "pending" if version_id is not None else "not_required"
+        )
+        dedup_url = _scan_task_dedup_url(repo_url)
+        with self.session_factory() as session:
+            existing = session.scalar(
+                select(ScanTaskRow).where(
+                    ScanTaskRow.owner_user_id == owner_user_id,
+                    ScanTaskRow.client_request_id == client_request_id,
+                )
+            )
+            if existing is not None:
+                return _scan_task_data(existing), False
+
+            row = ScanTaskRow(
+                id=scan_id,
+                owner_user_id=owner_user_id,
+                client_request_id=client_request_id,
+                repo_url=repo_url,
+                dedup_repo_url=dedup_url,
+                source_ref=source_ref,
+                commit_hash=commit_hash,
+                source_subdirectory=source_subdirectory,
+                version_id=version_id,
+                status=status,
+                created_at=now,
+                updated_at=now,
+                expires_at=expiry,
+                callback_status=callback_state,
+            )
+            session.add(row)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                existing = session.scalar(
+                    select(ScanTaskRow).where(
+                        ScanTaskRow.owner_user_id == owner_user_id,
+                        ScanTaskRow.client_request_id == client_request_id,
+                    )
+                )
+                if existing is not None:
+                    return _scan_task_data(existing), False
+                # Other integrity failures must remain persistence errors.
+                if _scan_integrity_constraint(exc) == _SOURCE_IDENTITY_CONSTRAINT:
+                    _raise_scan_source_conflict(dedup_url)
+                raise
+            return _scan_task_data(row), True
+
+    def create_version_scan_task(
+        self,
+        *,
+        version_id: str,
+        scan_id: str,
+        owner_user_id: str,
+        client_request_id: str,
+        repo_url: str,
+        source_ref: str | None = None,
+        commit_hash: str | None = None,
+        source_subdirectory: str | None = None,
+        expected_statuses: Collection[str],
+        operator_id: str,
+        expires_at: datetime | None = None,
+    ) -> dict[str, object]:
+        """Atomically move a version to scanning and create its scan task.
+
+        The version row, scan task row, and submit audit entry share one
+        transaction.  A missing ``scan_tasks`` table or any constraint error
+        therefore cannot leave the version in a non-retryable state.
+        """
+        now = _utc_now()
+        # Submitted tasks remain available to the review workflow and use the
+        # execution deadline while active.
+        expiry = None
+        dedup_url = _scan_task_dedup_url(repo_url)
+        with self.session_factory() as session:
+            version_row = session.get(
+                PackageVersionRow,
+                version_id,
+                with_for_update=True,
+            )
+            if version_row is None:
+                raise LookupError(f"Version {version_id} does not exist")
+            if version_row.status not in set(expected_statuses):
+                raise ValueError(
+                    f"Version {version_id} changed state while being submitted"
+                )
+            if session.get(ScanTaskRow, scan_id) is not None:
+                raise ValueError(f"Scan task {scan_id} already exists")
+
+            version_row.status = "scanning"
+            version_data = dict(version_row.data) if version_row.data else {}
+            version_data["status"] = "scanning"
+            version_row.data = version_data
+
+            scan_row = ScanTaskRow(
+                id=scan_id,
+                owner_user_id=owner_user_id,
+                client_request_id=client_request_id,
+                repo_url=repo_url,
+                dedup_repo_url=dedup_url,
+                source_ref=source_ref,
+                commit_hash=commit_hash,
+                source_subdirectory=source_subdirectory,
+                version_id=version_id,
+                status="pending",
+                created_at=now,
+                updated_at=now,
+                expires_at=expiry,
+                callback_status="pending",
+            )
+            session.add(scan_row)
+            try:
+                session.add(
+                    AuditLogRow(
+                        id=f"audit-{uuid4().hex}",
+                        action="submit",
+                        target_type="version",
+                        target_id=version_id,
+                        operator_id=operator_id,
+                        detail=None,
+                        timestamp=now,
+                    )
+                )
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                if _scan_integrity_constraint(exc) == _SOURCE_IDENTITY_CONSTRAINT:
+                    _raise_scan_source_conflict(dedup_url)
+                raise
+            return _scan_task_data(scan_row)
+
+    def attach_scan_task_to_version(
+        self,
+        *,
+        scan_id: str,
+        version_id: str,
+        owner_user_id: str,
+        expected_statuses: Collection[str],
+        operator_id: str,
+    ) -> dict[str, object]:
+        """Atomically attach a completed standalone scan to a version.
+
+        Reusing a scan is a state transition of both records.  Keeping the
+        association, version status, and submit audit in one transaction
+        ensures a callback cannot run while the task is still unassociated.
+        """
+        now = _utc_now()
+        with self.session_factory() as session:
+            version_row = session.get(
+                PackageVersionRow,
+                version_id,
+                with_for_update=True,
+            )
+            if version_row is None:
+                raise LookupError(f"Version {version_id} does not exist")
+            if version_row.status not in set(expected_statuses):
+                raise ValueError(
+                    f"Version {version_id} changed state while being submitted"
+                )
+
+            scan_row = session.get(ScanTaskRow, scan_id, with_for_update=True)
+            if scan_row is None:
+                raise LookupError(f"Scan task {scan_id} does not exist")
+            if scan_row.owner_user_id != owner_user_id:
+                raise ValueError("Scan task does not belong to the submitting user")
+            if scan_row.status != "complete" or scan_row.report_json is None:
+                raise ValueError("Only a completed scan task can be reused")
+            if scan_row.version_id not in (None, version_id):
+                raise ValueError("Scan task is already attached to another version")
+
+            version_row.status = "scanning"
+            version_data = dict(version_row.data) if version_row.data else {}
+            version_data["status"] = "scanning"
+            version_row.data = version_data
+
+            scan_row.version_id = version_id
+            scan_row.callback_status = "pending"
+            scan_row.callback_attempt_count = 0
+            scan_row.callback_next_attempt_at = None
+            scan_row.callback_last_error = None
+            scan_row.completion_delivered_at = None
+            # The review workflow owns retention after attachment.
+            scan_row.expires_at = None
+            scan_row.updated_at = now
+            session.add(
+                AuditLogRow(
+                    id=f"audit-{uuid4().hex}",
+                    action="submit",
+                    target_type="version",
+                    target_id=version_id,
+                    operator_id=operator_id,
+                    detail={"scan_id": scan_id},
+                    timestamp=now,
+                )
+            )
+            session.commit()
+            return _scan_task_data(scan_row)
+
+    def delete_expired_scan_tasks(self, *, now: datetime | None = None) -> int:
+        """Delete expired tasks without dropping callback-owing rows."""
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            result = session.execute(
+                delete(ScanTaskRow).where(
+                    ScanTaskRow.expires_at.is_not(None),
+                    ScanTaskRow.expires_at <= current_time,
+                    or_(
+                        and_(
+                            ScanTaskRow.status.in_(_SCAN_TASK_FAILURE_STATUSES),
+                            # Preserve rows still needed for callback recovery.
+                            or_(
+                                ScanTaskRow.version_id.is_(None),
+                                ScanTaskRow.callback_status.in_(
+                                    ("delivered", "not_required")
+                                ),
+                            ),
+                        ),
+                        and_(
+                            ScanTaskRow.status == "complete",
+                            ScanTaskRow.version_id.is_(None),
+                        ),
+                    ),
+                )
+            )
+            session.commit()
+            return int(result.rowcount or 0)
+
+    def list_scan_tasks_for_dedup(
+        self,
+        *,
+        owner_user_id: str,
+    ) -> list[dict[str, object]]:
+        """Return unpaginated owner tasks for source-level duplicate checks."""
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(ScanTaskRow)
+                .where(ScanTaskRow.owner_user_id == owner_user_id)
+                .order_by(ScanTaskRow.created_at.desc())
+            ).all()
+            return [_scan_task_data(row) for row in rows]
+
+    def delete_scan_task(
+        self,
+        scan_id: str,
+        *,
+        owner_user_id: str | None = None,
+        now: datetime | None = None,
+        audit_operator_id: str | None = None,
+        audit_detail: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        """Atomically delete an eligible task and optionally audit it."""
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            statement = select(ScanTaskRow).where(ScanTaskRow.id == scan_id)
+            if owner_user_id is not None:
+                statement = statement.where(
+                    ScanTaskRow.owner_user_id == owner_user_id
+                )
+            row = session.scalar(statement.with_for_update())
+            if row is None:
+                return None
+
+            if row.lease_until is not None and row.lease_until > current_time:
+                raise ValueError("扫描任务仍在处理中，暂时不能删除")
+
+            failure = row.status in _SCAN_TASK_FAILURE_STATUSES
+            complete = row.status == "complete"
+            if not failure and not complete:
+                raise ValueError("扫描任务仍在处理中，暂时不能删除")
+            if row.version_id is not None and row.callback_status not in {
+                "delivered",
+                "not_required",
+            }:
+                raise ValueError("扫描任务回调尚未完成，暂时不能删除")
+
+            data = _scan_task_data(row)
+            session.delete(row)
+            if audit_operator_id is not None:
+                session.add(
+                    AuditLogRow(
+                        id=f"audit-{uuid4().hex}",
+                        action="scan_delete",
+                        target_type="scan_task",
+                        target_id=scan_id,
+                        operator_id=audit_operator_id,
+                        detail=audit_detail,
+                        timestamp=current_time,
+                    )
+                )
+            session.commit()
+            return data
+
+    def mark_scan_task_timed_out(
+        self,
+        scan_id: str,
+        *,
+        status: str,
+        error: str,
+        finished_at: datetime,
+        expires_at: datetime,
+        lease_token: str | None = None,
+    ) -> bool:
+        """Atomically terminalize an active task at the total-time deadline."""
+        if status != "total_timeout":
+            raise ValueError("Unsupported scan timeout status")
+        with self.session_factory() as session:
+            statement = (
+                select(ScanTaskRow)
+                .where(
+                    ScanTaskRow.id == scan_id,
+                    ScanTaskRow.status.in_(_SCAN_TASK_EXECUTABLE_STATUSES),
+                )
+                .with_for_update()
+            )
+            if lease_token:
+                statement = statement.where(
+                    ScanTaskRow.lease_token == lease_token
+                )
+            row = session.scalar(statement)
+            if row is None:
+                return False
+            row.status = status
+            row.error = error
+            row.finished_at = finished_at
+            row.expires_at = expires_at
+            row.callback_status = (
+                "pending" if row.version_id is not None else "not_required"
+            )
+            row.callback_next_attempt_at = None
+            row.callback_last_error = None
+            row.completion_delivered_at = None
+            row.updated_at = finished_at
+            session.commit()
+            return True
+
+    def get_scan_task(
+        self,
+        scan_id: str,
+        *,
+        owner_user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """Load a scan task, optionally constraining it to its owner."""
+        with self.session_factory() as session:
+            statement = select(ScanTaskRow).where(ScanTaskRow.id == scan_id)
+            if owner_user_id is not None:
+                statement = statement.where(
+                    ScanTaskRow.owner_user_id == owner_user_id
+                )
+            row = session.scalar(statement)
+            return _scan_task_data(row) if row is not None else None
+
+    def get_scan_task_by_request(
+        self,
+        *,
+        owner_user_id: str,
+        client_request_id: str,
+    ) -> dict[str, object] | None:
+        """Load the task identified by a user's idempotency key."""
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow).where(
+                    ScanTaskRow.owner_user_id == owner_user_id,
+                    ScanTaskRow.client_request_id == client_request_id,
+                )
+            )
+            return _scan_task_data(row) if row is not None else None
+
+    def claim_scan_task(
+        self,
+        scan_id: str,
+        *,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> dict[str, object] | None:
+        """Claim one runnable task with a database-backed lease."""
+        current_time = now or _utc_now()
+        lease_duration = max(60, int(lease_seconds))
+        with self.session_factory() as session:
+            statement = (
+                select(ScanTaskRow)
+                .where(
+                    ScanTaskRow.id == scan_id,
+                    ScanTaskRow.status.in_(_SCAN_TASK_EXECUTABLE_STATUSES),
+                    or_(
+                        ScanTaskRow.lease_until.is_(None),
+                        ScanTaskRow.lease_until <= current_time,
+                    ),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            row = session.scalar(statement)
+            if row is None:
+                return None
+            row.lease_token = uuid4().hex
+            row.lease_until = current_time + timedelta(seconds=lease_duration)
+            row.attempt_count = int(row.attempt_count or 0) + 1
+            row.updated_at = current_time
+            session.commit()
+            return _scan_task_data(row)
+
+    def claim_recoverable_scan_tasks(
+        self,
+        *,
+        lease_seconds: int,
+        limit: int = 50,
+        now: datetime | None = None,
+    ) -> list[dict[str, object]]:
+        """Claim pending/stale tasks for startup recovery.
+
+        Terminal tasks with an undelivered version callback are included so a
+        crash or prolonged callback outage cannot strand the version.
+        """
+        current_time = now or _utc_now()
+        lease_duration = max(60, int(lease_seconds))
+        bounded_limit = max(1, min(int(limit), 200))
+        active_condition = ScanTaskRow.status.in_(_SCAN_TASK_EXECUTABLE_STATUSES)
+        callback_owing_condition = and_(
+            ScanTaskRow.status.in_({"complete"} | _SCAN_TASK_FAILURE_STATUSES),
+            ScanTaskRow.version_id.is_not(None),
+            ScanTaskRow.completion_delivered_at.is_(None),
+        )
+        callback_condition = and_(
+            callback_owing_condition,
+            or_(
+                ScanTaskRow.callback_status == "pending",
+                ScanTaskRow.callback_status.is_(None),
+            ),
+            or_(
+                ScanTaskRow.callback_next_attempt_at.is_(None),
+                ScanTaskRow.callback_next_attempt_at <= current_time,
+            ),
+        )
+        # Keep active and callback-owing rows recoverable despite stale legacy
+        # expiry values.
+        retention_condition = or_(
+            active_condition,
+            ScanTaskRow.expires_at.is_(None),
+            ScanTaskRow.expires_at > current_time,
+            callback_owing_condition,
+        )
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(ScanTaskRow)
+                .where(
+                    or_(active_condition, callback_condition),
+                    retention_condition,
+                    or_(
+                        ScanTaskRow.lease_until.is_(None),
+                        ScanTaskRow.lease_until <= current_time,
+                    ),
+                )
+                .order_by(ScanTaskRow.created_at)
+                .limit(bounded_limit)
+                .with_for_update(skip_locked=True)
+            ).all()
+            for row in rows:
+                row.lease_token = uuid4().hex
+                row.lease_until = current_time + timedelta(
+                    seconds=lease_duration
+                )
+                if row.status in _SCAN_TASK_EXECUTABLE_STATUSES:
+                    row.attempt_count = int(row.attempt_count or 0) + 1
+                row.updated_at = current_time
+            session.commit()
+            return [_scan_task_data(row) for row in rows]
+
+    def claim_scan_callback_task(
+        self,
+        scan_id: str,
+        *,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> dict[str, object] | None:
+        """Claim one due producer callback without rerunning the scanner."""
+        current_time = now or _utc_now()
+        lease_duration = max(60, int(lease_seconds))
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow)
+                .where(
+                    ScanTaskRow.id == scan_id,
+                    ScanTaskRow.status.in_({"complete"} | _SCAN_TASK_FAILURE_STATUSES),
+                    ScanTaskRow.version_id.is_not(None),
+                    ScanTaskRow.completion_delivered_at.is_(None),
+                    or_(
+                        ScanTaskRow.callback_status == "pending",
+                        ScanTaskRow.callback_status.is_(None),
+                    ),
+                    or_(
+                        ScanTaskRow.callback_next_attempt_at.is_(None),
+                        ScanTaskRow.callback_next_attempt_at <= current_time,
+                    ),
+                    or_(
+                        ScanTaskRow.lease_until.is_(None),
+                        ScanTaskRow.lease_until <= current_time,
+                    ),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if row is None:
+                return None
+            row.lease_token = uuid4().hex
+            row.lease_until = current_time + timedelta(seconds=lease_duration)
+            row.updated_at = current_time
+            session.commit()
+            return _scan_task_data(row)
+
+    def renew_scan_task_lease(
+        self,
+        scan_id: str,
+        *,
+        lease_token: str,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Extend a lease only for the worker that currently owns it."""
+        current_time = now or _utc_now()
+        lease_duration = max(60, int(lease_seconds))
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow)
+                .where(
+                    ScanTaskRow.id == scan_id,
+                    ScanTaskRow.lease_token == lease_token,
+                    ScanTaskRow.lease_until > current_time,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            row.lease_until = current_time + timedelta(seconds=lease_duration)
+            row.updated_at = current_time
+            session.commit()
+            return True
+
+    def release_scan_task_lease(
+        self,
+        scan_id: str,
+        *,
+        lease_token: str,
+        now: datetime | None = None,
+    ) -> bool:
+        """Release a worker lease without touching task state."""
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow)
+                .where(
+                    ScanTaskRow.id == scan_id,
+                    ScanTaskRow.lease_token == lease_token,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            row.lease_token = None
+            row.lease_until = None
+            row.updated_at = current_time
+            session.commit()
+            return True
+
+    def mark_scan_callback_delivered(
+        self,
+        scan_id: str,
+        *,
+        lease_token: str | None = None,
+        now: datetime | None = None,
+    ) -> bool:
+        """Mark a success or failure callback delivered, idempotently."""
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow)
+                .where(ScanTaskRow.id == scan_id)
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            if row.callback_status == "delivered" or (
+                row.completion_delivered_at is not None
+            ):
+                return True
+            if lease_token and row.lease_token != lease_token:
+                return False
+            row.callback_status = "delivered"
+            row.callback_next_attempt_at = None
+            row.callback_last_error = None
+            row.completion_delivered_at = current_time
+            row.lease_token = None
+            row.lease_until = None
+            row.updated_at = current_time
+            session.commit()
+            return True
+
+    def terminalize_scan_task_after_packaging_failure(
+        self,
+        scan_id: str,
+        error: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Demote a completed task without bypassing terminal-state guards."""
+        current_time = now or _utc_now()
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ScanTaskRow)
+                .where(ScanTaskRow.id == scan_id)
+                .with_for_update()
+            )
+            if row is None or row.status != "complete":
+                return False
+            row.status = "error"
+            row.error = error
+            if row.finished_at is None:
+                row.finished_at = current_time
+            finished = row.finished_at or current_time
+            row.expires_at = finished + _SCAN_TASK_RETENTION
+            row.callback_status = "delivered"
+            row.callback_next_attempt_at = None
+            row.callback_last_error = None
+            row.completion_delivered_at = current_time
+            row.lease_token = None
+            row.lease_until = None
+            row.updated_at = current_time
+            session.commit()
+            return True
+
+    def list_scan_tasks(
+        self,
+        *,
+        owner_user_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, object]]:
+        """List persisted scans, optionally restricted to one owner."""
+        with self.session_factory() as session:
+            statement = select(ScanTaskRow)
+            if owner_user_id is not None:
+                statement = statement.where(
+                    ScanTaskRow.owner_user_id == owner_user_id
+                )
+            rows = session.scalars(
+                statement
+                .order_by(ScanTaskRow.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return [_scan_task_data(row) for row in rows]
+
+    def count_scan_tasks(self, *, owner_user_id: str | None = None) -> int:
+        """Count persisted scans for pagination, optionally by owner."""
+        with self.session_factory() as session:
+            statement = select(func.count()).select_from(ScanTaskRow)
+            if owner_user_id is not None:
+                statement = statement.where(
+                    ScanTaskRow.owner_user_id == owner_user_id
+                )
+            return int(session.scalar(statement) or 0)
+
+    def update_scan_task(
+        self,
+        scan_id: str,
+        updates: Mapping[str, object],
+        *,
+        lease_token: str | None = None,
+    ) -> bool:
+        """Apply an allow-listed state update and refresh ``updated_at``."""
+        unknown_fields = set(updates) - _SCAN_TASK_UPDATE_FIELDS
+        if unknown_fields:
+            raise ValueError(
+                "Unsupported scan task fields: "
+                + ", ".join(sorted(unknown_fields))
+            )
+        if not updates:
+            return False
+
+        with self.session_factory() as session:
+            statement = select(ScanTaskRow).where(ScanTaskRow.id == scan_id)
+            if lease_token:
+                statement = statement.where(
+                    ScanTaskRow.lease_token == lease_token
+                )
+            row = session.scalar(statement.with_for_update())
+            if row is None:
+                return False
+            requested_status = updates.get("status")
+            if (
+                requested_status is not None
+                and row.status in ({"complete"} | _SCAN_TASK_FAILURE_STATUSES)
+                and str(requested_status) != row.status
+            ):
+                # A late worker update must not resurrect a task that a
+                # timeout watchdog already terminalized.
+                return False
+            for field, value in updates.items():
+                setattr(row, field, value)
+            current_time = _utc_now()
+            effective_status = str(updates.get("status") or row.status)
+            effective_version_id = updates.get("version_id", row.version_id)
+            if effective_status in _SCAN_TASK_EXECUTABLE_STATUSES:
+                # A stale pre-terminal expiry must never remove a running
+                # task. The execution deadline is enforced by the worker.
+                if "expires_at" not in updates:
+                    row.expires_at = None
+            elif effective_status in _SCAN_TASK_FAILURE_STATUSES:
+                if "finished_at" not in updates and row.finished_at is None:
+                    row.finished_at = current_time
+                if "expires_at" not in updates:
+                    finished = row.finished_at or current_time
+                    if isinstance(finished, str):
+                        try:
+                            finished = _parse_iso_date(finished)
+                        except ValueError:
+                            finished = current_time
+                    row.expires_at = finished + _SCAN_TASK_RETENTION
+            elif effective_status == "complete" and "expires_at" not in updates:
+                if effective_version_id is None:
+                    finished = row.finished_at or current_time
+                    if isinstance(finished, str):
+                        try:
+                            finished = _parse_iso_date(finished)
+                        except ValueError:
+                            finished = current_time
+                    row.expires_at = finished + _SCAN_TASK_RETENTION
+                else:
+                    # Once a scan is attached and its callback is delivered,
+                    # the review workflow owns retention, not this cleaner.
+                    row.expires_at = None
+            row.updated_at = current_time
+            session.commit()
+            return True
+
     # ── 审核记录 ──────────────────────────────────────────
 
     def create_review_record(
@@ -624,11 +1538,36 @@ class ProducerRepository:
         target_id: str,
         operator_id: str,
         detail: dict[str, object] | None = None,
+        idempotency_key: str | None = None,
+    ) -> None:
+        self._create_audit_log(
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            operator_id=operator_id,
+            detail=detail,
+            idempotency_key=idempotency_key,
+        )
+
+    def _create_audit_log(
+        self,
+        *,
+        action: str,
+        target_type: str,
+        target_id: str,
+        operator_id: str,
+        detail: dict[str, object] | None = None,
+        idempotency_key: str | None = None,
     ) -> None:
         with self.session_factory() as session:
+            audit_id = (
+                f"audit-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:58]}"
+                if idempotency_key
+                else f"audit-{uuid4().hex}"
+            )
             session.add(
                 AuditLogRow(
-                    id=f"audit-{uuid4().hex}",
+                    id=audit_id,
                     action=action,
                     target_type=target_type,
                     target_id=target_id,
@@ -637,7 +1576,14 @@ class ProducerRepository:
                     timestamp=_utc_now(),
                 )
             )
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                if not idempotency_key:
+                    raise
+                if session.get(AuditLogRow, audit_id) is None:
+                    raise
 
 
 
