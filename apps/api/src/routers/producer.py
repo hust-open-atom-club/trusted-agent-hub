@@ -191,24 +191,14 @@ def submit_version(
             )
     resolved_source = None
     if source_url:
-        from src.routers.trust import (
-            _parse_github_url,
-            _pin_resolved_source,
-            _resolve_default_branch_source,
-        )
+        from src.routers.trust import _parse_github_url
 
-        resolved_source = _resolve_default_branch_source(
-            _parse_github_url(str(source_url))
-        )
-        try:
-            resolved_source = _pin_resolved_source(resolved_source)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="无法将源码仓库解析为不可变提交版本",
-            ) from exc
+        # Only the URL shape is validated up front.  The live GitHub
+        # resolution (default branch + HEAD) runs below, after the reuse
+        # branch decides it actually needs a brand-new scan: reusing a
+        # completed snapshot is identified by the commit that was scanned,
+        # not by whatever upstream HEAD says now.
+        resolved_source = _parse_github_url(str(source_url))
         url_subdirectory = resolved_source.get("subdir")
         url_subdirectory_present = url_subdirectory not in (None, "")
         if not url_subdirectory_present:
@@ -283,11 +273,13 @@ def submit_version(
                 status_code=400,
                 detail="复用扫描结果时必须提供源码仓库地址",
             )
-        expected_commit_hash = (
-            resolved_source.get("commit_hash")
-            if isinstance(resolved_source, dict)
-            else None
-        )
+        # The reuse identity is the commit captured by the scan itself.
+        # A live HEAD lookup would fail every active repository the moment
+        # anyone pushes, so upstream is deliberately not consulted here.
+        full_report = initial_info.get("full_report")
+        expected_commit_hash = initial_info.get("commit_hash")
+        if expected_commit_hash is None and isinstance(full_report, dict):
+            expected_commit_hash = full_report.get("commit_hash")
         if not source_url or not _scan_source_matches(
             initial_info,
             str(source_url),
@@ -317,6 +309,28 @@ def submit_version(
                 status_code=409,
                 detail=scan_conflict_detail(duplicate_info),
             )
+
+    # New scans need the live GitHub resolution (default branch + HEAD) so
+    # the task is pinned to an immutable commit.  The reuse branch above
+    # already validated its snapshot against the scanned commit and skips
+    # this entirely — that is what keeps reuse working on active
+    # repositories that have moved HEAD since the scan completed.
+    if not initial_sid and source_url:
+        from src.routers.trust import (
+            _pin_resolved_source,
+            _resolve_default_branch_source,
+        )
+
+        resolved_source = _resolve_default_branch_source(resolved_source)
+        try:
+            resolved_source = _pin_resolved_source(resolved_source)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="无法将源码仓库解析为不可变提交版本",
+            ) from exc
 
     service = ProducerService(repo)
     try:
