@@ -589,7 +589,8 @@
         "changes_requested": "要求修改",
         "submitted": "提交审核",
         "scan_start": "扫描开始",
-        "scan_complete": "扫描完成"
+        "scan_complete": "扫描完成",
+        "scan_delete": "删除扫描任务"
       }
     },
     "grade": {

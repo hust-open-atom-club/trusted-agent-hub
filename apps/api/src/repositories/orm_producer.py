@@ -146,14 +146,9 @@ class ScanTaskRow(Base):
         String(128), nullable=False
     )
     repo_url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    # Normalized repository identity used for source-level dedup. The
-    # unique index above covers (owner, dedup_repo_url, source_subdirectory)
-    # so two tasks for the same repository target cannot coexist.
     dedup_repo_url: Mapped[str] = mapped_column(
         String(2048), nullable=False, server_default=text("''")
     )
-    # The ref is retained for provenance; commit_hash is the immutable
-    # acquisition identity used by every resumed execution.
     source_ref: Mapped[str | None] = mapped_column(
         String(512), nullable=True
     )

@@ -53,10 +53,6 @@ export function fetchScanTasks(
 
 /**
  * Delete one terminal scan task.
- *
- * `apiFetch` already unwraps the response body and throws the server's
- * `detail` message on any non-2xx status, so the result can be returned
- * directly.
  */
 export function deleteScanTask(
   token: string,

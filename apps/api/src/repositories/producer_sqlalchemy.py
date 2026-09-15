@@ -1072,7 +1072,6 @@ class ProducerRepository:
         *,
         owner_user_id: str | None = None,
     ) -> dict[str, object] | None:
-        """Load a scan task, optionally constraining it to its owner."""
         with self.session_factory() as session:
             statement = select(ScanTaskRow).where(ScanTaskRow.id == scan_id)
             if owner_user_id is not None:
@@ -1088,7 +1087,6 @@ class ProducerRepository:
         owner_user_id: str,
         client_request_id: str,
     ) -> dict[str, object] | None:
-        """Load the task identified by a user's idempotency key."""
         with self.session_factory() as session:
             row = session.scalar(
                 select(ScanTaskRow).where(
@@ -1105,7 +1103,6 @@ class ProducerRepository:
         lease_seconds: int,
         now: datetime | None = None,
     ) -> dict[str, object] | None:
-        """Claim one runnable task with a database-backed lease."""
         current_time = now or _utc_now()
         lease_duration = max(60, int(lease_seconds))
         with self.session_factory() as session:
@@ -1204,7 +1201,6 @@ class ProducerRepository:
         lease_seconds: int,
         now: datetime | None = None,
     ) -> dict[str, object] | None:
-        """Claim one due producer callback without rerunning the scanner."""
         current_time = now or _utc_now()
         lease_duration = max(60, int(lease_seconds))
         with self.session_factory() as session:
@@ -1246,7 +1242,6 @@ class ProducerRepository:
         lease_seconds: int,
         now: datetime | None = None,
     ) -> bool:
-        """Extend a lease only for the worker that currently owns it."""
         current_time = now or _utc_now()
         lease_duration = max(60, int(lease_seconds))
         with self.session_factory() as session:
@@ -1273,7 +1268,6 @@ class ProducerRepository:
         lease_token: str,
         now: datetime | None = None,
     ) -> bool:
-        """Release a worker lease without touching task state."""
         current_time = now or _utc_now()
         with self.session_factory() as session:
             row = session.scalar(
@@ -1299,7 +1293,6 @@ class ProducerRepository:
         lease_token: str | None = None,
         now: datetime | None = None,
     ) -> bool:
-        """Mark a success or failure callback delivered, idempotently."""
         current_time = now or _utc_now()
         with self.session_factory() as session:
             row = session.scalar(
@@ -1332,7 +1325,6 @@ class ProducerRepository:
         *,
         now: datetime | None = None,
     ) -> bool:
-        """Demote a completed task without bypassing terminal-state guards."""
         current_time = now or _utc_now()
         with self.session_factory() as session:
             row = session.scalar(
@@ -1381,7 +1373,6 @@ class ProducerRepository:
             return [_scan_task_data(row) for row in rows]
 
     def count_scan_tasks(self, *, owner_user_id: str | None = None) -> int:
-        """Count persisted scans for pagination, optionally by owner."""
         with self.session_factory() as session:
             statement = select(func.count()).select_from(ScanTaskRow)
             if owner_user_id is not None:

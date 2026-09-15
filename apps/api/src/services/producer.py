@@ -401,16 +401,19 @@ class ProducerService:
         version_id: str,
         user_id: str | None = None,
         *,
-        scan_task: dict[str, object] | None = None,
+        scan_task: dict[str, object],
     ) -> tuple[str, str | None, str]:
         """校验状态并触发扫描。
 
+        Args:
+            scan_task: 必填。仅 HTTP 路由调用此方法；内部不提供
+                scan_task 的兜底路径，直接调用方必须携带完整任务身份，
+                缺失即 TypeError（属 #132 清理的有意行为）。
+
         Returns:
             (repo_url_or_local_path, scan_id, next_status)
-            next_status 告知调用方当前版本所处的中间状态：
-            - legacy callers: draft → "submitted"（需 router 进一步置为 scanning）
-            - transactional scan-task callers: any accepted state → "scanning"
-            - resubmitted / changes_requested / error → "scanning"（一跳直达）
+            next_status 恒为 "scanning"：版本行、扫描任务行与提交审计
+            在同一次事务内落库。
         """
         version = self.repository.get_version(version_id)
         if version is None:
@@ -418,129 +421,114 @@ class ProducerService:
 
         current_status = version.get("status", "")
 
-        # 统一走状态机校验；根据当前状态决定中间跳
+        # 统一走状态机校验：draft/error 跳 submitted，resubmitted /
+        # changes_requested 跳 scanning；版本终态统一由事务分支落到 scanning。
         if current_status in ("draft", "error"):
             validate_transition(current_status, "submitted")
-            next_status = "submitted"
         elif current_status in ("resubmitted", "changes_requested"):
             validate_transition(current_status, "scanning")
-            next_status = "scanning"
         else:
             raise ProducerServiceError(
                 f"无法提交审核：当前状态为 '{current_status}'，"
                 f"仅 'draft'、'resubmitted'、'changes_requested' 或 'error' 状态可提交"
             )
 
-        # 提取源码路径
-        source = version.get("source", {})
-        repo_url = source.get("repository_url", "") if isinstance(source, dict) else ""
-
-        # 重新扫描只更新 auto_grade，保留 manual_grade
-        # effective_grade 继续优先使用人工评级
+        source = version.get("source")
+        repo_url = (
+            source.get("repository_url", "")
+            if isinstance(source, dict)
+            else ""
+        )
 
         if not repo_url:
             raise ProducerServiceError(
                 "版本缺少源码地址（source.repository_url），无法提交扫描"
             )
 
-        # 生成 scan_id（由 router 层传给 _run_scan_task）
         scan_id = f"scan-{uuid.uuid4().hex[:12]}"
-        if scan_task is not None:
-            owner_user_id = str(
-                scan_task.get("owner_user_id") or user_id or ""
+        owner_user_id = str(
+            scan_task.get("owner_user_id") or user_id or ""
+        )
+        if not owner_user_id:
+            raise ProducerServiceError(
+                "缺少扫描任务所属用户，无法提交扫描"
             )
-            if not owner_user_id:
-                raise ProducerServiceError(
-                    "缺少扫描任务所属用户，无法提交扫描"
-                )
-            existing_scan_id = str(
-                scan_task.get("existing_scan_id") or ""
-            ).strip()
-            if existing_scan_id:
-                try:
-                    self.repository.attach_scan_task_to_version(
-                        scan_id=existing_scan_id,
-                        version_id=version_id,
-                        owner_user_id=owner_user_id,
-                        expected_statuses={current_status},
-                        operator_id=user_id or "system",
-                    )
-                except (LookupError, ValueError) as exc:
-                    raise ProducerServiceError(str(exc)) from exc
-                except Exception as exc:
-                    raise ProducerPersistenceError(
-                        "扫描任务与版本关联失败，版本状态未改变"
-                    ) from exc
-                return repo_url, existing_scan_id, "scanning"
-
-            client_request_id = str(
-                scan_task.get("client_request_id")
-                or f"producer:{version_id}:{scan_id}"
-            )
-            expires_at = scan_task.get("expires_at")
-            if not isinstance(expires_at, datetime):
-                expires_at = None
-            source_ref = scan_task.get("source_ref")
-            commit_hash = scan_task.get("commit_hash")
-            source_subdirectory = scan_task.get("source_subdirectory")
-            if (
-                not isinstance(source_ref, str)
-                or not source_ref.strip()
-                or not isinstance(commit_hash, str)
-                or not re.fullmatch(r"[0-9a-f]{40}", commit_hash.strip().lower())
-            ):
-                raise ProducerServiceError(
-                    "扫描任务缺少已解析的不可变源码提交身份"
-                )
-            if source_subdirectory is not None and not isinstance(
-                source_subdirectory, str
-            ):
-                raise ProducerServiceError(
-                    "扫描任务的源码子目录无效"
-                )
+        existing_scan_id = str(
+            scan_task.get("existing_scan_id") or ""
+        ).strip()
+        if existing_scan_id:
             try:
-                self.repository.create_version_scan_task(
+                self.repository.attach_scan_task_to_version(
+                    scan_id=existing_scan_id,
                     version_id=version_id,
-                    scan_id=scan_id,
                     owner_user_id=owner_user_id,
-                    client_request_id=client_request_id,
-                    repo_url=repo_url,
-                    source_ref=source_ref.strip(),
-                    commit_hash=commit_hash.strip().lower(),
-                    source_subdirectory=(
-                        source_subdirectory.strip()
-                        if isinstance(source_subdirectory, str)
-                        and source_subdirectory.strip()
-                        else None
-                    ),
                     expected_statuses={current_status},
                     operator_id=user_id or "system",
-                    expires_at=expires_at,
                 )
             except (LookupError, ValueError) as exc:
                 raise ProducerServiceError(str(exc)) from exc
-            except ScanTaskSourceConflictError as exc:
-                raise ProducerSourceConflictError(
-                    "该源码已有扫描任务，不允许重复扫描；"
-                    "请先删除原扫描任务后再提交"
-                ) from exc
             except Exception as exc:
                 raise ProducerPersistenceError(
-                    "扫描任务持久化失败，版本状态未改变"
+                    "扫描任务与版本关联失败，版本状态未改变"
                 ) from exc
-            return repo_url, scan_id, "scanning"
+            return repo_url, existing_scan_id, "scanning"
 
-        # Legacy callers that do not provide a scan-task transaction retain
-        # the old status/audit behavior.  The HTTP producer route always uses
-        # the atomic branch above.
-        self.repository.update_version_status(version_id, next_status)
-        self.repository.create_audit_log(
-            action=AuditAction.SUBMIT.value,
-            target_type="version",
-            target_id=version_id,
-            operator_id=user_id or "system",
+        client_request_id = str(
+            scan_task.get("client_request_id")
+            or f"producer:{version_id}:{scan_id}"
         )
-        return repo_url, scan_id, next_status
+        expires_at = scan_task.get("expires_at")
+        if not isinstance(expires_at, datetime):
+            expires_at = None
+        source_ref = scan_task.get("source_ref")
+        commit_hash = scan_task.get("commit_hash")
+        source_subdirectory = scan_task.get("source_subdirectory")
+        if (
+            not isinstance(source_ref, str)
+            or not source_ref.strip()
+            or not isinstance(commit_hash, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", commit_hash.strip().lower())
+        ):
+            raise ProducerServiceError(
+                "扫描任务缺少已解析的不可变源码提交身份"
+            )
+        if source_subdirectory is not None and not isinstance(
+            source_subdirectory, str
+        ):
+            raise ProducerServiceError(
+                "扫描任务的源码子目录无效"
+            )
+        try:
+            self.repository.create_version_scan_task(
+                version_id=version_id,
+                scan_id=scan_id,
+                owner_user_id=owner_user_id,
+                client_request_id=client_request_id,
+                repo_url=repo_url,
+                source_ref=source_ref.strip(),
+                commit_hash=commit_hash.strip().lower(),
+                source_subdirectory=(
+                    source_subdirectory.strip()
+                    if isinstance(source_subdirectory, str)
+                    and source_subdirectory.strip()
+                    else None
+                ),
+                expected_statuses={current_status},
+                operator_id=user_id or "system",
+                expires_at=expires_at,
+            )
+        except (LookupError, ValueError) as exc:
+            raise ProducerServiceError(str(exc)) from exc
+        except ScanTaskSourceConflictError as exc:
+            raise ProducerSourceConflictError(
+                "该源码已有扫描任务，不允许重复扫描；"
+                "请先删除原扫描任务后再提交"
+            ) from exc
+        except Exception as exc:
+            raise ProducerPersistenceError(
+                "扫描任务持久化失败，版本状态未改变"
+            ) from exc
+        return repo_url, scan_id, "scanning"
 
     # ── 扫描完成回调 ──────────────────────────────────────
 
@@ -971,10 +959,10 @@ class ProducerService:
     ) -> None:
         """扫描失败回调，支持按 scan_id 幂等重放。"""
         self.repository.update_version_status(version_id, "error")
-        error_updates: dict[str, object] = {"scan_error": error}
-        if scan_id:
-            error_updates["scan_error_scan_id"] = scan_id
-        self.repository.update_version_data(version_id, error_updates)
+        self.repository.update_version_data(
+            version_id,
+            {"scan_error": error},
+        )
         self.repository.create_audit_log(
             action=AuditAction.SCAN_COMPLETE.value,
             target_type="version",
