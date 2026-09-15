@@ -14,7 +14,7 @@ import hashlib
 from typing import NoReturn
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -498,6 +498,35 @@ class ProducerRepository:
             data["status"] = new_status
             row.data = data
             session.commit()
+
+    def transition_version_status_if_current(
+        self,
+        version_id: str,
+        expected_statuses: tuple[str, ...],
+        new_status: str,
+    ) -> bool:
+        """Transition a version only if its status is still one of the expected values."""
+        if not expected_statuses:
+            return False
+        with self.session_factory() as session:
+            row = session.get(PackageVersionRow, version_id)
+            if row is None:
+                return False
+            data = dict(row.data) if row.data else {}
+            data["status"] = new_status
+            result = session.execute(
+                update(PackageVersionRow)
+                .where(
+                    PackageVersionRow.id == version_id,
+                    PackageVersionRow.status.in_(expected_statuses),
+                )
+                .values(status=new_status, data=data)
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                return False
+            session.commit()
+            return True
 
     def update_version_data(
         self, version_id: str, updates: dict[str, object]

@@ -132,6 +132,12 @@ function isPlaceholderStr(v: string | undefined | null): boolean {
   return false;
 }
 
+function isReusableCommitHash(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const commitHash = value.trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(commitHash) && !/^0{40}$/.test(commitHash);
+}
+
 function SubmitForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -591,7 +597,9 @@ function SubmitForm() {
       };
       if (meta.source && typeof meta.source === 'object') {
         const ms = meta.source as Record<string, unknown>;
-        if (ms.commit_hash && String(ms.commit_hash).length === 40) sourceObj.commit_hash = ms.commit_hash;
+        if (isReusableCommitHash(ms.commit_hash)) {
+          sourceObj.commit_hash = ms.commit_hash.trim().toLowerCase();
+        }
         if (ms.ref && String(ms.ref) !== 'HEAD') sourceObj.ref = ms.ref;
         if (ms.ref_type) sourceObj.ref_type = ms.ref_type;
         if (ms.owner && ms.owner !== 'unknown') sourceObj.owner = ms.owner;
@@ -599,6 +607,12 @@ function SubmitForm() {
         if (ms.subdirectory) sourceObj.subdirectory = ms.subdirectory;
       }
       sourceObj.repository_url = sUrl;
+      const initialScanId = (
+        scanResult?.status === 'complete'
+        && scanResult.scan_id
+        && isReusableCommitHash(sourceObj.commit_hash)
+      ) ? scanResult.scan_id : undefined;
+      const submitBody = initialScanId ? { initial_scan_id: initialScanId } : {};
 
       const authorObj = pkgAuthorUrl.trim() ? { url: pkgAuthorUrl.trim() } : null;
       const compatList = normalizeSubmissionClients(pkgType, pkgCompatibility);
@@ -624,7 +638,7 @@ function SubmitForm() {
         const versionId: string = verData.id;
         const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
-          body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
+          body: JSON.stringify(submitBody),
         });
         if (!subRes.ok) {
           const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));
@@ -675,7 +689,7 @@ function SubmitForm() {
 
       const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST', headers,
-        body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
+        body: JSON.stringify(submitBody),
       });
       if (!subRes.ok) {
         const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));

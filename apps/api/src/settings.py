@@ -73,7 +73,13 @@ def _literal_true(name: str) -> bool:
     return value is not None and value.lower() == "true"
 
 
-def _integer(name: str, default: int, *, minimum: int = 1) -> int:
+def _integer(
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
     value = _optional(name)
     if value is None:
         return default
@@ -83,6 +89,8 @@ def _integer(name: str, default: int, *, minimum: int = 1) -> int:
         raise ValueError(f"{name} must be an integer") from exc
     if parsed < minimum:
         raise ValueError(f"{name} must be at least {minimum}")
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"{name} must be at most {maximum}")
     return parsed
 
 
@@ -155,6 +163,7 @@ class Settings:
     artifacts_root: str = str(DEFAULT_ARTIFACTS_ROOT)
     source_snapshot_dir: str | None = None
     source_snapshot_ttl_seconds: int = 604800
+    scan_cleanup_interval_seconds: int = 600
     initial_admin_email: str | None = None
     initial_admin_password: str | None = None
     initial_admin_display_name: str = "Administrator"
@@ -190,6 +199,12 @@ class Settings:
             source_snapshot_dir=_optional("SOURCE_SNAPSHOT_DIR"),
             source_snapshot_ttl_seconds=_integer(
                 "SOURCE_SNAPSHOT_TTL_SECONDS", 604800
+            ),
+            scan_cleanup_interval_seconds=_integer(
+                "SCAN_CLEANUP_INTERVAL_SECONDS",
+                600,
+                minimum=60,
+                maximum=3600,
             ),
             initial_admin_email=_optional("INITIAL_ADMIN_EMAIL"),
             initial_admin_password=_optional("INITIAL_ADMIN_PASSWORD"),
