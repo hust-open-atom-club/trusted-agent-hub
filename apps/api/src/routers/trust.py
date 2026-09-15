@@ -50,7 +50,10 @@ from src.auth import require_role, verify_resource_access
 from src.database import create_session_factory, get_runtime_engine
 from src.dependencies import CurrentUser
 from src.models.common import require_safe_source_subdirectory
-from src.repositories.producer_sqlalchemy import ProducerRepository
+from src.repositories.producer_sqlalchemy import (
+    ProducerRepository,
+    ScanTaskSourceConflictError,
+)
 from src.services.artifacts import force_rmtree
 from src.services.source_snapshots import SourceSnapshotStore
 from src.settings import get_settings
@@ -1665,6 +1668,7 @@ def _canonical_scan_repo_url(url: str) -> str:
 def _scan_dedup_identity(
     repo_url: object,
     source_subdirectory: object = None,
+    source_ref: object = None,
 ) -> tuple[str, str] | None:
     """Return the canonical repository and normalized subdirectory identity."""
     if not isinstance(repo_url, str) or not repo_url.strip():
@@ -1677,12 +1681,28 @@ def _scan_dedup_identity(
     )
     canonical = _canonical_scan_repo_url(raw)
     if subdir is None:
+        ref: str | None = (
+            source_ref.strip()
+            if isinstance(source_ref, str) and source_ref.strip()
+            else None
+        )
         parsed = urllib.parse.urlsplit(raw)
         segments = [part for part in parsed.path.split("/") if part]
         if len(segments) > 3 and segments[2].casefold() == "tree":
-            # The segment after ``tree`` is the ref, not a subdirectory.
-            path_after_ref = "/".join(segments[4:])
-            subdir = path_after_ref or None
+            ref_parts = ref.split("/") if ref is not None else None
+            if ref_parts is not None and segments[3:3 + len(ref_parts)] == ref_parts:
+                # Strip exactly ``/tree/<ref>``: a slashed default branch
+                # (e.g. ``release/1.0``) must not be mistaken for a
+                # subdirectory.
+                path_after_ref = "/".join(segments[3 + len(ref_parts):])
+                subdir = path_after_ref or None
+            elif ref_parts is None:
+                # The segment after ``tree`` is the ref, not a subdirectory.
+                path_after_ref = "/".join(segments[4:])
+                subdir = path_after_ref or None
+            # A known ref that does not align with the URL tree path leaves
+            # the identity at repository level; the database unique
+            # source-identity constraint remains the backstop.
     return canonical, (subdir or "")
 
 
@@ -1706,6 +1726,7 @@ def _scan_source_identity_match(
     task_identity = _scan_dedup_identity(
         info.get("repo_url"),
         info.get("source_subdirectory"),
+        info.get("source_ref"),
     )
     request_identity = _scan_dedup_identity(repo_url, source_subdirectory)
     if task_identity is None or request_identity is None:
