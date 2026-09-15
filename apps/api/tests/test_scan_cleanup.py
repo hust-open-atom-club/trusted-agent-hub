@@ -228,6 +228,17 @@ def _patch_reuse_submit_dependencies(
     )
 
 
+def _use_memory_only_scan_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin endpoint-level tests to the in-memory scan store.
+
+    CI promotes TEST_DATABASE_URL to DATABASE_URL (tests/conftest.py), which
+    switches the scan store to DB-first mode; memory-only records would then
+    disappear from endpoint reads.  These tests exercise memory-mode semantics,
+    so keep the repository unset regardless of the environment.
+    """
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: None)
+
+
 def test_expired_scan_is_cleaned_without_a_follow_up_request(
     tmp_path: Path,
 ) -> None:
@@ -254,7 +265,10 @@ def test_cleanup_processes_at_most_fifty_oldest_records() -> None:
     assert trust._get_scan("scan-50") is not None
 
 
-def test_scan_status_does_not_return_an_expired_backlog_record() -> None:
+def test_scan_status_does_not_return_an_expired_backlog_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_memory_only_scan_store(monkeypatch)
     base = time.time() - 1_000
     for index in range(51):
         _register(f"scan-{index:02d}", expires_at=base + index)
@@ -615,7 +629,10 @@ def test_initial_scan_claim_rejects_wrong_owner_and_source_binding() -> None:
     assert trust._get_scan("scan-bound").get("reuse_claimed") is not True
 
 
-def test_expired_running_scan_remains_queryable_and_listed() -> None:
+def test_expired_running_scan_remains_queryable_and_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_memory_only_scan_store(monkeypatch)
     _register(
         "scan-running-expired",
         status="scanning",
@@ -992,6 +1009,7 @@ def test_consumed_initial_scan_is_rejected_on_reuse_fallback(
         full_report=_reusable_report(),
     )
     trust._update_scan("scan-consumed", resource_consumed=True)
+    _use_memory_only_scan_store(monkeypatch)
     _patch_reuse_submit_dependencies(monkeypatch, repository)
 
     with pytest.raises(HTTPException) as raised:
