@@ -108,7 +108,11 @@ def test_light_mirror_keeps_local_source_dir_on_success_callback(
 
     reacquire_calls: list[object] = []
 
-    def _fail_acquire(_resolved: dict[str, object]):
+    def _fail_acquire(
+        _resolved: dict[str, object],
+        *,
+        temp_dir_callback=None,
+    ):
         reacquire_calls.append(_resolved)
         raise AssertionError("reacquisition must not run for a fresh report")
 
@@ -208,7 +212,11 @@ def test_callback_preparation_falls_back_to_database_report(
         )
         reacquire_sources: list[dict[str, object]] = []
 
-        def _fake_acquire(parsed: dict[str, object]):
+        def _fake_acquire(
+            parsed: dict[str, object],
+            *,
+            temp_dir_callback=None,
+        ):
             reacquire_sources.append(parsed)
             return "/controlled/reacquired", "zip", SCAN_COMMIT
 
@@ -249,7 +257,11 @@ def test_callback_preparation_reuses_caller_report_without_reacquisition(
             lambda path, require_directory=False: path,
         )
 
-        def _fail_acquire(_parsed: dict[str, object]):
+        def _fail_acquire(
+            _parsed: dict[str, object],
+            *,
+            temp_dir_callback=None,
+        ):
             raise AssertionError("reacquisition must not run")
 
         monkeypatch.setattr(trust, "_acquire_repo_source", _fail_acquire)
@@ -526,7 +538,11 @@ def test_persist_failure_keeps_report_readable_for_callbacks(
 
         reacquire_calls: list[object] = []
 
-        def _fail_acquire(_resolved: dict[str, object]):
+        def _fail_acquire(
+            _resolved: dict[str, object],
+            *,
+            temp_dir_callback=None,
+        ):
             reacquire_calls.append(_resolved)
             raise AssertionError("reacquisition must not run")
 

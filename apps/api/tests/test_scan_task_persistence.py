@@ -722,7 +722,7 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
     monkeypatch.setattr(
         trust,
         "_acquire_repo_source",
-        lambda _parsed: (str(acquired_source), "zip", commit_hash),
+        lambda _parsed, **_kwargs: (str(acquired_source), "zip", commit_hash),
     )
     trust._scans.clear()
 
@@ -968,7 +968,11 @@ def test_callback_reacquires_persisted_source_after_runtime_cache_loss(
 
     observed_sources: list[dict[str, object]] = []
 
-    def fake_acquire(parsed: dict[str, object]) -> tuple[str, str, str]:
+    def fake_acquire(
+        parsed: dict[str, object],
+        *,
+        temp_dir_callback=None,
+    ) -> tuple[str, str, str]:
         observed_sources.append(parsed)
         return str(reacquired), "zip", commit_hash
 
