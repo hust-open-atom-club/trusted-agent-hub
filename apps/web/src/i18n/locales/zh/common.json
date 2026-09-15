@@ -941,7 +941,7 @@
     "next": "下一页",
     "page_num": "第 {{page}} 页，共 {{total}} 页",
     "retained_until": "保留至",
-    "retained_forever": "已提交审核：不自动清理",
+    "retained_forever": "已提交审核：版本存在期间不做自动清理；版本删除后 30 天内可自动清理",
     "delete": "删除任务",
     "deleting": "删除中…",
     "delete_confirm": "确定删除这个扫描任务吗？删除后才能再次扫描同一源码。",

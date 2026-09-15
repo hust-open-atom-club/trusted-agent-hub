@@ -941,7 +941,7 @@
     "next": "Next",
     "page_num": "Page {{page}} of {{total}}",
     "retained_until": "Retained until",
-    "retained_forever": "Submitted for review: no automatic cleanup",
+    "retained_forever": "Submitted for review: no automatic cleanup while the version exists; auto-cleanup 30 days after version deletion",
     "delete": "Delete task",
     "deleting": "Deleting…",
     "delete_confirm": "Delete this scan task? You must delete it before scanning the same source again.",

@@ -1522,6 +1522,10 @@ def run_scan_maintenance() -> None:
     repository = _get_scan_task_repository()
     if repository is not None:
         repository.delete_expired_scan_tasks()
+        try:
+            repository.backfill_orphan_scan_task_retention()
+        except Exception:  # pragma: no cover - defensive maintenance boundary
+            _logger.exception("Failed to backfill orphan scan task retention")
     try:
         _cleanup_orphan_scan_temp_dirs()
     except Exception:  # pragma: no cover - defensive maintenance boundary
