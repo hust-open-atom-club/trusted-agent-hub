@@ -1,7 +1,9 @@
 # Scan task list API
 
 The legacy GET /api/v0/scans endpoint remains array-shaped for existing
-clients. It returns the caller's scan tasks, or all tasks for admins.
+clients. It returns the caller's scan tasks, or all tasks for admins — the
+full set, without a truncation limit, so a retained task can never become
+invisible behind a silent page cut.
 
 The management UI uses the versioned paginated endpoint:
 
@@ -39,6 +41,9 @@ its original owner-scoped behavior for submitters and reviewers; admins may
 see all tasks. On the v1 management endpoint, reviewers and admins may see all
 tasks. `owner_user_id` identifies task ownership for that management view; the
 projection contains no source report or private acquisition data.
+
+Admin callers with very large scan backlogs should prefer the paginated
+v1 endpoint: the legacy array response carries the full set in one body.
 
 ## Lifecycle policy
 
