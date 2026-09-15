@@ -753,6 +753,37 @@ def _scan_delete_allowed_for_user(
     )
 
 
+def scan_conflict_detail(info: dict[str, Any]) -> dict[str, Any]:
+    """Build the structured 409 body for a duplicate-source scan request.
+
+    The dedup lookup filters by owner, so the requester is always the task
+    owner here: delete permission reduces to owner-only
+    ``_scan_delete_allowed``.
+    """
+    scan_id = str(info.get("scan_id") or "")
+    lifecycle = _scan_lifecycle(info)
+    delete_allowed = _scan_delete_allowed(
+        info,
+        requester_is_owner=True,
+        requester_is_admin=False,
+    )
+    if delete_allowed:
+        message = (
+            f"该源码已有扫描任务 {scan_id}（{lifecycle}），"
+            f"请先删除任务 {scan_id} 后重试"
+        )
+    else:
+        message = (
+            f"该源码已有扫描任务 {scan_id}（{lifecycle}），不允许重复扫描。"
+        )
+    return {
+        "message": message,
+        "conflict_scan_id": scan_id,
+        "lifecycle": lifecycle,
+        "delete_allowed": delete_allowed,
+    }
+
+
 def _scan_auto_refresh(info: dict[str, Any]) -> bool:
     """Keep polling active tasks and terminal tasks with pending callbacks."""
     if info.get("status") in _SCAN_EXECUTING_STATUSES:
@@ -5483,23 +5514,9 @@ def submit_scan(
     # A new request ID cannot bypass source-level duplicate prevention.
     duplicate_info = _find_scan_task_by_source(_user.id, source)
     if duplicate_info is not None:
-        duplicate_lifecycle = _scan_lifecycle(duplicate_info)
-        suffix = (
-            "；请先删除原扫描任务后再重试"
-            if duplicate_lifecycle in (
-                "llm_timeout",
-                "total_timeout",
-                "error",
-                "complete_unsubmitted",
-            )
-            else ""
-        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"该源码已有扫描任务 {duplicate_info.get('scan_id')} "
-                f"（{duplicate_lifecycle}），不允许重复扫描{suffix}。"
-            ),
+            detail=scan_conflict_detail(duplicate_info),
         )
 
     # 解析 URL 并同步校验：仅允许 GitHub 声明的默认分支。

@@ -304,7 +304,7 @@ def submit_version(
     if not initial_sid and source_url:
         from src.routers.trust import (
             _find_scan_task_by_source_identity,
-            _scan_lifecycle,
+            scan_conflict_detail,
         )
 
         duplicate_info = _find_scan_task_by_source_identity(
@@ -313,23 +313,9 @@ def submit_version(
             source_subdirectory,
         )
         if duplicate_info is not None:
-            duplicate_lifecycle = _scan_lifecycle(duplicate_info)
-            suffix = (
-                "；请先删除原扫描任务后再提交"
-                if duplicate_lifecycle in {
-                    "llm_timeout",
-                    "total_timeout",
-                    "error",
-                    "complete_unsubmitted",
-                }
-                else ""
-            )
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"该源码已有扫描任务 {duplicate_info.get('scan_id')} "
-                    f"（{duplicate_lifecycle}），不允许重复扫描{suffix}。"
-                ),
+                detail=scan_conflict_detail(duplicate_info),
             )
 
     service = ProducerService(repo)
