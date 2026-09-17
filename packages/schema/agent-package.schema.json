@@ -218,6 +218,30 @@
       },
       "description": "搜索关键词"
     },
+    "use_cases": {
+      "type": "array",
+      "maxItems": 6,
+      "description": "作者声明的用途与适用场景；会公开显示在详情页「这个包是干什么的」板块",
+      "items": {
+        "type": "object",
+        "required": ["title", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "场景短标题，如：写规格再开发"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "该场景下这个包能帮上什么忙"
+          }
+        }
+      }
+    },
     "category": {
       "type": "string",
       "description": "功能分类，如 code-generation, security, data, productivity, devops, testing",

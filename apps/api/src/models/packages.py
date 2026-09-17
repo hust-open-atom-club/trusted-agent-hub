@@ -78,6 +78,13 @@ class CredentialsPermissions(StrictContractModel):
     description: str | None = None
 
 
+class UseCase(StrictContractModel):
+    """作者声明的用途/适用场景；长度上限由供给侧请求模型校验，读路径保持宽容。"""
+
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
 class Permissions(StrictContractModel):
     filesystem: FilesystemPermissions | None = None
     shell: ShellPermissions | None = None
@@ -702,6 +709,37 @@ class PublicTrustSummary(StrictContractModel):
     install_recommendation: str
 
 
+class PublicPermissionPurpose(StrictContractModel):
+    """作者声明的权限用途（公开安全：只有理由文本，没有证据或路径）。"""
+
+    scope: Literal["shell", "network", "credentials"]
+    reason: str = Field(max_length=200)
+
+
+class PublicCapabilitySummary(StrictContractModel):
+    """公开能力概览：作者声明的工具与权限用途。
+
+    只投影清单里作者自己声明的内容；扫描发现、评审记录和证据不进入这里。
+    """
+
+    tools: list[str] = Field(default_factory=list)
+    purposes: list[PublicPermissionPurpose] = Field(default_factory=list)
+    use_cases: list[UseCase] = Field(default_factory=list)
+
+
+class PublicTrustBoundary(StrictContractModel):
+    """公开安全的信任边界结论。
+
+    只给三态结论：扫描是否可用、以及是否观察到未声明的能力。
+    未声明能力的具体清单、文件位置和证据文本都停留在评审侧。
+    """
+
+    verification: Literal[
+        "verified_consistent", "verified_undeclared", "not_verified"
+    ] = "not_verified"
+    scanned_at: str | None = None
+
+
 class PublicVersionDetail(StrictContractModel):
     """Least-privilege projection returned by public version endpoints."""
 
@@ -709,6 +747,8 @@ class PublicVersionDetail(StrictContractModel):
     version: str
     compatibility: list[Client] = Field(default_factory=list)
     permission_summary: PublicPermissionSummary | None = None
+    capabilities: PublicCapabilitySummary | None = None
+    trust_boundary: PublicTrustBoundary | None = None
     installation: PublicInstallation | None = None
     effective_grade: Grade | None = None
     risk_level: str | None = None
@@ -725,8 +765,10 @@ class VersionDetail(StrictContractModel):
     integrity: Integrity | None = None
     compatibility: list[Client] = Field(default_factory=list)
     permissions: Permissions | None = None
+    use_cases: list[UseCase] | None = None
     installation: Installation | None = None
     type_config: dict[str, object] | None = None
+    trust_boundary: PublicTrustBoundary | None = None
     dependencies: Dependencies | None = None
     entry_points: EntryPoints | None = None
     submitted_at: str | None = None

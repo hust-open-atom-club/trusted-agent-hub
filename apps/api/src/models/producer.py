@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+import json
+from typing import Annotated
+
+from pydantic import AfterValidator, Field
 
 from .common import Client, PackageType, StrictContractModel
 from .packages import (
@@ -13,7 +16,55 @@ from .packages import (
     Permissions,
     Source,
     TrustScore,
+    UseCase,
 )
+
+_TYPE_CONFIG_KEYS = frozenset(
+    {
+        "skill_config",
+        "mcp_server_config",
+        "plugin_config",
+        "subagent_config",
+        "command_config",
+        "prompt_config",
+    }
+)
+_TYPE_CONFIG_MAX_BYTES = 8 * 1024
+_USE_CASE_MAX_ITEMS = 6
+_USE_CASE_TITLE_MAX = 40
+_USE_CASE_DESCRIPTION_MAX = 160
+
+
+def _bounded_type_config(value: dict[str, object] | None) -> dict[str, object] | None:
+    if value is None:
+        return None
+    unknown = set(value) - _TYPE_CONFIG_KEYS
+    if unknown:
+        raise ValueError(
+            f"type_config 只接受 {sorted(_TYPE_CONFIG_KEYS)}，收到未知键 {sorted(unknown)}"
+        )
+    if len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")) > _TYPE_CONFIG_MAX_BYTES:
+        raise ValueError(f"type_config 超过 {_TYPE_CONFIG_MAX_BYTES} 字节上限")
+    return value
+
+
+def _bounded_use_cases(value: list[UseCase] | None) -> list[UseCase] | None:
+    if value is None:
+        return None
+    if len(value) > _USE_CASE_MAX_ITEMS:
+        raise ValueError(f"use_cases 最多 {_USE_CASE_MAX_ITEMS} 条")
+    for item in value:
+        if len(item.title) > _USE_CASE_TITLE_MAX:
+            raise ValueError(f"use_cases.title 最多 {_USE_CASE_TITLE_MAX} 字符")
+        if len(item.description) > _USE_CASE_DESCRIPTION_MAX:
+            raise ValueError(
+                f"use_cases.description 最多 {_USE_CASE_DESCRIPTION_MAX} 字符"
+            )
+    return value
+
+
+TypeConfigField = Annotated[dict[str, object] | None, AfterValidator(_bounded_type_config)]
+UseCasesField = Annotated[list[UseCase] | None, AfterValidator(_bounded_use_cases)]
 
 
 class CreatePackageRequest(StrictContractModel):
@@ -29,6 +80,8 @@ class CreatePackageRequest(StrictContractModel):
     icon_url: str | None = None
     author: Author | None = None
     permissions: Permissions | None = None
+    use_cases: UseCasesField = None
+    type_config: TypeConfigField = None
     installation: Installation | None = None
     dependencies: Dependencies | None = None
     source: Source | None = None
@@ -50,6 +103,8 @@ class CreateVersionRequest(StrictContractModel):
     source: Source | None = None
     integrity: Integrity | None = None
     permissions: Permissions | None = None
+    use_cases: UseCasesField = None
+    type_config: TypeConfigField = None
     compatibility: list[Client] = Field(default_factory=list)
     installation: Installation | None = None
     dependencies: Dependencies | None = None

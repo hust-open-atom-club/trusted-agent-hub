@@ -64,6 +64,20 @@ const SPDX_LICENSES = [
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[\w.]+)?(?:\+[\w.]+)?$/;
 
+const TYPE_CONFIG_KEYS = [
+  'skill_config',
+  'mcp_server_config',
+  'plugin_config',
+  'subagent_config',
+] as const;
+
+function buildTypeConfig(meta: PackageMetadata): Record<string, unknown> | null {
+  const entries = TYPE_CONFIG_KEYS
+    .map((key) => [key, meta[key]] as const)
+    .filter(([, value]) => value !== undefined && value !== null);
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 function createClientRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -81,10 +95,15 @@ interface PackageMetadata {
   license: string;
   author?: { name?: string; email?: string; url?: string };
   keywords?: string[];
+  use_cases?: Array<{ title: string; description: string }>;
   category?: string;
   homepage?: string | null;
   compatibility?: string[];
   permissions?: Record<string, unknown>;
+  skill_config?: Record<string, unknown>;
+  mcp_server_config?: Record<string, unknown>;
+  plugin_config?: Record<string, unknown>;
+  subagent_config?: Record<string, unknown>;
   source?: Record<string, unknown>;
   integrity?: Record<string, unknown>;
   installation?: Record<string, unknown>;
@@ -680,6 +699,8 @@ function SubmitForm() {
           source: sourceObj,
           integrity: meta.integrity || null,
           permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
+          use_cases: Array.isArray(meta.use_cases) ? meta.use_cases : null,
+          type_config: buildTypeConfig(meta),
           compatibility: compatList,
           installation: meta.installation || null,
           dependencies: meta.dependencies || null,
@@ -715,6 +736,8 @@ function SubmitForm() {
         license: pkgLicense.trim(), keywords: kwList, category: pkgCategory.trim() || meta.category || 'other',
         homepage: homepage || null, author: authorObj,
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
+        use_cases: Array.isArray(meta.use_cases) ? meta.use_cases : null,
+        type_config: buildTypeConfig(meta),
         compatibility: compatList, installation: meta.installation, source: sourceObj,
         dependencies: meta.dependencies || null,
         field_source: fs,
@@ -732,6 +755,8 @@ function SubmitForm() {
         source: sourceObj,
         integrity: meta.integrity || null,
         permissions: (meta.permissions && typeof meta.permissions === 'object' ? meta.permissions : {}),
+        use_cases: Array.isArray(meta.use_cases) ? meta.use_cases : null,
+        type_config: buildTypeConfig(meta),
         compatibility: compatList,
         installation: meta.installation || null,
         dependencies: meta.dependencies || null,

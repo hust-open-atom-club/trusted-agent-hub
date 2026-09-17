@@ -13,8 +13,8 @@ from pydantic import ValidationError
 from packages.schema.extract_skills import extract_single_skill
 from schema.constants import CLIENTS
 from src.models.common import Client, PackageListQuery, PackageType
-from src.models.packages import Author
-from src.models.producer import CreatePackageRequest
+from src.models.packages import Author, UseCase, VersionDetail
+from src.models.producer import CreatePackageRequest, CreateVersionRequest
 from src.services.install import CLIENT_INSTALL_ROOTS, get_client_install_root
 from src.services.producer import (
     ProducerService,
@@ -120,6 +120,170 @@ def test_json_schema_accepts_url_only_codex_skill_author() -> None:
     ]
 
     jsonschema.validate(skill, schema)
+
+
+def test_producer_request_bounds_type_config_and_use_cases() -> None:
+    with pytest.raises(ValidationError):
+        CreateVersionRequest.model_validate(
+            {"version": "1.0.0", "type_config": {"unknown_config": {}}}
+        )
+    with pytest.raises(ValidationError):
+        CreateVersionRequest.model_validate(
+            {
+                "version": "1.0.0",
+                "type_config": {"skill_config": {"blob": "x" * 9000}},
+            }
+        )
+    with pytest.raises(ValidationError):
+        CreateVersionRequest.model_validate(
+            {
+                "version": "1.0.0",
+                "use_cases": [{"title": "x" * 41, "description": "ok"}],
+            }
+        )
+    with pytest.raises(ValidationError):
+        CreateVersionRequest.model_validate(
+            {
+                "version": "1.0.0",
+                "use_cases": [
+                    {"title": f"t{index}", "description": "ok"} for index in range(7)
+                ],
+            }
+        )
+
+    accepted = CreateVersionRequest.model_validate(
+        {
+            "version": "1.0.0",
+            "type_config": {"skill_config": {"tools": ["Bash"]}},
+            "use_cases": [{"title": "场景", "description": "说明"}],
+        }
+    )
+
+    assert accepted.type_config == {"skill_config": {"tools": ["Bash"]}}
+
+
+def test_version_detail_tolerates_over_long_use_cases_from_legacy_rows() -> None:
+    version = VersionDetail(
+        id="ver-legacy",
+        package_id="pkg-legacy",
+        version="1.0.0",
+        status="published",
+        use_cases=[UseCase(title="x" * 80, description="y" * 300)],
+    )
+
+    assert len(version.use_cases[0].title) == 80
+
+
+class _CreateVersionRepository:
+    """Minimal repository used to exercise ProducerService.create_version."""
+
+    def __init__(self) -> None:
+        self.created: dict[str, object] = {}
+
+    def get_package(self, package_id: str) -> dict[str, object]:
+        return {"id": package_id, "type": "skill", "name": "demo-skill"}
+
+    def create_version(self, **kwargs: object) -> dict[str, object]:
+        self.created = kwargs
+        return {"id": "version-1", **kwargs}
+
+
+def test_create_version_forwards_author_declared_type_config() -> None:
+    repository = _CreateVersionRepository()
+    request = CreateVersionRequest.model_validate(
+        {
+            "version": "1.0.0",
+            "type_config": {"skill_config": {"tools": ["Bash", "Read"]}},
+        }
+    )
+
+    ProducerService(repository).create_version(  # type: ignore[arg-type]
+        "package-1", request
+    )
+
+    assert repository.created["type_config"] == {
+        "skill_config": {"tools": ["Bash", "Read"]}
+    }
+
+
+def test_extractor_reads_author_declared_use_cases(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: use-case-skill\n"
+        "description: A Skill that documents its intended use cases.\n"
+        "use_cases:\n"
+        "  - title: 写规格再开发\n"
+        "    description: 编码前先形成清晰规格，减少返工。\n"
+        "  - title: PRD 草拟\n"
+        "    description: 把目标、范围与需求整理成可执行文档。\n"
+        "---\n"
+        "\n# Use case skill\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+
+    assert metadata["use_cases"] == [
+        {"title": "写规格再开发", "description": "编码前先形成清晰规格，减少返工。"},
+        {"title": "PRD 草拟", "description": "把目标、范围与需求整理成可执行文档。"},
+    ]
+
+
+def test_extractor_bounds_invalid_and_duplicate_use_cases(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\n"
+        "name: bounded-use-case-skill\n"
+        "description: A Skill with too many use cases declared.\n"
+        "use_cases:\n"
+        "  - title: 重复标题\n"
+        "    description: 第一条\n"
+        "  - title: 重复标题\n"
+        "    description: 应被去重\n"
+        "  - title: 缺描述\n"
+        "  - title: 超长描述\n"
+        f"    description: {'长' * 400}\n"
+        "  - title: 场景三\n"
+        "    description: 第三条\n"
+        "  - title: 场景四\n"
+        "    description: 第四条\n"
+        "  - title: 场景五\n"
+        "    description: 第五条\n"
+        "  - title: 场景六\n"
+        "    description: 第六条\n"
+        "---\n"
+        "\n# Bounded use cases\n",
+        encoding="utf-8",
+    )
+
+    metadata = extract_single_skill(tmp_path)
+    use_cases = metadata["use_cases"]
+    titles = [item["title"] for item in use_cases]
+
+    assert len(use_cases) == 6
+    assert titles[0] == "重复标题"
+    assert titles.count("重复标题") == 1
+    assert "缺描述" not in titles
+    assert len(use_cases[1]["description"]) == 160
+
+
+def test_json_schema_accepts_and_validates_use_cases() -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    skill = json.loads(
+        (SCHEMA_EXAMPLES / "skill-basic.json").read_text(encoding="utf-8")
+    )
+    skill["use_cases"] = [
+        {"title": "写规格再开发", "description": "编码前先形成清晰规格。"},
+    ]
+
+    jsonschema.validate(skill, schema)
+
+    skill["use_cases"] = [{"title": "x" * 41, "description": "标题过长"}]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(skill, schema)
+
+    skill["use_cases"] = [{"title": "缺少描述"}]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(skill, schema)
 
 
 def test_extractor_uses_codex_target_for_codex_only_skill(

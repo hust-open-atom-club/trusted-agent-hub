@@ -209,22 +209,12 @@
     "not_found": "包不存在",
     "not_found_hint": "包 \"{{name}}\" 不存在。",
     "trust_score": "信任评分",
-    "trust_conclusion": "信任结论",
     "source_repo": "来源仓库",
     "url": "地址",
     "ref": "引用",
     "verified_owner": "已验证所有者",
     "stars": "星标",
     "compatible_clients": "兼容客户端",
-    "permissions": "权限声明",
-    "filesystem": "文件系统",
-    "shell": "Shell",
-    "network": "网络",
-    "environment": "环境变量",
-    "credentials": "凭据",
-    "database": "数据库",
-    "browser": "浏览器",
-    "external_services": "外部服务",
     "read": "读取",
     "write": "写入",
     "can_delete": "可删除文件",
@@ -258,19 +248,16 @@
     "verified_source": "来源已验证",
     "calculated": "计算时间",
     "nav": {
-      "overview": "概览",
-      "trust": "信任结论",
       "files": "文件",
       "integrity": "完整性",
-      "permissions": "权限",
+      "capability": "能力",
+      "boundary": "安全边界",
       "installation": "安装",
       "versions": "版本",
       "feedback": "反馈"
     },
     "section": {
-      "overview_kicker": "兼容客户端和关键词",
       "trust_history": "信任评分历史",
-      "permissions_kicker": "声明的能力范围",
       "dependencies_kicker": "运行要求",
       "entry_points_kicker": "包启动元数据",
       "installation_kicker": "方式和目标",
@@ -332,32 +319,98 @@
       "download_size": "安装包大小",
       "missing": "缺失"
     },
-    "permissions": {
-      "no_filesystem": "未声明文件系统访问。",
-      "read": "读取：{{value}}",
-      "write": "写入：{{value}}",
-      "commands": "命令：{{value}}",
-      "domains": "域名：{{value}}",
-      "access": "访问：{{value}}",
-      "can_delete": "可删除文件",
-      "allowed": "已允许",
-      "not_allowed": "未允许"
+    "capability": {
+      "radar_title": "权限范围",
+      "radar_aria": "{{name}} 声明的权限范围",
+      "radar_note": "外圈表示声明范围更大或无法判定上限（按最大范围展示）。该图描述声明的能力范围，与信任等级相互独立。",
+      "empty": "此版本未声明任何敏感权限。",
+      "axis_header": "权限项",
+      "value_header": "声明范围",
+      "block_title": "这个 {{type}} 是干什么的？",
+      "block_kicker": "用途、工具与权限依据",
+      "block_summary": "以下内容全部来自 {{name}} 作者提交时声明的信息与公开的扫描结论，不含审核内部证据。",
+      "legend": {
+        "current": "当前权限",
+        "reference": "完全权限（参考）"
+      },
+      "scope": {
+        "shell": "命令执行",
+        "network": "网络访问",
+        "credentials": "凭据访问"
+      },
+      "tile": {
+        "author_declared": "作者声明",
+        "use_case_label": "适用场景",
+        "use_case_body": "{{title}} — {{description}}",
+        "tools_label": "工具",
+        "tools_body": "{{count}} 个：{{sample}}",
+        "purpose_label": "权限用途",
+        "purpose_body": "{{scope}}：{{reason}}",
+        "boundary_label": "边界核验",
+        "keywords_label": "适用场景",
+        "keywords_body": "{{sample}}"
+      },
+      "boundary": {
+        "verified_consistent": "扫描未发现未声明的能力。",
+        "verified_undeclared": "扫描发现未声明的能力，建议人工复核后再安装。",
+        "not_verified": "此版本尚无可用扫描结果，边界未核验。"
+      },
+      "level": {
+        "none": "未声明"
+      },
+      "axis": {
+        "filesystem_read": "文件读取",
+        "filesystem_write": "文件写入",
+        "filesystem_delete": "文件删除",
+        "shell": "命令执行",
+        "network": "网络访问",
+        "environment": "环境变量",
+        "credentials_external": "凭据·外部"
+      },
+      "value": {
+        "filesystem_read": "可读取 {{count}} 个路径",
+        "filesystem_write": "可写入 {{count}} 个路径",
+        "filesystem_delete": "可删除文件",
+        "shell": "可执行 Shell 命令",
+        "network": "可访问网络",
+        "environment": "变量读取 {{read}} · 写入 {{write}}",
+        "credentials_external": "凭据 {{credentials}} 类 · 外部服务 {{services}} 个"
+      }
     },
-    "permission_summary": {
-      "filesystem_none": "无读/写/删除权限",
-      "filesystem_access": "读取 {{readCount}} 个路径 · 写入 {{writeCount}} 个路径 · 删除权限：{{deleteAllowed}}",
-      "shell_not_allowed": "未允许",
-      "shell_allowed": "已允许：{{commands}}",
-      "shell_allowed_summary": "已允许",
-      "network_not_allowed": "未允许",
-      "network_allowed": "已允许：{{domains}}",
-      "network_allowed_summary": "已允许",
-      "environment_read": "读取 {{count}} 个变量",
-      "environment_write": "写入 {{count}} 个变量",
-      "credentials_access": "访问：{{access}}",
-      "credentials_access_count": "访问 {{count}} 类凭据",
-      "declared": "已声明",
-      "external_services_count": "访问 {{count}} 个服务"
+    "boundary": {
+      "title": "安全能力边界",
+      "subtitle": "这个 {{type}} 能做什么 / 不能做什么",
+      "item": {
+        "filesystem_read": "文件系统读取",
+        "filesystem_write": "文件系统写入",
+        "filesystem_delete": "删除权限",
+        "shell": "Shell 执行",
+        "network": "网络访问",
+        "environment": "环境变量",
+        "credentials": "凭据访问"
+      },
+      "value": {
+        "filesystem_read": "允许读取 {{count}} 个路径（受限）",
+        "filesystem_write": "允许写入 {{count}} 个路径（受限）",
+        "environment": "允许读取 {{count}} 个变量",
+        "credentials": "允许访问 {{count}} 类凭据",
+        "allowed": "允许",
+        "not_allowed": "不允许"
+      },
+      "summary": {
+        "allowed": "允许",
+        "not_allowed": "不允许"
+      },
+      "verdict": {
+        "limited": "该版本声明的权限范围较小，未命中删除、执行等高风险能力。",
+        "none": "该版本未声明任何敏感权限。",
+        "elevated": "该版本声明了 {{count}} 项高风险权限，请确认你能接受这些能力。",
+        "undeclared": "扫描发现未声明的能力，建议人工复核。"
+      }
+    },
+    "breadcrumb": {
+      "label": "面包屑导航",
+      "detail": "包详情"
     },
     "install": {
       "method": "安装方式",
@@ -409,7 +462,11 @@
       "install": "安装",
       "source": "来源",
       "sections": "页面章节",
-      "review": "需查看"
+      "review": "需查看",
+      "install_hint": "选择客户端并复制安装命令，在你的环境中安装。",
+      "permissions": "权限摘要",
+      "declared_count": "已声明 {{declared}} 项 / 共 {{total}} 项",
+      "see_detail": "查看详情 →"
     }
   },
   "feedback": {

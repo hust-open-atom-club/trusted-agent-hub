@@ -387,11 +387,34 @@ export interface PublicPermissionSummary {
   external_services_count: number;
 }
 
+export interface PublicPermissionPurpose {
+  scope: 'filesystem' | 'shell' | 'network' | 'environment' | 'credentials';
+  reason: string;
+}
+
+export interface PublicCapabilitySummary {
+  tools: string[];
+  purposes: PublicPermissionPurpose[];
+  use_cases?: PublicUseCase[];
+}
+
+export interface PublicUseCase {
+  title: string;
+  description: string;
+}
+
+export interface PublicTrustBoundary {
+  verification: 'verified_consistent' | 'verified_undeclared' | 'not_verified';
+  scanned_at?: string | null;
+}
+
 export interface PublicVersionDetail {
   name: string;
   version: string;
   compatibility: string[];
   permission_summary?: PublicPermissionSummary | null;
+  capabilities?: PublicCapabilitySummary | null;
+  trust_boundary?: PublicTrustBoundary | null;
   installation?: PublicInstallation | null;
   effective_grade?: string | null;
   risk_level?: string | null;

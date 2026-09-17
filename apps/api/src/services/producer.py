@@ -16,6 +16,7 @@ from src.repositories.producer_sqlalchemy import (
     ScanTaskSourceConflictError,
 )
 from src.services.source_snapshots import SourceSnapshotStore
+from src.services.trust_boundary import public_trust_boundary
 from scanners.risk_scanner.redaction import redact_report
 from src.models.producer import (
     CreatePackageRequest,
@@ -337,6 +338,10 @@ class ProducerService:
             icon_url=data.icon_url,
             author=data.author.model_dump(exclude_none=True) if data.author else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
+            use_cases=(
+                [item.model_dump() for item in data.use_cases] if data.use_cases else None
+            ),
+            type_config=data.type_config,
             installation=data.installation.model_dump() if data.installation else None,
             dependencies=data.dependencies.model_dump() if data.dependencies else None,
             source=data.source.model_dump() if data.source else None,
@@ -389,6 +394,10 @@ class ProducerService:
             source=data.source.model_dump() if data.source else None,
             integrity=data.integrity.model_dump() if data.integrity else None,
             permissions=data.permissions.model_dump() if data.permissions else None,
+            use_cases=(
+                [item.model_dump() for item in data.use_cases] if data.use_cases else None
+            ),
+            type_config=data.type_config,
             compatibility=self._normalize_compatibility(
                 package_type, data.compatibility
             ),
@@ -765,11 +774,15 @@ class ProducerService:
 
         # 更新版本数据（附加完整信任评分信息）
         trust_data: dict[str, object] = trust_score if isinstance(trust_score, dict) else {}
+        completed_at = datetime.now(timezone.utc).isoformat()
         self.repository.update_version_data(
             version_id,
             {
                 "trust_score": trust_data,
-                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "submitted_at": completed_at,
+                "trust_boundary": public_trust_boundary(
+                    scan_data, scanned_at=completed_at
+                ).model_dump(mode="json"),
             },
         )
 

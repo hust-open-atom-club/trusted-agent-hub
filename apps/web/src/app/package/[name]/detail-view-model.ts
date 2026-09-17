@@ -1,18 +1,12 @@
 import type {
+  PublicCapabilitySummary,
   PublicPermissionSummary,
+  PublicTrustBoundary,
   VersionIntegrity,
-  VersionPermissions,
   VersionSource,
 } from '@/types';
 
 export type PermissionTone = 'safe' | 'caution' | 'danger';
-
-export interface PermissionSummaryItem {
-  labelKey: string;
-  valueKey: string;
-  values: Record<string, string | number | boolean>;
-  tone: PermissionTone;
-}
 
 export interface DetailText {
   key: string;
@@ -56,164 +50,321 @@ export function getFeedbackSummary(
   };
 }
 
-export function getPermissionSummary(perms?: VersionPermissions | null): PermissionSummaryItem[] {
-  const filesystem = perms?.filesystem;
-  const shell = perms?.shell;
-  const network = perms?.network;
-  const environment = perms?.environment;
-  const credentials = perms?.credentials;
+export type CapabilityScope = 'none' | 'limited' | 'unrestricted';
 
-  const hasFilesystemAccess = Boolean(
-    filesystem?.read?.length ||
-    filesystem?.write?.length ||
-    filesystem?.delete,
-  );
-
-  const items: PermissionSummaryItem[] = [
-    {
-      labelKey: 'detail.filesystem',
-      valueKey: hasFilesystemAccess
-        ? 'detail.permission_summary.filesystem_access'
-        : 'detail.permission_summary.filesystem_none',
-      values: hasFilesystemAccess
-        ? {
-            readCount: filesystem?.read?.length ?? 0,
-            writeCount: filesystem?.write?.length ?? 0,
-            deleteAllowed: Boolean(filesystem?.delete),
-          }
-        : {},
-      tone: filesystem?.delete || Boolean(filesystem?.write?.length) ? 'danger' : 'safe',
-    },
-    {
-      labelKey: 'detail.shell',
-      valueKey: shell?.allowed
-        ? 'detail.permission_summary.shell_allowed'
-        : 'detail.permission_summary.shell_not_allowed',
-      values: shell?.allowed ? { commands: shell.commands?.join(', ') ?? '' } : {},
-      tone: shell?.allowed ? 'danger' : 'safe',
-    },
-    {
-      labelKey: 'detail.network',
-      valueKey: network?.allowed
-        ? 'detail.permission_summary.network_allowed'
-        : 'detail.permission_summary.network_not_allowed',
-      values: network?.allowed ? { domains: network.domains?.join(', ') ?? '' } : {},
-      tone: network?.allowed ? 'caution' : 'safe',
-    },
-  ];
-
-  if (environment?.read?.length || environment?.write?.length) {
-    items.push({
-      labelKey: 'detail.environment',
-      valueKey: environment.write?.length
-        ? 'detail.permission_summary.environment_write'
-        : 'detail.permission_summary.environment_read',
-      values: { count: environment.write?.length || environment.read?.length || 0 },
-      tone: environment.write?.length ? 'caution' : 'safe',
-    });
-  }
-
-  if (credentials?.access?.length) {
-    items.push({
-      labelKey: 'detail.credentials',
-      valueKey: 'detail.permission_summary.credentials_access',
-      values: { access: credentials.access.join(', ') },
-      tone: 'caution',
-    });
-  }
-
-  return items;
+export interface CapabilityAxis {
+  key: string;
+  value: number;
+  scope: CapabilityScope;
+  tone: PermissionTone;
+  detailKey: string;
+  detailValues: Record<string, string | number | boolean>;
 }
 
-export function getPublicPermissionSummary(
-  summary?: PublicPermissionSummary | null,
-): PermissionSummaryItem[] {
-  if (!summary) return [];
+const CAPABILITY_SCOPE_VALUE: Record<CapabilityScope, number> = {
+  none: 0,
+  limited: 0.5,
+  unrestricted: 1,
+};
 
-  const hasFilesystemAccess = Boolean(
-    summary.filesystem_read_count
-    || summary.filesystem_write_count
-    || summary.filesystem_delete,
-  );
-  const items: PermissionSummaryItem[] = [
+const NO_CAPABILITY_DETAIL_KEY = 'detail.capability.level.none';
+
+function capabilityAxis(
+  key: string,
+  scope: CapabilityScope,
+  tone: PermissionTone,
+  detailKey: string,
+  detailValues: Record<string, string | number | boolean> = {},
+): CapabilityAxis {
+  return { key, scope, value: CAPABILITY_SCOPE_VALUE[scope], tone, detailKey, detailValues };
+}
+
+export function getCapabilityAxes(summary?: PublicPermissionSummary | null): CapabilityAxis[] {
+  const readCount = summary?.filesystem_read_count ?? 0;
+  const writeCount = summary?.filesystem_write_count ?? 0;
+  const deleteAllowed = Boolean(summary?.filesystem_delete);
+  const shellAllowed = Boolean(summary?.shell_allowed);
+  const networkAllowed = Boolean(summary?.network_allowed);
+  const environmentRead = summary?.environment_read_count ?? 0;
+  const environmentWrite = summary?.environment_write_count ?? 0;
+  const credentialsCount = summary?.credentials_access_count ?? 0;
+  const externalServicesCount = summary?.external_services_count ?? 0;
+  const externalDeclared = externalServicesCount > 0
+    || Boolean(summary?.database_declared)
+    || Boolean(summary?.browser_declared);
+
+  return [
+    readCount > 0
+      ? capabilityAxis(
+          'filesystem_read',
+          'limited',
+          'safe',
+          'detail.capability.value.filesystem_read',
+          { count: readCount },
+        )
+      : capabilityAxis('filesystem_read', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    writeCount > 0
+      ? capabilityAxis(
+          'filesystem_write',
+          'limited',
+          'caution',
+          'detail.capability.value.filesystem_write',
+          { count: writeCount },
+        )
+      : capabilityAxis('filesystem_write', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    deleteAllowed
+      ? capabilityAxis(
+          'filesystem_delete',
+          'unrestricted',
+          'danger',
+          'detail.capability.value.filesystem_delete',
+        )
+      : capabilityAxis('filesystem_delete', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    // 公开投影只有 shell_allowed 布尔值，无法区分命令白名单与任意命令，
+    // 因此按范围无法判定处理（保守取最大档）。
+    shellAllowed
+      ? capabilityAxis('shell', 'unrestricted', 'danger', 'detail.capability.value.shell')
+      : capabilityAxis('shell', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    networkAllowed
+      ? capabilityAxis('network', 'unrestricted', 'caution', 'detail.capability.value.network')
+      : capabilityAxis('network', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    environmentWrite > 0
+      ? capabilityAxis(
+          'environment',
+          'unrestricted',
+          'caution',
+          'detail.capability.value.environment',
+          { read: environmentRead, write: environmentWrite },
+        )
+      : environmentRead > 0
+        ? capabilityAxis(
+            'environment',
+            'limited',
+            'safe',
+            'detail.capability.value.environment',
+            { read: environmentRead, write: environmentWrite },
+          )
+        : capabilityAxis('environment', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+    credentialsCount > 0
+      ? capabilityAxis(
+          'credentials_external',
+          'unrestricted',
+          'danger',
+          'detail.capability.value.credentials_external',
+          { credentials: credentialsCount, services: externalServicesCount },
+        )
+      : externalDeclared
+        ? capabilityAxis(
+            'credentials_external',
+            'limited',
+            'caution',
+            'detail.capability.value.credentials_external',
+            { credentials: credentialsCount, services: externalServicesCount },
+          )
+        : capabilityAxis('credentials_external', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
+  ];
+}
+
+export function hasDeclaredCapability(axes: CapabilityAxis[]): boolean {
+  return axes.some((axis) => axis.value > 0);
+}
+
+export interface BoundaryRow {
+  key: string;
+  allowed: boolean;
+  valueKey: string;
+  values: Record<string, string | number>;
+  tone: PermissionTone;
+}
+
+export function getBoundaryRows(
+  summary?: PublicPermissionSummary | null,
+): BoundaryRow[] {
+  const readCount = summary?.filesystem_read_count ?? 0;
+  const writeCount = summary?.filesystem_write_count ?? 0;
+  const deleteAllowed = Boolean(summary?.filesystem_delete);
+  const shellAllowed = Boolean(summary?.shell_allowed);
+  const networkAllowed = Boolean(summary?.network_allowed);
+  const environmentCount =
+    (summary?.environment_read_count ?? 0) + (summary?.environment_write_count ?? 0);
+  const credentialsCount = summary?.credentials_access_count ?? 0;
+
+  return [
     {
-      labelKey: 'detail.filesystem',
-      valueKey: hasFilesystemAccess
-        ? 'detail.permission_summary.filesystem_access'
-        : 'detail.permission_summary.filesystem_none',
-      values: hasFilesystemAccess
-        ? {
-            readCount: summary.filesystem_read_count,
-            writeCount: summary.filesystem_write_count,
-            deleteAllowed: summary.filesystem_delete,
-          }
-        : {},
-      tone: summary.filesystem_delete || summary.filesystem_write_count > 0 ? 'danger' : 'safe',
+      key: 'filesystem_read',
+      allowed: readCount > 0,
+      valueKey: readCount > 0
+        ? 'detail.boundary.value.filesystem_read'
+        : 'detail.boundary.value.not_allowed',
+      values: { count: readCount },
+      tone: 'safe',
     },
     {
-      labelKey: 'detail.shell',
-      valueKey: summary.shell_allowed
-        ? 'detail.permission_summary.shell_allowed_summary'
-        : 'detail.permission_summary.shell_not_allowed',
-      values: {},
-      tone: summary.shell_allowed ? 'danger' : 'safe',
+      key: 'filesystem_write',
+      allowed: writeCount > 0,
+      valueKey: writeCount > 0
+        ? 'detail.boundary.value.filesystem_write'
+        : 'detail.boundary.value.not_allowed',
+      values: { count: writeCount },
+      tone: writeCount > 0 ? 'caution' : 'safe',
     },
     {
-      labelKey: 'detail.network',
-      valueKey: summary.network_allowed
-        ? 'detail.permission_summary.network_allowed_summary'
-        : 'detail.permission_summary.network_not_allowed',
+      key: 'filesystem_delete',
+      allowed: deleteAllowed,
+      valueKey: deleteAllowed
+        ? 'detail.boundary.value.allowed'
+        : 'detail.boundary.value.not_allowed',
       values: {},
-      tone: summary.network_allowed ? 'caution' : 'safe',
+      tone: deleteAllowed ? 'danger' : 'safe',
+    },
+    {
+      key: 'shell',
+      allowed: shellAllowed,
+      valueKey: shellAllowed
+        ? 'detail.boundary.value.allowed'
+        : 'detail.boundary.value.not_allowed',
+      values: {},
+      tone: shellAllowed ? 'danger' : 'safe',
+    },
+    {
+      key: 'network',
+      allowed: networkAllowed,
+      valueKey: networkAllowed
+        ? 'detail.boundary.value.allowed'
+        : 'detail.boundary.value.not_allowed',
+      values: {},
+      tone: networkAllowed ? 'caution' : 'safe',
+    },
+    {
+      key: 'environment',
+      allowed: environmentCount > 0,
+      valueKey: environmentCount > 0
+        ? 'detail.boundary.value.environment'
+        : 'detail.boundary.value.not_allowed',
+      values: { count: environmentCount },
+      tone: (summary?.environment_write_count ?? 0) > 0 ? 'caution' : 'safe',
+    },
+    {
+      key: 'credentials',
+      allowed: credentialsCount > 0,
+      valueKey: credentialsCount > 0
+        ? 'detail.boundary.value.credentials'
+        : 'detail.boundary.value.not_allowed',
+      values: { count: credentialsCount },
+      tone: credentialsCount > 0 ? 'danger' : 'safe',
     },
   ];
+}
 
-  if (summary.environment_read_count || summary.environment_write_count) {
-    items.push({
-      labelKey: 'detail.environment',
-      valueKey: summary.environment_write_count
-        ? 'detail.permission_summary.environment_write'
-        : 'detail.permission_summary.environment_read',
-      values: {
-        count: summary.environment_write_count || summary.environment_read_count,
+export interface CapabilityHighlight {
+  key: string;
+  labelKey: string;
+  bodyKey: string;
+  bodyValues: Record<string, string | number>;
+  tone: PermissionTone;
+  authorDeclared?: boolean;
+}
+
+export function getCapabilityHighlights(
+  capabilities?: PublicCapabilitySummary | null,
+  boundary?: PublicTrustBoundary | null,
+  keywords: string[] = [],
+  separator = '、',
+): CapabilityHighlight[] {
+  const highlights: CapabilityHighlight[] = [];
+  const tools = capabilities?.tools ?? [];
+
+  for (const useCase of (capabilities?.use_cases ?? []).slice(0, 6)) {
+    highlights.push({
+      key: `use_case_${useCase.title}`,
+      labelKey: 'detail.capability.tile.use_case_label',
+      bodyKey: 'detail.capability.tile.use_case_body',
+      bodyValues: { title: useCase.title, description: useCase.description },
+      tone: 'safe',
+      authorDeclared: true,
+    });
+  }
+
+  if (tools.length > 0) {
+    const sample = tools.slice(0, 3).join(separator);
+    highlights.push({
+      key: 'tools',
+      labelKey: 'detail.capability.tile.tools_label',
+      bodyKey: 'detail.capability.tile.tools_body',
+      bodyValues: {
+        count: tools.length,
+        sample: tools.length > 3 ? `${sample}…` : sample,
       },
-      tone: summary.environment_write_count ? 'caution' : 'safe',
-    });
-  }
-  if (summary.credentials_access_count) {
-    items.push({
-      labelKey: 'detail.credentials',
-      valueKey: 'detail.permission_summary.credentials_access_count',
-      values: { count: summary.credentials_access_count },
-      tone: 'caution',
-    });
-  }
-  if (summary.database_declared) {
-    items.push({
-      labelKey: 'detail.database',
-      valueKey: 'detail.permission_summary.declared',
-      values: {},
-      tone: 'caution',
-    });
-  }
-  if (summary.browser_declared) {
-    items.push({
-      labelKey: 'detail.browser',
-      valueKey: 'detail.permission_summary.declared',
-      values: {},
-      tone: 'caution',
-    });
-  }
-  if (summary.external_services_count) {
-    items.push({
-      labelKey: 'detail.external_services',
-      valueKey: 'detail.permission_summary.external_services_count',
-      values: { count: summary.external_services_count },
-      tone: 'caution',
+      tone: 'safe',
     });
   }
 
-  return items;
+  for (const purpose of (capabilities?.purposes ?? []).slice(0, 3)) {
+    highlights.push({
+      key: `purpose_${purpose.scope}`,
+      labelKey: 'detail.capability.tile.purpose_label',
+      bodyKey: 'detail.capability.tile.purpose_body',
+      bodyValues: {
+        scopeKey: `detail.capability.scope.${purpose.scope}`,
+        reason: purpose.reason,
+      },
+      tone: 'caution',
+      authorDeclared: true,
+    });
+  }
+
+  const verification = boundary?.verification ?? 'not_verified';
+  highlights.push({
+    key: 'boundary',
+    labelKey: 'detail.capability.tile.boundary_label',
+    bodyKey: `detail.capability.boundary.${verification}`,
+    bodyValues: {},
+    tone: verification === 'verified_undeclared' ? 'caution' : 'safe',
+  });
+
+  if (highlights.length < 3 && keywords.length > 0) {
+    highlights.push({
+      key: 'keywords',
+      labelKey: 'detail.capability.tile.keywords_label',
+      bodyKey: 'detail.capability.tile.keywords_body',
+      bodyValues: {
+        sample: keywords.length > 4
+          ? `${keywords.slice(0, 4).join(separator)}…`
+          : keywords.join(separator),
+      },
+      tone: 'safe',
+    });
+  }
+
+  return highlights.slice(0, 8);
+}
+
+export interface BoundaryVerdict {
+  key: string;
+  values: Record<string, string | number>;
+  tone: PermissionTone;
+}
+
+export function getBoundaryVerdict(
+  summary?: PublicPermissionSummary | null,
+  boundary?: PublicTrustBoundary | null,
+): BoundaryVerdict {
+  if (boundary?.verification === 'verified_undeclared') {
+    return { key: 'detail.boundary.verdict.undeclared', values: {}, tone: 'caution' };
+  }
+  const rows = getBoundaryRows(summary);
+  const highRisk = rows.filter((row) => row.allowed && row.tone === 'danger').length;
+  if (highRisk > 0) {
+    return {
+      key: 'detail.boundary.verdict.elevated',
+      values: { count: highRisk },
+      tone: 'caution',
+    };
+  }
+  if (!hasDeclaredCapability(getCapabilityAxes(summary))) {
+    return { key: 'detail.boundary.verdict.none', values: {}, tone: 'safe' };
+  }
+  return { key: 'detail.boundary.verdict.limited', values: {}, tone: 'safe' };
 }
 
 export function formatByteSize(bytes?: number | null): string {

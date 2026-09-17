@@ -15,12 +15,16 @@ from src.models.packages import (
     PackagePage,
     PackageStats,
     PackageSummary,
+    PublicCapabilitySummary,
     PublicInstallation,
     PublicInstallTarget,
+    PublicPermissionPurpose,
     PublicPermissionSummary,
+    PublicTrustBoundary,
     PublicTrustSummary,
     PublicVersionDetail,
     TrustHistoryPoint,
+    UseCase,
     VersionDetail,
     VersionSummary,
 )
@@ -33,6 +37,7 @@ from .errors import (
     TrustScoreNotFoundError,
     VersionNotFoundError,
 )
+from .trust_boundary import public_trust_boundary
 
 _GRADE_NUMERIC: dict[Grade | None, int] = {
     Grade.A: 5,
@@ -57,6 +62,57 @@ _GRADE_MIDPOINT: dict[Grade, float] = {
 
 def _grade_order(grade: Grade | None) -> int:
     return _GRADE_NUMERIC.get(grade, 0)
+
+_MAX_PUBLIC_TOOLS = 24
+_MAX_PUBLIC_USE_CASES = 6
+_TOOL_CONFIG_SECTIONS = (
+    "skill_config",
+    "mcp_server_config",
+    "subagent_config",
+    "plugin_config",
+)
+
+
+def _declared_tool_names(type_config: dict[str, object] | None) -> list[str]:
+    """从作者提交的类型配置里取工具名；只取名字，不取描述、参数或路径。"""
+    if not isinstance(type_config, dict):
+        return []
+    names: list[str] = []
+    for section in _TOOL_CONFIG_SECTIONS:
+        config = type_config.get(section)
+        if not isinstance(config, dict):
+            continue
+        raw_tools = config.get("tools")
+        if not isinstance(raw_tools, list):
+            continue
+        for item in raw_tools:
+            name = item if isinstance(item, str) else None
+            if name is None and isinstance(item, dict):
+                candidate = item.get("name")
+                name = candidate if isinstance(candidate, str) else None
+            if name and name.strip():
+                names.append(name.strip()[:80])
+    return list(dict.fromkeys(names))[:_MAX_PUBLIC_TOOLS]
+
+
+def _public_use_cases(raw: object) -> list[UseCase]:
+    """公开投影里的用途条目：过滤非法项、按 schema 上限截断、条数封顶。"""
+    if not isinstance(raw, list):
+        return []
+    items: list[UseCase] = []
+    for entry in raw:
+        title = getattr(entry, "title", None)
+        description = getattr(entry, "description", None)
+        if not isinstance(title, str) or not isinstance(description, str):
+            continue
+        title = title.strip()[:40]
+        description = description.strip()[:160]
+        if not title or not description:
+            continue
+        items.append(UseCase(title=title, description=description))
+        if len(items) >= _MAX_PUBLIC_USE_CASES:
+            break
+    return items
 
 
 _STATS_CACHE: dict[str, tuple[float, Any]] = {}
@@ -406,6 +462,68 @@ class PackageService:
         )
 
     @staticmethod
+    def _capability_summary(version: VersionDetail) -> PublicCapabilitySummary | None:
+        """公开能力概览：作者声明的工具名与权限用途；两者都没有时返回 None。"""
+        purposes: list[PublicPermissionPurpose] = []
+        permissions = version.permissions
+        if permissions is not None:
+            shell = permissions.shell
+            if shell is not None and shell.allowed and shell.description:
+                purposes.append(
+                    PublicPermissionPurpose(
+                        scope="shell", reason=shell.description[:200]
+                    )
+                )
+            network = permissions.network
+            if network is not None and network.allowed and network.description:
+                purposes.append(
+                    PublicPermissionPurpose(
+                        scope="network", reason=network.description[:200]
+                    )
+                )
+            credentials = permissions.credentials
+            if (
+                credentials is not None
+                and credentials.access
+                and credentials.description
+            ):
+                purposes.append(
+                    PublicPermissionPurpose(
+                        scope="credentials", reason=credentials.description[:200]
+                    )
+                )
+
+        tools = _declared_tool_names(version.type_config)
+        use_cases = _public_use_cases(version.use_cases)
+        if not tools and not purposes and not use_cases:
+            return None
+        return PublicCapabilitySummary(
+            tools=tools,
+            purposes=purposes,
+            use_cases=use_cases,
+        )
+
+    def _trust_boundary(self, version: VersionDetail) -> PublicTrustBoundary:
+        if version.trust_boundary is not None:
+            return version.trust_boundary
+        get_report = getattr(self.repository, "get_scan_report", None)
+        if not callable(get_report):
+            return PublicTrustBoundary()
+        try:
+            report = get_report(version.id)
+        except Exception:  # pragma: no cover - 防御性：报告异常不影响公开页
+            logger.warning(
+                "scan report lookup failed for version %s", version.id, exc_info=True
+            )
+            return PublicTrustBoundary()
+        if not isinstance(report, dict):
+            return PublicTrustBoundary()
+
+        scanned_at = report.get("scanned_at")
+        scanned_at = scanned_at if isinstance(scanned_at, str) else None
+        return public_trust_boundary(report.get("scan_json"), scanned_at=scanned_at)
+
+    @staticmethod
     def _public_installation(version: VersionDetail) -> PublicInstallation | None:
         installation = version.installation
         if installation is None:
@@ -441,6 +559,8 @@ class PackageService:
             version=version.version,
             compatibility=version.compatibility,
             permission_summary=self._permission_summary(version),
+            capabilities=self._capability_summary(version),
+            trust_boundary=self._trust_boundary(version),
             installation=self._public_installation(version),
             effective_grade=grade,
             risk_level=(

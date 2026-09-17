@@ -1,4 +1,5 @@
 import inspect
+import json
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,13 @@ from src.models.packages import (
     CredentialsPermissions,
     EnvironmentPermissions,
     Grade,
+    NetworkPermissions,
     PackagePage,
     PackageStats,
     PackageSummary,
+    Permissions,
+    PublicTrustBoundary,
+    ShellPermissions,
     PublicTrustSummary,
     PublicVersionDetail,
     RiskSummary,
@@ -83,6 +88,20 @@ class FakeRepository:
             (version for version in self.versions if version.id == version_id),
             None,
         )
+
+
+class _CountingScanReportRepository(FakeRepository):
+    def __init__(
+        self,
+        packages: tuple[PackageSummary, ...],
+        versions: tuple[VersionDetail, ...],
+    ) -> None:
+        super().__init__(packages, versions)
+        self.scan_report_reads = 0
+
+    def get_scan_report(self, version_id: str) -> dict[str, object] | None:
+        self.scan_report_reads += 1
+        return None
 
 
 class FakeRepositoryWithScanReport(FakeRepository):
@@ -558,6 +577,7 @@ def test_public_package_and_version_lookups_return_explicit_records(
         name="alpha-package",
         version="2.0.0",
         compatibility=["claude-code"],
+        trust_boundary=PublicTrustBoundary(),
         effective_grade=Grade.B,
         risk_level="low_risk",
         install_recommendation="review_recommended",
@@ -595,6 +615,195 @@ def test_public_version_projection_never_contains_scan_file_contents(
     payload = version.model_dump(mode="json")
     assert "scan_file_contents" not in payload
     assert "SKILL.md" not in str(payload)
+
+    # 新增的公开投影会读取同一份扫描报告，这里锁死它不会顺带把文件内容带出去
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "OPENAI_API_KEY" not in serialized
+    assert "credentials.json" not in serialized
+    assert "secret" not in serialized
+    assert "capability_graph" not in serialized
+
+
+def test_public_version_capability_summary_uses_only_declared_metadata() -> None:
+    packages = (
+        PackageSummary(
+            id="p-cap",
+            name="cap-package",
+            description="Capability demo",
+            type="skill",
+            latest_version="1.0.0",
+            status="published",
+        ),
+    )
+    versions = (
+        VersionDetail(
+            id="v-cap",
+            package_id="p-cap",
+            version="1.0.0",
+            status="published",
+            compatibility=["claude-code"],
+            permissions=Permissions(
+                shell=ShellPermissions(
+                    allowed=True,
+                    commands=["git", "rm -rf build"],
+                    description="整理仓库",
+                ),
+                network=NetworkPermissions(
+                    allowed=False,
+                    domains=[],
+                    description="网络未开启，不应公开",
+                ),
+                credentials=CredentialsPermissions(
+                    access=["github-token"],
+                    description="读取发布 token",
+                ),
+            ),
+            type_config={
+                "skill_config": {
+                    "tools": ["Bash", "Read", {"name": "Grep", "description": "搜索"}],
+                },
+                "mcp_server_config": {
+                    "tools": [{"name": "search", "description": "检索"}, {"name": "Bash"}],
+                },
+            },
+            use_cases=[
+                {"title": "写规格再开发", "description": "编码前先形成清晰规格。"},
+                {"title": "PRD 草拟", "description": "把目标、范围与需求整理成可执行文档。"},
+            ],
+        ),
+    )
+
+    projection = PackageService(FakeRepository(packages, versions)).get_public_version(
+        "cap-package",
+        "1.0.0",
+    )
+
+    assert projection.capabilities is not None
+    assert projection.capabilities.tools == ["Bash", "Read", "Grep", "search"]
+    assert [purpose.scope for purpose in projection.capabilities.purposes] == [
+        "shell",
+        "credentials",
+    ]
+    assert [purpose.reason for purpose in projection.capabilities.purposes] == [
+        "整理仓库",
+        "读取发布 token",
+    ]
+    assert [item.title for item in projection.capabilities.use_cases] == [
+        "写规格再开发",
+        "PRD 草拟",
+    ]
+    serialized = json.dumps(projection.model_dump(mode="json"), ensure_ascii=False)
+    assert "commands" not in serialized
+    assert "rm -rf build" not in serialized
+    assert "github-token" not in serialized
+    assert "网络未开启" not in serialized
+
+
+def test_public_trust_boundary_summarizes_scan_without_leaking_findings() -> None:
+    packages = (
+        PackageSummary(
+            id="p-boundary",
+            name="boundary-package",
+            description="Boundary demo",
+            type="skill",
+            latest_version="1.0.0",
+            status="published",
+        ),
+    )
+    versions = (
+        VersionDetail(
+            id="v-boundary",
+            package_id="p-boundary",
+            version="1.0.0",
+            status="published",
+            compatibility=["claude-code"],
+        ),
+    )
+    graph = {
+        "declared": ["filesystem.access"],
+        "observed": ["filesystem.access", "shell.execute"],
+        "undeclared_observed": ["shell.execute"],
+        "edge_count": 3,
+    }
+    repository = FakeRepositoryWithScanReport(
+        packages,
+        versions,
+        {
+            "v-boundary": {
+                "scanned_at": "2026-09-01T00:00:00Z",
+                "scan_json": {"structural_analysis": {"capability_graph": graph}},
+            }
+        },
+    )
+
+    boundary = PackageService(repository).get_public_version(
+        "boundary-package", "1.0.0"
+    ).trust_boundary
+
+    assert boundary is not None
+    assert boundary.verification == "verified_undeclared"
+    assert boundary.scanned_at == "2026-09-01T00:00:00Z"
+    serialized = json.dumps(boundary.model_dump(mode="json"), ensure_ascii=False)
+    assert "shell.execute" not in serialized
+    assert "undeclared_observed" not in serialized
+    assert "capability_graph" not in serialized
+
+    # 没有未声明能力 → consistent；没有扫描报告 → not_verified
+    consistent_repository = FakeRepositoryWithScanReport(
+        packages,
+        versions,
+        {
+            "v-boundary": {
+                "scanned_at": "2026-09-01T00:00:00Z",
+                "scan_json": {
+                    "structural_analysis": {
+                        "capability_graph": {**graph, "undeclared_observed": []}
+                    }
+                },
+            }
+        },
+    )
+    assert PackageService(consistent_repository).get_public_version(
+        "boundary-package", "1.0.0"
+    ).trust_boundary.verification == "verified_consistent"
+
+    assert PackageService(FakeRepository(packages, versions)).get_public_version(
+        "boundary-package", "1.0.0"
+    ).trust_boundary == PublicTrustBoundary()
+
+
+def test_stored_trust_boundary_skips_the_scan_report_read() -> None:
+    packages = (
+        PackageSummary(
+            id="p-stored",
+            name="stored-package",
+            description="Stored boundary demo",
+            type="skill",
+            latest_version="1.0.0",
+            status="published",
+        ),
+    )
+    stored = PublicTrustBoundary(
+        verification="verified_undeclared",
+        scanned_at="2026-09-01T00:00:00Z",
+    )
+    versions = (
+        VersionDetail(
+            id="v-stored",
+            package_id="p-stored",
+            version="1.0.0",
+            status="published",
+            trust_boundary=stored,
+        ),
+    )
+    repository = _CountingScanReportRepository(packages, versions)
+
+    projection = PackageService(repository).get_public_version(
+        "stored-package", "1.0.0"
+    )
+
+    assert projection.trust_boundary == stored
+    assert repository.scan_report_reads == 0
 
 
 def test_seed_file_snapshot_collection_skips_sensitive_and_linked_files(
@@ -898,6 +1107,8 @@ def test_http_public_version_is_a_least_privilege_projection(
         "version",
         "compatibility",
         "permission_summary",
+        "capabilities",
+        "trust_boundary",
         "installation",
         "effective_grade",
         "risk_level",
@@ -908,6 +1119,11 @@ def test_http_public_version_is_a_least_privilege_projection(
     assert body["risk_level"] == "trusted"
     assert body["install_recommendation"] == "safe"
     assert body["permission_summary"]["shell_allowed"] is True
+    assert body["capabilities"] is None
+    assert body["trust_boundary"] == {
+        "verification": "not_verified",
+        "scanned_at": None,
+    }
     assert "commands" not in response.text
     assert "trust_score" not in response.text
     assert "manual_grade" not in response.text

@@ -141,9 +141,7 @@ describe('PackageDetailPage summary duplication', () => {
     render(<PackageDetailPage />);
     await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
 
-    expect(
-      screen.getAllByText('读取 1 个路径 · 写入 0 个路径 · 删除权限：未允许'),
-    ).toHaveLength(1);
+    expect(screen.getAllByText('允许读取 1 个路径（受限）')).toHaveLength(1);
     expect(screen.getAllByText('可安全安装')).toHaveLength(1);
     expect(screen.getAllByText('评级 A · 可信')).toHaveLength(1);
     expect(screen.getAllByText('Skill')).toHaveLength(1);
@@ -189,5 +187,98 @@ describe('PackageDetailPage summary duplication', () => {
     await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
 
     expect(screen.getByText('此版本暂无详细信任评分。')).toBeInTheDocument();
+  });
+
+  it('renders the permission-scope radar next to the permission summary', async () => {
+    render(<PackageDetailPage />);
+    await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
+
+    const radar = screen.getByTestId('capability-radar');
+    const axes = radar.querySelectorAll('[data-axis]');
+
+    expect(axes).toHaveLength(7);
+    expect(radar.querySelector('[data-axis="filesystem_read"]')).toHaveAttribute(
+      'data-scope',
+      'limited',
+    );
+    expect(radar.querySelector('[data-axis="shell"]')).toHaveAttribute(
+      'data-scope',
+      'unrestricted',
+    );
+    expect(radar.querySelector('[data-axis="network"]')).toHaveAttribute('data-scope', 'none');
+    expect(screen.getByText('权限范围')).toBeInTheDocument();
+    expect(screen.getAllByText('可执行 Shell 命令')).toHaveLength(1);
+  });
+
+  it('lays the boundary section out as radar + verdict list', async () => {
+    render(<PackageDetailPage />);
+    await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
+
+    expect(screen.getByRole('heading', { level: 2, name: '安全能力边界' })).toBeInTheDocument();
+    expect(screen.getByText('这个 Skill 能做什么 / 不能做什么')).toBeInTheDocument();
+    // 主区权限清单 + 侧栏权限摘要各渲染一次
+    expect(screen.getAllByText('文件系统读取')).toHaveLength(2);
+    expect(screen.getByText('允许读取 1 个路径（受限）')).toBeInTheDocument();
+    expect(screen.getAllByText('Shell 执行')).toHaveLength(2);
+    // Shell 与文件系统写入都属于不允许，至少各出现一次
+    expect(screen.getAllByText('不允许').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('该版本声明了 1 项高风险权限，请确认你能接受这些能力。'))
+      .toBeInTheDocument();
+  });
+
+  it('explains what the package does from declared metadata', async () => {
+    mocks.fetchPackageVersion.mockResolvedValue(
+      makeVersionDetail({
+        capabilities: {
+          tools: ['Bash', 'Read'],
+          purposes: [{ scope: 'shell', reason: '整理仓库' }],
+          use_cases: [
+            { title: '写规格再开发', description: '编码前先形成清晰规格，减少返工。' },
+          ],
+        },
+        trust_boundary: { verification: 'verified_consistent', scanned_at: '2026-09-01T00:00:00Z' },
+      }),
+    );
+
+    render(<PackageDetailPage />);
+    await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
+
+    expect(screen.getByRole('heading', { level: 2, name: '这个 Skill 是干什么的？' })).toBeInTheDocument();
+    expect(screen.getByText('2 个：Bash、Read')).toBeInTheDocument();
+    expect(screen.getByText('命令执行：整理仓库')).toBeInTheDocument();
+    expect(
+      screen.getByText('写规格再开发 — 编码前先形成清晰规格，减少返工。'),
+    ).toBeInTheDocument();
+    // 作者声明卡（用途/权限依据）带归属标签；工具卡可能是平台推断、核验卡是平台结论，都不带
+    expect(screen.getAllByText('作者声明')).toHaveLength(2);
+    expect(screen.getByText('扫描未发现未声明的能力。')).toBeInTheDocument();
+  });
+
+  it('explains the empty scope instead of drawing an all-zero radar', async () => {
+    mocks.fetchPackageVersion.mockResolvedValue(
+      makeVersionDetail({
+        permission_summary: {
+          filesystem_read_count: 0,
+          filesystem_write_count: 0,
+          filesystem_delete: false,
+          shell_allowed: false,
+          network_allowed: false,
+          environment_read_count: 0,
+          environment_write_count: 0,
+          credentials_access_count: 0,
+          database_declared: false,
+          browser_declared: false,
+          external_services_count: 0,
+        },
+      }),
+    );
+
+    render(<PackageDetailPage />);
+    await screen.findByRole('heading', { level: 1, name: 'demo-skill' });
+
+    expect(screen.queryByTestId('capability-radar')).not.toBeInTheDocument();
+    // 边界卡与侧栏权限摘要各提示一次
+    expect(screen.getAllByText('此版本未声明任何敏感权限。')).toHaveLength(2);
+    expect(screen.getAllByText('不允许').length).toBeGreaterThanOrEqual(7);
   });
 });
