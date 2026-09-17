@@ -1983,6 +1983,8 @@ def _seed_packaging_failure_scan(
 
     get_version/get_package 只返回 data JSON，因此 name/version/package_id
     也必须写在 data 里（真实 create_package / 版本 data 就是这么写的）。
+    调用方必须先执行 `_patch_packaging_failure`：DB-first 模式下
+    `_update_scan_state` 会写环境数据库，而不是测试用的那一份。
     """
     with repository.session_factory() as session:
         session.add(
@@ -2118,6 +2120,7 @@ def test_packaging_failure_end_to_end_keeps_detailed_error_and_demotes_scan(
         "trust_score": {},
         "local_source_dir": str(local_dir),
     }
+    _patch_packaging_failure(monkeypatch, repository)
     _seed_packaging_failure_scan(
         repository,
         scan_id=scan_id,
@@ -2125,7 +2128,6 @@ def test_packaging_failure_end_to_end_keeps_detailed_error_and_demotes_scan(
         version_id=version_id,
         report=report,
     )
-    _patch_packaging_failure(monkeypatch, repository)
 
     delivered, task, mirror = _drive_packaging_failure_callback(
         repository, scan_id=scan_id, version_id=version_id, report=report
@@ -2165,6 +2167,7 @@ def test_packaging_failure_backstop_terminalizes_db_row_without_report_scan_id(
         "trust_score": {},
         "local_source_dir": str(local_dir),
     }
+    _patch_packaging_failure(monkeypatch, repository)
     _seed_packaging_failure_scan(
         repository,
         scan_id=scan_id,
@@ -2172,7 +2175,6 @@ def test_packaging_failure_backstop_terminalizes_db_row_without_report_scan_id(
         version_id=version_id,
         report=report,
     )
-    _patch_packaging_failure(monkeypatch, repository)
 
     delivered, task, mirror = _drive_packaging_failure_callback(
         repository, scan_id=scan_id, version_id=version_id, report=report
