@@ -1021,8 +1021,109 @@ def test_packaging_failure_is_terminal_and_does_not_retry_callback(
     assert calls == 1
     info = trust._get_scan("scan-consumer-fails")
     assert info is not None
+    assert info["status"] == "error"
+    assert info["error"]
+    assert trust._scan_lifecycle(info) == "error"
     assert info["callback_status"] == "delivered"
     assert info["resource_consumed"] is True
+
+
+def test_packaging_failure_without_version_row_still_marks_scan_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """版本行缺失也是终态失败：producer 直接终结扫描任务。"""
+
+    class _MissingVersionRepository(_ReuseRepository):
+        def get_version(self, _version_id: str) -> None:
+            return None
+
+    repository = _MissingVersionRepository()
+    _patch_reuse_submit_dependencies(monkeypatch, repository)
+    scan_id = "scan-missing-version"
+    local_dir = tmp_path / "missing-version-source"
+    local_dir.mkdir()
+    report = {
+        **_reusable_report(),
+        "scan_id": scan_id,
+        "scan_report": {"summary": {"total": 0}},
+        "trust_score": {},
+        "local_source_dir": str(local_dir),
+    }
+    _register(scan_id, expires_at=None, full_report=report)
+    trust._update_scan_state(
+        scan_id,
+        {"status": "complete", "callback_status": "pending"},
+        required=True,
+    )
+
+    delivered = trust._deliver_scan_callback(
+        scan_id,
+        report,
+        None,
+        trust._version_scan_completion_callback("version-1"),
+        lease_token=None,
+    )
+
+    assert delivered is True
+    info = trust._get_scan(scan_id)
+    assert info is not None
+    assert info["status"] == "error"
+    assert "版本记录不存在" in str(info["error"])
+    assert trust._scan_lifecycle(info) == "error"
+
+
+def test_packaging_failure_without_report_scan_id_still_marks_scan_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """报告缺少 scan_id 时 producer 侧跳过降级，回调兜底必须置 error。"""
+    repository = _ReuseRepository()
+    repository.version.update(
+        {
+            "package_id": "package-1",
+            "version": "1.0.0",
+            "installation": {"method": "copy_directory"},
+        }
+    )
+    _patch_reuse_submit_dependencies(monkeypatch, repository)
+
+    def fail_build(**_kwargs: object) -> dict[str, object]:
+        raise artifacts.ArtifactError("invalid package layout")
+
+    monkeypatch.setattr(artifacts, "build_artifact", fail_build)
+    scan_id = "scan-without-report-id"
+    local_dir = tmp_path / "missing-scan-id-source"
+    local_dir.mkdir()
+    report = {
+        "repo_url": "https://github.com/acme/demo",
+        "source_ref": "main",
+        "commit_hash": "a" * 40,
+        "scan_report": {"summary": {"total": 0}},
+        "trust_score": {},
+        "local_source_dir": str(local_dir),
+    }
+    _register(scan_id, expires_at=None, full_report=report)
+    trust._update_scan_state(
+        scan_id,
+        {"status": "complete", "callback_status": "pending"},
+        required=True,
+    )
+
+    delivered = trust._deliver_scan_callback(
+        scan_id,
+        report,
+        None,
+        trust._version_scan_completion_callback("version-1"),
+        lease_token=None,
+    )
+
+    assert delivered is True
+    info = trust._get_scan(scan_id)
+    assert info is not None
+    assert info["status"] == "error"
+    assert "源码目录已保留待重试" in str(info["error"])
+    assert trust._scan_lifecycle(info) == "error"
 
 
 def test_artifact_packaging_failure_keeps_source_directory_retryable(

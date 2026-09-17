@@ -612,6 +612,12 @@ class ProducerService:
         if version is None:
             if local_source_dir:
                 force_rmtree(local_source_dir)
+            # 版本行缺失同样是终态失败；此处已知 scan_id，直接终结扫描任务。
+            if scan_id:
+                self._terminalize_scan_task_on_packaging_failure(
+                    scan_id,
+                    "扫描版本记录不存在，请重新提交",
+                )
             return False
         # Top-level integrity is a public server-owned projection. Clear
         # package-authored values before an install artifact is generated;
@@ -1040,10 +1046,11 @@ class ProducerService:
         scan_id: str,
         error: str,
     ) -> None:
-        """Finalize a scan whose completion callback failed during packaging."""
+        """Finalize a scan after a terminal completion-consumer failure."""
         from src.routers.trust import (
             _get_scan_task_repository,
             _remember_scan_info,
+            _scan_retention_expiry,
             _update_scan_state,
         )
 
@@ -1068,6 +1075,9 @@ class ProducerService:
             return
 
         try:
+            finished_at = datetime.now(timezone.utc)
+            # 内存模式没有仓库层做原子降级；这里补上完成时间与保留期，
+            # 与 terminalize_scan_task_after_packaging_failure 的语义对齐。
             _update_scan_state(
                 scan_id,
                 {
@@ -1076,8 +1086,13 @@ class ProducerService:
                     "callback_status": "delivered",
                     "callback_next_attempt_at": None,
                     "callback_last_error": None,
+                    "finished_at": finished_at.isoformat(),
+                    "expires_at": _scan_retention_expiry(
+                        finished_at.isoformat()
+                    ),
                 },
                 required=True,
+                allow_terminal_override=True,
             )
         except Exception:
             logger.exception(

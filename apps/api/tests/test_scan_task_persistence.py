@@ -22,6 +22,7 @@ from src.repositories.producer_sqlalchemy import (
 )
 from src.routers import producer as producer_router
 from src.routers import trust
+from src.services import artifacts
 from src.services.producer import (
     ProducerPersistenceError,
     ProducerService,
@@ -1968,6 +1969,225 @@ def test_packaging_failure_demotes_complete_task_atomically(
     replay = repository.get_scan_task(scan_id)
     assert replay is not None
     assert replay["error"] == "安装产物打包失败: forced"
+
+
+def _seed_packaging_failure_scan(
+    repository: ProducerRepository,
+    *,
+    scan_id: str,
+    package_id: str,
+    version_id: str,
+    report: dict[str, object],
+) -> None:
+    """Seed package/version/scan rows plus the runtime mirror for packaging failures.
+
+    get_version/get_package 只返回 data JSON，因此 name/version/package_id
+    也必须写在 data 里（真实 create_package / 版本 data 就是这么写的）。
+    """
+    with repository.session_factory() as session:
+        session.add(
+            PackageRow(
+                id=package_id,
+                name="demo",
+                status="draft",
+                latest_version="1.0.0",
+                data={"submitter_id": "scan-user-1", "name": "demo"},
+            )
+        )
+        session.add(
+            PackageVersionRow(
+                id=version_id,
+                package_id=package_id,
+                version="1.0.0",
+                status="scanning",
+                data={
+                    "status": "scanning",
+                    "version": "1.0.0",
+                    "package_id": package_id,
+                    "source": {"repository_url": "https://github.com/acme/demo"},
+                },
+            )
+        )
+        session.commit()
+    repository.create_scan_task(
+        scan_id=scan_id,
+        owner_user_id="scan-user-1",
+        client_request_id=f"request-{scan_id}",
+        repo_url="https://github.com/acme/demo",
+        status="complete",
+        callback_status="pending",
+        version_id=version_id,
+    )
+    trust._register_scan(
+        scan_id,
+        {
+            "scan_id": scan_id,
+            "status": "complete",
+            "callback_status": "pending",
+            "callback_finished": False,
+            "created_at": "now",
+            "finished_at": None,
+            "package_name": None,
+            "summary": None,
+            "trust_score": None,
+            "expires_at": None,
+            "full_report": report,
+            "user_id": "scan-user-1",
+            "owner_user_id": "scan-user-1",
+            "source_owner_id": "scan-user-1",
+            "version_id": version_id,
+        },
+    )
+    trust._update_scan_state(
+        scan_id,
+        {
+            "status": "complete",
+            "callback_status": "pending",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        },
+        required=True,
+    )
+
+
+def _patch_packaging_failure(
+    monkeypatch: pytest.MonkeyPatch, repository: ProducerRepository
+) -> None:
+    """Pin both repositories to the test one and make artifact packaging fail."""
+
+    def fail_build(**_kwargs: object) -> dict[str, object]:
+        raise artifacts.ArtifactError("invalid package layout")
+
+    monkeypatch.setattr(
+        producer_router, "_get_producer_repository", lambda: repository
+    )
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    monkeypatch.setattr(
+        trust,
+        "_prepare_scan_callback_report",
+        lambda _scan_id, report: (dict(report), None),
+    )
+    monkeypatch.setattr(trust, "_SCAN_CALLBACK_RETRY_BASE_SECONDS", 0.0)
+    monkeypatch.setattr(
+        trust, "_schedule_scan_callback_retry", lambda _scan_id: None
+    )
+    monkeypatch.setattr(artifacts, "build_artifact", fail_build)
+
+
+def _drive_packaging_failure_callback(
+    repository: ProducerRepository,
+    *,
+    scan_id: str,
+    version_id: str,
+    report: dict[str, object],
+) -> tuple[bool, dict[str, object] | None, dict[str, object] | None]:
+    try:
+        delivered = trust._deliver_scan_callback(
+            scan_id,
+            report,
+            None,
+            trust._version_scan_completion_callback(version_id),
+            lease_token=None,
+        )
+        return (
+            delivered,
+            repository.get_scan_task(scan_id),
+            trust._get_scan(scan_id),
+        )
+    finally:
+        with trust._SCAN_PROGRESS_LOCK:
+            trust._scans.pop(scan_id, None)
+
+
+def test_packaging_failure_end_to_end_keeps_detailed_error_and_demotes_scan(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """打包失败端到端：DB 行与运行时镜像都终结为 error，且保留详细错误文案。"""
+    repository, _ = scan_repository
+    scan_id = "scan-packaging-e2e"
+    version_id = "packaging-version"
+    local_dir = tmp_path / "packaging-source"
+    local_dir.mkdir()
+    report: dict[str, object] = {
+        "scan_id": scan_id,
+        "repo_url": "https://github.com/acme/demo",
+        "source_ref": "main",
+        "commit_hash": "c" * 40,
+        "scan_report": {"summary": {"total": 0}},
+        "trust_score": {},
+        "local_source_dir": str(local_dir),
+    }
+    _seed_packaging_failure_scan(
+        repository,
+        scan_id=scan_id,
+        package_id="packaging-package",
+        version_id=version_id,
+        report=report,
+    )
+    _patch_packaging_failure(monkeypatch, repository)
+
+    delivered, task, mirror = _drive_packaging_failure_callback(
+        repository, scan_id=scan_id, version_id=version_id, report=report
+    )
+
+    assert delivered is True
+    assert task is not None
+    assert task["status"] == "error"
+    assert "invalid package layout" in str(task["error"])
+    assert task["callback_status"] == "delivered"
+    assert task["resource_consumed"] is True
+    assert task["expires_at"] is not None
+    assert mirror is not None
+    assert mirror["status"] == "error"
+    assert trust._scan_lifecycle(mirror) == "error"
+    version = repository.get_version(version_id)
+    assert version is not None
+    assert version["status"] == "error"
+
+
+def test_packaging_failure_backstop_terminalizes_db_row_without_report_scan_id(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """报告缺 scan_id 时 producer 跳过降级，回调兜底在 DB 模式也必须终结扫描行。"""
+    repository, _ = scan_repository
+    scan_id = "scan-backstop-e2e"
+    version_id = "backstop-version"
+    local_dir = tmp_path / "backstop-source"
+    local_dir.mkdir()
+    report: dict[str, object] = {
+        "repo_url": "https://github.com/acme/demo",
+        "source_ref": "main",
+        "commit_hash": "c" * 40,
+        "scan_report": {"summary": {"total": 0}},
+        "trust_score": {},
+        "local_source_dir": str(local_dir),
+    }
+    _seed_packaging_failure_scan(
+        repository,
+        scan_id=scan_id,
+        package_id="backstop-package",
+        version_id=version_id,
+        report=report,
+    )
+    _patch_packaging_failure(monkeypatch, repository)
+
+    delivered, task, mirror = _drive_packaging_failure_callback(
+        repository, scan_id=scan_id, version_id=version_id, report=report
+    )
+
+    assert delivered is True
+    assert task is not None
+    assert task["status"] == "error"
+    assert "源码目录已保留待重试" in str(task["error"])
+    assert task["callback_status"] == "delivered"
+    assert task["resource_consumed"] is True
+    assert task["expires_at"] is not None
+    assert mirror is not None
+    assert mirror["status"] == "error"
+    assert trust._scan_lifecycle(mirror) == "error"
 
 
 def test_tree_ref_url_shares_the_bare_repository_dedup_identity(
