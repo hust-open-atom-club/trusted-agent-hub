@@ -103,7 +103,11 @@ def test_publish_rebuild_acquires_pinned_source_and_cleans_it(
     acquired: dict[str, object] = {}
     source_dir = tmp_path / "tah_repo_rebuild"
 
-    def acquire_source(parsed: dict[str, object]) -> tuple[str, str, str]:
+    def acquire_source(
+        parsed: dict[str, object],
+        *,
+        temp_dir_callback=None,
+    ) -> tuple[str, str, str]:
         acquired["parsed"] = parsed
         (source_dir / "skills" / "demo").mkdir(parents=True)
         return str(source_dir), "github_api", "a" * 40

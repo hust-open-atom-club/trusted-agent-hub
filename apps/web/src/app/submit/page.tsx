@@ -19,6 +19,10 @@ import {
   writePendingScanState,
 } from '@/lib/pending-scan';
 import {
+  forgetScanPackageContext,
+  rememberScanPackageContext,
+} from '@/lib/scan-package-context';
+import {
   CLIENT_LABELS,
   PACKAGE_TYPE_INSTALL_CLIENTS,
 } from '../../../../../packages/schema/constants';
@@ -91,6 +95,15 @@ type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' 
 
 class TerminalScanError extends Error {}
 
+class ScanStatusHttpError extends Error {
+  readonly httpStatus: number;
+
+  constructor(message: string, httpStatus: number) {
+    super(message);
+    this.httpStatus = httpStatus;
+  }
+}
+
 interface ScanConflictDetail {
   message: string;
   conflict_scan_id: string;
@@ -132,6 +145,12 @@ function isPlaceholderStr(v: string | undefined | null): boolean {
   return false;
 }
 
+function isReusableCommitHash(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const commitHash = value.trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(commitHash) && !/^0{40}$/.test(commitHash);
+}
+
 function SubmitForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -139,6 +158,7 @@ function SubmitForm() {
   const { t } = useTranslation();
   const packageId = searchParams.get('packageId') || '';
   const isNewVersion = !!packageId;
+  const urlScanParam = (searchParams.get('scan') || '').trim();
 
   const [repoUrl, setRepoUrl] = useState('');
   const [phase, setPhase] = useState<ScanPhase>('input');
@@ -200,7 +220,10 @@ function SubmitForm() {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail || `扫描状态查询失败 (${response.status})`);
+      throw new ScanStatusHttpError(
+        body.detail || `扫描状态查询失败 (${response.status})`,
+        response.status,
+      );
     }
     return response.json();
   };
@@ -263,6 +286,9 @@ function SubmitForm() {
       clientRequestId: responseRequestId,
       repoUrl: normalizedUrl,
     });
+    if (isNewVersion && packageId) {
+      rememberScanPackageContext(payload.scan_id, packageId);
+    }
     setActiveScanId(payload.scan_id);
     return payload.scan_id;
   };
@@ -344,7 +370,8 @@ function SubmitForm() {
     if (cmV.length > 0) fs.compatibility = 'auto';
     setFieldSource(fs);
 
-    clearPendingScanState();
+    // The pending scan stays recorded until the submission succeeds so a
+    // refresh on this confirmation form can restore the scanned state.
     setPhase('confirm');
   };
 
@@ -511,6 +538,26 @@ function SubmitForm() {
     }
   };
 
+  // An explicit "continue submission" link (/submit?scan=<id>) hands a
+  // completed scan back to this page from the scan list.  The parameter is
+  // one-shot: it is stripped so later refreshes keep using the persisted
+  // pending state instead of a stale URL value.
+  useEffect(() => {
+    if (!token || !urlScanParam) return;
+    const existing = readPendingScanState();
+    if (existing?.scanId !== urlScanParam) {
+      writePendingScanState({
+        scanId: urlScanParam,
+        clientRequestId: '',
+        repoUrl: '',
+      });
+    }
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete('scan');
+    const query = nextParams.toString();
+    router.replace(query ? `/submit?${query}` : '/submit');
+  }, [router, searchParams, token, urlScanParam]);
+
   useEffect(() => {
     if (!token) return;
     const pending = readPendingScanState();
@@ -542,6 +589,18 @@ function SubmitForm() {
         }
       } catch (err: unknown) {
         if (cancelled) return;
+        const httpStatus = err instanceof ScanStatusHttpError ? err.httpStatus : null;
+        if (httpStatus === 404 || httpStatus === 403) {
+          // The tracked scan is gone or not accessible: nothing can be resumed.
+          clearPendingScanState();
+          setError(
+            httpStatus === 404
+              ? '扫描任务不存在或已过期，请重新扫描'
+              : '无法访问该扫描任务，请重新扫描',
+          );
+          setPhase('input');
+          return;
+        }
         setError(err instanceof Error ? err.message : '扫描状态恢复失败');
         setPhase(err instanceof TerminalScanError ? 'background' : 'input');
       }
@@ -591,7 +650,9 @@ function SubmitForm() {
       };
       if (meta.source && typeof meta.source === 'object') {
         const ms = meta.source as Record<string, unknown>;
-        if (ms.commit_hash && String(ms.commit_hash).length === 40) sourceObj.commit_hash = ms.commit_hash;
+        if (isReusableCommitHash(ms.commit_hash)) {
+          sourceObj.commit_hash = ms.commit_hash.trim().toLowerCase();
+        }
         if (ms.ref && String(ms.ref) !== 'HEAD') sourceObj.ref = ms.ref;
         if (ms.ref_type) sourceObj.ref_type = ms.ref_type;
         if (ms.owner && ms.owner !== 'unknown') sourceObj.owner = ms.owner;
@@ -599,6 +660,12 @@ function SubmitForm() {
         if (ms.subdirectory) sourceObj.subdirectory = ms.subdirectory;
       }
       sourceObj.repository_url = sUrl;
+      const initialScanId = (
+        scanResult?.status === 'complete'
+        && scanResult.scan_id
+        && isReusableCommitHash(sourceObj.commit_hash)
+      ) ? scanResult.scan_id : undefined;
+      const submitBody = initialScanId ? { initial_scan_id: initialScanId } : {};
 
       const authorObj = pkgAuthorUrl.trim() ? { url: pkgAuthorUrl.trim() } : null;
       const compatList = normalizeSubmissionClients(pkgType, pkgCompatibility);
@@ -624,7 +691,7 @@ function SubmitForm() {
         const versionId: string = verData.id;
         const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
-          body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
+          body: JSON.stringify(submitBody),
         });
         if (!subRes.ok) {
           const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));
@@ -634,6 +701,8 @@ function SubmitForm() {
             subConflict?.message ?? `提交审核失败 (${subRes.status})`,
           );
         }
+        clearPendingScanState();
+        if (initialScanId) forgetScanPackageContext(initialScanId);
         setPhase('done');
         setTimeout(() => {
           router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
@@ -675,7 +744,7 @@ function SubmitForm() {
 
       const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST', headers,
-        body: JSON.stringify({ initial_scan_id: scanResult?.scan_id || '' }),
+        body: JSON.stringify(submitBody),
       });
       if (!subRes.ok) {
         const e = await subRes.json().catch(() => ({ detail: '提交审核失败' }));
@@ -686,6 +755,8 @@ function SubmitForm() {
         );
       }
 
+      clearPendingScanState();
+      if (initialScanId) forgetScanPackageContext(initialScanId);
       setPhase('done');
       setTimeout(() => {
         router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
@@ -1129,7 +1200,13 @@ function SubmitForm() {
             </label>
             <div style={{ display: 'flex', gap: '0.6rem' }}>
               <button type="button" className="btn btn-secondary"
-                onClick={() => { setPhase('input'); setScanResult(null); setMetadata(null); setFieldSource({}); }}
+                onClick={() => {
+                  clearPendingScanState();
+                  setPhase('input');
+                  setScanResult(null);
+                  setMetadata(null);
+                  setFieldSource({});
+                }}
                 disabled={isBusy}>
                 重新扫描
               </button>

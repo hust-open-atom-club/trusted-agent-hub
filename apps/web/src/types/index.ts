@@ -48,6 +48,12 @@ export interface PackageListResponse {
 
 /* ── 扫描任务 ── */
 
+export interface ScanSubmissionRef {
+  version_id: string;
+  package_name: string;
+  version: string;
+}
+
 export interface ScanTaskItem {
   scan_id: string;
   status: string;
@@ -62,6 +68,7 @@ export interface ScanTaskItem {
   auto_refresh: boolean;
   delete_allowed: boolean;
   owner_user_id: string | null;
+  submission: ScanSubmissionRef | null;
 }
 
 export interface ScanTaskPage {

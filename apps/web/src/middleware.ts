@@ -27,7 +27,6 @@ const ROLE_LEVEL: Record<string, number> = {
 const PROTECTED: { path: string; minRole: string }[] = [
   { path: '/account', minRole: 'user' },
   { path: '/submit', minRole: 'submitter' },
-  { path: '/submissions', minRole: 'submitter' },
   { path: '/scans', minRole: 'submitter' },
   { path: '/packages', minRole: 'submitter' },
   { path: '/review', minRole: 'reviewer' },

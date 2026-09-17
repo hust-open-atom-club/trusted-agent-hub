@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import math
+from multiprocessing import get_context
 import os
 import re
 import socket
@@ -99,7 +100,7 @@ from schema.constants import HASH_SCOPE_SCANNED_SOURCE, UserRole
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
 # ---------------------------------------------------------------------------
-# key: scan_id, value: {status, package_name, created_at, finished_at, report_path, error, expires_at}
+# key: scan_id, value: runtime scan state
 _scans: Dict[str, Dict[str, Any]] = {}
 _SOURCE_SNAPSHOT_STORE = SourceSnapshotStore()
 
@@ -153,6 +154,14 @@ _GITHUB_API_CONCURRENCY_GATE = threading.BoundedSemaphore(
 )
 _GITHUB_RATE_LIMIT_LOCK = threading.Lock()
 _GITHUB_RATE_LIMIT_UNTIL = 0.0
+
+_SCAN_EXECUTION_THREADS: dict[str, threading.Thread] = {}
+_SCAN_ERROR_CALLBACKS: dict[str, Callable[[str, str], None]] = {}
+# Per-execution deadline used by the lease/execution-expiry checks; independent
+# from the task-level wall-clock bound _SCAN_TOTAL_TIMEOUT_SECONDS (1800s).
+_SCAN_MAX_EXECUTION_SECONDS = 3600
+_SCAN_CLEANUP_BATCH_SIZE = 50
+_SCAN_CLEANUP_PROCESS_TIMEOUT_SECONDS = 20.0
 
 
 class ScanTaskPersistenceError(RuntimeError):
@@ -209,6 +218,409 @@ _LLM_PROGRESS_FALLBACKS = frozenset({
     "manual_review_for_unresolved",
     "manual_review_for_incomplete_context",
 })
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _scan_expires_at(info: dict[str, Any]) -> float:
+    try:
+        return float(info.get("expires_at", 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scan_expired(info: dict[str, Any], now: float | None = None) -> bool:
+    """Whether an elapsed retention deadline applies to this record.
+
+    ``expires_at`` is ``None`` for records the review workflow owns
+    (version-attached scans); they carry no retention deadline and
+    therefore never expire.
+    """
+    expires_at = _scan_expiry_seconds(info)
+    if expires_at is None:
+        return False
+    current_time = _time.time() if now is None else now
+    return expires_at <= current_time
+
+
+def _scan_cleanup_eligible(info: dict[str, Any], now: float | None = None) -> bool:
+    """Only terminal scans whose callback/resource consumer has finished may go."""
+    return _scan_expired(info, now) and _scan_finished(info)
+
+
+def _scan_execution_deadline_ts(info: dict[str, Any]) -> float:
+    raw_deadline = info.get("execution_deadline_at")
+    if raw_deadline is None:
+        raw_deadline = info.get("expires_at", 0)
+    try:
+        return float(raw_deadline)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scan_execution_expired(
+    info: dict[str, Any],
+    now: float | None = None,
+) -> bool:
+    return (
+        info.get("status") in _SCAN_EXECUTING_STATUSES
+        and _scan_execution_deadline_ts(info) <= (
+            _time.time() if now is None else now
+        )
+    )
+
+
+def _scan_execution_stopped_locked(
+    scan_id: str,
+    info: dict[str, Any],
+) -> bool:
+    if info.get("execution_finished") is True:
+        return True
+    thread = _SCAN_EXECUTION_THREADS.get(scan_id)
+    if thread is not None:
+        return not thread.is_alive()
+    if info.get("execution_started") is False:
+        return True
+    if info.get("execution_started") is True:
+        return False
+    # Older records lack an execution marker: a terminal record is safe to remove.
+    return _scan_finished(info)
+
+
+def _begin_scan_execution(scan_id: str) -> bool:
+    now = _time.time()
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is None or info.get("execution_finished") is True:
+            return False
+        info["execution_started"] = True
+        info["execution_started_at"] = now
+        if not isinstance(info.get("execution_deadline_at"), (int, float)):
+            info["execution_deadline_at"] = now + _SCAN_MAX_EXECUTION_SECONDS
+        info["execution_thread_ident"] = threading.get_ident()
+        _SCAN_EXECUTION_THREADS[scan_id] = threading.current_thread()
+        return True
+
+
+def _finish_scan_execution(scan_id: str) -> None:
+    callback: Callable[[str, str], None] | None = None
+    error: str | None = None
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is None:
+            _SCAN_EXECUTION_THREADS.pop(scan_id, None)
+            _SCAN_ERROR_CALLBACKS.pop(scan_id, None)
+            return
+        info["execution_finished"] = True
+        info["execution_thread_ident"] = None
+        _SCAN_EXECUTION_THREADS.pop(scan_id, None)
+        if info.get("status") not in ({"complete"} | _SCAN_FAILURE_STATUSES):
+            error = str(info.get("error") or "扫描任务在完成收尾前停止")
+            callback = _SCAN_ERROR_CALLBACKS.get(scan_id)
+            info.update(
+                {
+                    "status": "error",
+                    "error": error,
+                    "finished_at": _utc_now_iso(),
+                    "callback_finished": False,
+                    "callback_status": (
+                        "pending" if callback is not None else "not_required"
+                    ),
+                }
+            )
+
+    if callback is not None and error is not None:
+        try:
+            callback(scan_id, error)
+        except Exception:
+            _LOGGER.exception(
+                "Stopped scan failure callback failed for %s",
+                scan_id,
+            )
+    if error is not None:
+        with _SCAN_PROGRESS_LOCK:
+            info = _scans.get(scan_id)
+            if info is not None:
+                info["callback_finished"] = True
+                info["callback_status"] = (
+                    "delivered" if callback is not None else "not_required"
+                )
+
+
+def _mark_timed_out_scan(scan_id: str, now: float) -> bool:
+    callback: Callable[[str, str], None] | None = None
+    timeout_error = "Scan exceeded the maximum execution time"
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if (
+            info is None
+            or not _scan_execution_expired(info, now)
+            or not _scan_execution_stopped_locked(scan_id, info)
+        ):
+            return False
+        if _scan_finished(info):
+            return True
+        existing_error = info.get("error")
+        if isinstance(existing_error, str) and existing_error.strip():
+            timeout_error = existing_error
+        info.update(
+            {
+                "status": "error",
+                "error": timeout_error,
+                "finished_at": _utc_now_iso(),
+                "execution_finished": True,
+                "callback_finished": False,
+            }
+        )
+        callback = _SCAN_ERROR_CALLBACKS.get(scan_id)
+
+    if callback is not None:
+        try:
+            callback(scan_id, timeout_error)
+        except Exception:
+            _LOGGER.exception(
+                "Timed-out scan failure callback failed for %s",
+                scan_id,
+            )
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is not None:
+            info["callback_finished"] = True
+    return True
+
+
+def _register_scan(
+    scan_id: str,
+    info: dict[str, Any],
+    *,
+    on_error: Callable[[str, str], None] | None = None,
+) -> None:
+    with _SCAN_PROGRESS_LOCK:
+        _scans[scan_id] = dict(info)
+        _SCAN_EXECUTION_THREADS.pop(scan_id, None)
+        _SCAN_ERROR_CALLBACKS.pop(scan_id, None)
+        if on_error is not None:
+            _SCAN_ERROR_CALLBACKS[scan_id] = on_error
+
+
+def _get_scan(scan_id: str) -> dict[str, Any] | None:
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        return dict(info) if info is not None else None
+
+
+def _scan_initiator_id(info: dict[str, Any]) -> str:
+    """Return the operator that initiated the scan."""
+    owner = info.get("user_id") or info.get("source_owner_id")
+    return str(owner) if owner else ""
+
+
+def _scan_finished(info: dict[str, Any]) -> bool:
+    callback_status = info.get("callback_status")
+    if callback_status in {"delivered", "not_required"}:
+        callback_finished = True
+    elif callback_status == "pending":
+        callback_finished = False
+    else:
+        callback_finished = (
+            info.get("callback_finished") is True
+            or info.get("completion_delivered_at") is not None
+        )
+    return (
+        info.get("status") in ({"complete"} | _SCAN_FAILURE_STATUSES)
+        and callback_finished
+    )
+
+
+def _scan_expired_finished(info: dict[str, Any], now: float | None = None) -> bool:
+    """Whether an expired scan is safe to hide/remove from the API."""
+    return _scan_expired(info, now) and _scan_finished(info)
+
+
+def _update_scan(scan_id: str, updates: dict[str, Any] | None = None, **fields: Any) -> bool:
+    if updates is not None and fields:
+        raise ValueError("pass either updates or keyword fields, not both")
+    changes = updates if updates is not None else fields
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is None:
+            return False
+        info.update(changes)
+        return True
+
+
+def _list_scan_snapshots() -> list[tuple[str, dict[str, Any]]]:
+    with _SCAN_PROGRESS_LOCK:
+        return [(scan_id, dict(info)) for scan_id, info in _scans.items()]
+
+
+def _remove_scan(scan_id: str) -> dict[str, Any] | None:
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.pop(scan_id, None)
+        _SCAN_EXECUTION_THREADS.pop(scan_id, None)
+        _SCAN_ERROR_CALLBACKS.pop(scan_id, None)
+        return dict(info) if info is not None else None
+
+
+def _remove_cleanup_eligible_scan(
+    scan_id: str,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if (
+            info is None
+            or not _scan_cleanup_eligible(info, now)
+            or not _scan_execution_stopped_locked(scan_id, info)
+        ):
+            return None
+        return _remove_scan(scan_id)
+
+
+def _has_expired_scan_cleanup_backlog(now: float | None = None) -> bool:
+    with _SCAN_PROGRESS_LOCK:
+        return any(
+            (
+                (
+                    _scan_cleanup_eligible(info, now)
+                    or _scan_execution_expired(info, now)
+                )
+                and _scan_execution_stopped_locked(scan_id, info)
+            )
+            for scan_id, info in _scans.items()
+        )
+
+
+def _scan_directory_is_absent(local_dir: Any) -> bool:
+    if not local_dir:
+        return True
+    try:
+        return not Path(local_dir).exists()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _remove_scan_directory_and_verify(local_dir: Any) -> bool:
+    """Remove a scan directory and only report success when it is gone."""
+    if not local_dir:
+        return True
+    try:
+        force_rmtree(local_dir)
+    except Exception:
+        _LOGGER.warning(
+            "Failed to remove temporary scan directory %s",
+            local_dir,
+            exc_info=True,
+        )
+        return False
+    if _scan_directory_is_absent(local_dir):
+        return True
+    _LOGGER.warning(
+        "Temporary scan directory still exists after removal attempt: %s",
+        local_dir,
+    )
+    return False
+
+
+def _scan_directory_key(local_dir: Any) -> str | None:
+    if not local_dir:
+        return None
+    try:
+        return os.path.normcase(str(Path(local_dir).resolve()))
+    except (OSError, RuntimeError, TypeError):
+        return os.path.normcase(str(local_dir))
+
+
+def _remove_scan_directories_worker(
+    directories: tuple[str, ...],
+    result_pipe: Any,
+) -> None:
+    results: dict[str, bool] = {}
+    for directory in directories:
+        results[directory] = _remove_scan_directory_and_verify(directory)
+    try:
+        result_pipe.send(results)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        result_pipe.close()
+
+
+def _remove_scan_directories_with_timeout(
+    directory_paths: dict[str, str],
+) -> dict[str, bool]:
+    """Remove one batch in a killable process so shutdown has a hard bound."""
+    if not directory_paths:
+        return {}
+
+    directories = tuple(directory_paths.values())
+    context = get_context("spawn")
+    parent_pipe, child_pipe = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_remove_scan_directories_worker,
+        args=(directories, child_pipe),
+        name="scan-cleanup-files",
+        daemon=True,
+    )
+    started = False
+    try:
+        process.start()
+        started = True
+        child_pipe.close()
+        process.join(_SCAN_CLEANUP_PROCESS_TIMEOUT_SECONDS)
+        if process.is_alive():
+            process.terminate()
+            process.join(1.0)
+            _LOGGER.warning(
+                "Timed out removing scan directories; records remain retryable"
+            )
+            return {key: False for key in directory_paths}
+
+        if process.exitcode != 0 or not parent_pipe.poll():
+            _LOGGER.warning(
+                "Scan directory cleanup worker exited without a result (exit=%s)",
+                process.exitcode,
+            )
+            return {key: False for key in directory_paths}
+        results = parent_pipe.recv()
+        return {
+            key: bool(results.get(path, False))
+            for key, path in directory_paths.items()
+        }
+    except (OSError, EOFError, ValueError):
+        _LOGGER.warning(
+            "Could not start or read the scan directory cleanup worker",
+            exc_info=True,
+        )
+        return {key: False for key in directory_paths}
+    finally:
+        parent_pipe.close()
+        try:
+            child_pipe.close()
+        except (OSError, ValueError):
+            pass
+        if started and process.is_alive():
+            process.terminate()
+            process.join(1.0)
+        if started and process.is_alive():
+            process.kill()
+            process.join(1.0)
+        if started and not process.is_alive():
+            process.close()
+
+
+def _record_scan_directory(scan_id: str, local_dir: Any) -> None:
+    if not local_dir:
+        return
+    with _SCAN_PROGRESS_LOCK:
+        info = _scans.get(scan_id)
+        if info is None:
+            return
+        full_report = info.get("full_report")
+        if not isinstance(full_report, dict):
+            full_report = {}
+            info["full_report"] = full_report
+        full_report["local_source_dir"] = local_dir
 
 
 def _utc_now_iso() -> str:
@@ -489,27 +901,91 @@ def _cleanup_orphan_scan_temp_dirs(
     return removed
 
 
-def _cleanup_expired_scans() -> None:
-    """Remove expired process-local scan state."""
+def _cleanup_expired_scans() -> int:
+    """Three-phase cleanup: select (locked) → callbacks/deletions (unlocked) → remove (locked)."""
     now = _time.time()
+
     with _SCAN_PROGRESS_LOCK:
-        expired = [
-            sid
-            for sid, info in _scans.items()
-            if (expires_at := _scan_expiry_seconds(info)) is not None
-            and expires_at <= now
-            and _scan_is_auto_expirable(info)
-        ]
-    for sid in expired:
+        candidates: list[tuple[str, float, Any, str | None, bool]] = []
+        for scan_id, info in _scans.items():
+            if info.get("cleanup_pending") is True:
+                continue
+            execution_stopped = _scan_execution_stopped_locked(scan_id, info)
+            finished = _scan_cleanup_eligible(info, now)
+            timed_out = (
+                not finished
+                and _scan_execution_expired(info, now)
+                and execution_stopped
+            )
+            if not execution_stopped or (not finished and not timed_out):
+                continue
+            report = info.get("full_report")
+            local_dir = (
+                report.get("local_source_dir")
+                if isinstance(report, dict)
+                else None
+            )
+            candidates.append(
+                (
+                    scan_id,
+                    _scan_expires_at(info),
+                    local_dir,
+                    _scan_directory_key(local_dir),
+                    timed_out,
+                )
+            )
+        candidates.sort(key=lambda item: item[1])
+        candidates = candidates[:_SCAN_CLEANUP_BATCH_SIZE]
+        selected: list[tuple[str, Any, str | None, bool]] = []
+        for scan_id, _expires_at, local_dir, directory_key, timed_out in candidates:
+            info = _scans.get(scan_id)
+            if info is None or info.get("cleanup_pending") is True:
+                continue
+            info["cleanup_pending"] = True
+            selected.append((scan_id, local_dir, directory_key, timed_out))
+    if not selected:
+        return 0
+
+    try:
+        timeout_ready: set[str] = set()
+        directory_paths: dict[str, str] = {}
+        for scan_id, local_dir, directory_key, timed_out in selected:
+            if timed_out and _mark_timed_out_scan(scan_id, now):
+                timeout_ready.add(scan_id)
+            if directory_key is not None and local_dir:
+                directory_paths.setdefault(directory_key, str(local_dir))
+        cleaned_directories = _remove_scan_directories_with_timeout(directory_paths)
+    except BaseException:
         with _SCAN_PROGRESS_LOCK:
-            info = _scans.pop(sid, None)
-        if info is None:
-            continue
-        local_dir = (info.get("full_report") or {}).get("local_source_dir")
-        if local_dir:
-            controlled_dir = _controlled_scan_temp_dir(local_dir)
-            if controlled_dir is not None:
-                force_rmtree(controlled_dir)
+            for scan_id, _local_dir, _directory_key, _timed_out in selected:
+                info = _scans.get(scan_id)
+                if info is not None:
+                    info.pop("cleanup_pending", None)
+        raise
+
+    removed = 0
+    with _SCAN_PROGRESS_LOCK:
+        for scan_id, _local_dir, directory_key, timed_out in selected:
+            info = _scans.get(scan_id)
+            if info is None:
+                continue
+            if timed_out and scan_id not in timeout_ready:
+                info.pop("cleanup_pending", None)
+                continue
+            if directory_key and not cleaned_directories.get(directory_key, False):
+                info.pop("cleanup_pending", None)
+                continue
+            if _remove_cleanup_eligible_scan(scan_id, now) is None:
+                info.pop("cleanup_pending", None)
+                continue
+            removed += 1
+
+    if _has_expired_scan_cleanup_backlog(now):
+        _LOGGER.info(
+            "Scan cleanup backlog remains; processed at most %s records this pass",
+            _SCAN_CLEANUP_BATCH_SIZE,
+        )
+    return removed
 
 
 def _scan_not_found_detail(scan_id: str) -> str:
@@ -548,6 +1024,14 @@ class ScanResponse(BaseModel):
     delete_allowed: bool = False
 
 
+class ScanSubmissionRef(BaseModel):
+    """Version a scan task was submitted with."""
+
+    version_id: str
+    package_name: str
+    version: str
+
+
 class ScanListItem(BaseModel):
     """Public projection used by both scan-list API versions."""
 
@@ -564,6 +1048,7 @@ class ScanListItem(BaseModel):
     auto_refresh: bool = False
     delete_allowed: bool = False
     owner_user_id: Optional[str] = None
+    submission: Optional[ScanSubmissionRef] = None
 
 
 class ScanPageResponse(BaseModel):
@@ -831,6 +1316,10 @@ def _scan_info_from_task(task: dict[str, object]) -> dict[str, Any]:
             if task.get("version_id") is not None
             else "not_required"
         )
+    callback_finished = (
+        callback_status in {"delivered", "not_required"}
+        or completion_delivered_at is not None
+    )
     return {
         "scan_id": task.get("scan_id"),
         "status": task.get("status", "pending"),
@@ -842,6 +1331,8 @@ def _scan_info_from_task(task: dict[str, object]) -> dict[str, Any]:
         "attempt_count": int(task.get("attempt_count") or 0),
         "completion_delivered_at": completion_delivered_at,
         "callback_status": callback_status,
+        "callback_finished": callback_finished,
+        "resource_consumed": bool(task.get("resource_consumed")),
         "callback_attempt_count": int(
             task.get("callback_attempt_count") or 0
         ),
@@ -1021,6 +1512,7 @@ def _persist_scan_updates(
             "callback_status",
             "callback_attempt_count",
             "callback_last_error",
+            "resource_consumed",
         }:
             database_updates[field] = deepcopy(value)
         elif field in {
@@ -1326,7 +1818,20 @@ def _version_scan_completion_callback(
         if error is not None:
             service.handle_scan_error(version_id, error, scan_id=_scan_id)
         elif report is not None:
-            service.handle_scan_complete(version_id, report)
+            completed = service.handle_scan_complete(version_id, report)
+            if completed is False:
+                _logger.warning(
+                    "Packaging failed for version %s (scan %s)",
+                    version_id,
+                    _scan_id,
+                )
+                _update_scan_state(
+                    _scan_id,
+                    {
+                        "status": "error",
+                        "error": "安装产物打包失败，源码目录已保留待重试",
+                    },
+                )
 
     return on_scan_done
 
@@ -1591,9 +2096,13 @@ def _authorized_scan_info(
     scan_id: str,
     user: CurrentUser,
 ) -> dict[str, Any] | None:
-    _cleanup_expired_scans()
+    # Expired records are hidden below; physically removing them is the
+    # background maintenance loop's job, not this request's.
     info = _load_scan_info(scan_id)
     if info is None:
+        return None
+    # 被保留的过期终态记录不再面向接口暴露（清理批次按最老 50 条推进）。
+    if _scan_expired_finished(info):
         return None
     verify_resource_access(
         user,
@@ -1808,44 +2317,6 @@ def _scan_source_identity_match(
     if task_identity is None or request_identity is None:
         return False
     return task_identity == request_identity
-
-
-def _find_scan_task_by_source(
-    owner_user_id: str,
-    repo_url: str,
-) -> dict[str, Any] | None:
-    """Find a retained task for the same owner and repository target."""
-    now = _time.time()
-
-    def retained(info: dict[str, Any]) -> bool:
-        expires_at = _scan_expiry_seconds(info)
-        return not (
-            expires_at is not None
-            and expires_at <= now
-            and _scan_is_auto_expirable(info)
-        )
-
-    repository = _get_scan_task_repository()
-    if repository is not None:
-        tasks = repository.list_scan_tasks_for_dedup(
-            owner_user_id=owner_user_id,
-            repo_url=repo_url,
-        )
-        for task in tasks:
-            info = _scan_info_from_task(task)
-            if retained(info):
-                return info
-        return None
-
-    with _SCAN_PROGRESS_LOCK:
-        runtime_scans = list(_scans.values())
-    for info in runtime_scans:
-        owner = str(info.get("owner_user_id") or info.get("user_id") or "")
-        if owner == owner_user_id and retained(info) and _scan_request_urls_match(
-            info.get("repo_url"), repo_url
-        ):
-            return dict(info)
-    return None
 
 
 def _find_scan_task_by_source_identity(
@@ -3893,7 +4364,10 @@ def _flatten_zipball_root(tmp_dir: str) -> bool:
     return True
 
 
-def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
+def _acquire_repo_source(
+    parsed: dict[str, Any],
+    temp_dir_callback: Callable[[str], None] | None = None,
+) -> tuple[str | None, str, str]:
     """Resolve a commit and acquire a bounded repository snapshot.
 
     Returns:
@@ -3908,6 +4382,9 @@ def _acquire_repo_source(parsed: dict[str, Any]) -> tuple[str | None, str, str]:
         prefix=_SCAN_TEMP_PREFIX,
         dir=str(temp_root),
     )
+    if temp_dir_callback is not None:
+        # 在可能失败的解析步骤之前就发布临时目录，调用方/清理链路可据此回收残包。
+        temp_dir_callback(tmp_dir)
     use_github_api = bool(get_settings().github_token)
     request_budget = _new_github_request_budget() if use_github_api else None
     try:
@@ -4286,6 +4763,8 @@ def _release_scan_lease(scan_id: str, lease_token: str | None) -> None:
 def _mark_scan_callback_delivered(
     scan_id: str,
     lease_token: str | None,
+    *,
+    resource_consumed: bool = False,
 ) -> bool:
     """Persist callback delivery only after the callback has returned."""
     repository = _get_scan_task_repository()
@@ -4295,6 +4774,9 @@ def _mark_scan_callback_delivered(
             if info is not None:
                 info["completion_delivered_at"] = _utc_now_iso()
                 info["callback_status"] = "delivered"
+                info["callback_finished"] = True
+                if resource_consumed:
+                    info["resource_consumed"] = True
                 info["callback_next_attempt_at"] = None
                 info["callback_last_error"] = None
         return True
@@ -4305,6 +4787,7 @@ def _mark_scan_callback_delivered(
             delivered = repository.mark_scan_callback_delivered(
                 scan_id,
                 lease_token=lease_token,
+                resource_consumed=resource_consumed,
             )
             if delivered:
                 with _SCAN_PROGRESS_LOCK:
@@ -4312,6 +4795,9 @@ def _mark_scan_callback_delivered(
                     if info is not None:
                         info["completion_delivered_at"] = _utc_now_iso()
                         info["callback_status"] = "delivered"
+                        info["callback_finished"] = True
+                        if resource_consumed:
+                            info["resource_consumed"] = True
                         info["callback_next_attempt_at"] = None
                         info["callback_last_error"] = None
                 return True
@@ -4443,7 +4929,10 @@ def _prepare_scan_callback_report(
         return callback_report, None
 
     try:
-        repo_root, _method, _commit_hash = _acquire_repo_source(resolved_source)
+        repo_root, _method, _commit_hash = _acquire_repo_source(
+            resolved_source,
+            temp_dir_callback=lambda path: _record_scan_directory(scan_id, path),
+        )
     except _DeterministicAcquisitionError as exc:
         callback_report["_source_reacquisition_attempted"] = True
         callback_report["_source_reacquisition_error"] = str(exc)
@@ -4491,6 +4980,7 @@ def _deliver_scan_callback(
             scan_id,
             {
                 "callback_status": "not_required",
+                "callback_finished": True,
                 "callback_next_attempt_at": None,
                 "callback_last_error": None,
             },
@@ -4519,7 +5009,11 @@ def _deliver_scan_callback(
                     _prepare_scan_callback_report(scan_id, report)
                 )
             on_complete(scan_id, callback_report, error)
-            _mark_scan_callback_delivered(scan_id, lease_token)
+            _mark_scan_callback_delivered(
+                scan_id,
+                lease_token,
+                resource_consumed=error is None,
+            )
             return True
         except Exception as exc:
             callback_error = str(exc) or type(exc).__name__
@@ -4556,6 +5050,37 @@ def _run_scan_task(
     source: str,
     *,
     on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
+    on_error: Callable[[str, str], None] | None = None,
+    signals: Dict[str, Any] | None = None,
+    resolved_source: dict[str, Any] | None = None,
+    lease_token: str | None = None,
+) -> None:
+    if not _begin_scan_execution(scan_id):
+        _logger.warning(
+            "Skipping scan %s: execution stopped or claimed by another worker",
+            scan_id,
+        )
+        return
+    try:
+        _run_scan_task_body(
+            scan_id,
+            source,
+            on_complete=on_complete,
+            on_error=on_error,
+            signals=signals,
+            resolved_source=resolved_source,
+            lease_token=lease_token,
+        )
+    finally:
+        _finish_scan_execution(scan_id)
+
+
+def _run_scan_task_body(
+    scan_id: str,
+    source: str,
+    *,
+    on_complete: Callable[[str, dict[str, Any] | None, str | None], None] | None = None,
+    on_error: Callable[[str, str], None] | None = None,
     signals: Dict[str, Any] | None = None,
     resolved_source: dict[str, Any] | None = None,
     lease_token: str | None = None,
@@ -4691,7 +5216,7 @@ def _run_scan_task(
                                 "扫描期间源码子目录与其他扫描任务冲突，"
                                 "任务已终止。请删除冲突的任务后重试。"
                             ),
-                            "finished_at": datetime.now(timezone.utc),
+                            "finished_at": _utc_now_iso(),
                             "expires_at": datetime.now(timezone.utc)
                             + timedelta(seconds=_SCAN_TTL_SECONDS),
                             "callback_status": (
@@ -4914,11 +5439,12 @@ def _run_scan_task(
 
         _raise_if_scan_total_timeout(scan_id, total_timeout_event)
 
+        runtime_scan_info = _get_scan(scan_id) or {}
         snapshot_metadata = _SOURCE_SNAPSHOT_STORE.save(
             scanner._file_contents,
             owner_id=str(
-                _scans.get(scan_id, {}).get("source_owner_id")
-                or _scans.get(scan_id, {}).get("user_id")
+                runtime_scan_info.get("source_owner_id")
+                or runtime_scan_info.get("user_id")
                 or ""
             ) or None,
         )
@@ -5088,7 +5614,7 @@ def _run_scan_task(
                     {
                         "status": terminal_status,
                         "error": public_error,
-                        "finished_at": finished_at,
+                        "finished_at": finished_at.isoformat(),
                         "expires_at": failure_expires_at,
                         "callback_status": (
                             "pending" if on_complete else "not_required"
@@ -5568,8 +6094,11 @@ def submit_scan(
             )
             return _scan_response(existing_info, requester=_user)
 
-    # A new request ID cannot bypass source-level duplicate prevention.
-    duplicate_info = _find_scan_task_by_source(_user.id, source)
+    # A new request ID cannot bypass source-level duplicate prevention.  The
+    # source identity is (owner, repository, subdirectory): sibling
+    # subdirectories of one repository are distinct sources and each keeps
+    # its own dedup slot.
+    duplicate_info = _find_scan_task_by_source_identity(_user.id, source)
     if duplicate_info is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -5864,13 +6393,44 @@ def get_scan_metadata(
 # ---------------------------------------------------------------------------
 
 
+def _scan_version_labels(
+    repository: ProducerRepository | None,
+    records: list[dict[str, Any]],
+) -> dict[str, dict[str, str]]:
+    """Advisory labels for the "view submission" link: one query per page, and
+    a failed lookup must not break the scan list itself."""
+    if repository is None:
+        return {}
+    version_ids = sorted(
+        {
+            str(record.get("version_id"))
+            for record in records
+            if record.get("version_id")
+        }
+    )
+    if not version_ids:
+        return {}
+    try:
+        return repository.list_version_labels(version_ids)
+    except Exception:  # pragma: no cover - advisory projection
+        _logger.exception("Failed to resolve scan submission labels")
+        return {}
+
+
 def _scan_list_item(
     scan_id: str,
     record: dict[str, Any],
     *,
     requester: CurrentUser,
+    version_labels: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     expires_at = _scan_expiry_iso(record)
+    version_id = record.get("version_id")
+    submission_label = (
+        version_labels.get(str(version_id))
+        if version_labels and version_id
+        else None
+    )
     return {
         "scan_id": str(record.get("scan_id") or scan_id),
         "status": str(record.get("status") or "unknown"),
@@ -5893,6 +6453,15 @@ def _scan_list_item(
         "auto_refresh": _scan_auto_refresh(record),
         "delete_allowed": _scan_delete_allowed_for_user(record, requester),
         "owner_user_id": _scan_owner_id(record) or None,
+        "submission": (
+            {
+                "version_id": str(version_id),
+                "package_name": str(submission_label["package_name"]),
+                "version": str(submission_label["version"]),
+            }
+            if submission_label
+            else None
+        ),
     }
 
 
@@ -5918,11 +6487,13 @@ def _list_scan_page(
         total = int(
             repository.count_scan_tasks(owner_user_id=owner_user_id)
         )
+        version_labels = _scan_version_labels(repository, tasks)
         items = [
             _scan_list_item(
                 str(task.get("scan_id") or ""),
                 task,
                 requester=_user,
+                version_labels=version_labels,
             )
             for task in tasks
         ]
@@ -5934,8 +6505,7 @@ def _list_scan_page(
             "has_more": offset + len(items) < total,
         }
 
-    with _SCAN_PROGRESS_LOCK:
-        runtime_scans = list(_scans.items())
+    runtime_scans = _list_scan_snapshots()
     visible_runtime_scans = [
         (sid, info)
         for sid, info in runtime_scans
@@ -5976,17 +6546,18 @@ def list_scans(
         tasks = repository.list_scan_tasks(
             owner_user_id=None if can_view_all_scans else _user.id,
         )
+        version_labels = _scan_version_labels(repository, tasks)
         return [
             _scan_list_item(
                 str(task.get("scan_id") or ""),
                 task,
                 requester=_user,
+                version_labels=version_labels,
             )
             for task in tasks
         ]
 
-    with _SCAN_PROGRESS_LOCK:
-        runtime_scans = list(_scans.items())
+    runtime_scans = _list_scan_snapshots()
     return [
         _scan_list_item(
             sid,

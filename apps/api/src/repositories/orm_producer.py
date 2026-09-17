@@ -187,6 +187,9 @@ class ScanTaskRow(Base):
     completion_delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    resource_consumed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     callback_status: Mapped[str | None] = mapped_column(
         String(32), nullable=True
     )

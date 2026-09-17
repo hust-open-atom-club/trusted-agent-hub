@@ -1671,7 +1671,8 @@ h3 {
   color: var(--color-muted);
 }
 
-.status-badge.submitted {
+.status-badge.submitted,
+.status-badge.resubmitted {
   background: var(--color-accent-light, oklch(94% 0.05 95));
   color: var(--color-accent);
 }

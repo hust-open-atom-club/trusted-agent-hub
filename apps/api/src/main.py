@@ -34,7 +34,7 @@ _logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_application: FastAPI):
-    """Start scan workers and release process-wide resources on shutdown."""
+    """Start the scan recovery and maintenance workers; release resources on shutdown."""
     worker_stop = threading.Event()
     worker_threads: list[threading.Thread] = []
     try:

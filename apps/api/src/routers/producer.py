@@ -10,7 +10,11 @@
 
 from __future__ import annotations
 
+from functools import wraps
 import logging
+import threading
+from typing import Any, Callable
+from weakref import WeakValueDictionary
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import Field
@@ -40,6 +44,7 @@ from src.services.producer import (
     ProducerService,
     ProducerServiceError,
     ProducerSourceConflictError,
+    ProducerSubmissionConflict,
 )
 from src.settings import get_settings
 
@@ -48,6 +53,38 @@ from src.settings import get_settings
 
 router = APIRouter(prefix="/api/v0/producer", tags=["producer"])
 logger = logging.getLogger(__name__)
+
+_VERSION_SUBMISSION_LOCK_GUARD = threading.Lock()
+_VERSION_SUBMISSION_LOCKS: WeakValueDictionary[str, Any] = WeakValueDictionary()
+_VERSION_SUBMISSION_CONFLICT_STATUSES = frozenset(
+    {"submitted", "scanning", "pending_review"}
+)
+
+
+def _version_submission_lock(version_id: str) -> threading.RLock:
+    with _VERSION_SUBMISSION_LOCK_GUARD:
+        lock = _VERSION_SUBMISSION_LOCKS.get(version_id)
+        if lock is None:
+            lock = threading.RLock()
+            _VERSION_SUBMISSION_LOCKS[version_id] = lock
+        return lock
+
+
+def _serialize_version_submission(
+    handler: Callable[..., SubmitResponse],
+) -> Callable[..., SubmitResponse]:
+    """Serialize submissions for one version without blocking other versions."""
+    @wraps(handler)
+    def guarded_handler(*args: Any, **kwargs: Any) -> SubmitResponse:
+        version_id = kwargs.get("version_id")
+        if version_id is None and args:
+            version_id = args[0]
+        if not isinstance(version_id, str):
+            raise TypeError("version_id is required")
+        with _version_submission_lock(version_id):
+            return handler(*args, **kwargs)
+
+    return guarded_handler
 
 
 def _get_producer_repository() -> ProducerRepository:
@@ -131,8 +168,13 @@ class SubmitVersionRequest(StrictContractModel):
 @router.post(
     "/versions/{version_id}/submit",
     response_model=SubmitResponse,
-    responses={400: {"model": ErrorEnvelope}, 404: {"model": ErrorEnvelope}},
+    responses={
+        400: {"model": ErrorEnvelope},
+        404: {"model": ErrorEnvelope},
+        409: {"model": ErrorEnvelope},
+    },
 )
+@_serialize_version_submission
 def submit_version(
     version_id: str,
     background_tasks: BackgroundTasks,
@@ -156,6 +198,11 @@ def submit_version(
         if pkg:
             verify_resource_access(_user, pkg.get("submitter_id", ""))
             source_owner_id = str(pkg.get("submitter_id") or _user.id)
+    if version.get("status") in _VERSION_SUBMISSION_CONFLICT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="该版本已提交或正在处理，请勿重复提交",
+        )
 
     # Reject a non-default branch before changing the version state.  This
     # protects producer submissions as well as the standalone scan endpoint.
@@ -232,10 +279,9 @@ def submit_version(
         if source_subdirectory_present:
             resolved_source["subdir"] = source_subdirectory
 
-    # A scan ID is a user-owned capability.  Resolve it before changing the
-    # version state so a guessed/stolen ID cannot be used to attach another
-    # user's report to this submission.  The database-backed lookup also makes
-    # reuse work after the process-local scan cache has been rebuilt.
+    # Resolve and validate a reusable scan before changing version state.
+    # The repository attaches it atomically below, which is the durable
+    # one-time claim across workers and process restarts.
     initial_sid = body.initial_scan_id.strip() if body and body.initial_scan_id else None
     initial_info = None
     scan_owner_id = _user.id
@@ -250,6 +296,11 @@ def submit_version(
             raise HTTPException(
                 status_code=404,
                 detail=f"扫描任务 {initial_sid} 不存在或已过期",
+            )
+        if initial_info.get("resource_consumed") is True:
+            raise HTTPException(
+                status_code=409,
+                detail="该扫描结果已被消费，请重新扫描",
             )
         scan_owner_id = str(
             initial_info.get("owner_user_id")
@@ -273,18 +324,17 @@ def submit_version(
                 status_code=400,
                 detail="复用扫描结果时必须提供源码仓库地址",
             )
-        # The reuse identity is the commit captured by the scan itself.
-        # A live HEAD lookup would fail every active repository the moment
-        # anyone pushes, so upstream is deliberately not consulted here.
         full_report = initial_info.get("full_report")
         expected_commit_hash = initial_info.get("commit_hash")
         if expected_commit_hash is None and isinstance(full_report, dict):
             expected_commit_hash = full_report.get("commit_hash")
-        if not source_url or not _scan_source_matches(
+        if not _scan_source_matches(
             initial_info,
             str(source_url),
             resolved_source=resolved_source,
-            expected_source=source_data if isinstance(source_data, dict) else None,
+            expected_source=(
+                source_data if isinstance(source_data, dict) else None
+            ),
             expected_commit_hash=expected_commit_hash,
         ):
             raise HTTPException(
@@ -364,6 +414,8 @@ def submit_version(
         ) from exc
     except ProducerSourceConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProducerSubmissionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -379,9 +431,7 @@ def submit_version(
                 package_id=str(version_row.get("package_id", "")),
                 submitter_id=_user.id,
             )
-        except Exception:  # pragma: no cover - scan dispatch must remain durable
-            # A signal read is advisory.  It must not strand the atomically
-            # created scan task before BackgroundTasks gets its work item.
+        except Exception:  # pragma: no cover - scan dispatch remains durable
             logger.exception("Failed to collect platform signals for %s", version_id)
             signals = {}
 
@@ -521,7 +571,6 @@ def submit_version(
             ),
         )
 
-    # 否则正常启动后台扫描
     from src.routers.trust import (
         _enqueue_scan_task,
         _load_scan_info,
@@ -530,19 +579,19 @@ def submit_version(
     )
     from schema.constants import AuditAction
 
+    if scan_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="提交审核未生成扫描任务",
+        )
     scan_info = _load_scan_info(scan_id)
     if scan_info is None:
         raise HTTPException(
             status_code=503,
             detail="Scan task persistence is temporarily unavailable.",
         )
-    _update_scan_state(
-        scan_id,
-        {"source_owner_id": source_owner_id},
-    )
+    _update_scan_state(scan_id, {"source_owner_id": source_owner_id})
 
-    # 扫描任务真正启动时补写 SCAN_START 审计，与 scan_complete 的 detail.scan_id
-    # 形成证据链：submit → scan_start → scan_complete
     try:
         repo.create_audit_log(
             action=AuditAction.SCAN_START.value,
@@ -551,9 +600,7 @@ def submit_version(
             operator_id=_user.id,
             detail={"scan_id": scan_id},
         )
-    except Exception:  # pragma: no cover - task dispatch must remain durable
-        # The task row is the scheduling source of truth.  Audit logging can
-        # be retried/reconciled separately and must not strand the scan.
+    except Exception:  # pragma: no cover - task row remains recoverable
         logger.exception("Failed to write scan-start audit for %s", version_id)
 
     enqueued = _enqueue_scan_task(
