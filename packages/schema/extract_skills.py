@@ -1582,21 +1582,87 @@ def extract_keywords(result: ScanResult) -> list[str]:
 # Step 8 & 9: 组装 & 输出
 # ═══════════════════════════════════════════════════════════════════
 
+MAX_PUBLIC_USE_CASES = 6
+_USE_CASE_TITLE_MAX = 40
+_USE_CASE_DESCRIPTION_MAX = 160
+
+
+def extract_use_cases(result: ScanResult) -> list[dict[str, str]]:
+    """读取作者声明的用途：manifest.json / plugin.json 优先，其次 SKILL.md frontmatter。"""
+    sources: list[Any] = [
+        result.frontmatter.get("use_cases"),
+        result.frontmatter.get("useCases"),
+    ]
+    for manifest_name in ("manifest.json", "plugin.json"):
+        manifest = result.json_object(manifest_name)
+        if isinstance(manifest, dict):
+            sources.append(manifest.get("use_cases"))
+
+    items: list[dict[str, str]] = []
+    seen_titles: set[str] = set()
+    for raw in sources:
+        if not isinstance(raw, list):
+            continue
+        for entry in raw:
+            if isinstance(entry, dict):
+                title_value = entry.get("title")
+                description_value = entry.get("description")
+            elif isinstance(entry, str):
+                title_value = entry
+                description_value = entry
+            else:
+                continue
+            if not isinstance(title_value, str) or not isinstance(description_value, str):
+                continue
+            title = title_value.strip()[:_USE_CASE_TITLE_MAX]
+            description = description_value.strip()[:_USE_CASE_DESCRIPTION_MAX]
+            if not title or not description or title in seen_titles:
+                continue
+            seen_titles.add(title)
+            items.append({"title": title, "description": description})
+            if len(items) >= MAX_PUBLIC_USE_CASES:
+                return items
+    return items
+
+
+def _declared_tools(result: ScanResult) -> list[str]:
+    """作者在 SKILL.md frontmatter 或 manifest.json 里声明的工具名。"""
+    names: list[str] = []
+    for raw in (
+        result.frontmatter.get("tools"),
+        result.frontmatter.get("allowed-tools"),
+    ):
+        if isinstance(raw, str):
+            names.extend(part.strip() for part in raw.split(","))
+        elif isinstance(raw, list):
+            for item in raw:
+                name = item.get("name") if isinstance(item, dict) else item
+                if isinstance(name, str) and name.strip():
+                    names.append(name.strip())
+    manifest = result.json_object("manifest.json")
+    if isinstance(manifest, dict):
+        skill_config = manifest.get("skill_config")
+        if isinstance(skill_config, dict) and isinstance(skill_config.get("tools"), list):
+            for item in skill_config["tools"]:
+                name = item.get("name") if isinstance(item, dict) else item
+                if isinstance(name, str) and name.strip():
+                    names.append(name.strip())
+    return list(dict.fromkeys(name for name in names if name))
+
+
 def build_skill_config(result: ScanResult) -> dict[str, Any]:
     """构建 skill_config 对象。"""
     is_tool = result.skill_type == "tool"
 
-    # tools 推断
-    tools: list[str]
-    if is_tool:
-        tools = ["Read", "Write", "Bash", "Grep", "Glob"]
-        # 检测是否有 HTTP/API 代码
-        body_lower = result.skill_md_body.lower()
-        if any(kw in body_lower for kw in ["fetch", "http", "api", "web"]):
-            if "WebFetch" not in tools:
+    tools = _declared_tools(result)
+    if not tools:
+        if is_tool:
+            tools = ["Read", "Write", "Bash", "Grep", "Glob"]
+            body_lower = result.skill_md_body.lower()
+            if any(kw in body_lower for kw in ["fetch", "http", "api", "web"]):
                 tools.append("WebFetch")
-    else:
-        tools = ["Read", "Grep", "Glob"]
+        else:
+            tools = ["Read", "Grep", "Glob"]
 
     # resources
     resources: list[str] = []
@@ -1866,6 +1932,7 @@ def build_metadata_json(
     # 其他
     category = infer_category(result)
     keywords = extract_keywords(result)
+    use_cases = extract_use_cases(result)
     homepage = result.frontmatter.get("homepage") or result.frontmatter.get("url") or None
     if (
         _canonical_url_for_comparison(str(homepage) if homepage else None)
@@ -1924,6 +1991,8 @@ def build_metadata_json(
     # 可选字段（有值才加）
     if keywords:
         data["keywords"] = keywords
+    if use_cases:
+        data["use_cases"] = use_cases
     if category:
         data["category"] = category
     if homepage:

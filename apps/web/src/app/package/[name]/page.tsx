@@ -21,6 +21,7 @@ import {
 import TypeBadge from '@/components/TypeBadge';
 import StatusBadge from '@/components/StatusBadge';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
+import CapabilityRadar from '@/components/CapabilityRadar';
 import FeedbackSection from '@/components/FeedbackSection';
 import { fadeUp, listItem, listStagger, motion, pageStagger, softPanel } from '@/components/Motion';
 import { useAuth } from '@/lib/auth';
@@ -28,9 +29,13 @@ import InstallCommandBlock from './InstallCommandBlock';
 import PackageIcon from './PackageIcon';
 import PackageReadingNav, { type ReadingNavItem } from './PackageReadingNav';
 import {
+  getBoundaryRows,
+  getBoundaryVerdict,
+  getCapabilityAxes,
+  getCapabilityHighlights,
   getFeedbackSummary,
-  getPublicPermissionSummary,
-  type PermissionSummaryItem,
+  hasDeclaredCapability,
+  type CapabilityHighlight,
 } from './detail-view-model';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -42,19 +47,21 @@ function DetailSkeleton() {
         <div className="skeleton-bar" />
       </div>
       <section className="detail-hero skeleton">
-        <div className="detail-identity-mark" />
-        <div className="detail-hero-copy">
-          <div className="skeleton-bar detail-skeleton-title" />
-          <div className="skeleton-bar detail-skeleton-line" />
-          <div className="skeleton-bar detail-skeleton-wide" />
-          <div className="detail-meta-grid">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div className="detail-meta-item" key={i}>
-                <div className="skeleton-bar detail-skeleton-meta" />
-                <div className="skeleton-bar detail-skeleton-value" />
-              </div>
-            ))}
+        <div className="detail-hero-top">
+          <div className="detail-identity-mark" />
+          <div className="detail-hero-copy">
+            <div className="skeleton-bar detail-skeleton-title" />
+            <div className="skeleton-bar detail-skeleton-line" />
+            <div className="skeleton-bar detail-skeleton-wide" />
           </div>
+        </div>
+        <div className="detail-meta-grid">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div className="detail-meta-item" key={i}>
+              <div className="skeleton-bar detail-skeleton-meta" />
+              <div className="skeleton-bar detail-skeleton-value" />
+            </div>
+          ))}
         </div>
       </section>
       <div className="detail-shell">
@@ -164,18 +171,14 @@ export default function PackageDetailPage() {
   const { t, i18n } = useTranslation();
   const tt: Translate = (key, options) => String(t(key, options));
   const dateLocale = i18n.language === 'zh' ? 'zh-CN' : 'en-US';
-  const permissionSummaryText = (item: PermissionSummaryItem) =>
-    tt(
-      item.valueKey,
-      item.valueKey === 'detail.permission_summary.filesystem_access'
-        ? {
-            ...item.values,
-            deleteAllowed: item.values.deleteAllowed
-              ? tt('detail.permissions.allowed')
-              : tt('detail.permissions.not_allowed'),
-          }
-        : item.values,
-    );
+  const highlightBody = (highlight: CapabilityHighlight) => {
+    const values = { ...highlight.bodyValues };
+    if (typeof values.scopeKey === 'string') {
+      values.scope = tt(values.scopeKey);
+      delete values.scopeKey;
+    }
+    return tt(highlight.bodyKey, values);
+  };
 
   const { user, token } = useAuth();
 
@@ -241,14 +244,27 @@ export default function PackageDetailPage() {
     : (selectableClients[0] ?? 'claude-code');
   const effectiveGrade = versionDetail?.effective_grade ?? pkg.grade;
   const riskLevel = versionDetail?.risk_level ?? pkg.risk_level;
-  const permissionSummary = getPublicPermissionSummary(versionDetail?.permission_summary);
+  const capabilityAxes = getCapabilityAxes(versionDetail?.permission_summary);
+  const boundaryRows = getBoundaryRows(versionDetail?.permission_summary);
+  const boundaryVerdict = getBoundaryVerdict(
+    versionDetail?.permission_summary,
+    versionDetail?.trust_boundary,
+  );
+  const declaredRows = boundaryRows.filter((row) => row.allowed);
+  const highlights = getCapabilityHighlights(
+    versionDetail?.capabilities,
+    versionDetail?.trust_boundary,
+    pkg.keywords,
+    i18n.language === 'zh' ? '、' : ', ',
+  );
   const feedbackSummary = getFeedbackSummary(pkg.feedback_counts);
   const installCommand = buildInstallCommand(pkg.name, selectableClients, install?.method, effectiveClient);
   const clientLabel = (client: string) => tt(`detail.client.${client}`, { defaultValue: getClientLabel(client) });
+  const typeLabel = tt(`search.${pkg.type}`, { defaultValue: pkg.type });
+  const hasPermissionManifest = Boolean(versionDetail?.permission_summary);
   const sectionNavItems: ReadingNavItem[] = [
-    { id: 'overview', label: tt('detail.nav.overview') },
-    { id: 'trust', label: tt('detail.nav.trust') },
-    { id: 'permissions', label: tt('detail.nav.permissions') },
+    { id: 'capability', label: tt('detail.nav.capability') },
+    { id: 'permissions', label: tt('detail.nav.boundary') },
     { id: 'installation', label: tt('detail.nav.installation') },
     { id: 'feedback', label: tt('detail.nav.feedback') },
     { id: 'versions', label: tt('detail.nav.versions') },
@@ -256,41 +272,55 @@ export default function PackageDetailPage() {
 
   return (
     <motion.div className="detail-page" variants={pageStagger} initial="hidden" animate="visible">
-      <button className="link-btn detail-back" onClick={() => router.push('/')}>
-        &larr; {tt('detail.back')}
-      </button>
+      <nav className="detail-breadcrumb" aria-label={tt('detail.breadcrumb.label')}>
+        <button className="link-btn" onClick={() => router.push('/')}>
+          &larr; {tt('detail.back')}
+        </button>
+        <span className="detail-breadcrumb-sep" aria-hidden="true">/</span>
+        <span>{tt('detail.breadcrumb.detail')}</span>
+      </nav>
 
       <motion.section className="detail-hero" variants={softPanel}>
-        <PackageIcon type={pkg.type} iconUrl={pkg.icon_url} label={pkg.name} />
-        <div className="detail-hero-copy">
-          <div className="detail-title-row">
-            <h1 className="detail-name">{pkg.name}</h1>
-            <TypeBadge type={pkg.type} />
-            <StatusBadge status={pkg.status} />
+        <div className="detail-hero-top">
+          <PackageIcon type={pkg.type} iconUrl={pkg.icon_url} label={pkg.name} />
+          <div className="detail-hero-copy">
+            <div className="detail-title-row">
+              <h1 className="detail-name">{pkg.name}</h1>
+              <TypeBadge type={pkg.type} />
+              <StatusBadge status={pkg.status} />
+            </div>
+            {pkg.owner && (
+              <p className="detail-source-line">
+                <strong>{tt('detail.by_owner', { owner: pkg.owner.display_name })}</strong>
+              </p>
+            )}
+            <p className="detail-description">{pkg.description}</p>
           </div>
-          {pkg.owner && (
-            <p className="detail-source-line">
-              <strong>{tt('detail.by_owner', { owner: pkg.owner.display_name })}</strong>
-            </p>
-          )}
-          <p className="detail-description">{pkg.description}</p>
-          <div className="detail-meta-grid">
-            <div className="detail-meta-item">
-              <span className="detail-meta-label">{tt('detail.meta.version')}</span>
-              <span className="detail-meta-value">v{pkg.latest_version}</span>
-            </div>
-            <div className="detail-meta-item">
-              <span className="detail-meta-label">{tt('detail.meta.license')}</span>
-              <span className="detail-meta-value">{pkg.license}</span>
-            </div>
-            <div className="detail-meta-item">
-              <span className="detail-meta-label">{tt('detail.meta.installs')}</span>
-              <span className="detail-meta-value">{pkg.install_count.toLocaleString()}</span>
-            </div>
-            <div className="detail-meta-item">
-              <span className="detail-meta-label">{tt('detail.meta.feedback')}</span>
-              <span className="detail-meta-value">{tt(feedbackSummary.key, feedbackSummary.values)}</span>
-            </div>
+        </div>
+        <div className="detail-meta-grid">
+          <div className="detail-meta-item">
+            <span className="detail-meta-label">{tt('detail.meta.version')}</span>
+            <span className="detail-meta-value">v{pkg.latest_version}</span>
+          </div>
+          <div className="detail-meta-item">
+            <span className="detail-meta-label">{tt('detail.meta.license')}</span>
+            <span className="detail-meta-value">{pkg.license}</span>
+          </div>
+          <div className="detail-meta-item">
+            <span className="detail-meta-label">{tt('detail.meta.installs')}</span>
+            <span className="detail-meta-value">{pkg.install_count.toLocaleString()}</span>
+          </div>
+          <div className="detail-meta-item">
+            <span className="detail-meta-label">{tt('detail.meta.feedback')}</span>
+            <span className="detail-meta-value">{tt(feedbackSummary.key, feedbackSummary.values)}</span>
+          </div>
+          <div className="detail-meta-item">
+            <span className="detail-meta-label">{tt('detail.compatible_clients')}</span>
+            <span className="detail-meta-value">
+              {compat.length > 0
+                ? compat.map((client) => clientLabel(client)).join(' · ')
+                : tt('detail.not_evaluated')}
+            </span>
           </div>
         </div>
       </motion.section>
@@ -301,49 +331,73 @@ export default function PackageDetailPage() {
         </motion.aside>
 
         <motion.main className="detail-main" variants={pageStagger}>
-          <DetailSection id="overview" title={tt('detail.nav.overview')} kicker={tt('detail.section.overview_kicker')}>
-            {compat.length > 0 && (
-              <div className="detail-subsection">
-                <h3>{tt('detail.compatible_clients')}</h3>
-                <div className="keyword-list">
-                  {compat.map((c) => <span key={c} className="keyword-tag">{clientLabel(c)}</span>)}
-                </div>
-              </div>
-            )}
-            {pkg.keywords.length > 0 && (
-              <div className="detail-subsection">
-                <h3>{tt('detail.keywords')}</h3>
-                <div className="keyword-list">
-                  {pkg.keywords.map((kw) => <span key={kw} className="keyword-tag">{kw}</span>)}
-                </div>
-              </div>
-            )}
+          <DetailSection
+            id="capability"
+            title={tt('detail.capability.block_title', { type: typeLabel })}
+            kicker={tt('detail.capability.block_kicker')}
+          >
+            <p className="detail-muted">
+              {tt('detail.capability.block_summary', { name: pkg.name })}
+            </p>
+            <div className="capability-highlight-grid">
+              {highlights.map((highlight) => (
+                <motion.article
+                  className={`capability-highlight ${highlight.tone}`}
+                  key={highlight.key}
+                  variants={fadeUp}
+                >
+                  <span>{tt(highlight.labelKey)}</span>
+                  <strong>{highlightBody(highlight)}</strong>
+                  {highlight.authorDeclared && (
+                    <em className="capability-highlight-flag">
+                      {tt('detail.capability.tile.author_declared')}
+                    </em>
+                  )}
+                </motion.article>
+              ))}
+            </div>
           </DetailSection>
 
-          <DetailSection id="trust" title={tt('detail.trust_conclusion')}>
-            {effectiveGrade || riskLevel || versionDetail?.install_recommendation ? (
-              <div className="detail-trust-panel">
-                <TrustScoreDetail
-                  mode="public"
-                  effectiveGrade={effectiveGrade}
-                  publicRiskLevel={riskLevel}
-                  publicInstallRecommendation={versionDetail?.install_recommendation}
-                />
-              </div>
-            ) : (
-              <p className="detail-muted">{tt('detail.empty.trust_score')}</p>
-            )}
-          </DetailSection>
-
-          <DetailSection id="permissions" title={tt('detail.nav.permissions')} kicker={tt('detail.section.permissions_kicker')}>
-            {permissionSummary.length > 0 ? (
-              <div className="permission-summary-grid">
-                {permissionSummary.map((item) => (
-                  <div className={`permission-summary-card ${item.tone}`} key={item.labelKey}>
-                    <span>{tt(item.labelKey)}</span>
-                    <strong>{permissionSummaryText(item)}</strong>
-                  </div>
-                ))}
+          <DetailSection
+            id="permissions"
+            title={tt('detail.boundary.title')}
+            kicker={tt('detail.boundary.subtitle', { type: typeLabel })}
+          >
+            {hasPermissionManifest ? (
+              <div className="boundary-layout">
+                <div className="boundary-radar">
+                  {hasDeclaredCapability(capabilityAxes) ? (
+                    <CapabilityRadar axes={capabilityAxes} packageName={pkg.name} />
+                  ) : (
+                    <p className="detail-muted">{tt('detail.capability.empty')}</p>
+                  )}
+                </div>
+                <div className="boundary-panel">
+                  {(effectiveGrade || riskLevel || versionDetail?.install_recommendation) && (
+                    <div className="boundary-grade">
+                      <TrustScoreDetail
+                        mode="public"
+                        effectiveGrade={effectiveGrade}
+                        publicRiskLevel={riskLevel}
+                        publicInstallRecommendation={versionDetail?.install_recommendation}
+                      />
+                    </div>
+                  )}
+                  {!effectiveGrade && !riskLevel && !versionDetail?.install_recommendation && (
+                    <p className="detail-muted">{tt('detail.empty.trust_score')}</p>
+                  )}
+                  <ul className="boundary-list">
+                    {boundaryRows.map((row) => (
+                      <li className={row.allowed ? row.tone : 'off'} key={row.key}>
+                        <span>{tt(`detail.boundary.item.${row.key}`)}</span>
+                        <strong>{tt(row.valueKey, row.values)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className={`boundary-verdict ${boundaryVerdict.tone}`}>
+                    {tt(boundaryVerdict.key, boundaryVerdict.values)}
+                  </p>
+                </div>
               </div>
             ) : (
               <p className="detail-muted">{tt('detail.empty.permissions')}</p>
@@ -391,6 +445,7 @@ export default function PackageDetailPage() {
               <span>{tt('detail.rail.install')}</span>
               <strong>{clientLabel(effectiveClient)}</strong>
             </div>
+            <p className="rail-card-note">{tt('detail.rail.install_hint')}</p>
             {selectableClients.length > 1 && (
               <label className="rail-select-label">
                 {tt('detail.install.target_client')}
@@ -415,6 +470,48 @@ export default function PackageDetailPage() {
               </div>
             )}
           </motion.div>
+
+          {hasPermissionManifest && (
+            <motion.div className="rail-card rail-permission-card" variants={softPanel}>
+              <div className="rail-card-heading">
+                <span>{tt('detail.rail.permissions')}</span>
+                <a className="rail-card-link" href="#permissions">
+                  {tt('detail.rail.see_detail')}
+                </a>
+              </div>
+              {declaredRows.length > 0 ? (
+                <>
+                  <p className="rail-card-note">
+                    {tt('detail.rail.declared_count', {
+                      declared: declaredRows.length,
+                      total: boundaryRows.length,
+                    })}
+                  </p>
+                  <div className="keyword-list">
+                    {declaredRows.map((row) => (
+                      <span className="keyword-tag" key={row.key}>
+                        {tt(`detail.boundary.item.${row.key}`)}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="rail-card-note">{tt('detail.capability.empty')}</p>
+              )}
+            </motion.div>
+          )}
+
+          {pkg.keywords.length > 0 && (
+            <motion.div className="rail-card" variants={softPanel}>
+              <div className="rail-card-heading">
+                <span>{tt('detail.keywords')}</span>
+              </div>
+              <div className="keyword-list">
+                {pkg.keywords.map((kw) => <span key={kw} className="keyword-tag">{kw}</span>)}
+              </div>
+            </motion.div>
+          )}
+
         </motion.aside>
       </motion.div>
     </motion.div>

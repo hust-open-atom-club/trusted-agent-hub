@@ -1698,9 +1698,10 @@ h3 {
    ============================================================ */
 
 .detail-page {
-  max-width: 1180px;
+  width: 100%;
+  max-width: min(100%, 2200px);
   margin: 0 auto;
-  padding: 2rem clamp(1rem, 3vw, 1.5rem) 4rem;
+  padding: 2rem clamp(1rem, 2.5vw, 3rem) 4rem;
   overflow-x: clip;
 }
 
@@ -1714,8 +1715,8 @@ h3 {
 }
 
 .detail-hero {
-  display: grid;
-  grid-template-columns: 4.25rem minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 1.25rem;
   padding: 1.5rem;
   margin-bottom: 1rem;
@@ -1725,6 +1726,26 @@ h3 {
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+}
+
+.detail-hero-top {
+  display: grid;
+  grid-template-columns: 4.25rem minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.detail-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+  color: var(--color-muted);
+}
+
+.detail-breadcrumb-sep {
+  color: var(--color-rule-2);
 }
 
 .detail-identity-mark {
@@ -1785,7 +1806,7 @@ h3 {
 
 .detail-meta-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 0.75rem;
 }
 
@@ -1817,7 +1838,10 @@ h3 {
 
 .detail-shell {
   display: grid;
-  grid-template-columns: minmax(104px, 140px) minmax(0, 1fr) minmax(300px, 340px);
+  grid-template-columns:
+    minmax(120px, 168px)
+    minmax(0, 1fr)
+    minmax(300px, 380px);
   align-items: start;
   gap: 1.1rem;
 }
@@ -2457,21 +2481,6 @@ h3 {
   margin-top: 1rem;
 }
 
-.permission-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.permission-summary-card {
-  padding: 0.8rem;
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-sm);
-  background: var(--color-paper);
-}
-
-.permission-summary-card span,
 .rail-card-heading span,
 .rail-target-path span,
 .rail-select-label {
@@ -2483,27 +2492,317 @@ h3 {
   letter-spacing: 0.04em;
 }
 
-.permission-summary-card strong {
-  display: block;
-  margin-top: 0.25rem;
+/* 权限范围雷达图：只描述声明的能力范围，信任结论由等级单独表达 */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.capability-radar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 0.9rem 0.75rem 0.75rem;
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+}
+
+.capability-radar-heading {
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.capability-radar svg {
+  width: 100%;
+  max-width: 380px;
+  height: auto;
+}
+
+.capability-radar-ring {
+  fill: none;
+  stroke: var(--color-rule);
+  stroke-width: 1;
+}
+
+.capability-radar-ring.is-tier {
+  stroke: var(--color-rule-2);
+}
+
+.capability-radar-spoke {
+  stroke: var(--color-rule);
+  stroke-width: 1;
+}
+
+.capability-radar-area {
+  stroke-width: 2;
+  stroke-linejoin: round;
+  transition: all var(--ease-out) 240ms;
+}
+
+.capability-radar-area.tone-safe {
+  fill: color-mix(in oklch, var(--color-success) 24%, transparent);
+  stroke: var(--color-success);
+}
+
+.capability-radar-area.tone-caution {
+  fill: color-mix(in oklch, var(--color-warning) 26%, transparent);
+  stroke: var(--color-warning);
+}
+
+.capability-radar-area.tone-danger {
+  fill: color-mix(in oklch, var(--color-danger) 20%, transparent);
+  stroke: var(--color-danger);
+}
+
+.capability-radar-vertex {
+  stroke: var(--color-paper-2);
+  stroke-width: 1.5;
+}
+
+.capability-radar-centre {
+  fill: var(--color-rule-2);
+}
+
+.capability-radar-label {
+  fill: var(--color-ink-2);
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.capability-radar-label.is-empty {
+  fill: var(--color-muted);
+  font-weight: 500;
+}
+
+.capability-radar-note {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.capability-radar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-muted);
+  font-size: 0.68rem;
+}
+
+.capability-radar-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.capability-radar-legend-dot {
+  display: inline-block;
+  box-sizing: border-box;
+  border: 2px solid var(--color-rule-2);
+  border-radius: 50%;
+}
+
+.capability-radar-legend-dot.tone-safe {
+  border-color: var(--color-success);
+  background: color-mix(in oklch, var(--color-success) 24%, transparent);
+}
+
+.capability-radar-legend-dot.tone-caution {
+  border-color: var(--color-warning);
+  background: color-mix(in oklch, var(--color-warning) 26%, transparent);
+}
+
+.capability-radar-legend-dot.tone-danger {
+  border-color: var(--color-danger);
+  background: color-mix(in oklch, var(--color-danger) 20%, transparent);
+}
+
+/* 「这个 Skill 是干什么的?」要点卡 */
+
+.capability-highlight-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.capability-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.85rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+}
+
+.capability-highlight span {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.capability-highlight strong {
   color: var(--color-ink);
-  font-size: 0.84rem;
-  line-height: 1.45;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
-.permission-summary-card.safe {
-  border-color: color-mix(in oklch, var(--color-success) 26%, var(--color-rule));
+.capability-highlight-flag {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  font-size: 0.66rem;
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 
-.permission-summary-card.caution {
+.capability-highlight.caution {
   border-color: color-mix(in oklch, var(--color-warning) 34%, var(--color-rule));
   background: var(--color-warning-light);
 }
 
-.permission-summary-card.danger {
+.capability-highlight.danger {
   border-color: color-mix(in oklch, var(--color-danger) 34%, var(--color-rule));
   background: var(--color-danger-light);
+}
+
+/* 「安全能力边界」：雷达 + 结论面板 */
+
+.boundary-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.boundary-radar {
+  min-width: 0;
+}
+
+.boundary-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.boundary-grade {
+  min-width: 0;
+}
+
+.boundary-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.boundary-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  font-size: 0.83rem;
+}
+
+.boundary-list li span {
+  color: var(--color-ink-2);
+}
+
+.boundary-list li strong {
+  font-weight: 650;
+  color: var(--color-muted);
+  text-align: right;
+}
+
+.boundary-list li.safe strong {
+  color: var(--color-success);
+}
+
+.boundary-list li.caution strong {
+  color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink));
+}
+
+.boundary-list li.danger strong {
+  color: var(--color-danger);
+}
+
+.boundary-list li.off span {
+  color: var(--color-muted);
+}
+
+.boundary-verdict {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklch, var(--color-success) 30%, var(--color-rule));
+  background: var(--color-success-light);
+  color: var(--color-ink-2);
+  font-size: 0.83rem;
+  line-height: 1.55;
+}
+
+.boundary-verdict.caution {
+  border-color: color-mix(in oklch, var(--color-warning) 34%, var(--color-rule));
+  background: var(--color-warning-light);
+}
+
+.boundary-verdict.danger {
+  border-color: color-mix(in oklch, var(--color-danger) 34%, var(--color-rule));
+  background: var(--color-danger-light);
+}
+
+/* 侧栏补充 */
+
+.rail-card-note {
+  margin: 0 0 0.6rem;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+
+.rail-card-link {
+  color: var(--color-accent-deep);
+  font-size: 0.74rem;
+  font-weight: 650;
+  text-decoration: none;
 }
 
 .permissions-list,
@@ -5318,7 +5617,10 @@ h3 {
 
 @media (max-width: 1180px) {
   .detail-shell {
-    grid-template-columns: minmax(88px, 112px) minmax(0, 1fr) minmax(280px, 320px);
+    grid-template-columns:
+      minmax(96px, 128px)
+      minmax(0, 1fr)
+      minmax(280px, 320px);
     gap: 0.9rem;
   }
 
@@ -5349,6 +5651,11 @@ h3 {
 
   .detail-meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .detail-hero-top,
+  .boundary-layout {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -5463,7 +5770,6 @@ h3 {
     gap: 0.25rem;
   }
 
-  .permission-summary-grid,
   .permissions-list,
   .dependencies-list,
   .integrity-grid {

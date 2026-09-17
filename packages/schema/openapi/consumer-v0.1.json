@@ -1675,6 +1675,35 @@
         "title": "PipInstallationStep",
         "type": "object"
       },
+      "PublicCapabilitySummary": {
+        "additionalProperties": false,
+        "description": "公开能力概览：作者声明的工具与权限用途。\n\n只投影清单里作者自己声明的内容；扫描发现、评审记录和证据不进入这里。",
+        "properties": {
+          "purposes": {
+            "items": {
+              "$ref": "#/components/schemas/PublicPermissionPurpose"
+            },
+            "title": "Purposes",
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "use_cases": {
+            "items": {
+              "$ref": "#/components/schemas/UseCase"
+            },
+            "title": "Use Cases",
+            "type": "array"
+          }
+        },
+        "title": "PublicCapabilitySummary",
+        "type": "object"
+      },
       "PublicInstallTarget": {
         "additionalProperties": false,
         "description": "Install destination safe to expose on the public package page.",
@@ -1766,6 +1795,32 @@
         "title": "PublicInstallation",
         "type": "object"
       },
+      "PublicPermissionPurpose": {
+        "additionalProperties": false,
+        "description": "作者声明的权限用途（公开安全：只有理由文本，没有证据或路径）。",
+        "properties": {
+          "reason": {
+            "maxLength": 200,
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "shell",
+              "network",
+              "credentials"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "reason"
+        ],
+        "title": "PublicPermissionPurpose",
+        "type": "object"
+      },
       "PublicPermissionSummary": {
         "additionalProperties": false,
         "description": "Counts and capability flags safe for the public package page.",
@@ -1835,6 +1890,35 @@
         "title": "PublicPermissionSummary",
         "type": "object"
       },
+      "PublicTrustBoundary": {
+        "additionalProperties": false,
+        "description": "公开安全的信任边界结论。\n\n只给三态结论：扫描是否可用、以及是否观察到未声明的能力。\n未声明能力的具体清单、文件位置和证据文本都停留在评审侧。",
+        "properties": {
+          "scanned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanned At"
+          },
+          "verification": {
+            "default": "not_verified",
+            "enum": [
+              "verified_consistent",
+              "verified_undeclared",
+              "not_verified"
+            ],
+            "title": "Verification",
+            "type": "string"
+          }
+        },
+        "title": "PublicTrustBoundary",
+        "type": "object"
+      },
       "PublicTrustSummary": {
         "additionalProperties": false,
         "description": "Effective public conclusion; scoring evidence remains review-only.",
@@ -1863,6 +1947,16 @@
         "additionalProperties": false,
         "description": "Least-privilege projection returned by public version endpoints.",
         "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicCapabilitySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "compatibility": {
             "items": {
               "$ref": "#/components/schemas/Client"
@@ -1925,6 +2019,16 @@
               }
             ],
             "title": "Risk Level"
+          },
+          "trust_boundary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicTrustBoundary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "title": "Version",
@@ -2059,6 +2163,28 @@
           "install_recommendation"
         ],
         "title": "TrustLevelResponse",
+        "type": "object"
+      },
+      "UseCase": {
+        "additionalProperties": false,
+        "description": "作者声明的用途/适用场景；长度上限由供给侧请求模型校验，读路径保持宽容。",
+        "properties": {
+          "description": {
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "description"
+        ],
+        "title": "UseCase",
         "type": "object"
       },
       "ValidationError": {

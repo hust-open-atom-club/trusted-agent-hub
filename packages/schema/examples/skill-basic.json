@@ -28,6 +28,16 @@
   },
   "compatibility": ["claude-code", "cursor", "codex"],
   "keywords": ["code-review", "pull-request", "quality", "security"],
+  "use_cases": [
+    {
+      "title": "提交 PR 前自查",
+      "description": "在请求评审前先跑一遍，提前发现正确性与安全问题。"
+    },
+    {
+      "title": "评审他人 PR",
+      "description": "按清单过一遍改动，输出结构化审查结论。"
+    }
+  ],
   "category": "code-generation",
   "homepage": "https://alice-dev.github.io/code-review-skill/",
   "dependencies": {

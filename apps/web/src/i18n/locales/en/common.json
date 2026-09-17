@@ -209,22 +209,12 @@
     "not_found": "Package not found",
     "not_found_hint": "The package \"{{name}}\" does not exist.",
     "trust_score": "Trust Score",
-    "trust_conclusion": "Trust conclusion",
     "source_repo": "Source Repository",
     "url": "URL",
     "ref": "Ref",
     "verified_owner": "Verified owner",
     "stars": "Stars",
     "compatible_clients": "Compatible Clients",
-    "permissions": "Permissions",
-    "filesystem": "Filesystem",
-    "shell": "Shell",
-    "network": "Network",
-    "environment": "Environment",
-    "credentials": "Credentials",
-    "database": "Database",
-    "browser": "Browser",
-    "external_services": "External services",
     "read": "Read",
     "write": "Write",
     "can_delete": "Can delete files",
@@ -258,19 +248,16 @@
     "verified_source": "Verified source",
     "calculated": "Calculated",
     "nav": {
-      "overview": "Overview",
-      "trust": "Trust conclusion",
       "files": "Files",
       "integrity": "Integrity",
-      "permissions": "Permissions",
+      "capability": "Capability",
+      "boundary": "Security boundary",
       "installation": "Installation",
       "versions": "Versions",
       "feedback": "Feedback"
     },
     "section": {
-      "overview_kicker": "Compatible clients and keywords",
       "trust_history": "Trust Score History",
-      "permissions_kicker": "Declared capability scope",
       "dependencies_kicker": "Runtime requirements",
       "entry_points_kicker": "Package launch metadata",
       "installation_kicker": "Method and targets",
@@ -332,32 +319,98 @@
       "download_size": "Artifact Size",
       "missing": "Missing"
     },
-    "permissions": {
-      "no_filesystem": "No filesystem access declared.",
-      "read": "Read: {{value}}",
-      "write": "Write: {{value}}",
-      "commands": "Commands: {{value}}",
-      "domains": "Domains: {{value}}",
-      "access": "Access: {{value}}",
-      "can_delete": "Can delete files",
-      "allowed": "Allowed",
-      "not_allowed": "Not allowed"
+    "boundary": {
+      "title": "Security and capability boundary",
+      "subtitle": "What this {{type}} can and cannot do",
+      "item": {
+        "filesystem_read": "Filesystem read",
+        "filesystem_write": "Filesystem write",
+        "filesystem_delete": "File deletion",
+        "shell": "Shell execution",
+        "network": "Network access",
+        "environment": "Environment variables",
+        "credentials": "Credential access"
+      },
+      "value": {
+        "filesystem_read": "Allowed: {{count}} paths (scoped)",
+        "filesystem_write": "Allowed: {{count}} paths (scoped)",
+        "environment": "Allowed: {{count}} variables",
+        "credentials": "Allowed: {{count}} credential types",
+        "allowed": "Allowed",
+        "not_allowed": "Not allowed"
+      },
+      "summary": {
+        "allowed": "Allowed",
+        "not_allowed": "Not allowed"
+      },
+      "verdict": {
+        "limited": "This version declares a small permission scope — no deletion, execution or other high-risk capabilities.",
+        "none": "This version declares no sensitive permissions.",
+        "elevated": "This version declares {{count}} high-risk permissions. Confirm you accept them.",
+        "undeclared": "The scan found capabilities that were not declared. Review manually."
+      }
     },
-    "permission_summary": {
-      "filesystem_none": "No read/write/delete access",
-      "filesystem_access": "Read {{readCount}} paths · Write {{writeCount}} paths · Delete allowed: {{deleteAllowed}}",
-      "shell_not_allowed": "Not allowed",
-      "shell_allowed": "Allowed: {{commands}}",
-      "shell_allowed_summary": "Allowed",
-      "network_not_allowed": "Not allowed",
-      "network_allowed": "Allowed: {{domains}}",
-      "network_allowed_summary": "Allowed",
-      "environment_read": "Read {{count}} variables",
-      "environment_write": "Write {{count}} variables",
-      "credentials_access": "Access: {{access}}",
-      "credentials_access_count": "Access to {{count}} credential types",
-      "declared": "Declared",
-      "external_services_count": "Access to {{count}} services"
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "detail": "Package detail"
+    },
+    "capability": {
+      "radar_title": "Permission scope",
+      "radar_aria": "Declared permission scope of {{name}}",
+      "radar_note": "Outer rings mean a wider declared scope or an unbounded one (shown at the widest reading). This chart describes declared capability scope and is independent of the trust grade.",
+      "empty": "This version declares no sensitive permissions.",
+      "axis_header": "Permission",
+      "value_header": "Declared scope",
+      "block_title": "What does this {{type}} do?",
+      "block_kicker": "Purpose, tools and permission rationale",
+      "block_summary": "Everything below comes from the metadata {{name}} declared at submission plus the public scan conclusion. Review-only evidence is not shown.",
+      "legend": {
+        "current": "Current permissions",
+        "reference": "Full scope (reference)"
+      },
+      "scope": {
+        "shell": "Shell execution",
+        "network": "Network access",
+        "credentials": "Credential access"
+      },
+      "tile": {
+        "author_declared": "Author-declared",
+        "use_case_label": "Use case",
+        "use_case_body": "{{title}} — {{description}}",
+        "tools_label": "Tools",
+        "tools_body": "{{count}}: {{sample}}",
+        "purpose_label": "Permission rationale",
+        "purpose_body": "{{scope}}: {{reason}}",
+        "boundary_label": "Boundary verification",
+        "keywords_label": "Use cases",
+        "keywords_body": "{{sample}}"
+      },
+      "boundary": {
+        "verified_consistent": "The scan found no undeclared capabilities.",
+        "verified_undeclared": "The scan found undeclared capabilities. Review manually before installing.",
+        "not_verified": "No scan result is available for this version; the boundary is not verified."
+      },
+      "level": {
+        "none": "Not declared"
+      },
+      "axis": {
+        "filesystem_read": "Read",
+        "filesystem_write": "Write",
+        "filesystem_delete": "Delete",
+        "shell": "Shell",
+        "network": "Network",
+        "environment": "Env vars",
+        "credentials_external": "Credentials"
+      },
+      "value": {
+        "filesystem_read": "Can read {{count}} paths",
+        "filesystem_write": "Can write {{count}} paths",
+        "filesystem_delete": "Can delete files",
+        "shell": "Can execute shell commands",
+        "network": "Can access the network",
+        "environment": "Reads {{read}} · writes {{write}} variables",
+        "credentials_external": "{{credentials}} credential types · {{services}} external services"
+      }
     },
     "install": {
       "method": "Method",
@@ -409,7 +462,11 @@
       "install": "Install",
       "source": "Source",
       "sections": "Sections",
-      "review": "Review"
+      "review": "Review",
+      "install_hint": "Pick a client and copy the install command to add it to your environment.",
+      "permissions": "Permission summary",
+      "declared_count": "{{declared}} of {{total}} declared",
+      "see_detail": "See details →"
     }
   },
   "feedback": {

@@ -32,6 +32,25 @@ ajv validate -s agent-package.schema.json -d examples/plugin-basic.json
 ajv validate -s agent-package.schema.json -d examples/risky-skill.json
 ```
 
+## 作者声明的用途（`use_cases`）
+
+`agent-package.schema.json` 支持可选的 `use_cases` 字段，用来回答「这个包能做什么、
+什么时候有用」，会公开显示在详情页的「这个包是干什么的」板块：
+
+```json
+"use_cases": [
+  {
+    "title": "提交 PR 前自查",
+    "description": "在请求评审前先跑一遍，提前发现正确性与安全问题。"
+  }
+]
+```
+
+- 可选字段，最多 6 条；`title` ≤ 40 字符，`description` ≤ 160 字符，超出会被截断。
+- 可以写在仓库的 `manifest.json` / `plugin.json`，也可以写在 `SKILL.md` frontmatter 里。
+- 只允许声明事实性用途，不要写审核结论、内部证据或敏感路径——该字段是公开的。
+- 未声明时详情页会回退到「声明的工具 + 权限用途 + 关键词」。
+
 ## 版本
 
 - 当前版本：v0.1
