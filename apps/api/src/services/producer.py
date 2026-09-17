@@ -248,6 +248,10 @@ class ProducerSourceConflictError(ProducerServiceError):
     """A retained scan task already exists for the same source identity."""
 
 
+class ProducerSubmissionConflict(ProducerServiceError):
+    """The version was claimed by another submission or is already in flight."""
+
+
 class ProducerService:
     """供给侧业务逻辑服务。"""
 
@@ -421,13 +425,15 @@ class ProducerService:
 
         current_status = version.get("status", "")
 
-        # 统一走状态机校验：draft/error 跳 submitted，resubmitted /
-        # changes_requested 跳 scanning；版本终态统一由事务分支落到 scanning。
         if current_status in ("draft", "error"):
             validate_transition(current_status, "submitted")
         elif current_status in ("resubmitted", "changes_requested"):
             validate_transition(current_status, "scanning")
         else:
+            if current_status in ("submitted", "scanning", "pending_review"):
+                raise ProducerSubmissionConflict(
+                    f"版本 '{version_id}' 已被其他请求提交，不能重复提交"
+                )
             raise ProducerServiceError(
                 f"无法提交审核：当前状态为 '{current_status}'，"
                 f"仅 'draft'、'resubmitted'、'changes_requested' 或 'error' 状态可提交"
@@ -462,10 +468,12 @@ class ProducerService:
                     scan_id=existing_scan_id,
                     version_id=version_id,
                     owner_user_id=owner_user_id,
-                    expected_statuses={current_status},
+                    expected_statuses={str(current_status)},
                     operator_id=user_id or "system",
                 )
-            except (LookupError, ValueError) as exc:
+            except ValueError as exc:
+                raise ProducerSubmissionConflict(str(exc)) from exc
+            except LookupError as exc:
                 raise ProducerServiceError(str(exc)) from exc
             except Exception as exc:
                 raise ProducerPersistenceError(
@@ -513,11 +521,13 @@ class ProducerService:
                     and source_subdirectory.strip()
                     else None
                 ),
-                expected_statuses={current_status},
+                expected_statuses={str(current_status)},
                 operator_id=user_id or "system",
                 expires_at=expires_at,
             )
-        except (LookupError, ValueError) as exc:
+        except ValueError as exc:
+            raise ProducerSubmissionConflict(str(exc)) from exc
+        except LookupError as exc:
             raise ProducerServiceError(str(exc)) from exc
         except ScanTaskSourceConflictError as exc:
             raise ProducerSourceConflictError(
@@ -534,10 +544,11 @@ class ProducerService:
 
     def handle_scan_complete(
         self, version_id: str, full_report: dict[str, object]
-    ) -> None:
+    ) -> bool:
         """扫描流水线完成后回调：打包安装产物 + 写入扫描报告 + 更新状态。
 
-        打包失败视为提交流程失败：状态回退 error，提交者可重新提交。
+        返回 ``True`` 仅表示完整报告已保存且版本状态已写入
+        ``pending_review``；产物打包失败返回 ``False``，提交者可重新提交。
         """
         from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
@@ -574,7 +585,7 @@ class ProducerService:
                     detail={"scan_id": scan_id},
                     idempotency_key=completion_audit_key,
                 )
-                return
+                return True
 
         raw_scan_report = full_report.get("scan_report", {})
         scan_report = (
@@ -598,145 +609,140 @@ class ProducerService:
 
         # ── 生成安装产物（同步，失败则回退 error） ───────────
         version = self.repository.get_version(version_id)
-        if version is not None:
-            # Top-level integrity is a public server-owned projection. Clear
-            # package-authored values before an install artifact is generated;
-            # _apply_artifact_to_version writes the archive hash only for the
-            # copy_directory path.
-            provenance_updates: dict[str, object] = {"integrity": None}
-            if isinstance(acquisition_facts, dict):
-                safe_source = deepcopy(acquisition_facts.get("source") or {})
-                provenance_updates.update(
-                    {
-                        "source": safe_source,
-                        "acquisition_facts": deepcopy(acquisition_facts),
+        if version is None:
+            if local_source_dir:
+                force_rmtree(local_source_dir)
+            return False
+        # Top-level integrity is a public server-owned projection. Clear
+        # package-authored values before an install artifact is generated;
+        # _apply_artifact_to_version writes the archive hash only for the
+        # copy_directory path.
+        provenance_updates: dict[str, object] = {"integrity": None}
+        if isinstance(acquisition_facts, dict):
+            safe_source = deepcopy(acquisition_facts.get("source") or {})
+            provenance_updates.update(
+                {
+                    "source": safe_source,
+                    "acquisition_facts": deepcopy(acquisition_facts),
+                }
+            )
+        if isinstance(package_claims, dict):
+            provenance_updates["provenance_claims"] = redact_report(
+                deepcopy(package_claims)
+            )
+        self.repository.update_version_data(version_id, provenance_updates)
+        version.update(provenance_updates)
+
+        source = dict(version.get("source") or {})
+        extracted_meta = full_report.get("package_metadata")
+        acquired_source = None
+        if isinstance(acquisition_facts, dict):
+            acquired_source = acquisition_facts.get("source")
+        if not isinstance(acquired_source, dict):
+            acquired_source = (
+                extracted_meta.get("source")
+                if isinstance(extracted_meta, dict)
+                else None
+            )
+        # Source identity is an acquisition fact.  It must supersede the
+        # submitted URL/ref so the install manifest identifies the same
+        # repository default branch and commit that were scanned.
+        if isinstance(acquired_source, dict):
+            for key in (
+                "type",
+                "repository_url",
+                "owner",
+                "repo",
+                "ref_type",
+                "ref",
+                "commit_hash",
+            ):
+                value = acquired_source.get(key)
+                if value not in (None, ""):
+                    source[key] = value
+
+        repo_url = str(source.get("repository_url", ""))
+        commit_hash = full_report.get("commit_hash") or source.get(
+            "commit_hash", ""
+        )
+        source_subdirectory = full_report.get("source_subdirectory") or (
+            source.get("subdirectory", "")
+        )
+        if source_subdirectory:
+            source["subdirectory"] = str(source_subdirectory)
+        self.repository.update_version_data(version_id, {"source": source})
+        version["source"] = source
+        package = self.repository.get_package(version.get("package_id", ""))
+        package_name = package.get("name", "") if package else ""
+        pkg_version = version.get("version", "")
+        install_method = str(
+            (version.get("installation") or {}).get("method")
+            or "copy_directory"
+        )
+
+        if install_method == "copy_directory":
+            if repo_url and package_name and pkg_version:
+                try:
+                    if source_reacquisition_attempted and (
+                        not isinstance(local_source_dir, str)
+                        or not Path(local_source_dir).is_dir()
+                    ):
+                        raise ArtifactError(source_reacquisition_error)
+                    artifact_kwargs = {
+                        "repo_url": repo_url,
+                        "commit_hash": str(commit_hash),
+                        "package_name": package_name,
+                        "version": str(pkg_version),
+                        "local_source_dir": local_source_dir,
                     }
-                )
-            if isinstance(package_claims, dict):
-                provenance_updates["provenance_claims"] = redact_report(
-                    deepcopy(package_claims)
-                )
-            self.repository.update_version_data(version_id, provenance_updates)
-            version.update(provenance_updates)
-
-            source = dict(version.get("source") or {})
-            extracted_meta = full_report.get("package_metadata")
-            acquired_source = None
-            if isinstance(acquisition_facts, dict):
-                acquired_source = acquisition_facts.get("source")
-            if not isinstance(acquired_source, dict):
-                acquired_source = (
-                    extracted_meta.get("source")
-                    if isinstance(extracted_meta, dict)
-                    else None
-                )
-            # Source identity is an acquisition fact.  It must supersede the
-            # submitted URL/ref so the install manifest identifies the same
-            # repository default branch and commit that were scanned.
-            if isinstance(acquired_source, dict):
-                for key in (
-                    "type",
-                    "repository_url",
-                    "owner",
-                    "repo",
-                    "ref_type",
-                    "ref",
-                    "commit_hash",
-                ):
-                    value = acquired_source.get(key)
-                    if value not in (None, ""):
-                        source[key] = value
-
-            repo_url = str(source.get("repository_url", ""))
-            commit_hash = full_report.get("commit_hash") or source.get(
-                "commit_hash", ""
+                    if source_subdirectory:
+                        artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
+                    artifact = build_artifact(
+                        **artifact_kwargs,
+                    )
+                    self._apply_artifact_to_version(
+                        version_id,
+                        artifact,
+                        package_name,
+                        pkg_version,
+                        str(commit_hash),
+                        str(source_subdirectory) if source_subdirectory else None,
+                    )
+                except ArtifactError as exc:
+                    self.repository.update_version_status(
+                        version_id, "error"
+                    )
+                    self.repository.update_version_data(
+                        version_id,
+                        {"scan_error": f"安装产物打包失败: {exc}"},
+                    )
+                    self.repository.create_audit_log(
+                        action=AuditAction.SCAN_COMPLETE.value,
+                        target_type="version",
+                        target_id=version_id,
+                        operator_id="system",
+                        detail={
+                            "scan_id": scan_id or None,
+                            "error": f"artifact packaging failed: {exc}",
+                        },
+                        idempotency_key=completion_audit_key,
+                    )
+                    # Packaging failures are terminal and must not retry.
+                    if scan_id:
+                        self._terminalize_scan_task_on_packaging_failure(
+                            scan_id,
+                            f"安装产物打包失败: {exc}",
+                        )
+                    return False
+        else:
+            # npm/pip/docker/manual 不需要 ZIP 制品：
+            # 按安装方式生成 manifest 步骤
+            self._apply_installation_steps_to_version(
+                version_id,
+                package_name,
+                pkg_version,
+                install_method,
             )
-            source_subdirectory = full_report.get("source_subdirectory") or (
-                source.get("subdirectory", "")
-            )
-            if source_subdirectory:
-                source["subdirectory"] = str(source_subdirectory)
-            self.repository.update_version_data(version_id, {"source": source})
-            version["source"] = source
-            package = self.repository.get_package(version.get("package_id", ""))
-            package_name = package.get("name", "") if package else ""
-            pkg_version = version.get("version", "")
-            install_method = str(
-                (version.get("installation") or {}).get("method")
-                or "copy_directory"
-            )
-
-            if install_method == "copy_directory":
-                if repo_url and package_name and pkg_version:
-                    try:
-                        if source_reacquisition_attempted and (
-                            not isinstance(local_source_dir, str)
-                            or not Path(local_source_dir).is_dir()
-                        ):
-                            raise ArtifactError(source_reacquisition_error)
-                        artifact_kwargs = {
-                            "repo_url": repo_url,
-                            "commit_hash": str(commit_hash),
-                            "package_name": package_name,
-                            "version": str(pkg_version),
-                            "local_source_dir": local_source_dir,
-                        }
-                        if source_subdirectory:
-                            artifact_kwargs["source_subdirectory"] = str(source_subdirectory)
-                        artifact = build_artifact(
-                            **artifact_kwargs,
-                        )
-                        self._apply_artifact_to_version(
-                            version_id,
-                            artifact,
-                            package_name,
-                            pkg_version,
-                            str(commit_hash),
-                            str(source_subdirectory) if source_subdirectory else None,
-                        )
-                    except ArtifactError as exc:
-                        self.repository.update_version_status(
-                            version_id, "error"
-                        )
-                        self.repository.update_version_data(
-                            version_id,
-                            {"scan_error": f"安装产物打包失败: {exc}"},
-                        )
-                        self.repository.create_audit_log(
-                            action=AuditAction.SCAN_COMPLETE.value,
-                            target_type="version",
-                            target_id=version_id,
-                            operator_id="system",
-                            detail={
-                                "scan_id": scan_id or None,
-                                "error": f"artifact packaging failed: {exc}"
-                            },
-                            idempotency_key=completion_audit_key,
-                        )
-                        # Packaging failures are terminal and must not retry.
-                        if scan_id:
-                            self._terminalize_scan_task_on_packaging_failure(
-                                scan_id,
-                                f"安装产物打包失败: {exc}",
-                            )
-                        return
-                    finally:
-                        # 无论打包成功与否，扫描遗留的代码目录均已消费，清理之
-                        if local_source_dir:
-                            force_rmtree(local_source_dir)
-                elif local_source_dir:
-                    force_rmtree(local_source_dir)
-            else:
-                # npm/pip/docker/manual 不需要 ZIP 制品：
-                # 按安装方式生成 manifest 步骤
-                self._apply_installation_steps_to_version(
-                    version_id,
-                    package_name,
-                    pkg_version,
-                    install_method,
-                )
-                if local_source_dir:
-                    force_rmtree(local_source_dir)
 
         # 保存扫描报告
         scan_data: dict[str, object] = dict(scan_report) if isinstance(scan_report, dict) else {}
@@ -768,30 +774,85 @@ class ProducerService:
         )
 
         # 状态：scanning → pending_review
-        self.repository.update_version_status(version_id, "pending_review")
-        self.repository.create_audit_log(
-            action=AuditAction.SCAN_COMPLETE.value,
-            target_type="version",
-            target_id=version_id,
-            operator_id="system",
-            detail={
-                "scan_id": scan_id or None,
-                "findings_count": (
-                    scan_report.get("summary", {}).get("total", 0)
-                    if isinstance(scan_report, dict)
-                    else 0
-                ),
-                "trust_grade": trust_score.get("risk_summary", {}).get("grade")
-                if isinstance(trust_score, dict)
-                else None,
-                "llm_review": (
-                    scan_report.get("llm_review", {}).get("labels_summary")
-                    if isinstance(scan_report, dict)
-                    else None
-                ),
-            },
-            idempotency_key=completion_audit_key,
+        try:
+            self.repository.update_version_status(version_id, "pending_review")
+            self.repository.create_audit_log(
+                action=AuditAction.SCAN_COMPLETE.value,
+                target_type="version",
+                target_id=version_id,
+                operator_id="system",
+                detail={
+                    "scan_id": scan_id or None,
+                    "findings_count": (
+                        scan_report.get("summary", {}).get("total", 0)
+                        if isinstance(scan_report, dict)
+                        else 0
+                    ),
+                    "trust_grade": trust_score.get("risk_summary", {}).get("grade")
+                    if isinstance(trust_score, dict)
+                    else None,
+                    "llm_review": (
+                        scan_report.get("llm_review", {}).get("labels_summary")
+                        if isinstance(scan_report, dict)
+                        else None
+                    ),
+                },
+                idempotency_key=completion_audit_key,
+            )
+        except Exception as exc:
+            error = f"扫描完成收尾失败: {type(exc).__name__}: {exc}"
+            self._recover_scan_completion_failure(version_id, error)
+            raise
+
+        if local_source_dir:
+            force_rmtree(local_source_dir)
+        return True
+
+    def _recover_scan_completion_failure(self, version_id: str, error: str) -> None:
+        transition = getattr(
+            self.repository,
+            "transition_version_status_if_current",
+            None,
         )
+        expected_statuses = ("scanning", "pending_review")
+        try:
+            if callable(transition):
+                transition(version_id, expected_statuses, "error")
+            else:
+                current = self.repository.get_version(version_id)
+                if (
+                    isinstance(current, dict)
+                    and current.get("status") in expected_statuses
+                ):
+                    self.repository.update_version_status(version_id, "error")
+        except Exception:
+            logger.exception(
+                "Could not compensate failed scan completion for %s",
+                version_id,
+            )
+        try:
+            self.repository.update_version_data(
+                version_id,
+                {"scan_error": error},
+            )
+        except Exception:
+            logger.exception(
+                "Could not persist failed scan completion for %s",
+                version_id,
+            )
+        try:
+            self.repository.create_audit_log(
+                action=AuditAction.SCAN_COMPLETE.value,
+                target_type="version",
+                target_id=version_id,
+                operator_id="system",
+                detail={"error": error, "phase": "completion"},
+            )
+        except Exception:
+            logger.exception(
+                "Could not write failed scan completion audit for %s",
+                version_id,
+            )
 
     def _apply_artifact_to_version(
         self,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { apiFetch } from '@/lib/api-fetch';
-import { fetchScanTasks, scanPageAfterDeletion } from './scans';
+import { fetchScanTasks } from './scans';
 
 vi.mock('@/lib/api-fetch', () => ({
   apiFetch: vi.fn(),
@@ -43,14 +43,5 @@ describe('fetchScanTasks', () => {
       'offset must be a non-negative integer',
     );
     expect(mockedApiFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe('scanPageAfterDeletion', () => {
-  it('returns to the previous page only when deletion empties a later page', () => {
-    expect(scanPageAfterDeletion(1, 1)).toBe(0);
-    expect(scanPageAfterDeletion(2, 1)).toBe(1);
-    expect(scanPageAfterDeletion(1, 2)).toBe(1);
-    expect(scanPageAfterDeletion(0, 1)).toBe(0);
   });
 });

@@ -75,9 +75,6 @@ export default function Navbar() {
               <Link href="/submit">{t('nav.submit')}</Link>
             </li>
             <li>
-              <Link href="/submissions">{t('nav.submissions')}</Link>
-            </li>
-            <li>
               <Link href="/scans">{t('nav.scans')}</Link>
             </li>
           </>

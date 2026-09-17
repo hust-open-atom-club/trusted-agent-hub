@@ -49,8 +49,9 @@ def _alembic_config(database_url: str) -> Config:
 def test_migration_graph_has_single_base_and_head() -> None:
     script = ScriptDirectory.from_config(_alembic_config("sqlite+pysqlite:///:memory:"))
     assert script.get_bases() == ["20260826_0001"]
-    assert script.get_heads() == ["20260913_0001"]
+    assert script.get_heads() == ["20260916_0001"]
     assert [revision.revision for revision in script.walk_revisions()] == [
+        "20260916_0001",
         "20260913_0001",
         "20260912_0002",
         "20260912_0001",
@@ -367,7 +368,7 @@ def test_alembic_upgrade_head_creates_exact_schema(
             "source_ref", "commit_hash", "source_subdirectory", "version_id",
             "status", "package_name", "created_at", "updated_at", "finished_at",
             "lease_token", "lease_until", "attempt_count",
-            "completion_delivered_at", "callback_status",
+            "completion_delivered_at", "resource_consumed", "callback_status",
             "callback_attempt_count", "callback_next_attempt_at",
             "callback_last_error", "expires_at", "summary", "trust_score",
             "llm_review", "metadata_json", "capabilities", "report_json",
@@ -417,6 +418,7 @@ def test_alembic_upgrade_head_creates_exact_schema(
             "lease_until": True,
             "attempt_count": False,
             "completion_delivered_at": True,
+            "resource_consumed": False,
             "callback_status": True,
             "callback_attempt_count": False,
             "callback_next_attempt_at": True,
@@ -648,6 +650,7 @@ def test_built_wheel_contains_and_executes_migrations(tmp_path: Path) -> None:
             "20260912_0001_add_scan_tasks.py",
             "20260912_0002_add_scan_identity_and_callback_delivery.py",
             "20260913_0001_add_scan_dedup_identity.py",
+            "20260916_0001_add_scan_resource_consumed.py",
         }
         unpacked = tmp_path / "unpacked"
         wheel.extractall(unpacked)

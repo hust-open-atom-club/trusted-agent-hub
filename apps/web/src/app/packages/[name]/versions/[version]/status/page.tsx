@@ -571,7 +571,7 @@ function StatusContent() {
 
       <div className="status-bottom-actions">
         {user && (
-          <button className="btn btn-secondary" onClick={() => router.push('/submissions')}>
+          <button className="btn btn-secondary" onClick={() => router.push('/scans')}>
             我的提交列表
           </button>
         )}

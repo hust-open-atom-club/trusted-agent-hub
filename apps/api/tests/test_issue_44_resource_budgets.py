@@ -167,7 +167,11 @@ def test_scan_task_reports_a_policy_failure_as_a_security_error(
     }
     callbacks: list[tuple[str, dict[str, object] | None, str | None]] = []
 
-    def fail_acquisition(_parsed: dict[str, object]) -> tuple[None, str, str]:
+    def fail_acquisition(
+        _parsed: dict[str, object],
+        *,
+        temp_dir_callback=None,
+    ) -> tuple[None, str, str]:
         raise trust._DeterministicAcquisitionError(
             "ZIP contains a special file: 'root/named-pipe'"
         )

@@ -22,7 +22,11 @@ from src.repositories.producer_sqlalchemy import (
 )
 from src.routers import producer as producer_router
 from src.routers import trust
-from src.services.producer import ProducerService
+from src.services.producer import (
+    ProducerPersistenceError,
+    ProducerService,
+    ProducerSubmissionConflict,
+)
 
 
 @pytest.fixture
@@ -219,6 +223,43 @@ def test_version_scan_task_transaction_rolls_back_version_on_task_failure(
     assert repository.list_audit_logs(target_id=DRAFT_VERSION_ID) == []
 
 
+def test_submit_service_keeps_draft_retryable_when_task_write_fails(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    original_create = repository.create_version_scan_task
+
+    def fail_create(**_kwargs: object) -> dict[str, object]:
+        raise OperationalError("insert", {}, RuntimeError("database unavailable"))
+
+    monkeypatch.setattr(repository, "create_version_scan_task", fail_create)
+    service = ProducerService(repository)
+    scan_task = {
+        "owner_user_id": "scan-user-1",
+        "source_ref": "main",
+        "commit_hash": "a" * 40,
+    }
+
+    with pytest.raises(ProducerPersistenceError):
+        service.submit_version(
+            DRAFT_VERSION_ID,
+            user_id="scan-user-1",
+            scan_task=scan_task,
+        )
+
+    assert repository.get_version(DRAFT_VERSION_ID)["status"] == "draft"
+    monkeypatch.setattr(repository, "create_version_scan_task", original_create)
+    _, scan_id, status = service.submit_version(
+        DRAFT_VERSION_ID,
+        user_id="scan-user-1",
+        scan_task=scan_task,
+    )
+    assert status == "scanning"
+    assert repository.get_scan_task(str(scan_id)) is not None
+
+
 def test_reused_scan_is_attached_before_callback_can_be_delivered(
     scan_repository: tuple[ProducerRepository, object],
 ) -> None:
@@ -260,6 +301,66 @@ def test_reused_scan_is_attached_before_callback_can_be_delivered(
     assert reused["completion_delivered_at"] is None
 
 
+def test_reused_scan_can_be_attached_to_only_one_version(
+    scan_repository: tuple[ProducerRepository, object],
+) -> None:
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    second_version_id = "atomic-version-2"
+    with repository.session_factory() as session:
+        session.add(
+            PackageVersionRow(
+                id=second_version_id,
+                package_id=DRAFT_PACKAGE_ID,
+                version="2.0.0",
+                status="draft",
+                data={
+                    "status": "draft",
+                    "source": {
+                        "repository_url": "https://github.com/acme/demo"
+                    },
+                },
+            )
+        )
+        session.commit()
+    repository.create_scan_task(
+        scan_id="scan-one-time-reuse",
+        owner_user_id="scan-user-1",
+        client_request_id="request-one-time-reuse",
+        repo_url="https://github.com/acme/demo",
+        source_ref="main",
+        commit_hash="e" * 40,
+        status="complete",
+        callback_status="not_required",
+    )
+    repository.update_scan_task(
+        "scan-one-time-reuse",
+        {"report_json": {"scan_id": "scan-one-time-reuse"}},
+    )
+    service = ProducerService(repository)
+    scan_task = {
+        "owner_user_id": "scan-user-1",
+        "existing_scan_id": "scan-one-time-reuse",
+    }
+
+    service.submit_version(
+        DRAFT_VERSION_ID,
+        user_id="scan-user-1",
+        scan_task=scan_task,
+    )
+    with pytest.raises(ProducerSubmissionConflict):
+        service.submit_version(
+            second_version_id,
+            user_id="scan-user-1",
+            scan_task=scan_task,
+        )
+
+    task = repository.get_scan_task("scan-one-time-reuse")
+    assert task is not None
+    assert task["version_id"] == DRAFT_VERSION_ID
+    assert repository.get_version(second_version_id)["status"] == "draft"
+
+
 def test_scan_task_claim_lease_prevents_duplicate_execution_and_can_recover(
     scan_repository: tuple[ProducerRepository, object],
 ) -> None:
@@ -299,6 +400,179 @@ def test_scan_task_claim_lease_prevents_duplicate_execution_and_can_recover(
     )
     assert [task["scan_id"] for task in recovered] == ["scan-lease-1"]
     assert recovered[0]["attempt_count"] == 2
+
+
+def test_submit_route_claims_persisted_task_before_background_dispatch(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    commit_hash = "b" * 40
+    monkeypatch.setattr(
+        producer_router,
+        "_get_producer_repository",
+        lambda: repository,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_get_scan_task_repository",
+        lambda: repository,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_resolve_default_branch_source",
+        lambda parsed: {
+            **parsed,
+            "ref": "main",
+            "subdir": None,
+            "repository_resolved": True,
+        },
+    )
+    monkeypatch.setattr(
+        trust,
+        "_pin_resolved_source",
+        lambda parsed: {**parsed, "commit_hash": commit_hash},
+    )
+    monkeypatch.setattr(
+        "src.services.signals.collect_platform_signals",
+        lambda *_args, **_kwargs: {},
+    )
+    trust._scans.clear()
+
+    try:
+        background_tasks = BackgroundTasks()
+        response = producer_router.submit_version(
+            DRAFT_VERSION_ID,
+            background_tasks,
+            _user=CurrentUser(id="scan-user-1", role="submitter"),
+        )
+
+        task = repository.get_scan_task(str(response.scan_id))
+        assert response.status == "scanning"
+        assert task is not None
+        assert task["status"] == "pending"
+        assert task["lease_token"] is not None
+        assert task["attempt_count"] == 1
+        assert len(background_tasks.tasks) == 1
+        assert repository.claim_recoverable_scan_tasks(
+            lease_seconds=120,
+            now=datetime.now(timezone.utc),
+        ) == []
+    finally:
+        trust._scans.clear()
+
+
+def test_submit_route_pipeline_keeps_successful_version_pending_review(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    commit_hash = "c" * 40
+    monkeypatch.setattr(
+        producer_router,
+        "_get_producer_repository",
+        lambda: repository,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_get_scan_task_repository",
+        lambda: repository,
+    )
+    monkeypatch.setattr(
+        trust,
+        "_resolve_default_branch_source",
+        lambda parsed: {
+            **parsed,
+            "ref": "main",
+            "subdir": None,
+            "repository_resolved": True,
+        },
+    )
+    monkeypatch.setattr(
+        trust,
+        "_pin_resolved_source",
+        lambda parsed: {**parsed, "commit_hash": commit_hash},
+    )
+    monkeypatch.setattr(
+        "src.services.signals.collect_platform_signals",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        trust,
+        "_prepare_scan_callback_report",
+        lambda _scan_id, report: (dict(report), None),
+    )
+
+    def complete(
+        service: ProducerService,
+        version_id: str,
+        _report: dict[str, object],
+    ) -> bool:
+        service.repository.update_version_status(version_id, "pending_review")
+        return True
+
+    def run_body(
+        scan_id: str,
+        source: str,
+        *,
+        on_complete: object = None,
+        lease_token: str | None = None,
+        **_kwargs: object,
+    ) -> None:
+        finished_at = datetime.now(timezone.utc)
+        report = {
+            "scan_id": scan_id,
+            "repo_url": source,
+            "source_ref": "main",
+            "commit_hash": commit_hash,
+            "scan_report": {},
+            "trust_score": {},
+        }
+        trust._update_scan_state(
+            scan_id,
+            {
+                "status": "complete",
+                "full_report": report,
+                "finished_at": finished_at,
+                "callback_status": "pending",
+            },
+            required=True,
+        )
+        assert callable(on_complete)
+        assert trust._deliver_scan_callback(
+            scan_id,
+            report,
+            None,
+            on_complete,
+            lease_token=lease_token,
+        ) is True
+
+    monkeypatch.setattr(ProducerService, "handle_scan_complete", complete)
+    monkeypatch.setattr(trust, "_run_scan_task_body", run_body)
+    trust._scans.clear()
+
+    try:
+        background_tasks = BackgroundTasks()
+        response = producer_router.submit_version(
+            DRAFT_VERSION_ID,
+            background_tasks,
+            _user=CurrentUser(id="scan-user-1", role="submitter"),
+        )
+        task = background_tasks.tasks[0]
+        task.func(*task.args, **task.kwargs)
+
+        version = repository.get_version(DRAFT_VERSION_ID)
+        persisted_scan = repository.get_scan_task(str(response.scan_id))
+        assert version is not None
+        assert version["status"] == "pending_review"
+        assert persisted_scan is not None
+        assert persisted_scan["status"] == "complete"
+        assert persisted_scan["callback_status"] == "delivered"
+        assert persisted_scan["resource_consumed"] is True
+    finally:
+        trust._scans.clear()
 
 
 def test_required_scan_state_persistence_failure_is_surfaced(
@@ -722,7 +996,7 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
     monkeypatch.setattr(
         trust,
         "_acquire_repo_source",
-        lambda _parsed: (str(acquired_source), "zip", commit_hash),
+        lambda _parsed, **_kwargs: (str(acquired_source), "zip", commit_hash),
     )
     trust._scans.clear()
 
@@ -868,7 +1142,46 @@ def test_callback_failure_is_persisted_until_a_later_success(
         assert delivered["callback_status"] == "delivered"
         assert delivered["callback_attempt_count"] == 2
         assert delivered["completion_delivered_at"] is not None
+        assert delivered["resource_consumed"] is True
+        projected = trust._scan_info_from_task(delivered)
+        assert projected["callback_finished"] is True
+        assert projected["resource_consumed"] is True
         assert callbacks == 1
+    finally:
+        trust._scans.pop(scan_id, None)
+
+
+def test_database_projection_allows_expired_terminal_mirror_cleanup(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = scan_repository
+    scan_id = "scan-expired-database-mirror"
+    repository.create_scan_task(
+        scan_id=scan_id,
+        owner_user_id="scan-user-1",
+        client_request_id="request-expired-database-mirror",
+        repo_url="https://github.com/acme/demo",
+        status="complete",
+        callback_status="not_required",
+    )
+    repository.update_scan_task(
+        scan_id,
+        {
+            "finished_at": datetime.now(timezone.utc) - timedelta(days=31),
+            "expires_at": datetime.now(timezone.utc) - timedelta(seconds=1),
+        },
+    )
+    task = repository.get_scan_task(scan_id)
+    assert task is not None
+    info = trust._scan_info_from_task(task)
+    assert info["callback_finished"] is True
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    trust._scans[scan_id] = trust._memory_scan_info(info)
+
+    try:
+        assert trust._cleanup_expired_scans() == 1
+        assert scan_id not in trust._scans
     finally:
         trust._scans.pop(scan_id, None)
 
@@ -968,7 +1281,11 @@ def test_callback_reacquires_persisted_source_after_runtime_cache_loss(
 
     observed_sources: list[dict[str, object]] = []
 
-    def fake_acquire(parsed: dict[str, object]) -> tuple[str, str, str]:
+    def fake_acquire(
+        parsed: dict[str, object],
+        *,
+        temp_dir_callback=None,
+    ) -> tuple[str, str, str]:
         observed_sources.append(parsed)
         return str(reacquired), "zip", commit_hash
 
@@ -1327,6 +1644,102 @@ def test_new_request_id_cannot_duplicate_a_retained_source(
     assert "不允许重复扫描" in str(raised.value.detail)
 
 
+def test_sibling_subdirectories_of_one_repository_scan_independently(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained task only guards its own (repository, subdirectory).
+
+    Two capability packages that live in different directories of one
+    repository are distinct sources: the second one must be able to start
+    its own scan instead of colliding with the first task.
+    """
+    repository, _ = scan_repository
+    repository.create_scan_task(
+        scan_id="scan-subdir-alpha",
+        owner_user_id="scan-user-1",
+        client_request_id="subdir-alpha-original",
+        repo_url="https://github.com/acme/demo/tree/main/skills/alpha",
+        source_subdirectory="skills/alpha",
+    )
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    monkeypatch.setattr(
+        trust,
+        "_resolve_default_branch_source",
+        lambda parsed: {
+            **parsed,
+            "ref": "main",
+            "subdir": "skills/beta",
+            "repository_resolved": True,
+        },
+    )
+    monkeypatch.setattr(
+        trust,
+        "_fetch_repository_commit_hash",
+        lambda _parsed: "a" * 40,
+    )
+    trust._scans.clear()
+
+    response = trust.submit_scan(
+        BackgroundTasks(),
+        repo_url="https://github.com/acme/demo/tree/main/skills/beta",
+        idempotency_key="subdir-beta-request",
+        _user=SimpleNamespace(id="scan-user-1", role="submitter"),
+    )
+
+    assert response["scan_id"] != "scan-subdir-alpha"
+    assert {
+        task["source_subdirectory"]
+        for task in repository.list_scan_tasks(owner_user_id="scan-user-1")
+    } == {"skills/alpha", "skills/beta"}
+
+
+def test_scan_list_exposes_the_attached_submission(
+    scan_repository: tuple[ProducerRepository, object],
+) -> None:
+    """Attached scans carry the version they were submitted with."""
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    repository.create_scan_task(
+        scan_id="scan-attached",
+        owner_user_id="scan-user-1",
+        client_request_id="attached-request",
+        repo_url="https://github.com/acme/demo",
+        version_id=DRAFT_VERSION_ID,
+        status="complete",
+    )
+
+    labels = repository.list_version_labels([DRAFT_VERSION_ID])
+    assert labels == {
+        DRAFT_VERSION_ID: {
+            "package_name": DRAFT_PACKAGE_ID,
+            "version": "1.0.0",
+        }
+    }
+
+    record = repository.get_scan_task("scan-attached")
+    assert record is not None
+    item = trust._scan_list_item(
+        "scan-attached",
+        trust._scan_info_from_task(record),
+        requester=CurrentUser(id="scan-user-1", role="submitter"),
+        version_labels=labels,
+    )
+    assert item["submission"] == {
+        "version_id": DRAFT_VERSION_ID,
+        "package_name": DRAFT_PACKAGE_ID,
+        "version": "1.0.0",
+    }
+
+    detached = trust._scan_list_item(
+        "scan-detached",
+        {"scan_id": "scan-detached", "status": "complete", "expires_at": None},
+        requester=CurrentUser(id="scan-user-1", role="submitter"),
+        version_labels=labels,
+    )
+    assert detached["submission"] is None
+
+
 def test_concurrent_source_insert_conflict_returns_409_not_500(
     scan_repository: tuple[ProducerRepository, object],
     monkeypatch: pytest.MonkeyPatch,
@@ -1344,7 +1757,7 @@ def test_concurrent_source_insert_conflict_returns_409_not_500(
     # concurrent task, so registration reaches the unique source index.
     monkeypatch.setattr(
         trust,
-        "_find_scan_task_by_source",
+        "_find_scan_task_by_source_identity",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
@@ -1542,6 +1955,7 @@ def test_packaging_failure_demotes_complete_task_atomically(
     assert task["callback_next_attempt_at"] is None
     assert task["callback_last_error"] is None
     assert task["completion_delivered_at"] is not None
+    assert task["resource_consumed"] is True
     assert task["expires_at"] is not None
 
     # A replayed delivery attempt after a successful demotion is a no-op.

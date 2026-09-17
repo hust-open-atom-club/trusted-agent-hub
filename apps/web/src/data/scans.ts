@@ -15,15 +15,6 @@ export interface ScanTaskDeleteResult {
   lifecycle: string;
 }
 
-export function scanPageAfterDeletion(
-  currentPage: number,
-  itemsOnPage: number,
-): number {
-  return currentPage > 0 && itemsOnPage === 1
-    ? currentPage - 1
-    : currentPage;
-}
-
 /** Fetch the versioned, owner-scoped scan management page. */
 export function fetchScanTasks(
   token: string,

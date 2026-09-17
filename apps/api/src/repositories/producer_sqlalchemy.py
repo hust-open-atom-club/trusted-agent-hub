@@ -14,7 +14,7 @@ import hashlib
 from typing import NoReturn
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -93,6 +93,7 @@ def _scan_task_data(row: ScanTaskRow) -> dict[str, object]:
         "completion_delivered_at": _serialize_optional_dt(
             row.completion_delivered_at
         ),
+        "resource_consumed": row.resource_consumed,
         "callback_status": row.callback_status,
         "callback_attempt_count": row.callback_attempt_count,
         "callback_next_attempt_at": _serialize_optional_dt(
@@ -132,6 +133,7 @@ _SCAN_TASK_UPDATE_FIELDS = frozenset(
         "lease_until",
         "attempt_count",
         "completion_delivered_at",
+        "resource_consumed",
         "callback_status",
         "callback_attempt_count",
         "callback_next_attempt_at",
@@ -498,6 +500,35 @@ class ProducerRepository:
             data["status"] = new_status
             row.data = data
             session.commit()
+
+    def transition_version_status_if_current(
+        self,
+        version_id: str,
+        expected_statuses: tuple[str, ...],
+        new_status: str,
+    ) -> bool:
+        """Transition a version only if its status is still one of the expected values."""
+        if not expected_statuses:
+            return False
+        with self.session_factory() as session:
+            row = session.get(PackageVersionRow, version_id)
+            if row is None:
+                return False
+            data = dict(row.data) if row.data else {}
+            data["status"] = new_status
+            result = session.execute(
+                update(PackageVersionRow)
+                .where(
+                    PackageVersionRow.id == version_id,
+                    PackageVersionRow.status.in_(expected_statuses),
+                )
+                .values(status=new_status, data=data)
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                return False
+            session.commit()
+            return True
 
     def update_version_data(
         self, version_id: str, updates: dict[str, object]
@@ -866,6 +897,8 @@ class ProducerRepository:
                 raise ValueError("Scan task does not belong to the submitting user")
             if scan_row.status != "complete" or scan_row.report_json is None:
                 raise ValueError("Only a completed scan task can be reused")
+            if scan_row.resource_consumed:
+                raise ValueError("Scan task result has already been consumed")
             if scan_row.version_id not in (None, version_id):
                 raise ValueError("Scan task is already attached to another version")
 
@@ -1032,6 +1065,32 @@ class ProducerRepository:
                 statement.order_by(ScanTaskRow.created_at.desc())
             ).mappings()
             return [dict(row) for row in rows]
+
+    def list_version_labels(
+        self,
+        version_ids: Collection[str],
+    ) -> dict[str, dict[str, str]]:
+        """Resolve version ids to their package name and version label."""
+        ids = sorted({str(version_id) for version_id in version_ids if version_id})
+        if not ids:
+            return {}
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(
+                    PackageVersionRow.id,
+                    PackageVersionRow.version,
+                    PackageRow.name,
+                )
+                .join(PackageRow, PackageRow.id == PackageVersionRow.package_id)
+                .where(PackageVersionRow.id.in_(ids))
+            ).all()
+        return {
+            str(row.id): {
+                "package_name": str(row.name or ""),
+                "version": str(row.version or ""),
+            }
+            for row in rows
+        }
 
     def delete_scan_task(
         self,
@@ -1352,6 +1411,7 @@ class ProducerRepository:
         scan_id: str,
         *,
         lease_token: str | None = None,
+        resource_consumed: bool = False,
         now: datetime | None = None,
     ) -> bool:
         current_time = now or _utc_now()
@@ -1366,10 +1426,16 @@ class ProducerRepository:
             if row.callback_status == "delivered" or (
                 row.completion_delivered_at is not None
             ):
+                if resource_consumed and not row.resource_consumed:
+                    row.resource_consumed = True
+                    row.updated_at = current_time
+                    session.commit()
                 return True
             if lease_token and row.lease_token != lease_token:
                 return False
             row.callback_status = "delivered"
+            if resource_consumed:
+                row.resource_consumed = True
             row.callback_next_attempt_at = None
             row.callback_last_error = None
             row.completion_delivered_at = current_time
@@ -1402,6 +1468,7 @@ class ProducerRepository:
             finished = row.finished_at or current_time
             row.expires_at = finished + _SCAN_TASK_RETENTION
             row.callback_status = "delivered"
+            row.resource_consumed = True
             row.callback_next_attempt_at = None
             row.callback_last_error = None
             row.completion_delivered_at = current_time
