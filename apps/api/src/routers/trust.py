@@ -840,10 +840,34 @@ def _controlled_scan_temp_dir(
         return None
 
 
+def _scan_snapshot_released(
+    scan_id: str,
+    info: dict[str, Any],
+) -> bool:
+    """Whether a finished scan can no longer consume its snapshot.
+
+    失败终态不可复用；``complete`` 且已消费说明复用打包已收尾。``complete``
+    且未消费的记录仍受保护：它的快照是提交阶段打包产物的输入。
+    """
+    status = info.get("status")
+    released_status = status in _SCAN_FAILURE_STATUSES or (
+        status == "complete" and info.get("resource_consumed") is True
+    )
+    return (
+        released_status
+        and _scan_finished(info)
+        and _scan_execution_stopped_locked(scan_id, info)
+    )
+
+
 def _active_scan_temp_dirs() -> set[Path]:
     """Collect runtime snapshot paths that must not be treated as orphans."""
     with _SCAN_PROGRESS_LOCK:
-        runtime_infos = list(_scans.values())
+        runtime_infos = [
+            info
+            for scan_id, info in _scans.items()
+            if not _scan_snapshot_released(scan_id, info)
+        ]
 
     protected: set[Path] = set()
     for info in runtime_infos:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import threading
 import time
@@ -1130,6 +1131,7 @@ def test_artifact_packaging_failure_keeps_source_directory_retryable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """打包失败先保留快照，回收见孤儿 TTL 用例。"""
     repository = _ReuseRepository()
     repository.version.update(
         {
@@ -1195,3 +1197,119 @@ def test_acquisition_publishes_temp_directory_before_failure(
 
     assert result == (None, "", "")
     assert paths == [str(acquired_dir)]
+
+
+def test_terminal_scan_snapshots_are_reaped_but_unsubmitted_scans_are_protected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """失败终态扫描的快照可被孤儿回收接管；未提交扫描的快照必须继续受保护。"""
+    root = tmp_path / "scan-repositories"
+    root.mkdir()
+    failed_dir = root / "tah_repo_failed"
+    unsubmitted_dir = root / "tah_repo_unsubmitted"
+    for directory in (failed_dir, unsubmitted_dir):
+        directory.mkdir()
+        (directory / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ROOT", root)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ORPHAN_TTL_SECONDS", 60)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_CLEANUP_BATCH_SIZE", 10)
+    now = 10_000.0
+    for directory in (failed_dir, unsubmitted_dir):
+        os.utime(directory, (now - 120, now - 120))
+
+    _register(
+        "scan-failed-orphan",
+        status="error",
+        callback_finished=True,
+        local_source_dir=failed_dir,
+    )
+    # 未提交扫描：快照仍是提交阶段打包的输入，必须保留。
+    _register(
+        "scan-complete-unsubmitted",
+        status="complete",
+        local_source_dir=unsubmitted_dir,
+    )
+
+    assert trust._cleanup_orphan_scan_temp_dirs(now=now) == 1
+    assert not failed_dir.exists()
+    assert unsubmitted_dir.exists()
+
+
+def test_memory_mode_packaging_failure_snapshot_is_reaped_after_orphan_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """内存模式打包失败：走完整 callback 交付路径，快照先保留、释放后由孤儿回收接管。"""
+    repository = _ReuseRepository()
+    repository.version.update(
+        {
+            "package_id": "package-1",
+            "version": "1.0.0",
+            "installation": {"method": "copy_directory"},
+        }
+    )
+    monkeypatch.setattr(
+        producer_router, "_get_producer_repository", lambda: repository
+    )
+    _use_memory_only_scan_store(monkeypatch)
+
+    root = tmp_path / "scan-repositories"
+    root.mkdir()
+    local_dir = root / "tah_repo_packaging_failure"
+    local_dir.mkdir()
+    (local_dir / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ROOT", root)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_ORPHAN_TTL_SECONDS", 60)
+    monkeypatch.setattr(trust, "_SCAN_TEMP_CLEANUP_BATCH_SIZE", 10)
+
+    def fail_build(**_kwargs: object) -> dict[str, object]:
+        raise artifacts.ArtifactError("invalid package layout")
+
+    monkeypatch.setattr(artifacts, "build_artifact", fail_build)
+
+    scan_id = "scan-packaging-failure"
+    report = {
+        "scan_id": scan_id,
+        "scan_report": {"summary": {"total": 0}},
+        "trust_score": {},
+        "commit_hash": "a" * 40,
+        "local_source_dir": str(local_dir),
+    }
+    trust._register_scan(
+        scan_id,
+        {
+            "scan_id": scan_id,
+            "status": "complete",
+            "callback_status": "pending",
+            "callback_finished": False,
+            "created_at": "now",
+            "finished_at": None,
+            "version_id": "version-1",
+            "owner_user_id": "user",
+            "user_id": "user",
+            "expires_at": None,
+            "full_report": report,
+        },
+    )
+
+    delivered = trust._deliver_scan_callback(
+        scan_id,
+        report,
+        None,
+        trust._version_scan_completion_callback("version-1"),
+        lease_token=None,
+    )
+
+    assert delivered is True
+    assert repository.version["status"] == "error"
+    info = trust._get_scan(scan_id)
+    assert info is not None
+    assert info["callback_status"] == "delivered"
+    assert info["resource_consumed"] is True
+    assert local_dir.exists()
+
+    ttl_passed = local_dir.stat().st_mtime + 120
+    assert trust._cleanup_orphan_scan_temp_dirs(now=ttl_passed) == 1
+    assert not local_dir.exists()
