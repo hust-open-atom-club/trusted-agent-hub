@@ -1579,8 +1579,14 @@ def _update_scan_state(
     updates: dict[str, Any],
     *,
     required: bool = False,
+    allow_terminal_override: bool = False,
 ) -> bool:
-    """Update runtime state and mirror public fields to the database."""
+    """Update runtime state and mirror public fields to the database.
+
+    ``allow_terminal_override`` 只放行「complete → 失败态」这一种业务降级
+    （扫描完成但打包失败）；其余终态改写仍被拦截，防止迟到的 worker 复活
+    已终结的任务。
+    """
     with _SCAN_PROGRESS_LOCK:
         info = _scans.get(scan_id)
         if info is None:
@@ -1592,10 +1598,17 @@ def _update_scan_state(
         lease_token = info.get("lease_token")
         requested_status = updates.get("status")
         current_status = str(info.get("status") or "")
+        packaging_failure_downgrade = (
+            allow_terminal_override
+            and current_status == "complete"
+            and requested_status is not None
+            and str(requested_status) in _SCAN_FAILURE_STATUSES
+        )
         if (
             requested_status is not None
             and current_status in (_SCAN_FAILURE_STATUSES | {"complete"})
             and str(requested_status) != current_status
+            and not packaging_failure_downgrade
         ):
             if required:
                 raise ScanTaskPersistenceError(
@@ -1825,13 +1838,25 @@ def _version_scan_completion_callback(
                     version_id,
                     _scan_id,
                 )
-                _update_scan_state(
-                    _scan_id,
-                    {
-                        "status": "error",
-                        "error": "安装产物打包失败，源码目录已保留待重试",
-                    },
-                )
+                # producer 侧通常已原子降级该扫描；这里只在它没写成功时兜底，
+                # 且必须按模式分派（DB 侧 generic update 会拒绝 complete → error）。
+                if (
+                    (_get_scan(_scan_id) or {}).get("status")
+                    not in _SCAN_FAILURE_STATUSES
+                ):
+                    service._terminalize_scan_task_on_packaging_failure(
+                        _scan_id,
+                        "安装产物打包失败，源码目录已保留待重试",
+                    )
+                    if (
+                        (_get_scan(_scan_id) or {}).get("status")
+                        not in _SCAN_FAILURE_STATUSES
+                    ):
+                        _logger.warning(
+                            "Scan %s is still not terminal after the "
+                            "packaging-failure backstop",
+                            _scan_id,
+                        )
 
     return on_scan_done
 
