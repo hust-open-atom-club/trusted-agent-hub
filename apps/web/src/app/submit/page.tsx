@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useRef, useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
@@ -18,6 +18,12 @@ import {
   readPendingScanState,
   writePendingScanState,
 } from '@/lib/pending-scan';
+import {
+  clearPendingSubmitContext,
+  patchPendingSubmitContext,
+  readPendingSubmitContext,
+  writePendingSubmitContext,
+} from '@/lib/pending-submit';
 import {
   forgetScanPackageContext,
   rememberScanPackageContext,
@@ -214,6 +220,147 @@ function SubmitForm() {
   const [confirmed, setConfirmed] = useState(false);
 
   const isBusy = phase === 'scanning' || phase === 'submitting';
+
+  /* ── 刷新一致性：提交上下文恢复 ──
+   * 刷新丢失内存态后，按 localStorage 里的 versionId 查后端真实状态：
+   * 非 draft（submit 已生效）→ 跳状态页；仍为 draft（submit 未送达）→
+   * 用库里数据重建确认表单，再次提交由后端幂等续接接回原包/版本。 */
+  const submitResumeCheckedRef = useRef(false);
+  const [resumeNotice, setResumeNotice] = useState('');
+
+  useEffect(() => {
+    if (!token || submitResumeCheckedRef.current) return;
+    const context = readPendingSubmitContext();
+    if (!context) return;
+    let cancelled = false;
+
+    const fetchVersion = async (): Promise<Record<string, unknown> | null> => {
+      const res = await authFetch(
+        `${API_BASE}/api/v0/producer/versions/${encodeURIComponent(context.versionId!)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.status === 404 || res.status === 403) return null;
+      if (!res.ok) throw new Error(`版本状态查询失败 (${res.status})`);
+      return await res.json();
+    };
+
+    const resume = async () => {
+      const DRAFT = 'draft';
+      let detail: Record<string, unknown> | null = null;
+      try {
+        if (context.versionId) {
+          detail = await fetchVersion();
+          // 短重试一次：submit 请求已送达但事务尚未提交时不误判为未提交。
+          if (detail && String(detail.status ?? '') === DRAFT) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            if (cancelled) return;
+            detail = await fetchVersion();
+          }
+        }
+      } catch {
+        if (!cancelled) setError('上次提交状态查询失败，请手动重新提交');
+        return;
+      }
+      if (cancelled) return;
+
+      if (detail === null) {
+        // 版本不存在/无权访问/上下文尚无 versionId：清理后走正常流程。
+        clearPendingSubmitContext();
+        return;
+      }
+
+      const status = String(detail.status ?? '');
+      if (status !== DRAFT) {
+        clearPendingSubmitContext();
+        clearPendingScanState();
+        router.push(
+          `/packages/${encodeURIComponent(context.packageName)}/versions/${encodeURIComponent(context.version)}/status?vid=${encodeURIComponent(context.versionId!)}`,
+        );
+        return;
+      }
+
+      // 仍为 draft → 重建确认表单；若 sessionStorage 的扫描状态还在，
+      // 既有恢复逻辑已停在确认表单，不重复覆盖。
+      if (readPendingScanState()) {
+        setResumeNotice('已恢复上次未完成的提交，确认信息后可直接再次提交审核。');
+        return;
+      }
+      const packageIdV = String(detail.package_id ?? context.packageId ?? '');
+      if (!packageIdV) {
+        clearPendingSubmitContext();
+        return;
+      }
+      let pkg: Record<string, unknown> | null = null;
+      try {
+        const pkgRes = await authFetch(
+          `${API_BASE}/api/v0/producer/packages/${encodeURIComponent(packageIdV)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (pkgRes.ok) pkg = await pkgRes.json();
+      } catch {
+        pkg = null;
+      }
+      if (cancelled) return;
+      if (!pkg) {
+        setError('已找到上次创建的草稿版本，但包信息加载失败；请重新扫描后提交，同名草稿会自动续接。');
+        return;
+      }
+      const source = (detail.source ?? {}) as Record<string, unknown>;
+      const author = (detail.author ?? null) as { url?: string } | null;
+      const typeV = PACKAGE_TYPES.some((item) => item.value === pkg!.type)
+        ? String(pkg.type) : 'skill';
+      const keywords = Array.isArray(pkg.keywords)
+        ? pkg.keywords.map(String) : [];
+      // confirm 阶段以 scanResult 非空为渲染门控：构造最小完成态占位。
+      setScanResult({ scan_id: '', status: 'complete' });
+      setScanTerminal(false);
+      setCapabilities([]);
+      setSelectedCapability('');
+      setMetadata({
+        name: String(pkg.name ?? ''),
+        version: String(detail.version ?? context.version),
+        description: String(detail.description ?? pkg.description ?? ''),
+        type: typeV,
+        license: String(detail.license ?? pkg.license ?? ''),
+        author: author ?? undefined,
+        keywords,
+        category: String(pkg.category ?? ''),
+        homepage: (pkg.homepage ?? null) as string | null,
+        compatibility: Array.isArray(detail.compatibility)
+          ? detail.compatibility.map(String) : [],
+        permissions: (detail.permissions ?? {}) as Record<string, unknown>,
+        source,
+        integrity: (detail.integrity ?? undefined) as Record<string, unknown> | undefined,
+        installation: (detail.installation ?? undefined) as Record<string, unknown> | undefined,
+        dependencies: (detail.dependencies ?? undefined) as Record<string, unknown> | undefined,
+      });
+      setPkgName(String(pkg.name ?? context.packageName));
+      setPkgType(typeV);
+      setPkgVersion(String(detail.version ?? context.version));
+      setPkgDescription(String(detail.description ?? pkg.description ?? ''));
+      setPkgLicense(String(detail.license ?? pkg.license ?? ''));
+      setPkgSourceUrl(String(source.repository_url ?? ''));
+      setPkgAuthorUrl(author?.url ?? '');
+      setPkgCategory(String(pkg.category ?? ''));
+      setPkgHomepage(String(pkg.homepage ?? ''));
+      setPkgKeywords(keywords.join(', '));
+      setPkgCompatibility(normalizeSubmissionClients(typeV, Array.isArray(detail.compatibility) ? detail.compatibility.map(String) : undefined));
+      setFieldSource({ name: 'manual', version: 'manual', description: 'manual', license: 'manual', type: 'manual' });
+      setScanSourceFields(String(source.repository_url ?? ''));
+      setActiveScanId('');
+      setResumeNotice('上次提交未送达（版本仍为草稿），已为你恢复填写内容；再次点击提交将续接原包和版本。');
+      setPhase('confirm');
+    };
+
+    submitResumeCheckedRef.current = true;
+    void resume();
+    return () => {
+      cancelled = true;
+      // StrictMode 双挂载会先 cleanup 再重跑 effect：归还守卫，否则重挂载
+      // 被跳过、恢复逻辑永远不执行。cancelled 只中止本轮异步链，不丢数据。
+      submitResumeCheckedRef.current = false;
+    };
+  }, [router, token]);
 
   useEffect(() => {
     if (!isNewVersion || !token) return;
@@ -664,6 +811,14 @@ function SubmitForm() {
       const version = pkgVersion && SEMVER_RE.test(pkgVersion) ? pkgVersion : '0.1.0';
       const sUrl = pkgSourceUrl.trim();
 
+      // 提交锚点先落盘：三步请求链任意一步被刷新打断都能据此恢复。
+      writePendingSubmitContext({
+        packageId: packageId || null,
+        versionId: null,
+        packageName: pkgName.trim(),
+        version,
+      });
+
       const sourceObj: Record<string, unknown> = {
         type: 'github', repository_url: sUrl, ref: 'main', commit_hash: '0'.repeat(40),
       };
@@ -710,6 +865,8 @@ function SubmitForm() {
         if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
         const verData = await verRes.json();
         const versionId: string = verData.id;
+        // 锚点已持久化：刷新后可查真实状态，而非停在"未提交"。
+        patchPendingSubmitContext({ versionId });
         const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
           body: JSON.stringify(submitBody),
@@ -723,6 +880,7 @@ function SubmitForm() {
           );
         }
         clearPendingScanState();
+        clearPendingSubmitContext();
         if (initialScanId) forgetScanPackageContext(initialScanId);
         setPhase('done');
         setTimeout(() => {
@@ -747,6 +905,7 @@ function SubmitForm() {
       if (!pkgRes.ok) { const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' })); throw new Error(e.detail || `创建包失败 (${pkgRes.status})`); }
       const pkgData = await pkgRes.json();
       const createdPkgId: string = pkgData.id;
+      patchPendingSubmitContext({ packageId: createdPkgId });
 
       const verBody: Record<string, unknown> = {
         version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
@@ -766,6 +925,7 @@ function SubmitForm() {
       if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
       const verData = await verRes.json();
       const versionId: string = verData.id;
+      patchPendingSubmitContext({ versionId });
 
       const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST', headers,
@@ -781,6 +941,7 @@ function SubmitForm() {
       }
 
       clearPendingScanState();
+      clearPendingSubmitContext();
       if (initialScanId) forgetScanPackageContext(initialScanId);
       setPhase('done');
       setTimeout(() => {
@@ -836,6 +997,19 @@ function SubmitForm() {
         </div>
 
         {error && <div className="submit-error">{error}</div>}
+        {resumeNotice && !error && (
+          <div
+            role="status"
+            style={{
+              marginTop: '0.5rem', padding: '0.6rem 0.9rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'oklch(95% 0.05 95)', color: 'oklch(40% 0.10 85)',
+              border: '1px solid oklch(80% 0.08 90)', fontSize: '0.85rem',
+            }}
+          >
+            {resumeNotice}
+          </div>
+        )}
         {error && conflict?.delete_allowed && (
           <div style={{ marginTop: '0.5rem' }}>
             <button
