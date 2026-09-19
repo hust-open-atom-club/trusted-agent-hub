@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from scanners.risk_scanner import llm_reviewer
 from src.models.packages import LLMReview
 from src.routers import trust
+from src.settings import clear_settings_cache
 
 
 def test_initial_progress_has_fifteen_minute_deadline() -> None:
@@ -27,6 +28,59 @@ def test_initial_progress_has_fifteen_minute_deadline() -> None:
         "last_update_at": progress["last_update_at"],
         "deadline_at": progress["deadline_at"],
     }
+
+
+def test_configured_llm_budget_sets_the_progress_deadline(monkeypatch) -> None:
+    monkeypatch.setenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", "120")
+    clear_settings_cache()
+    try:
+        progress, monotonic_deadline = trust._initial_llm_progress(2)
+    finally:
+        clear_settings_cache()
+
+    started = datetime.fromisoformat(progress["started_at"])
+    deadline = datetime.fromisoformat(progress["deadline_at"])
+    assert (deadline - started).total_seconds() == 120
+    assert monotonic_deadline > trust._time.monotonic()
+    assert progress["findings_pending"] == 2
+
+
+def test_configured_llm_budget_cannot_exceed_the_scan_budget(monkeypatch) -> None:
+    monkeypatch.setenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", "7200")
+    clear_settings_cache()
+    try:
+        progress, _deadline = trust._initial_llm_progress(1)
+    finally:
+        clear_settings_cache()
+
+    started = datetime.fromisoformat(progress["started_at"])
+    deadline = datetime.fromisoformat(progress["deadline_at"])
+    assert (deadline - started).total_seconds() == trust._SCAN_TOTAL_TIMEOUT_SECONDS
+
+
+def test_timeout_detail_reports_review_and_context_counts() -> None:
+    detail = trust._llm_review_timeout_detail(
+        {
+            "findings_reviewed": 258,
+            "context_coverage": {
+                "candidates": 287,
+                "complete": 12,
+                "partial": 30,
+                "missing": 245,
+            },
+        },
+        287,
+    )
+
+    assert detail == (
+        "(reviewed=258/287, context complete=12 partial=30 missing=245)"
+    )
+
+
+def test_timeout_detail_defaults_to_zero_without_coverage() -> None:
+    assert trust._llm_review_timeout_detail({}, 5) == (
+        "(reviewed=0/5, context complete=0 partial=0 missing=0)"
+    )
 
 
 def test_progress_store_drops_prompts_keys_reasoning_and_internal_events() -> None:

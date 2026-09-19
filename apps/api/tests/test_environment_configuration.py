@@ -131,6 +131,27 @@ def test_public_and_security_settings_are_parsed(
     assert settings.public_api_base_url == "https://hub.example.com"
 
 
+def test_llm_review_deadline_defaults_and_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", raising=False)
+    assert Settings.from_environment().llm_review_deadline_seconds == 15 * 60
+
+    monkeypatch.setenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", "240")
+    assert Settings.from_environment().llm_review_deadline_seconds == 240
+
+
+@pytest.mark.parametrize("value", ["soon", "0", "-30"])
+def test_llm_review_deadline_rejects_unusable_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", value)
+
+    with pytest.raises(ValueError, match="TAH_LLM_REVIEW_DEADLINE_SECONDS"):
+        Settings.from_environment()
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -297,6 +318,10 @@ def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned(
     assert "dockerfile: ./apps/api/Dockerfile" in compose
     assert "ARTIFACTS_ROOT: ${ARTIFACTS_ROOT:-/artifacts}" in compose
     assert "SOURCE_SNAPSHOT_DIR: ${SOURCE_SNAPSHOT_DIR:-/source-snapshots}" in compose
+    assert (
+        "TAH_LLM_REVIEW_DEADLINE_SECONDS: ${TAH_LLM_REVIEW_DEADLINE_SECONDS:-}"
+        in compose
+    )
     assert "FASTEMBED_CACHE_HOST_PATH" not in compose
     assert "FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/fastembed-cache}" in compose
     assert "API_RELOAD:" not in compose

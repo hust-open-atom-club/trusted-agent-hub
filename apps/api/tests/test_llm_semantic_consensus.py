@@ -270,26 +270,132 @@ def test_disagreement_uses_third_review_and_majority_verdict(monkeypatch) -> Non
     assert result["labels"]["semantic-1"] == "llm:suspected-malicious"
 
 
-def test_three_low_confidence_reviews_remain_manual(monkeypatch) -> None:
-    monkeypatch.setattr(
-        llm_reviewer,
-        "_call_llm",
-        lambda _prompt: _review(
+def test_low_confidence_judges_skip_arbitration_and_remain_manual(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_call(prompt: str) -> dict[str, object]:
+        calls.append(prompt)
+        return _review(
             vulnerable=True,
             harmful=True,
             impact="high",
             intent="malicious",
             confidence=0.4,
-        ),
-    )
+        )
 
+    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
     result = llm_reviewer.run_llm_review(
         [_candidate()], _context("semantic-1"), {}
     )
 
-    assert result["review_rounds"] == 3
+    # Neither judge reached a decisive verdict, so a third review could never
+    # reach the two agreeing verdicts a decision needs. Sending one would only
+    # spend the review budget without changing the outcome.
+    assert len(calls) == 2
+    assert result["arbitrated"] == 0
+    assert result["review_rounds"] == 2
     assert result["decisions"]["semantic-1"]["verdict"] == "uncertain"
+    assert result["decisions"]["semantic-1"]["rounds"] == 2
     assert result["findings_pending"] == 1
+
+
+def test_unresolved_batch_costs_two_calls_regardless_of_finding_count(
+    monkeypatch,
+) -> None:
+    candidates = []
+    contexts: dict[str, str] = {}
+    finding_ids = [f"semantic-{index}" for index in range(3)]
+    for finding_id in finding_ids:
+        finding = _candidate()
+        finding["id"] = finding_id
+        candidates.append(finding)
+        contexts[finding_id] = _context("semantic-1")["semantic-1"]
+
+    calls: list[str] = []
+
+    def fake_call(prompt: str) -> dict[str, object]:
+        calls.append(prompt)
+        review = _review(
+            vulnerable=True,
+            harmful=True,
+            impact="high",
+            intent="malicious",
+            confidence=0.3,
+        )
+        return {"reviews": [{"id": finding_id, **review} for finding_id in finding_ids]}
+
+    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
+    result = llm_reviewer.run_llm_review(candidates, contexts, {})
+
+    assert len(calls) == 2
+    assert result["arbitrated"] == 0
+    assert result["findings_reviewed"] == 3
+    assert result["findings_pending"] == 3
+    for finding_id in finding_ids:
+        assert result["decisions"][finding_id]["verdict"] == "uncertain"
+
+
+def test_arbitration_covers_only_findings_with_a_decisive_vote(
+    monkeypatch,
+) -> None:
+    judge_reviews = {
+        "A": {
+            "semantic-1": _review(
+                vulnerable=True, harmful=True, impact="high", intent="malicious"
+            ),
+            "semantic-medium": _review(
+                vulnerable=False,
+                harmful=False,
+                impact="none",
+                intent="benign",
+                confidence=0.4,
+            ),
+        },
+        "B": {
+            "semantic-1": _review(
+                vulnerable=False, harmful=False, impact="none", intent="benign"
+            ),
+            "semantic-medium": _review(
+                vulnerable=False,
+                harmful=False,
+                impact="none",
+                intent="benign",
+                confidence=0.4,
+            ),
+        },
+    }
+    arbitration = {
+        "semantic-1": _review(
+            vulnerable=True, harmful=True, impact="high", intent="malicious"
+        ),
+    }
+    calls: list[str] = []
+
+    def fake_call(prompt: str) -> dict[str, object]:
+        calls.append(prompt)
+        if "final security adjudicator" in prompt:
+            reviews = arbitration
+        else:
+            reviews = judge_reviews["A" if "judge A" in prompt else "B"]
+        return {"reviews": [{"id": key, **value} for key, value in reviews.items()]}
+
+    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
+    result = llm_reviewer.run_llm_review(
+        [_candidate(), _medium_candidate()],
+        {**_context("semantic-1"), **_context("semantic-medium")},
+        {},
+    )
+
+    assert len(calls) == 3
+    assert "semantic-1" in calls[2]
+    assert "semantic-medium" not in calls[2]
+    assert result["arbitrated"] == 1
+    assert result["review_rounds"] == 3
+    assert result["findings_reviewed"] == 2
+    assert result["decisions"]["semantic-1"]["verdict"] == "confirmed_harmful"
+    assert result["decisions"]["semantic-medium"]["verdict"] == "uncertain"
 
 
 def test_internally_inconsistent_reviews_cannot_auto_clear_candidate(
@@ -310,7 +416,7 @@ def test_internally_inconsistent_reviews_cannot_auto_clear_candidate(
         [_candidate()], _context("semantic-1"), {}
     )
 
-    assert result["review_rounds"] == 3
+    assert result["review_rounds"] == 2
     assert result["decisions"]["semantic-1"]["verdict"] == "uncertain"
     assert result["labels"]["semantic-1"] == "llm:uncertain"
 

@@ -79,7 +79,10 @@ from scanners.risk_scanner.redaction import (
     redact_report,
     redact_value,
 )
-from scanners.risk_scanner.llm_reviewer import validate_supporting_evidence
+from scanners.risk_scanner.llm_reviewer import (
+    REVIEW_BATCH_SIZE,
+    validate_supporting_evidence,
+)
 from scanners.risk_scanner.provenance import (
     build_verification_capabilities,
     build_verification_facts,
@@ -128,7 +131,6 @@ _SCAN_TEMP_ROOT = (
 _SCAN_TEMP_PREFIX = "tah_repo_"
 _SCAN_TEMP_ORPHAN_TTL_SECONDS = 24 * 60 * 60
 _SCAN_TEMP_CLEANUP_BATCH_SIZE = 200
-_LLM_REVIEW_DEADLINE_SECONDS = 15 * 60
 _LLM_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _SOURCE_POLICY = ScanPolicy()
 _ZIP_READ_CHUNK_BYTES = 64 * 1024
@@ -634,9 +636,30 @@ def _nonnegative_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _llm_review_deadline_seconds() -> int:
+    """Resolve the bounded LLM review budget from settings.
+
+    The review runs inside the scan's own wall-clock budget, so a configured
+    value above that budget is clamped: otherwise a long review would be killed
+    as ``total_timeout`` before its own deadline could apply.
+    """
+    configured = get_settings().llm_review_deadline_seconds
+    if configured > _SCAN_TOTAL_TIMEOUT_SECONDS:
+        _logger.warning(
+            "TAH_LLM_REVIEW_DEADLINE_SECONDS=%s exceeds the %s-second scan "
+            "budget; clamping the LLM review deadline to %s seconds",
+            configured,
+            _SCAN_TOTAL_TIMEOUT_SECONDS,
+            _SCAN_TOTAL_TIMEOUT_SECONDS,
+        )
+        return _SCAN_TOTAL_TIMEOUT_SECONDS
+    return configured
+
+
 def _initial_llm_progress(findings_total: int) -> tuple[dict[str, Any], float]:
     started = datetime.now(timezone.utc)
-    deadline = started + timedelta(seconds=_LLM_REVIEW_DEADLINE_SECONDS)
+    budget = _llm_review_deadline_seconds()
+    deadline = started + timedelta(seconds=budget)
     return ({
         "status": "running",
         "phase": "judge_a",
@@ -648,7 +671,24 @@ def _initial_llm_progress(findings_total: int) -> tuple[dict[str, Any], float]:
         "started_at": started.isoformat(),
         "last_update_at": started.isoformat(),
         "deadline_at": deadline.isoformat(),
-    }, _time.monotonic() + _LLM_REVIEW_DEADLINE_SECONDS)
+    }, _time.monotonic() + budget)
+
+
+def _llm_review_timeout_detail(result: dict[str, Any], total: int) -> str:
+    """Summarize an interrupted review so the failure stays diagnosable.
+
+    Without these counts a timed-out review only reports that it ran out of
+    time, which cannot distinguish "the model was slow" from "most candidates
+    never received source context".
+    """
+    coverage = result.get("context_coverage")
+    coverage = coverage if isinstance(coverage, dict) else {}
+    return (
+        f"(reviewed={_nonnegative_int(result.get('findings_reviewed', 0))}/{total},"
+        f" context complete={_nonnegative_int(coverage.get('complete', 0))}"
+        f" partial={_nonnegative_int(coverage.get('partial', 0))}"
+        f" missing={_nonnegative_int(coverage.get('missing', 0))})"
+    )
 
 
 def _update_llm_progress(scan_id: str, update: dict[str, Any]) -> None:
@@ -5413,9 +5453,18 @@ def _run_scan_task_body(
                 daemon=True,
             )
             heartbeat_thread.start()
-            print(
-                f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查..."
-            )
+            review_budget = _llm_review_deadline_seconds()
+            review_batches = math.ceil(reviewable_total / REVIEW_BATCH_SIZE)
+            review_calls = review_batches * 2
+            if review_calls:
+                print(
+                    f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查，"
+                    f"批量 {REVIEW_BATCH_SIZE} → 约 {review_batches} 批 × 2 次调用，"
+                    f"预算 {review_budget} 秒"
+                    f"（≈{review_budget / review_calls:.1f} 秒/次）"
+                )
+            else:
+                print(f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查")
             try:
                 scan_report["llm_review"] = _run_llm_review_with_fallback(
                     findings,
@@ -5456,7 +5505,10 @@ def _run_scan_task_body(
                 final_progress["fallback"] = fallback
             _update_llm_progress(scan_id, final_progress)
             if result_status == "timeout":
-                raise ScanLLMTimeoutError("LLM review deadline exceeded")
+                raise ScanLLMTimeoutError(
+                    "LLM review deadline exceeded "
+                    + _llm_review_timeout_detail(llm_result, reviewable_total)
+                )
         else:
             scan_report["llm_review"] = {
                 "triggered": False,
@@ -5641,7 +5693,7 @@ def _run_scan_task_body(
             err_msg = err_msg.replace(token, "***")
         if isinstance(exc, ScanLLMTimeoutError):
             terminal_status = "llm_timeout"
-            public_error = "Scan failed: LLM review deadline exceeded"
+            public_error = f"Scan failed: {err_msg}"
         elif isinstance(exc, ScanTotalTimeoutError):
             terminal_status = "total_timeout"
             public_error = "Scan failed: total scan deadline exceeded"

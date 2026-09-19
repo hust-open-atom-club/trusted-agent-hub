@@ -155,6 +155,9 @@ class Settings:
     artifacts_root: str = str(DEFAULT_ARTIFACTS_ROOT)
     source_snapshot_dir: str | None = None
     source_snapshot_ttl_seconds: int = 604800
+    # Wall-clock budget for the bounded LLM review stage of a scan. Raising it
+    # cannot exceed the scan's own total timeout, which trust.py enforces.
+    llm_review_deadline_seconds: int = 15 * 60
     initial_admin_email: str | None = None
     initial_admin_password: str | None = None
     initial_admin_display_name: str = "Administrator"
@@ -190,6 +193,9 @@ class Settings:
             source_snapshot_dir=_optional("SOURCE_SNAPSHOT_DIR"),
             source_snapshot_ttl_seconds=_integer(
                 "SOURCE_SNAPSHOT_TTL_SECONDS", 604800
+            ),
+            llm_review_deadline_seconds=_integer(
+                "TAH_LLM_REVIEW_DEADLINE_SECONDS", 15 * 60
             ),
             initial_admin_email=_optional("INITIAL_ADMIN_EMAIL"),
             initial_admin_password=_optional("INITIAL_ADMIN_PASSWORD"),
