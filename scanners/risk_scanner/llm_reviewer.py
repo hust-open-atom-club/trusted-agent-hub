@@ -3,7 +3,10 @@
 The reviewer never assigns a package grade.  It validates whether a static
 candidate is harmful in its real context; deterministic policy applies the
 result later.  High-impact findings receive two independent reviews and a
-third arbitration review only when the first two do not agree.
+third arbitration review only when the two judges disagree on a decisive
+verdict.  When neither judge reaches one, the finding stays unresolved for
+manual review without spending a third call, because a single extra verdict
+cannot reach the two agreeing verdicts a decision requires.
 
 Labels:
   - llm:suspected-malicious  (intent = malicious, confidence >= 0.7)
@@ -818,6 +821,41 @@ def _agreed_decision(
     return None
 
 
+def _unresolved_decision(
+    reviews: list[dict[str, Any]],
+    *,
+    rounds: int,
+) -> dict[str, Any]:
+    """Return the fail-closed decision for a finding without a consensus.
+
+    ``unavailable`` and ``uncertain`` both require manual review; keeping them
+    apart tells a reviewer whether the judges answered without agreeing or
+    never produced a usable answer at all.
+    """
+    confidences = [
+        float(review.get("confidence", 0) or 0) for review in reviews
+    ]
+    return {
+        "verdict": (
+            "uncertain" if any(value > 0 for value in confidences)
+            else "unavailable"
+        ),
+        "impact": "unknown",
+        "intent": "benign",
+        "confidence": max(confidences, default=0.0),
+        "context_role": "unknown",
+        "evidence_sufficient": False,
+        "missing_context": sorted({
+            str(item)
+            for review in reviews
+            for item in (review.get("missing_context") or [])
+        }),
+        "supporting_evidence": [],
+        "explanation": f"{rounds} 轮语义复核未形成一致结论",
+        "rounds": rounds,
+    }
+
+
 def _label_for_decision(decision: dict[str, Any]) -> str:
     verdict = decision.get("verdict")
     if verdict == "likely_benign":
@@ -1123,6 +1161,15 @@ def run_llm_review(
                 if decision is not None:
                     decision["context_audit"] = finding["context_audit"]
                     result["decisions"][fid] = decision
+                elif all(
+                    review.get("verdict") == "uncertain" for review in normalized
+                ):
+                    # No judge reached a decisive verdict for this finding, so
+                    # a third review cannot reach the two agreeing verdicts a
+                    # decision needs. Arbitrating here would only spend budget.
+                    unresolved = _unresolved_decision(normalized, rounds=2)
+                    unresolved["context_audit"] = finding["context_audit"]
+                    result["decisions"][fid] = unresolved
                 else:
                     disputed.append({
                         **finding,
@@ -1176,31 +1223,7 @@ def run_llm_review(
                     ]
                     decision = _agreed_decision(all_reviews, rounds=3)
                     if decision is None:
-                        had_response = any(
-                            review.get("confidence", 0) > 0 for review in all_reviews
-                        )
-                        decision = {
-                            "verdict": "uncertain" if had_response else "unavailable",
-                            "impact": "unknown",
-                            "intent": "benign",
-                            "confidence": max(
-                                (
-                                    float(review.get("confidence", 0))
-                                    for review in all_reviews
-                                ),
-                                default=0.0,
-                            ),
-                            "context_role": "unknown",
-                            "evidence_sufficient": False,
-                            "missing_context": sorted({
-                                str(item)
-                                for review in all_reviews
-                                for item in (review.get("missing_context") or [])
-                            }),
-                            "supporting_evidence": [],
-                            "explanation": "三轮语义复核未形成一致结论",
-                            "rounds": 3,
-                        }
+                        decision = _unresolved_decision(all_reviews, rounds=3)
                     decision["context_audit"] = finding["context_audit"]
                     result["decisions"][fid] = decision
                 progress_reviewed += len(disputed)

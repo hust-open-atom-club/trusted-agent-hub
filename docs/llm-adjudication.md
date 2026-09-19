@@ -49,9 +49,12 @@ Reports expose enough metadata to reproduce and audit the review boundary:
 
 ## Decision gates
 
-Two independent judges are required. A third judge arbitrates disagreement.
-Normal high/critical findings may be reviewed for explanation, but only
-eligible findings may be downgraded.
+Two independent judges are required. A third judge arbitrates disagreement,
+but only when the two judges disagree on a decisive verdict. When neither
+judge reaches one, a single extra verdict could never form the two agreeing
+verdicts a decision requires, so the finding is recorded as unresolved for
+manual review without spending a third request. Normal high/critical findings
+may be reviewed for explanation, but only eligible findings may be downgraded.
 
 | Result | Effective-severity action |
 | --- | --- |
@@ -72,6 +75,21 @@ A benign downgrade requires all of the following:
 The applied outcome is recorded in `llm_adjudication_action`, while
 `llm_effective_severity_before` retains the score-facing value seen before the
 decision.
+
+## Review budget
+
+The review stage runs inside a wall-clock budget so one large package cannot
+occupy a worker indefinitely. The default is 900 seconds; set
+`TAH_LLM_REVIEW_DEADLINE_SECONDS` to change it. Values above the scan's own
+1800-second total budget are clamped to it, because the total-timeout watchdog
+would otherwise end the scan before the review deadline could apply.
+
+Candidates are reviewed in batches (`REVIEW_BATCH_SIZE`, 8 per batch) with two
+judges per batch, so a package with `N` candidates costs at least
+`2 * ceil(N / 8)` provider calls. Each scan logs that estimate with the budget
+when the review starts. When the budget runs out, the scan ends as
+`llm_timeout` and the error reports how many candidates were reviewed and how
+many of them received complete, partial, or missing source context.
 
 ## Operator verification
 
