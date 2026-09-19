@@ -317,8 +317,12 @@ class ProducerService:
             raise ProducerServiceError("包描述不能为空")
         self._validate_installation_clients(data.type.value, data.installation)
 
-        # 检查包名重复
-        if self.repository.package_name_exists(data.name.strip()):
+        # 同名 draft 包满足续接条件时幂等返回，条件见 _resumable_draft_package。
+        existing = self.repository.find_package_by_name(data.name.strip())
+        if existing is not None:
+            resumed = self._resumable_draft_package(existing, data, submitter_id)
+            if resumed is not None:
+                return resumed
             raise ProducerServiceError(
                 f"包名 '{data.name.strip()}' 已存在，请使用其他名称"
             )
@@ -367,6 +371,74 @@ class ProducerService:
 
     # ── 创建版本 ──────────────────────────────────────────
 
+    def _resumable_draft_package(
+        self,
+        existing: dict[str, object],
+        data: CreatePackageRequest,
+        submitter_id: str | None,
+    ) -> PackageResponse | None:
+        """中断续接：本人 draft 包 + 同源码地址时返回该包，否则 None。
+
+        安全条件（全部满足才允许续接，防止同名劫持或误挂别的提交流程）：
+        - 包状态为 draft 且 submitter_id 为当前用户；
+        - 请求携带 source.repository_url（前端提交流程必然携带）；
+        - 包下没有任何版本（刷新打断在建包之后、建版本之前），
+          或存在 draft 版本且其 source.repository_url 与请求一致
+          （刷新打断在建版本之后、submit 之前）。
+        已提交/审核中的版本、或源码地址不匹配的 draft 包都不续接。
+        """
+        if existing.get("status") != "draft":
+            return None
+        if submitter_id is None or existing.get("submitter_id") != submitter_id:
+            return None
+        if data.source is None or not data.source.repository_url:
+            return None
+        request_url = _canonical_comparison_url(data.source.repository_url)
+        if not request_url:
+            return None
+        package_id = str(existing.get("id") or "")
+        if not package_id:
+            return None
+        versions = self.repository.list_package_versions(package_id)
+        if not versions:
+            return self._package_response(existing)
+        for item in versions:
+            if not isinstance(item, dict) or item.get("status") != "draft":
+                continue
+            version_row = self.repository.get_version(str(item.get("id") or ""))
+            source = (
+                version_row.get("source")
+                if isinstance(version_row, dict)
+                else None
+            )
+            version_url = (
+                _canonical_comparison_url(
+                    str(source.get("repository_url") or "")
+                )
+                if isinstance(source, dict)
+                else ""
+            )
+            if version_url and version_url == request_url:
+                return self._package_response(existing)
+        return None
+
+    @staticmethod
+    def _package_response(data: dict[str, object]) -> PackageResponse:
+        return PackageResponse(
+            id=str(data["id"]),
+            name=str(data["name"]),
+            type=data["type"],  # type: ignore[arg-type]
+            description=str(data["description"]),
+            status=str(data.get("status") or "draft"),
+            latest_version=data.get("latest_version"),
+            license=data.get("license"),
+            keywords=list(data.get("keywords") or []),
+            category=data.get("category"),
+            author=data.get("author"),  # type: ignore[arg-type]
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+        )
+
     def create_version(
         self, package_id: str, data: CreateVersionRequest, submitter_id: str | None = None
     ) -> dict[str, object]:
@@ -382,6 +454,22 @@ class ProducerService:
             raise ProducerServiceError(
                 f"版本号 '{data.version}' 不符合 SemVer 规范（如 1.0.0）"
             )
+
+        # 中断续接：本人 draft 版本按 (package, version) 命中时返回原版本；
+        # 其余情况（他人/非 draft）明确报错，不再撞唯一约束 500。
+        existing_version = self.repository.get_version_by_number(
+            package_id, data.version
+        )
+        if isinstance(existing_version, dict) and existing_version.get("id"):
+            if not (
+                existing_version.get("status") == "draft"
+                and submitter_id is not None
+                and existing_version.get("submitter_id") == submitter_id
+            ):
+                raise ProducerServiceError(
+                    f"包 '{pkg.get('name')}' 的版本 '{data.version}' 已存在"
+                )
+            return dict(existing_version)
 
         result = self.repository.create_version(
             package_id=package_id,

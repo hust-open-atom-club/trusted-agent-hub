@@ -53,9 +53,9 @@ class _CreatePackageRepository:
     def __init__(self) -> None:
         self.created: dict[str, object] = {}
 
-    def package_name_exists(self, name: str) -> bool:
+    def find_package_by_name(self, name: str) -> dict[str, object] | None:
         assert name == "supported-codex-mcp"
-        return False
+        return None
 
     def create_package(self, **kwargs: object) -> dict[str, object]:
         self.created = kwargs
@@ -182,6 +182,11 @@ class _CreateVersionRepository:
 
     def get_package(self, package_id: str) -> dict[str, object]:
         return {"id": package_id, "type": "skill", "name": "demo-skill"}
+
+    def get_version_by_number(
+        self, package_id: str, version: str
+    ) -> dict[str, object] | None:
+        return None
 
     def create_version(self, **kwargs: object) -> dict[str, object]:
         self.created = kwargs
