@@ -411,7 +411,26 @@ export default function ReviewDetailPage() {
   const isPending = version?.status === 'pending_review';
   const scanReport = version?.scan_report;
   const scanStatus = scanReport?.scan_status;
-  const scanIncomplete = Boolean(scanStatus && (scanStatus.state !== 'complete' || scanStatus.complete === false));
+  const scanReportStatus = scanStatus?.state;
+  const scanReportStatusLabel = scanReportStatus
+    ? t(`review.detail.scan_report_status_${scanReportStatus}`, {
+        defaultValue: scanReportStatus,
+      })
+    : '';
+  const llmReview = scanReport?.llm_review;
+  const llmReviewIncomplete = Boolean(
+    llmReview
+    && (
+      ['timeout', 'call_failed', 'not_configured', 'context_incomplete'].includes(
+        llmReview.status || '',
+      )
+      || (llmReview.findings_pending ?? 0) > 0
+      || Boolean(llmReview.fallback)
+    ),
+  );
+  const scanIncomplete = Boolean(
+    scanReportStatus && scanReportStatus !== 'complete',
+  );
   const scanReasons = [
     ...(scanStatus?.reasons || []),
     ...(scanReport?.scan_limits?.exceeded || []),
@@ -661,7 +680,7 @@ export default function ReviewDetailPage() {
           role="alert"
           style={{
             marginBottom: '1rem', padding: '0.9rem 1.1rem',
-            background: 'oklch(95% 0.04 85)',
+            background: 'var(--color-warning-light)',
             borderLeft: '4px solid var(--color-warning)',
             borderRadius: '0 var(--radius-md) var(--radius-md) 0',
             color: 'var(--color-ink)',
@@ -672,6 +691,9 @@ export default function ReviewDetailPage() {
           </div>
           <div style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
             {t('review.detail.scan_incomplete_description')}
+          </div>
+          <div style={{ marginTop: '0.45rem', fontSize: '0.8rem', fontWeight: 600 }}>
+            {t('review.detail.scan_report_status')}: {scanReportStatusLabel}
           </div>
           {scanReasons.length > 0 && (
             <div style={{ marginTop: '0.45rem', fontSize: '0.78rem' }}>
@@ -685,6 +707,47 @@ export default function ReviewDetailPage() {
               {(scanReport.rule_execution.failed ?? 0) > 0 && ` · ${t('review.detail.scan_rules_failed')}: ${scanReport.rule_execution.failed}`}
             </div>
           )}
+        </section>
+      )}
+
+      {llmReviewIncomplete && (
+        <section
+          role="alert"
+          style={{
+            marginBottom: '1rem', padding: '0.9rem 1.1rem',
+            background: 'var(--color-warning-light)',
+            border: '1px solid var(--color-warning)',
+            borderRadius: 'var(--radius-md)',
+            color: 'var(--color-ink)',
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>
+            {t('review.detail.llm_incomplete_title')}
+          </div>
+          <div style={{ marginTop: '0.25rem', fontSize: '0.8rem', lineHeight: 1.5 }}>
+            {t('review.detail.llm_incomplete_description')}
+          </div>
+          <div style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
+            {t('review.detail.llm_incomplete_reason')}: {llmReview?.reason_code
+              ? t(`review.detail.llm_reason_${llmReview.reason_code}`, {
+                  defaultValue: llmReview.reason_code,
+                })
+              : t('review.detail.llm_reason_unknown')}
+            {llmReview?.phase
+              ? ` · ${t('review.detail.llm_incomplete_phase')}: ${t(
+                  `review.detail.llm_phase_${llmReview.phase}`,
+                  { defaultValue: llmReview.phase },
+                )}`
+              : ''}
+            {typeof llmReview?.attempt === 'number'
+              ? ` · ${t('review.detail.llm_incomplete_attempt')}: ${llmReview.attempt}`
+              : ''}
+          </div>
+          <div style={{ marginTop: '0.25rem', fontSize: '0.78rem' }}>
+            {t('review.detail.llm_findings_reviewed')}: {llmReview?.findings_reviewed ?? 0}/
+            {llmReview?.findings_total ?? 0}
+            {' · '}{t('review.detail.llm_findings_pending')}: {llmReview?.findings_pending ?? 0}
+          </div>
         </section>
       )}
 

@@ -779,8 +779,9 @@ class ProducerService:
     ) -> bool:
         """扫描流水线完成后回调：打包安装产物 + 写入扫描报告 + 更新状态。
 
-        返回 ``True`` 仅表示完整报告已保存且版本状态已写入
-        ``pending_review``；产物打包失败返回 ``False``，提交者可重新提交。
+        返回 ``True`` 表示可用报告（完整或明确标记为 partial）已保存且
+        版本状态已写入 ``pending_review``；产物打包失败返回 ``False``，
+        提交者可重新提交。
         """
         from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
@@ -1036,6 +1037,18 @@ class ProducerService:
                     "llm_review": (
                         scan_report.get("llm_review", {}).get("labels_summary")
                         if isinstance(scan_report, dict)
+                        else None
+                    ),
+                    "llm_review_status": (
+                        scan_report.get("llm_review", {}).get("status")
+                        if isinstance(scan_report, dict)
+                        and isinstance(scan_report.get("llm_review"), dict)
+                        else None
+                    ),
+                    "report_status": (
+                        scan_report.get("scan_status", {}).get("state")
+                        if isinstance(scan_report, dict)
+                        and isinstance(scan_report.get("scan_status"), dict)
                         else None
                     ),
                 },

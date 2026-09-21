@@ -20,13 +20,18 @@ and cannot be downgraded by an LLM verdict.
 Before review completes, an eligible finding retains its effective severity
 and requires manual review. This also applies when no provider is configured,
 the provider call fails, or the source context is missing or incomplete.
+Those provider, configuration, and context failures do not make an otherwise
+complete static scan report partial. Only exhaustion of the LLM review deadline
+or the remaining scan budget changes the report status to `partial`.
 
 ## Review input and prompt contract
 
 Each candidate contains the scanner's structured source/sink semantics and a
 redacted source excerpt for the primary location and up to three additional
 detector/occurrence locations. The default limits are 60 lines per location,
-8 KiB per finding, and 64 KiB per review run.
+8 KiB per finding, and 64 KiB per provider request batch. Resetting the batch
+budget prevents findings late in a large report from losing all source context
+only because earlier candidates consumed a run-wide allowance.
 
 The prompt instructs each judge to trace the source, sink, activation path,
 trust boundary, safeguards, and preconditions using only the supplied text.
@@ -41,8 +46,9 @@ Reports expose enough metadata to reproduce and audit the review boundary:
 
 - `prompt_audit` contains prompt/schema versions, system/template SHA-256
   hashes, and a SHA-256 for every rendered request payload.
-- `review_configuration` records provider, model, batch size, temperature, and
-  output-token limit; credentials and custom base URLs are never reported.
+- `review_configuration` records provider, model, batch size, concurrency,
+  temperature, and output-token limit; credentials and custom base URLs are
+  never reported.
 - `context_coverage` summarizes complete, partial, and missing contexts.
 - each decision carries `context_audit`, `supporting_evidence`, and
   `missing_context`.
@@ -80,16 +86,26 @@ decision.
 
 The review stage runs inside a wall-clock budget so one large package cannot
 occupy a worker indefinitely. The default is 900 seconds; set
-`TAH_LLM_REVIEW_DEADLINE_SECONDS` to change it. Values above the scan's own
-1800-second total budget are clamped to it, because the total-timeout watchdog
-would otherwise end the scan before the review deadline could apply.
+`TAH_LLM_REVIEW_DEADLINE_SECONDS` to change it. The effective budget is the
+smaller of that value and the scan's remaining time after reserving report
+finalization time. The reserve defaults to 120 seconds and can be changed with
+`TAH_SCAN_FINALIZATION_RESERVE_SECONDS`.
 
 Candidates are reviewed in batches (`REVIEW_BATCH_SIZE`, 8 per batch) with two
 judges per batch, so a package with `N` candidates costs at least
 `2 * ceil(N / 8)` provider calls. Each scan logs that estimate with the budget
-when the review starts. When the budget runs out, the scan ends as
-`llm_timeout` and the error reports how many candidates were reviewed and how
-many of them received complete, partial, or missing source context.
+when the review starts. Judge calls and any later arbitration calls use bounded
+parallelism. `TAH_LLM_REVIEW_MAX_CONCURRENCY` defaults to 2 and accepts values
+from 1 through 8. If too little scan time remains, LLM review is skipped.
+If the review reaches either deadline, completed verdicts are retained,
+unresolved findings are marked for manual review, and the pipeline continues
+through scoring and report persistence. The outer task finishes as `complete`,
+while `scan_status.state` and the status API's `report_status` are `partial`.
+`llm_review.reason_code`, `phase`, `attempt`, and the reviewed/pending counts
+explain where and why review stopped. A total scan timeout before a valid report
+is saved remains a terminal failure with `report_status=report_unavailable`.
+The task-level `llm_timeout` status is retained only so historical persisted
+tasks remain readable; current scans do not produce it.
 
 ## Operator verification
 

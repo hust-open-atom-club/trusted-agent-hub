@@ -741,7 +741,8 @@ function SubmitForm() {
     }
     if (isScanTerminalFailure(data.status)) {
       setScanTerminal(true);
-      throw new TerminalScanError(data.error || formatScanStatusMessage(data));
+      const message = data.error || formatScanStatusMessage(data);
+      throw new TerminalScanError(message);
     }
     return false;
   };

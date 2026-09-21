@@ -719,6 +719,7 @@
       "type": "object",
       "properties": {
         "triggered": { "type": "boolean", "description": "是否触发了 LLM 审查" },
+        "findings_total": { "type": "integer", "minimum": 0 },
         "findings_reviewed": { "type": "integer", "description": "LLM 审查的 finding 数量" },
         "findings_skipped": { "type": "integer", "minimum": 0 },
         "findings_pending": { "type": "integer", "minimum": 0 },
@@ -730,6 +731,24 @@
             "call_failed", "context_incomplete", "timeout"
           ]
         },
+        "reason_code": {
+          "type": ["string", "null"],
+          "enum": [
+            "scan_budget_exhausted", "review_deadline_exceeded",
+            "provider_request_timeout", "provider_rate_limited",
+            "provider_request_rejected",
+            "provider_unavailable", "network_error",
+            "invalid_provider_response", "provider_not_configured",
+            "context_incomplete", null
+          ]
+        },
+        "phase": {
+          "type": ["string", "null"],
+          "enum": [
+            "not_started", "judge_a", "judge_b", "arbitration", "complete", null
+          ]
+        },
+        "attempt": { "type": "integer", "minimum": 0 },
         "attempts": { "type": "integer", "minimum": 0 },
         "policy_version": { "type": "string" },
         "decision_policy": { "type": "object" },

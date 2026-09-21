@@ -18,6 +18,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.llm_progress import finalize_running_llm_progress
 from src.repositories.orm import (
     FeedbackRecordRow,
     PackageRow,
@@ -1309,6 +1310,14 @@ class ProducerRepository:
             row.callback_next_attempt_at = None
             row.callback_last_error = None
             row.completion_delivered_at = None
+            llm_review = finalize_running_llm_progress(
+                row.llm_review,
+                terminal_status="timeout",
+                reason_code="scan_budget_exhausted",
+                last_update_at=finished_at.isoformat(),
+            )
+            if llm_review is not None and llm_review != row.llm_review:
+                row.llm_review = llm_review
             row.updated_at = finished_at
             session.commit()
             return True
@@ -1647,8 +1656,13 @@ class ProducerRepository:
         updates: Mapping[str, object],
         *,
         lease_token: str | None = None,
+        expected_statuses: Collection[str] | None = None,
     ) -> bool:
-        """Apply an allow-listed state update and refresh ``updated_at``."""
+        """Apply an allow-listed update while holding the task row lock.
+
+        ``expected_statuses`` provides a compare-and-set guard for progress
+        writers so a late heartbeat cannot mutate an already terminal task.
+        """
         unknown_fields = set(updates) - _SCAN_TASK_UPDATE_FIELDS
         if unknown_fields:
             raise ValueError(
@@ -1666,6 +1680,11 @@ class ProducerRepository:
                 )
             row = session.scalar(statement.with_for_update())
             if row is None:
+                return False
+            if (
+                expected_statuses is not None
+                and row.status not in set(expected_statuses)
+            ):
                 return False
             requested_status = updates.get("status")
             if (

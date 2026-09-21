@@ -141,6 +141,26 @@ def test_llm_review_deadline_defaults_and_parses(
     assert Settings.from_environment().llm_review_deadline_seconds == 240
 
 
+def test_llm_review_concurrency_defaults_and_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TAH_LLM_REVIEW_MAX_CONCURRENCY", raising=False)
+    assert Settings.from_environment().llm_review_max_concurrency == 2
+
+    monkeypatch.setenv("TAH_LLM_REVIEW_MAX_CONCURRENCY", "4")
+    assert Settings.from_environment().llm_review_max_concurrency == 4
+
+
+def test_scan_finalization_reserve_defaults_and_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TAH_SCAN_FINALIZATION_RESERVE_SECONDS", raising=False)
+    assert Settings.from_environment().scan_finalization_reserve_seconds == 120
+
+    monkeypatch.setenv("TAH_SCAN_FINALIZATION_RESERVE_SECONDS", "180")
+    assert Settings.from_environment().scan_finalization_reserve_seconds == 180
+
+
 @pytest.mark.parametrize("value", ["soon", "0", "-30"])
 def test_llm_review_deadline_rejects_unusable_values(
     monkeypatch: pytest.MonkeyPatch,
@@ -149,6 +169,28 @@ def test_llm_review_deadline_rejects_unusable_values(
     monkeypatch.setenv("TAH_LLM_REVIEW_DEADLINE_SECONDS", value)
 
     with pytest.raises(ValueError, match="TAH_LLM_REVIEW_DEADLINE_SECONDS"):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize("value", ["many", "0", "9"])
+def test_llm_review_concurrency_rejects_unusable_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("TAH_LLM_REVIEW_MAX_CONCURRENCY", value)
+
+    with pytest.raises(ValueError, match="TAH_LLM_REVIEW_MAX_CONCURRENCY"):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize("value", ["soon", "0", "-30"])
+def test_scan_finalization_reserve_rejects_unusable_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("TAH_SCAN_FINALIZATION_RESERVE_SECONDS", value)
+
+    with pytest.raises(ValueError, match="TAH_SCAN_FINALIZATION_RESERVE_SECONDS"):
         Settings.from_environment()
 
 
@@ -321,6 +363,14 @@ def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned(
     assert (
         "TAH_LLM_REVIEW_DEADLINE_SECONDS: ${TAH_LLM_REVIEW_DEADLINE_SECONDS:-}"
         in compose
+    )
+    assert (
+        "TAH_LLM_REVIEW_MAX_CONCURRENCY: ${TAH_LLM_REVIEW_MAX_CONCURRENCY:-}"
+        in compose
+    )
+    assert (
+        "TAH_SCAN_FINALIZATION_RESERVE_SECONDS: "
+        "${TAH_SCAN_FINALIZATION_RESERVE_SECONDS:-}" in compose
     )
     assert "FASTEMBED_CACHE_HOST_PATH" not in compose
     assert "FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/fastembed-cache}" in compose

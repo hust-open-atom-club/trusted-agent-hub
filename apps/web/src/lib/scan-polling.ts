@@ -4,6 +4,8 @@ export const SCAN_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
 export const SCAN_FRONTEND_WAIT_MS = SCAN_TOTAL_TIMEOUT_MS;
 export const SCAN_TERMINAL_FAILURE_STATUSES = [
   'error',
+  // Historical persisted tasks only. New LLM timeouts complete with a
+  // partial report and never write this task-level status.
   'llm_timeout',
   'total_timeout',
 ] as const;
@@ -22,7 +24,7 @@ const CALLBACK_PENDING_POLL_MS = 5_000;
 
 export interface LLMReviewProgress {
   status?: 'running' | 'completed' | 'degraded' | 'timeout' | string;
-  phase?: 'judge_a' | 'judge_b' | 'arbitration' | 'complete' | string;
+  phase?: 'not_started' | 'judge_a' | 'judge_b' | 'arbitration' | 'complete' | string;
   attempt?: number;
   max_attempts?: number;
   findings_total?: number;
@@ -32,6 +34,7 @@ export interface LLMReviewProgress {
   last_update_at?: string;
   deadline_at?: string;
   fallback?: string;
+  reason_code?: string;
 }
 
 export interface ScanStatusPayload {
@@ -63,6 +66,13 @@ export interface ScanStatusPayload {
     info: number;
   };
   llm_review?: LLMReviewProgress | null;
+  report_status?: 'complete' | 'partial' | 'failed' | 'report_unavailable' | null;
+  scan_status?: {
+    state: 'complete' | 'partial' | 'failed' | string;
+    conclusion: 'risks_found' | 'no_risks_found' | 'inconclusive' | string;
+    complete: boolean;
+    reasons?: string[];
+  } | null;
   error?: string | null;
 }
 
@@ -112,6 +122,7 @@ export function formatElapsed(startedAt: string | undefined, nowMs = Date.now())
 }
 
 const PHASE_LABELS: Record<string, string> = {
+  not_started: '未启动',
   judge_a: 'Judge A',
   judge_b: 'Judge B',
   arbitration: '仲裁',
@@ -124,21 +135,30 @@ const SCAN_STATUS_LABELS: Record<string, string> = {
   scanning: '正在进行静态扫描',
   scoring: '正在计算信任评分',
   saving: '正在保存扫描报告',
+  complete: '扫描流程已结束',
   llm_timeout: 'LLM 审查超时，扫描已结束',
-  total_timeout: '扫描总时长超时，扫描已结束',
+  total_timeout: '扫描总时长超时，报告不可用',
   error: '扫描失败，扫描已结束',
 };
 
+export function formatLLMReviewPhase(phase: string | undefined): string {
+  if (!phase) return '准备中';
+  return PHASE_LABELS[phase] ?? phase;
+}
+
 export function formatScanStatusMessage(
-  scan: Pick<ScanStatusPayload, 'status' | 'llm_review'>,
+  scan: Pick<ScanStatusPayload, 'status' | 'llm_review' | 'report_status'>,
   nowMs = Date.now(),
 ): string {
   const progress = scan.llm_review;
   if (scan.status !== 'llm_review' || !progress) {
+    if (scan.status === 'complete' && scan.report_status === 'partial') {
+      return '扫描流程已结束，报告不完整，需人工复核';
+    }
     return SCAN_STATUS_LABELS[scan.status] ?? `扫描中... (${scan.status})`;
   }
 
-  const phase = PHASE_LABELS[progress.phase ?? ''] ?? progress.phase ?? '准备中';
+  const phase = formatLLMReviewPhase(progress.phase);
   const attempt = Math.max(0, progress.attempt ?? 0);
   const maxAttempts = Math.max(1, progress.max_attempts ?? 3);
   const reviewed = Math.max(0, progress.findings_reviewed ?? 0);

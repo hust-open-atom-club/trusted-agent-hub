@@ -10,6 +10,8 @@ _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _CONNECTION = re.compile(r"(?i)([a-z][a-z0-9+.-]*://[^\s/@:]+:)[^\s/@]+(@)")
 _API_KEY = re.compile(r"\b(?:sk-[A-Za-z0-9_-]{12,}|AKIA[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9_]{20,})\b")
 _SECRET_FIELD = re.compile(r"(?i)(\b(?:password|passwd|secret|token|api[_-]?key|private[_-]?key)\s*[:=]\s*)([^,\s;}]+)")
+DEFAULT_FINDING_CONTEXT_BYTES = 8192
+DEFAULT_CONTEXT_BATCH_BYTES = 64 * 1024
 
 
 def redact_text(value: str) -> str:
@@ -46,8 +48,8 @@ def build_finding_contexts(
     file_cache: dict[str, str],
     *,
     max_lines: int = 60,
-    max_bytes_per_finding: int = 8192,
-    max_total_bytes: int = 64 * 1024,
+    max_bytes_per_finding: int = DEFAULT_FINDING_CONTEXT_BYTES,
+    max_total_bytes: int = DEFAULT_CONTEXT_BATCH_BYTES,
 ) -> dict[str, str]:
     """Return redacted source excerpts for backward-compatible callers."""
     contexts, _ = build_finding_context_bundle(
@@ -118,8 +120,8 @@ def build_finding_context_bundle(
     *,
     max_lines: int = 60,
     max_locations_per_finding: int = 4,
-    max_bytes_per_finding: int = 8192,
-    max_total_bytes: int = 64 * 1024,
+    max_bytes_per_finding: int = DEFAULT_FINDING_CONTEXT_BYTES,
+    max_total_bytes: int = DEFAULT_CONTEXT_BATCH_BYTES,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """Build review excerpts plus an explicit, non-secret coverage audit.
 

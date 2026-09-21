@@ -604,6 +604,64 @@ def test_required_scan_state_persistence_failure_is_surfaced(
         trust._scans.pop(scan_id, None)
 
 
+def test_terminal_status_and_llm_progress_share_required_write(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = scan_repository
+    scan_id = "scan-terminal-llm-atomic"
+    repository.create_scan_task(
+        scan_id=scan_id,
+        owner_user_id="scan-user-1",
+        client_request_id="terminal-llm-atomic",
+        repo_url="https://github.com/acme/atomic",
+    )
+    trust._scans[scan_id] = trust._scan_info_from_task(
+        repository.get_scan_task(scan_id)
+    )
+    terminal_progress = {
+        "status": "completed",
+        "phase": "complete",
+        "attempt": 1,
+        "max_attempts": 3,
+        "findings_total": 2,
+        "findings_reviewed": 2,
+        "findings_pending": 0,
+    }
+    original_update = repository.update_scan_task
+    persisted_updates: list[dict[str, object]] = []
+
+    def record_update(
+        target_scan_id: str,
+        updates: dict[str, object],
+        **options: object,
+    ) -> bool:
+        persisted_updates.append(dict(updates))
+        return original_update(target_scan_id, updates, **options)
+
+    monkeypatch.setattr(repository, "update_scan_task", record_update)
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
+    try:
+        assert trust._update_scan_state(
+            scan_id,
+            {
+                "status": "complete",
+                "finished_at": datetime.now(timezone.utc),
+                "llm_review": terminal_progress,
+            },
+            required=True,
+        )
+        assert len(persisted_updates) == 1
+        assert persisted_updates[0]["status"] == "complete"
+        assert persisted_updates[0]["llm_review"] == terminal_progress
+        persisted = repository.get_scan_task(scan_id)
+        assert persisted is not None
+        assert persisted["status"] == "complete"
+        assert persisted["llm_review"] == terminal_progress
+    finally:
+        trust._scans.pop(scan_id, None)
+
+
 def test_startup_recovery_claims_persisted_pending_tasks(
     scan_repository: tuple[ProducerRepository, object],
     monkeypatch: pytest.MonkeyPatch,
@@ -1859,6 +1917,19 @@ def test_total_timeout_marks_active_task_and_sets_failure_retention(
         client_request_id="total-timeout-marker",
         repo_url="https://github.com/acme/timeout",
     )
+    running_llm_review = {
+        "status": "running",
+        "phase": "judge_b",
+        "attempt": 2,
+        "max_attempts": 3,
+        "findings_total": 5,
+        "findings_reviewed": 2,
+        "findings_pending": 3,
+    }
+    assert repository.update_scan_task(
+        scan_id,
+        {"status": "llm_review", "llm_review": running_llm_review},
+    )
     monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
     trust._scans[scan_id] = trust._scan_info_from_task(
         repository.get_scan_task(scan_id)
@@ -1873,6 +1944,33 @@ def test_total_timeout_marks_active_task_and_sets_failure_retention(
         )
         assert task["finished_at"] is not None
         assert task["expires_at"] is not None
+        assert {
+            key: value
+            for key, value in task["llm_review"].items()
+            if key != "last_update_at"
+        } == {
+            **running_llm_review,
+            "status": "timeout",
+            "reason_code": "scan_budget_exhausted",
+            "fallback": "manual_review_for_unresolved",
+        }
+        assert datetime.fromisoformat(
+            task["llm_review"]["last_update_at"].replace("Z", "+00:00")
+        ) == datetime.fromisoformat(
+            task["finished_at"].replace("Z", "+00:00")
+        )
+        assert trust._scans[scan_id]["llm_review"] == task["llm_review"]
+        assert repository.update_scan_task(
+            scan_id,
+            {"llm_review": {**running_llm_review, "phase": "arbitration"}},
+            expected_statuses=trust._SCAN_EXECUTING_STATUSES,
+        ) is False
+        monkeypatch.setattr(trust, "_SCAN_PERSIST_RETRY_DELAY_SECONDS", 0)
+        assert trust._update_scan_state(
+            scan_id,
+            {"llm_review": {**running_llm_review, "phase": "arbitration"}},
+        ) is False
+        assert trust._scans[scan_id]["llm_review"] == task["llm_review"]
         assert trust._scan_list_item(
             scan_id,
             trust._scans[scan_id],

@@ -61,15 +61,19 @@ not have to infer policy from internal states:
 | `callback_pending` | No | No | Continue | Until the callback is delivered |
 | `submitted_reviewing` | No | Yes | Stop | No automatic cleanup |
 
+`llm_timeout` is listed only for compatibility with historical persisted
+tasks. Current LLM deadline or scan-budget exhaustion completes the task with
+a partial report instead of writing this task-level status.
+
 `callback_pending` means the scan finished and is attached to a version,
 but the producer completion callback has not been persisted yet. Clients
 must keep polling; only `submitted_reviewing` confirms the submission
 actually reached the review workflow.
 
-A terminal failure (`error`, `llm_timeout`, `total_timeout`) that is still
-attached to a version whose submission callback has not been delivered is
-also not deletable yet. Such rows keep `auto_refresh` set until the
-callback settles, so a client that trusts only this projection does not
+A terminal failure (`error`, `total_timeout`, or historical `llm_timeout`)
+that is still attached to a version whose submission callback has not been
+delivered is also not deletable yet. Such rows keep `auto_refresh` set until
+the callback settles, so a client that trusts only this projection does not
 freeze the list behind a disabled delete button.
 
 A task under an active lease (a scan retry is currently claimed by a

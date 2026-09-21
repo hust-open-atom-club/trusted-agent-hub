@@ -496,7 +496,7 @@ export interface ScanReport {
   dependency_check?: Record<string, unknown> | null;
   dependency_scan?: Record<string, unknown> | null;
   structural_analysis?: StructuralAnalysis | null;
-  llm_review?: Record<string, unknown> | null;
+  llm_review?: LLMReviewSummary | null;
   scanned_at?: string | null;
   source_snapshot_id?: string | null;
   occurrences_total?: number;
@@ -594,6 +594,34 @@ export interface ScanStatus {
   conclusion: 'risks_found' | 'no_risks_found' | 'inconclusive' | string;
   complete: boolean;
   reasons?: string[];
+}
+
+export type LLMReviewReasonCode =
+  | 'scan_budget_exhausted'
+  | 'review_deadline_exceeded'
+  | 'provider_request_timeout'
+  | 'provider_rate_limited'
+  | 'provider_request_rejected'
+  | 'provider_unavailable'
+  | 'network_error'
+  | 'invalid_provider_response'
+  | 'provider_not_configured'
+  | 'context_incomplete';
+
+export interface LLMReviewSummary {
+  triggered?: boolean;
+  status?: 'not_triggered' | 'not_required' | 'not_configured' | 'completed' | 'call_failed' | 'context_incomplete' | 'timeout' | string;
+  reason_code?: LLMReviewReasonCode | string | null;
+  phase?: 'not_started' | 'judge_a' | 'judge_b' | 'arbitration' | 'complete' | string | null;
+  attempt?: number;
+  attempts?: number;
+  findings_total?: number;
+  findings_reviewed?: number;
+  findings_pending?: number;
+  findings_context_incomplete?: number;
+  fallback?: string | null;
+  error?: string | null;
+  labels_summary?: Record<string, number> | null;
 }
 
 export interface ScanLimits {

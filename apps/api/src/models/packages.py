@@ -410,6 +410,7 @@ class LLMReviewLabelsSummary(StrictContractModel):
 
 class LLMReview(StrictContractModel):
     triggered: bool = False
+    findings_total: int = Field(default=0, ge=0)
     findings_reviewed: int = 0
     findings_skipped: int = 0
     findings_pending: int = 0
@@ -423,6 +424,22 @@ class LLMReview(StrictContractModel):
         "context_incomplete",
         "timeout",
     ] | None = None
+    reason_code: Literal[
+        "scan_budget_exhausted",
+        "review_deadline_exceeded",
+        "provider_request_timeout",
+        "provider_rate_limited",
+        "provider_request_rejected",
+        "provider_unavailable",
+        "network_error",
+        "invalid_provider_response",
+        "provider_not_configured",
+        "context_incomplete",
+    ] | None = None
+    phase: Literal[
+        "not_started", "judge_a", "judge_b", "arbitration", "complete"
+    ] | None = None
+    attempt: int = Field(default=0, ge=0)
     attempts: int = 0
     review_rounds: int = Field(default=0, ge=0, le=3)
     arbitrated: int = Field(default=0, ge=0)
