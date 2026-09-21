@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useRef, useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
@@ -16,10 +16,19 @@ import {
 import {
   clearPendingScanState,
   readPendingScanState,
+  type PendingScanState,
   writePendingScanState,
 } from '@/lib/pending-scan';
 import {
+  clearPendingSubmitContext,
+  patchPendingSubmitContext,
+  pendingSubmitNeedsConfirmation,
+  readPendingSubmitContext,
+  writePendingSubmitContext,
+} from '@/lib/pending-submit';
+import {
   forgetScanPackageContext,
+  readScanPackageContext,
   rememberScanPackageContext,
 } from '@/lib/scan-package-context';
 import {
@@ -114,6 +123,8 @@ type ScanPhase = 'input' | 'scanning' | 'background' | 'confirm' | 'submitting' 
 
 class TerminalScanError extends Error {}
 
+class ResumeAccessError extends Error {}
+
 class ScanStatusHttpError extends Error {
   readonly httpStatus: number;
 
@@ -170,6 +181,31 @@ function isReusableCommitHash(value: unknown): value is string {
   return /^[0-9a-f]{40}$/.test(commitHash) && !/^0{40}$/.test(commitHash);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function pendingScanMatchesDraft(
+  pending: PendingScanState | null,
+  packageId: string,
+  repositoryUrl: string,
+): boolean {
+  if (!pending) return false;
+  if (pending.scanId && packageId) {
+    const boundPackageId = readScanPackageContext(pending.scanId);
+    if (boundPackageId && boundPackageId !== packageId) return false;
+  }
+  if (pending.repoUrl && repositoryUrl) {
+    if (
+      canonicalComparisonUrl(pending.repoUrl)
+      !== canonicalComparisonUrl(repositoryUrl)
+    ) return false;
+  }
+  return true;
+}
+
 function SubmitForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -211,26 +247,302 @@ function SubmitForm() {
   const [activeScanId, setActiveScanId] = useState('');
   const [scanTerminal, setScanTerminal] = useState(false);
   const [checkingBackground, setCheckingBackground] = useState(false);
+  const [checkingResume, setCheckingResume] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
+  const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
 
-  const isBusy = phase === 'scanning' || phase === 'submitting';
+  const isBusy = phase === 'scanning' || phase === 'submitting' || checkingResume;
+
+  const [resumeNotice, setResumeNotice] = useState('');
+  const [resumeNeedsDecision, setResumeNeedsDecision] = useState(false);
+  const [resumePromptPackageId, setResumePromptPackageId] = useState('');
+  const [resumeGateOpen, setResumeGateOpen] = useState(false);
+  const [restoredDraft, setRestoredDraft] = useState(false);
+  const preserveRestoredDraftRef = useRef(false);
 
   useEffect(() => {
-    if (!isNewVersion || !token) return;
-    apiFetch<{ name: string; type: string; description: string; license: string }>(
-      `${API_BASE}/api/v0/producer/packages/${packageId}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    ).then((pkg) => {
-      setPkgName(pkg.name || '');
-      if (pkg.type) setPkgType(pkg.type);
-      if (pkg.description) setPkgDescription(pkg.description);
-      if (pkg.license) setPkgLicense(pkg.license);
-      setFieldSource((prev) => ({ ...prev, name: 'auto', type: 'auto' }));
-    }).catch(() => {});
-  }, [isNewVersion, packageId, token]);
+    if (!token) {
+      setCheckingResume(false);
+      return;
+    }
+    let cancelled = false;
+    setCheckingResume(true);
 
-  /* ── 字段来源追踪 ── */
-  const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
+    const prefillNewVersion = async () => {
+      if (!isNewVersion) return;
+      try {
+        const pkg = await apiFetch<{
+          name: string;
+          type: string;
+          description: string;
+          license: string;
+        }>(
+          `${API_BASE}/api/v0/producer/packages/${packageId}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (cancelled) return;
+        setPkgName(pkg.name || '');
+        if (pkg.type) setPkgType(pkg.type);
+        if (pkg.description) setPkgDescription(pkg.description);
+        if (pkg.license) setPkgLicense(pkg.license);
+        setFieldSource((prev) => ({ ...prev, name: 'auto', type: 'auto' }));
+      } catch {}
+    };
+
+    const context = readPendingSubmitContext();
+    const hasScanToRecover = () => Boolean(readPendingScanState() || urlScanParam);
+    if (!context) {
+      setResumeNotice('');
+      setResumeNeedsDecision(false);
+      setResumeGateOpen(true);
+      setCheckingResume(false);
+      if (!hasScanToRecover()) void prefillNewVersion();
+      return () => { cancelled = true; };
+    }
+
+    const submissionLabel = `“${context.packageName} ${context.version}”`;
+    const targetPackageId = isNewVersion ? packageId : null;
+    if (pendingSubmitNeedsConfirmation(context, targetPackageId)) {
+      setResumePromptPackageId(context.packageId ?? '');
+      setResumeNeedsDecision(true);
+      setResumeGateOpen(false);
+      setPhase('input');
+      setCheckingResume(false);
+      setResumeNotice(
+        `检测到${submissionLabel}的未完成提交，但它与当前提交目标不一致。请选择前往该提交或忽略这条恢复记录。`,
+      );
+      return () => { cancelled = true; };
+    }
+    setResumePromptPackageId('');
+    setResumeNeedsDecision(false);
+    setResumeNotice(`正在检查${submissionLabel}的恢复状态…`);
+
+    const fetchVersion = async (): Promise<Record<string, unknown> | null> => {
+      const res = await authFetch(
+        `${API_BASE}/api/v0/producer/versions/${encodeURIComponent(context.versionId!)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (res.status === 404) return null;
+      if (res.status === 403) {
+        throw new ResumeAccessError(
+          '当前账号无权访问上次未完成的提交；请切换回原账号，或清除本地恢复记录。',
+        );
+      }
+      if (!res.ok) throw new Error(`版本状态查询失败 (${res.status})`);
+      return await res.json();
+    };
+
+    const resume = async () => {
+      const DRAFT = 'draft';
+      if (!context.versionId) {
+        setResumeGateOpen(true);
+        setResumeNotice(`${submissionLabel}在创建版本前中断，已保留恢复信息；请继续完成扫描和提交。`);
+        if (!hasScanToRecover()) await prefillNewVersion();
+        return;
+      }
+      let detail: Record<string, unknown> | null = null;
+      try {
+        detail = await fetchVersion();
+      } catch (err: unknown) {
+        if (!cancelled) {
+          const accessDenied = err instanceof ResumeAccessError;
+          setResumeGateOpen(!accessDenied);
+          setError(
+            err instanceof Error
+              ? err.message
+              : '上次提交状态查询失败，请手动重新提交',
+          );
+          setResumeNotice(`${submissionLabel}的本地恢复记录已保留。`);
+          if (!accessDenied && !hasScanToRecover()) await prefillNewVersion();
+        }
+        return;
+      }
+      if (cancelled) return;
+
+      if (detail === null) {
+        clearPendingSubmitContext();
+        setResumeNotice('');
+        setResumeGateOpen(true);
+        if (!hasScanToRecover()) await prefillNewVersion();
+        return;
+      }
+
+      const packageIdV = String(detail.package_id ?? context.packageId ?? '');
+      if (!packageIdV) {
+        clearPendingSubmitContext();
+        setResumeNotice('');
+        setResumeGateOpen(true);
+        if (!hasScanToRecover()) await prefillNewVersion();
+        return;
+      }
+      if (isNewVersion && packageIdV !== packageId) {
+        setResumePromptPackageId(packageIdV);
+        setResumeNeedsDecision(true);
+        setResumeGateOpen(false);
+        setPhase('input');
+        setResumeNotice(
+          `${submissionLabel}实际属于另一个包。请选择前往该提交或忽略这条恢复记录。`,
+        );
+        return;
+      }
+
+      const status = String(detail.status ?? '');
+      if (status !== DRAFT) {
+        clearPendingSubmitContext();
+        const pendingScan = readPendingScanState();
+        const source = asRecord(detail.source);
+        const repositoryUrl = String(source?.repository_url ?? '');
+        if (pendingScanMatchesDraft(pendingScan, packageIdV, repositoryUrl)) {
+          if (pendingScan?.scanId) {
+            forgetScanPackageContext(pendingScan.scanId);
+          }
+          clearPendingScanState();
+        }
+        router.push(
+          `/packages/${encodeURIComponent(context.packageName)}/versions/${encodeURIComponent(context.version)}/status?vid=${encodeURIComponent(context.versionId!)}`,
+        );
+        return;
+      }
+
+      let pkg: Record<string, unknown> | null = null;
+      try {
+        const pkgRes = await authFetch(
+          `${API_BASE}/api/v0/producer/packages/${encodeURIComponent(packageIdV)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        if (pkgRes.ok) pkg = await pkgRes.json();
+      } catch {
+        pkg = null;
+      }
+      if (cancelled) return;
+      if (!pkg) {
+        setError('已找到上次创建的草稿版本，但包信息加载失败；请重新扫描后提交，同名草稿会自动续接。');
+        return;
+      }
+      const source = (detail.source ?? {}) as Record<string, unknown>;
+      const author = (detail.author ?? null) as { url?: string } | null;
+      const typeConfig = asRecord(detail.type_config) ?? {};
+      const restoredFieldSource: Record<string, string> = {};
+      for (const [key, value] of Object.entries(asRecord(detail.field_source) ?? {})) {
+        if (typeof value === 'string') restoredFieldSource[key] = value;
+      }
+      const typeV = PACKAGE_TYPES.some((item) => item.value === pkg!.type)
+        ? String(pkg.type) : 'skill';
+      const keywords = Array.isArray(pkg.keywords)
+        ? pkg.keywords.map(String) : [];
+      const pendingScan = readPendingScanState();
+      const repositoryUrl = String(source.repository_url ?? '');
+      const recoverPendingScan = pendingScanMatchesDraft(
+        pendingScan,
+        packageIdV,
+        repositoryUrl,
+      );
+      preserveRestoredDraftRef.current = recoverPendingScan;
+      setRestoredDraft(true);
+      setScanResult(null);
+      setScanTerminal(false);
+      setCapabilities([]);
+      setSelectedCapability('');
+      setMetadata({
+        name: String(pkg.name ?? ''),
+        version: String(detail.version ?? context.version),
+        description: String(detail.description ?? pkg.description ?? ''),
+        type: typeV,
+        license: String(detail.license ?? pkg.license ?? ''),
+        author: author ?? undefined,
+        keywords,
+        use_cases: Array.isArray(detail.use_cases)
+          ? detail.use_cases as Array<{ title: string; description: string }>
+          : undefined,
+        category: String(pkg.category ?? ''),
+        homepage: (pkg.homepage ?? null) as string | null,
+        compatibility: Array.isArray(detail.compatibility)
+          ? detail.compatibility.map(String) : [],
+        permissions: (detail.permissions ?? {}) as Record<string, unknown>,
+        source,
+        integrity: (detail.integrity ?? undefined) as Record<string, unknown> | undefined,
+        installation: (detail.installation ?? undefined) as Record<string, unknown> | undefined,
+        dependencies: (detail.dependencies ?? undefined) as Record<string, unknown> | undefined,
+        skill_config: asRecord(typeConfig.skill_config),
+        mcp_server_config: asRecord(typeConfig.mcp_server_config),
+        plugin_config: asRecord(typeConfig.plugin_config),
+        subagent_config: asRecord(typeConfig.subagent_config),
+      });
+      setPkgName(String(pkg.name ?? context.packageName));
+      setPkgType(typeV);
+      setPkgVersion(String(detail.version ?? context.version));
+      setPkgDescription(String(detail.description ?? pkg.description ?? ''));
+      setPkgLicense(String(detail.license ?? pkg.license ?? ''));
+      setPkgSourceUrl(String(source.repository_url ?? ''));
+      setPkgAuthorUrl(author?.url ?? '');
+      setPkgCategory(String(pkg.category ?? ''));
+      setPkgHomepage(String(pkg.homepage ?? ''));
+      setPkgKeywords(keywords.join(', '));
+      setPkgCompatibility(normalizeSubmissionClients(typeV, Array.isArray(detail.compatibility) ? detail.compatibility.map(String) : undefined));
+      setFieldSource({
+        ...restoredFieldSource,
+        name: 'manual',
+        version: 'manual',
+        description: 'manual',
+        license: 'manual',
+        type: 'manual',
+      });
+      setScanSourceFields(String(source.repository_url ?? ''));
+      setActiveScanId('');
+      setConfirmed(false);
+      setResumeGateOpen(recoverPendingScan);
+      setResumeNotice(
+        recoverPendingScan
+          ? `已恢复${submissionLabel}的草稿字段，正在重新关联原扫描结果；手动编辑内容将保留。`
+          : pendingScan
+            ? `已恢复${submissionLabel}的草稿字段；检测到另一提交的扫描任务，未将其关联。再次提交将重新扫描。`
+            : `已恢复${submissionLabel}的草稿字段；当前没有可复用扫描结果，再次提交将重新扫描。`,
+      );
+      setPhase('confirm');
+    };
+
+    void resume().finally(() => {
+      if (!cancelled) setCheckingResume(false);
+    });
+    return () => { cancelled = true; };
+  }, [isNewVersion, packageId, router, token, urlScanParam]);
+
+  const handleContinueResume = () => {
+    setResumeNotice('正在打开上次未完成的提交…');
+    router.replace(resumePromptPackageId
+      ? `/submit?packageId=${encodeURIComponent(resumePromptPackageId)}`
+      : '/submit');
+  };
+
+  const handleIgnoreMismatchedResume = () => {
+    const pendingScan = readPendingScanState();
+    const boundPackageId = pendingScan?.scanId
+      ? readScanPackageContext(pendingScan.scanId)
+      : null;
+    const currentTargetPackageId = isNewVersion ? packageId : null;
+    const belongsToCurrentTarget = Boolean(
+      pendingScan?.scanId
+      && boundPackageId
+      && currentTargetPackageId
+      && boundPackageId === currentTargetPackageId
+    );
+    if (pendingScan && !belongsToCurrentTarget) {
+      if (pendingScan.scanId) forgetScanPackageContext(pendingScan.scanId);
+      clearPendingScanState();
+    }
+    clearPendingSubmitContext();
+    window.location.reload();
+  };
+
+  const handleClearLocalRecovery = () => {
+    const pendingScan = readPendingScanState();
+    if (pendingScan?.scanId) forgetScanPackageContext(pendingScan.scanId);
+    clearPendingSubmitContext();
+    clearPendingScanState();
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete('scan');
+    window.location.replace(nextUrl.toString());
+  };
 
   /* ── 扫描 ── */
   const fetchScanStatus = async (scanId: string): Promise<ScanStatusPayload> => {
@@ -331,9 +643,19 @@ function SubmitForm() {
 
     setScanResult(data);
     setScanTerminal(false);
-    setMetadata(meta);
     setCapabilities(caps);
     setSelectedCapability('');
+
+    if (preserveRestoredDraftRef.current) {
+      setRestoredDraft(false);
+      setResumeNotice('已重新关联原扫描结果，并保留草稿中手动编辑的字段。');
+      setPhase('confirm');
+      return;
+    }
+
+    setRestoredDraft(false);
+    setResumeNotice('');
+    setMetadata(meta);
 
     const nameV = meta?.name || '';
     const verV = meta?.version || '';
@@ -450,6 +772,9 @@ function SubmitForm() {
   };
 
   const runScan = async (url: string) => {
+    preserveRestoredDraftRef.current = false;
+    setRestoredDraft(false);
+    setResumeNotice('');
     setError('');
     setActiveScanId('');
     setScanTerminal(false);
@@ -578,7 +903,7 @@ function SubmitForm() {
   }, [router, searchParams, token, urlScanParam]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !resumeGateOpen) return;
     const pending = readPendingScanState();
     if (!pending) return;
     if (pending.repoUrl) {
@@ -610,8 +935,21 @@ function SubmitForm() {
         if (cancelled) return;
         const httpStatus = err instanceof ScanStatusHttpError ? err.httpStatus : null;
         if (httpStatus === 404 || httpStatus === 403) {
-          // The tracked scan is gone or not accessible: nothing can be resumed.
           clearPendingScanState();
+          if (preserveRestoredDraftRef.current) {
+            preserveRestoredDraftRef.current = false;
+            setRestoredDraft(true);
+            setResumeNotice(
+              '草稿字段已恢复，但原扫描结果不可用；再次提交将重新扫描源码。',
+            );
+            setError(
+              httpStatus === 404
+                ? '原扫描任务不存在或已过期'
+                : '当前账号无法访问原扫描任务',
+            );
+            setPhase('confirm');
+            return;
+          }
           setError(
             httpStatus === 404
               ? '扫描任务不存在或已过期，请重新扫描'
@@ -626,10 +964,11 @@ function SubmitForm() {
     };
     void recover();
     return () => { cancelled = true; };
-  }, [token]);
+  }, [resumeGateOpen, token]);
 
   const handleStartScan = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (checkingResume) return;
     if (!repoUrl.trim() || !repoUrl.trim().startsWith('https://github.com/')) {
       setError('请输入有效的 GitHub 仓库地址'); return;
     }
@@ -664,6 +1003,13 @@ function SubmitForm() {
       const version = pkgVersion && SEMVER_RE.test(pkgVersion) ? pkgVersion : '0.1.0';
       const sUrl = pkgSourceUrl.trim();
 
+      writePendingSubmitContext({
+        packageId: packageId || null,
+        versionId: null,
+        packageName: pkgName.trim(),
+        version,
+      });
+
       const sourceObj: Record<string, unknown> = {
         type: 'github', repository_url: sUrl, ref: 'main', commit_hash: '0'.repeat(40),
       };
@@ -685,6 +1031,28 @@ function SubmitForm() {
         && isReusableCommitHash(sourceObj.commit_hash)
       ) ? scanResult.scan_id : undefined;
       const submitBody = initialScanId ? { initial_scan_id: initialScanId } : {};
+
+      const clearSubmissionScanState = (submittedPackageId: string) => {
+        const pending = readPendingScanState();
+        if (!pending) return;
+        const boundPackageId = pending.scanId
+          ? readScanPackageContext(pending.scanId)
+          : null;
+        const matchesBoundPackage = !boundPackageId
+          || boundPackageId === submittedPackageId;
+        const matchesRepository = !pending.repoUrl
+          || canonicalComparisonUrl(pending.repoUrl)
+            === canonicalComparisonUrl(sUrl);
+        const belongsToSubmission = Boolean(
+          (initialScanId && pending.scanId === initialScanId)
+          || ((boundPackageId || pending.repoUrl)
+            && matchesBoundPackage
+            && matchesRepository),
+        );
+        if (!belongsToSubmission) return;
+        if (pending.scanId) forgetScanPackageContext(pending.scanId);
+        clearPendingScanState();
+      };
 
       const authorObj = pkgAuthorUrl.trim() ? { url: pkgAuthorUrl.trim() } : null;
       const compatList = normalizeSubmissionClients(pkgType, pkgCompatibility);
@@ -710,6 +1078,7 @@ function SubmitForm() {
         if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
         const verData = await verRes.json();
         const versionId: string = verData.id;
+        patchPendingSubmitContext({ versionId });
         const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
           method: 'POST', headers,
           body: JSON.stringify(submitBody),
@@ -722,8 +1091,13 @@ function SubmitForm() {
             subConflict?.message ?? `提交审核失败 (${subRes.status})`,
           );
         }
-        clearPendingScanState();
+        clearSubmissionScanState(packageId);
+        clearPendingSubmitContext();
         if (initialScanId) forgetScanPackageContext(initialScanId);
+        setResumeNotice('');
+        setResumeNeedsDecision(false);
+        setRestoredDraft(false);
+        preserveRestoredDraftRef.current = false;
         setPhase('done');
         setTimeout(() => {
           router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
@@ -747,6 +1121,7 @@ function SubmitForm() {
       if (!pkgRes.ok) { const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' })); throw new Error(e.detail || `创建包失败 (${pkgRes.status})`); }
       const pkgData = await pkgRes.json();
       const createdPkgId: string = pkgData.id;
+      patchPendingSubmitContext({ packageId: createdPkgId });
 
       const verBody: Record<string, unknown> = {
         version, repo_url: sUrl, description: pkgDescription.trim() || pkgName.trim(),
@@ -766,6 +1141,7 @@ function SubmitForm() {
       if (!verRes.ok) { const e = await verRes.json().catch(() => ({ detail: '创建版本失败' })); throw new Error(submissionErrorMessage(e.detail, `创建版本失败 (${verRes.status})`).message); }
       const verData = await verRes.json();
       const versionId: string = verData.id;
+      patchPendingSubmitContext({ versionId });
 
       const subRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST', headers,
@@ -780,8 +1156,13 @@ function SubmitForm() {
         );
       }
 
-      clearPendingScanState();
+      clearSubmissionScanState(createdPkgId);
+      clearPendingSubmitContext();
       if (initialScanId) forgetScanPackageContext(initialScanId);
+      setResumeNotice('');
+      setResumeNeedsDecision(false);
+      setRestoredDraft(false);
+      preserveRestoredDraftRef.current = false;
       setPhase('done');
       setTimeout(() => {
         router.push(`/packages/${encodeURIComponent(pkgName.trim())}/versions/${encodeURIComponent(version)}/status?vid=${encodeURIComponent(versionId)}`);
@@ -826,9 +1207,10 @@ function SubmitForm() {
   const hint: React.CSSProperties = { fontSize: '0.76rem', color: 'var(--color-muted)', lineHeight: 1.4 };
   const warnHint: React.CSSProperties = { ...hint, color: 'var(--color-warning)' };
   const availableClients = getAllowedSubmissionClients(pkgType);
+  const showConfirmation = phase === 'confirm' && Boolean(scanResult || restoredDraft);
 
   return (
-    <div className={`submit-page${phase === 'confirm' && scanResult ? ' submit-page--with-actions' : ''}`}>
+    <div className={`submit-page${showConfirmation ? ' submit-page--with-actions' : ''}`}>
       <div className="submit-container">
         <div className="submit-header">
           <h1>{isNewVersion ? '创建新版本' : '提交 Agent 能力包'}</h1>
@@ -836,6 +1218,43 @@ function SubmitForm() {
         </div>
 
         {error && <div className="submit-error">{error}</div>}
+        {resumeNotice && phase !== 'submitting' && phase !== 'done' && (
+          <div className="submit-notice" role="status">
+            <span>{resumeNotice}</span>
+            <div className="submit-notice__actions">
+              {resumeNeedsDecision && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleContinueResume}
+                  disabled={isBusy}
+                >
+                  前往该提交
+                </button>
+              )}
+              {resumeNeedsDecision ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleIgnoreMismatchedResume}
+                  disabled={isBusy}
+                >
+                  忽略该记录
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleClearLocalRecovery}
+                  disabled={isBusy}
+                  title="仅清除本机恢复记录，服务端草稿仍会保留"
+                >
+                  清除本地记录（保留草稿）
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {error && conflict?.delete_allowed && (
           <div style={{ marginTop: '0.5rem' }}>
             <button
@@ -850,7 +1269,7 @@ function SubmitForm() {
         )}
 
         {/* ══ Phase: 输入 ══ */}
-        {phase === 'input' && (
+        {phase === 'input' && !resumeNeedsDecision && (
           <form className="scanner-form" onSubmit={handleStartScan}>
             <div className="scanner-input-row">
               <input type="url" className="scanner-url-input" placeholder="https://github.com/owner/repo" value={repoUrl}
@@ -931,7 +1350,7 @@ function SubmitForm() {
         )}
 
         {/* ══ Phase: 确认 ══ */}
-        {phase === 'confirm' && scanResult && (
+        {showConfirmation && (
           <>
             {/* 多能力仓库：选择要提交的子目录 */}
             {capabilities.length > 1 && (
@@ -979,35 +1398,44 @@ function SubmitForm() {
             )}
 
             {/* 扫描摘要 */}
-            <div style={sectionStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
-                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-ink)' }}>{scanResult.package_name}</span>
-                {scanResult.trust_score?.grade && (
-                  <span className={`grade-badge ${scanResult.trust_score.grade.toLowerCase()}`}
-                    style={{ padding: '0.12rem 0.5rem', fontSize: '0.78rem', fontWeight: 700 }}>
-                    {scanResult.trust_score.grade}
-                  </span>
+            {scanResult ? (
+              <div style={sectionStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--color-ink)' }}>{scanResult.package_name}</span>
+                  {scanResult.trust_score?.grade && (
+                    <span className={`grade-badge ${scanResult.trust_score.grade.toLowerCase()}`}
+                      style={{ padding: '0.12rem 0.5rem', fontSize: '0.78rem', fontWeight: 700 }}>
+                      {scanResult.trust_score.grade}
+                    </span>
+                  )}
+                </div>
+                {scanResult.summary && (
+                  <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.83rem', color: 'var(--color-neutral)' }}>
+                    <span>发现问题: <strong>{scanResult.summary.total}</strong></span>
+                    <span>
+                      Critical: <strong style={{ color: scanResult.summary.critical > 0 ? 'var(--color-danger)' : 'inherit' }}>{scanResult.summary.critical}</strong>
+                      {' · '}High: <strong>{scanResult.summary.high}</strong>
+                      {' · '}Medium: <strong>{scanResult.summary.medium}</strong>
+                      {' · '}Low: <strong>{scanResult.summary.low}</strong>
+                    </span>
+                  </div>
+                )}
+                {(scanResult.llm_review?.status === 'timeout'
+                  || scanResult.llm_review?.status === 'degraded'
+                  || Boolean(scanResult.llm_review?.fallback)) && (
+                  <div className="submit-error" style={{ marginTop: '0.9rem', marginBottom: 0 }}>
+                    LLM 审查未能完成全部裁决；扫描结果已保存，未解决的问题需要人工审核。
+                  </div>
                 )}
               </div>
-              {scanResult.summary && (
-                <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.83rem', color: 'var(--color-neutral)' }}>
-                  <span>发现问题: <strong>{scanResult.summary.total}</strong></span>
-                  <span>
-                    Critical: <strong style={{ color: scanResult.summary.critical > 0 ? 'var(--color-danger)' : 'inherit' }}>{scanResult.summary.critical}</strong>
-                    {' · '}High: <strong>{scanResult.summary.high}</strong>
-                    {' · '}Medium: <strong>{scanResult.summary.medium}</strong>
-                    {' · '}Low: <strong>{scanResult.summary.low}</strong>
-                  </span>
-                </div>
-              )}
-              {(scanResult.llm_review?.status === 'timeout'
-                || scanResult.llm_review?.status === 'degraded'
-                || Boolean(scanResult.llm_review?.fallback)) && (
-                <div className="submit-error" style={{ marginTop: '0.9rem', marginBottom: 0 }}>
-                  LLM 审查未能完成全部裁决；扫描结果已保存，未解决的问题需要人工审核。
-                </div>
-              )}
-            </div>
+            ) : (
+              <div style={sectionStyle}>
+                <p className="scanner-status-title">已恢复草稿字段</p>
+                <p className="scanner-status-msg">
+                  当前没有可复用的扫描结果。提交审核后，系统会重新扫描源码，再进入审核流程。
+                </p>
+              </div>
+            )}
 
             {/* ── 必填字段 ── */}
             <div style={sectionStyle}>
@@ -1215,7 +1643,7 @@ function SubmitForm() {
         )}
 
         {/* ══ Sticky 底部操作栏 ══ */}
-        {phase === 'confirm' && scanResult && (
+        {showConfirmation && (
           <div className="submit-sticky-actions">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--color-ink)', cursor: 'pointer' }}>
               <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)}
@@ -1226,7 +1654,10 @@ function SubmitForm() {
             <div style={{ display: 'flex', gap: '0.6rem' }}>
               <button type="button" className="btn btn-secondary"
                 onClick={() => {
+                  preserveRestoredDraftRef.current = false;
                   clearPendingScanState();
+                  setRestoredDraft(false);
+                  setResumeNotice('');
                   setPhase('input');
                   setScanResult(null);
                   setMetadata(null);
