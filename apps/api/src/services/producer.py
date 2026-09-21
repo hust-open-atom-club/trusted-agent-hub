@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from sqlalchemy.exc import IntegrityError
+
 from src.repositories.producer_sqlalchemy import (
     ProducerRepository,
     ScanTaskSourceConflictError,
@@ -178,6 +180,14 @@ def _canonical_comparison_url(value: str | None) -> str | None:
     return normalized.casefold() if parsed.hostname == "github.com" else normalized
 
 
+def _stored_repository_url(data: dict[str, object]) -> str | None:
+    source = data.get("source")
+    source_url = source.get("repository_url") if isinstance(source, dict) else None
+    return _canonical_comparison_url(
+        str(source_url or data.get("repo_url") or "")
+    )
+
+
 def _distinct_homepage(
     homepage: str | None,
     repository_url: str | None,
@@ -308,64 +318,196 @@ class ProducerService:
 
     # ── 创建包 ────────────────────────────────────────────
 
+    def _package_updates(self, data: CreatePackageRequest) -> dict[str, object]:
+        return {
+            "type": data.type.value,
+            "description": data.description,
+            "license": data.license,
+            "keywords": data.keywords,
+            "category": data.category,
+            "homepage": _distinct_homepage(
+                data.homepage,
+                data.source.repository_url if data.source else None,
+            ),
+            "icon_url": data.icon_url,
+            "author": (
+                data.author.model_dump(exclude_none=True) if data.author else None
+            ),
+            "permissions": (
+                data.permissions.model_dump() if data.permissions else None
+            ),
+            "use_cases": (
+                [item.model_dump() for item in data.use_cases]
+                if data.use_cases
+                else None
+            ),
+            "type_config": data.type_config,
+            "installation": (
+                data.installation.model_dump() if data.installation else None
+            ),
+            "dependencies": (
+                data.dependencies.model_dump() if data.dependencies else None
+            ),
+            "source": data.source.model_dump() if data.source else None,
+            "compatibility": self._normalize_compatibility(
+                data.type.value, data.compatibility
+            ),
+            "field_source": data.field_source,
+        }
+
+    def _explicit_package_updates(
+        self, data: CreatePackageRequest
+    ) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in self._package_updates(data).items()
+            if key in data.model_fields_set and getattr(data, key) is not None
+        }
+
     def create_package(
         self, data: CreatePackageRequest, submitter_id: str | None = None
     ) -> PackageResponse:
-        if not data.name or not data.name.strip():
+        package_name = data.name.strip() if data.name else ""
+        if not package_name:
             raise ProducerServiceError("包名称不能为空")
         if not data.description:
             raise ProducerServiceError("包描述不能为空")
         self._validate_installation_clients(data.type.value, data.installation)
+        package_updates = self._package_updates(data)
+        conflict_message = (
+            f"包名 '{package_name}' 已存在，请使用其他名称；"
+            "若这是上次未完成的提交，请确认源码地址一致且相关版本仍为草稿，"
+            "或前往提交记录检查已有进度"
+        )
 
-        # 检查包名重复
-        if self.repository.package_name_exists(data.name.strip()):
-            raise ProducerServiceError(
-                f"包名 '{data.name.strip()}' 已存在，请使用其他名称"
+        # 同名 draft 包满足续接条件时幂等返回，条件见 _resumable_draft_package。
+        existing = self.repository.find_package_by_name(package_name)
+        if existing is not None:
+            resumed, resume_conflict = self._resumable_draft_package(
+                existing, data, submitter_id
             )
+            if resumed is not None:
+                return resumed
+            raise ProducerServiceError(resume_conflict or conflict_message)
 
-        result = self.repository.create_package(
-            name=data.name.strip(),
-            type=data.type.value,
-            description=data.description,
-            submitter_id=submitter_id,
-            license=data.license,
-            keywords=data.keywords,
-            category=data.category,
-            homepage=_distinct_homepage(
-                data.homepage,
-                data.source.repository_url if data.source else None,
-            ),
-            icon_url=data.icon_url,
-            author=data.author.model_dump(exclude_none=True) if data.author else None,
-            permissions=data.permissions.model_dump() if data.permissions else None,
-            use_cases=(
-                [item.model_dump() for item in data.use_cases] if data.use_cases else None
-            ),
-            type_config=data.type_config,
-            installation=data.installation.model_dump() if data.installation else None,
-            dependencies=data.dependencies.model_dump() if data.dependencies else None,
-            source=data.source.model_dump() if data.source else None,
-            compatibility=self._normalize_compatibility(
-                data.type.value, data.compatibility
-            ),
-            field_source=data.field_source,
-        )
-        return PackageResponse(
-            id=result["id"],
-            name=result["name"],
-            type=result["type"],
-            description=result["description"],
-            status=result["status"],
-            latest_version=result.get("latest_version"),
-            license=result.get("license"),
-            keywords=result.get("keywords", []),
-            category=result.get("category"),
-            author=result.get("author"),
-            created_at=result.get("created_at"),
-            updated_at=result.get("updated_at"),
-        )
+        try:
+            result = self.repository.create_package(
+                name=package_name,
+                submitter_id=submitter_id,
+                **package_updates,
+            )
+        except IntegrityError as exc:
+            existing = self.repository.find_package_by_name(package_name)
+            if existing is None:
+                raise
+            resumed, resume_conflict = self._resumable_draft_package(
+                existing, data, submitter_id
+            )
+            if resumed is not None:
+                return resumed
+            raise ProducerServiceError(resume_conflict or conflict_message) from exc
+        return self._package_response(result)
 
     # ── 创建版本 ──────────────────────────────────────────
+
+    def _resumable_draft_package(
+        self,
+        existing: dict[str, object],
+        data: CreatePackageRequest,
+        submitter_id: str | None,
+    ) -> tuple[PackageResponse | None, str | None]:
+        """Return an owned draft only when its source matches this request."""
+        package_name = str(existing.get("name") or data.name)
+        review_conflict = (
+            f"包名 '{package_name}' 已存在且已进入审核或发布流程，"
+            "请前往状态页查看"
+        )
+        version_review_conflict = (
+            f"包名 '{package_name}' 已存在，且相关版本已进入审核流程，"
+            "请前往状态页查看"
+        )
+        owner_conflict = (
+            f"包名 '{package_name}' 已存在，但对应草稿不可由当前账号续接，"
+            "请更换包名"
+        )
+        source_conflict = (
+            f"包名 '{package_name}' 已存在，但源码地址与现有草稿不一致或无法确认；"
+            "请使用原源码续接，或更换包名"
+        )
+        state_conflict = (
+            f"包名 '{package_name}' 已存在，且包或版本状态已变化；"
+            "请前往状态页查看提交进度"
+        )
+        if existing.get("status") != "draft":
+            return None, review_conflict
+        if submitter_id is None or existing.get("submitter_id") != submitter_id:
+            return None, owner_conflict
+        # 包请求没有历史 repo_url 字段，源码身份只能来自结构化 source。
+        if data.source is None or not data.source.repository_url:
+            return None, source_conflict
+        request_url = _canonical_comparison_url(data.source.repository_url)
+        if not request_url:
+            return None, source_conflict
+        existing_url = _stored_repository_url(existing)
+        package_id = str(existing.get("id") or "")
+        if not package_id:
+            return None, state_conflict
+        versions = self.repository.list_package_version_sources(package_id)
+        if not versions:
+            if existing_url != request_url:
+                return None, source_conflict
+            resumed = self._update_draft_package(package_id, data)
+            if resumed is None:
+                return None, state_conflict
+            return resumed, None
+        if any(item.get("status") != "draft" for item in versions):
+            return None, version_review_conflict
+        if existing_url is not None and existing_url != request_url:
+            return None, source_conflict
+        owned_versions = [
+            item for item in versions if item.get("submitter_id") == submitter_id
+        ]
+        if not owned_versions:
+            return None, owner_conflict
+        for item in owned_versions:
+            version_url = _stored_repository_url(item)
+            if version_url and version_url == request_url:
+                resumed = self._update_draft_package(package_id, data)
+                if resumed is None:
+                    return None, state_conflict
+                return resumed, None
+        return None, source_conflict
+
+    def _update_draft_package(
+        self,
+        package_id: str,
+        data: CreatePackageRequest,
+    ) -> PackageResponse | None:
+        updates = self._explicit_package_updates(data)
+        updated = self.repository.update_package_data_if_status(
+            package_id,
+            updates,
+            ("draft",),
+            expected_version_statuses=("draft",),
+        )
+        return self._package_response(updated) if updated is not None else None
+
+    @staticmethod
+    def _package_response(data: dict[str, object]) -> PackageResponse:
+        return PackageResponse(
+            id=str(data["id"]),
+            name=str(data["name"]),
+            type=data["type"],  # type: ignore[arg-type]
+            description=str(data["description"]),
+            status=str(data.get("status") or "draft"),
+            latest_version=data.get("latest_version"),
+            license=data.get("license"),
+            keywords=list(data.get("keywords") or []),
+            category=data.get("category"),
+            author=data.get("author"),  # type: ignore[arg-type]
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+        )
 
     def create_version(
         self, package_id: str, data: CreateVersionRequest, submitter_id: str | None = None
@@ -383,29 +525,110 @@ class ProducerService:
                 f"版本号 '{data.version}' 不符合 SemVer 规范（如 1.0.0）"
             )
 
-        result = self.repository.create_version(
-            package_id=package_id,
-            version=data.version,
-            submitter_id=submitter_id,
-            repo_url=data.repo_url,
-            description=data.description,
-            author=data.author.model_dump(exclude_none=True) if data.author else None,
-            license=data.license,
-            source=data.source.model_dump() if data.source else None,
-            integrity=data.integrity.model_dump() if data.integrity else None,
-            permissions=data.permissions.model_dump() if data.permissions else None,
-            use_cases=(
-                [item.model_dump() for item in data.use_cases] if data.use_cases else None
+        source = data.source.model_dump() if data.source else None
+        version_values: dict[str, object] = {
+            "description": data.description,
+            "author": (
+                data.author.model_dump(exclude_none=True) if data.author else None
             ),
-            type_config=data.type_config,
-            compatibility=self._normalize_compatibility(
+            "license": data.license,
+            "source": source,
+            "integrity": data.integrity.model_dump() if data.integrity else None,
+            "permissions": (
+                data.permissions.model_dump() if data.permissions else {}
+            ),
+            "use_cases": (
+                [item.model_dump() for item in data.use_cases]
+                if data.use_cases
+                else None
+            ),
+            "type_config": data.type_config,
+            "compatibility": self._normalize_compatibility(
                 package_type, data.compatibility
             ),
-            installation=data.installation.model_dump() if data.installation else None,
-            dependencies=data.dependencies.model_dump() if data.dependencies else None,
-            field_source=data.field_source,
+            "installation": (
+                data.installation.model_dump() if data.installation else None
+            ),
+            "dependencies": (
+                data.dependencies.model_dump() if data.dependencies else None
+            ),
+            "field_source": data.field_source,
+        }
+        conflict_message = (
+            f"包 '{pkg.get('name')}' 的版本 '{data.version}' 已存在；"
+            "若这是上次未完成的提交，请确认源码地址一致且版本仍为草稿，"
+            "或前往状态页检查提交进度"
         )
+        existing_version = self.repository.get_version_by_number(
+            package_id, data.version
+        )
+        if isinstance(existing_version, dict) and existing_version.get("id"):
+            resumed = self._resumable_draft_version(
+                existing_version,
+                data,
+                submitter_id,
+                version_values,
+            )
+            if resumed is not None:
+                return resumed
+            raise ProducerServiceError(conflict_message)
+
+        try:
+            result = self.repository.create_version(
+                package_id=package_id,
+                version=data.version,
+                submitter_id=submitter_id,
+                repo_url=data.repo_url,
+                **version_values,
+            )
+        except IntegrityError as exc:
+            existing_version = self.repository.get_version_by_number(
+                package_id, data.version
+            )
+            if isinstance(existing_version, dict) and existing_version.get("id"):
+                resumed = self._resumable_draft_version(
+                    existing_version,
+                    data,
+                    submitter_id,
+                    version_values,
+                )
+                if resumed is not None:
+                    return resumed
+                raise ProducerServiceError(conflict_message) from exc
+            raise
         return result
+
+    def _resumable_draft_version(
+        self,
+        existing: dict[str, object],
+        data: CreateVersionRequest,
+        submitter_id: str | None,
+        version_values: dict[str, object],
+    ) -> dict[str, object] | None:
+        # 版本接口保留 repo_url 兼容旧客户端；结构化 source 优先。
+        requested_url = _canonical_comparison_url(
+            data.source.repository_url if data.source else data.repo_url
+        )
+        if not (
+            existing.get("status") == "draft"
+            and submitter_id is not None
+            and existing.get("submitter_id") == submitter_id
+            and requested_url is not None
+            and _stored_repository_url(existing) == requested_url
+        ):
+            return None
+
+        updates = {
+            key: value
+            for key, value in version_values.items()
+            if key in data.model_fields_set and getattr(data, key) is not None
+        }
+        version_id = str(existing["id"])
+        return self.repository.update_version_data_if_status(
+            version_id,
+            updates,
+            ("draft",),
+        )
 
     # ── 提交审核 ──────────────────────────────────────────
 

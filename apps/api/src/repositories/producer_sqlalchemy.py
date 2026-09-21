@@ -285,14 +285,30 @@ class ProducerRepository:
             session.commit()
         return data
 
-    def package_name_exists(self, name: str) -> bool:
-        """检查包名是否已存在。"""
+    def find_package_by_name(self, name: str) -> dict[str, object] | None:
+        """按包名查找包（含 status/submitter_id），不存在时返回 None。"""
         with self.session_factory() as session:
-            return session.scalar(
-                select(func.count())
-                .select_from(PackageRow)
-                .where(PackageRow.name == name)
-            ) > 0
+            row = session.scalar(
+                select(PackageRow).where(PackageRow.name == name)
+            )
+            if row is None:
+                return None
+            return dict(row.data) if row.data else {}
+
+    def get_version_by_number(
+        self, package_id: str, version: str
+    ) -> dict[str, object] | None:
+        """按 (package_id, version) 查找版本，不存在时返回 None。"""
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(PackageVersionRow).where(
+                    PackageVersionRow.package_id == package_id,
+                    PackageVersionRow.version == version,
+                )
+            )
+            if row is None:
+                return None
+            return dict(row.data) if row.data else {}
 
     def get_package(self, package_id: str) -> dict[str, object] | None:
         with self.session_factory() as session:
@@ -395,6 +411,33 @@ class ProducerRepository:
             ).all()
             return [_version_brief(row) for row in rows]
 
+    def list_package_version_sources(
+        self, package_id: str
+    ) -> list[dict[str, object]]:
+        with self.session_factory() as session:
+            rows = session.execute(
+                select(
+                    PackageVersionRow.status,
+                    PackageVersionRow.data["submitter_id"],
+                    PackageVersionRow.data["source"],
+                    # 仅用于兼容尚未写入结构化 source 的旧草稿。
+                    PackageVersionRow.data["repo_url"],
+                ).where(
+                    PackageVersionRow.package_id == package_id
+                )
+            ).all()
+        candidates: list[dict[str, object]] = []
+        for status, submitter_id, source, repo_url in rows:
+            candidates.append(
+                {
+                    "status": status,
+                    "submitter_id": submitter_id,
+                    "source": source,
+                    "repo_url": repo_url,
+                }
+            )
+        return candidates
+
     # ── 版本操作 ──────────────────────────────────────────
 
     def create_version(
@@ -441,6 +484,7 @@ class ProducerRepository:
             "submitted_at": None,
             "trust_score": None,
             "created_at": _serialize_dt(now),
+            "updated_at": _serialize_dt(now),
         }
         with self.session_factory() as session:
             session.add(
@@ -550,6 +594,39 @@ class ProducerRepository:
             row.data = data
             session.commit()
 
+    def update_version_data_if_status(
+        self,
+        version_id: str,
+        updates: dict[str, object],
+        expected_statuses: tuple[str, ...],
+    ) -> dict[str, object] | None:
+        if not expected_statuses:
+            return None
+        with self.session_factory() as session:
+            row = session.get(
+                PackageVersionRow,
+                version_id,
+                with_for_update=True,
+            )
+            if row is None or row.status not in expected_statuses:
+                return None
+            data = dict(row.data) if row.data else {}
+            data.update(updates)
+            data["updated_at"] = _serialize_dt(_utc_now())
+            result = session.execute(
+                update(PackageVersionRow)
+                .where(
+                    PackageVersionRow.id == version_id,
+                    PackageVersionRow.status.in_(expected_statuses),
+                )
+                .values(data=data)
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                return None
+            session.commit()
+            return data
+
     def set_manual_grade(
         self,
         *,
@@ -600,6 +677,48 @@ class ProducerRepository:
             data.update(updates)
             row.data = data
             session.commit()
+
+    def update_package_data_if_status(
+        self,
+        package_id: str,
+        updates: dict[str, object],
+        expected_statuses: tuple[str, ...],
+        *,
+        expected_version_statuses: tuple[str, ...] | None = None,
+    ) -> dict[str, object] | None:
+        if not expected_statuses:
+            return None
+        with self.session_factory() as session:
+            row = session.get(PackageRow, package_id, with_for_update=True)
+            if row is None or row.status not in expected_statuses:
+                return None
+            if expected_version_statuses is not None:
+                version_statuses = session.scalars(
+                    select(PackageVersionRow.status)
+                    .where(PackageVersionRow.package_id == package_id)
+                    .with_for_update()
+                ).all()
+                if any(
+                    status not in expected_version_statuses
+                    for status in version_statuses
+                ):
+                    return None
+            data = dict(row.data) if row.data else {}
+            data.update(updates)
+            data["updated_at"] = _serialize_dt(_utc_now())
+            result = session.execute(
+                update(PackageRow)
+                .where(
+                    PackageRow.id == package_id,
+                    PackageRow.status.in_(expected_statuses),
+                )
+                .values(data=data)
+            )
+            if result.rowcount != 1:
+                session.rollback()
+                return None
+            session.commit()
+            return data
 
     def upsert_trust_level(
         self,

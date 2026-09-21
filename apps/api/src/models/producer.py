@@ -68,7 +68,7 @@ UseCasesField = Annotated[list[UseCase] | None, AfterValidator(_bounded_use_case
 
 
 class CreatePackageRequest(StrictContractModel):
-    """POST /packages 请求体。"""
+    """POST /packages 请求体；续接草稿时，显式 null 视为保留原值。"""
 
     name: str = Field(description="能力包名称，全局唯一")
     type: PackageType = Field(description="能力包类型")
@@ -93,7 +93,7 @@ class CreatePackageRequest(StrictContractModel):
 
 
 class CreateVersionRequest(StrictContractModel):
-    """POST /packages/{id}/versions 请求体。"""
+    """POST /packages/{id}/versions 请求体；续接草稿时，显式 null 视为保留原值。"""
 
     version: str = Field(description="SemVer 版本号，如 1.0.0")
     repo_url: str | None = Field(default=None, description="GitHub 仓库 HTTPS URL")
