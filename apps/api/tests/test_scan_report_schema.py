@@ -6,14 +6,19 @@ Covers:
 """
 
 import json
+import re
 from pathlib import Path
+from typing import get_args
 
 import jsonschema
 import pytest
 
-from src.models.packages import ScanReport
+from src.models.packages import LLMReview, ScanReport
+from src.routers import trust
 from packages.schema.constants import FINDING_CATEGORY_POLICY, FindingCategory
+from scanners.risk_scanner import llm_reviewer
 from scanners.risk_scanner.scanner import RiskScanner
+
 
 def _find_scan_report_schema() -> Path:
     """向上查找 scan-report.schema.json（宿主机或容器布局均可解析）。"""
@@ -26,7 +31,16 @@ def _find_scan_report_schema() -> Path:
     return Path("/packages/schema/scan-report.schema.json")
 
 
-SCHEMA = json.loads(_find_scan_report_schema().read_text(encoding="utf-8"))
+SCHEMA_PATH = _find_scan_report_schema()
+SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+REPOSITORY_ROOT = next(
+    (
+        parent
+        for parent in Path(__file__).resolve().parents
+        if (parent / "apps" / "web" / "src" / "types" / "index.ts").exists()
+    ),
+    None,
+)
 
 CLEAN_SKILL = (
     "---\n"
@@ -110,6 +124,85 @@ def test_schema_categories_match_shared_finding_policy():
     assert enum == set(FINDING_CATEGORY_POLICY)
     assert {category.value for category in FindingCategory} == enum
     assert "installation_security" in enum
+
+
+def _literal_strings(annotation: object) -> set[str]:
+    values: set[str] = set()
+    for value in get_args(annotation):
+        if isinstance(value, str):
+            values.add(value)
+        else:
+            values.update(_literal_strings(value))
+    return values
+
+
+def test_llm_reason_code_contracts_match_schema() -> None:
+    reason_codes = {
+        value
+        for value in SCHEMA["properties"]["llm_review"]["properties"][
+            "reason_code"
+        ]["enum"]
+        if isinstance(value, str)
+    }
+
+    model_codes = _literal_strings(
+        LLMReview.model_fields["reason_code"].annotation
+    )
+    assert model_codes == reason_codes
+    assert set(trust._LLM_REASON_CODES) == reason_codes
+
+    exception_codes = {llm_reviewer.LLMReviewCallError.reason_code}
+    exception_codes.update(
+        error_type.reason_code
+        for error_type in llm_reviewer.LLMReviewCallError.__subclasses__()
+    )
+    assert exception_codes == reason_codes - {
+        "scan_budget_exhausted",
+        "context_incomplete",
+    }
+
+
+def test_web_llm_reason_code_contracts_match_schema() -> None:
+    if REPOSITORY_ROOT is None:
+        pytest.skip("web source tree is not available in this test artifact")
+
+    reason_codes = {
+        value
+        for value in SCHEMA["properties"]["llm_review"]["properties"][
+            "reason_code"
+        ]["enum"]
+        if isinstance(value, str)
+    }
+    typescript = (
+        REPOSITORY_ROOT / "apps" / "web" / "src" / "types" / "index.ts"
+    ).read_text(encoding="utf-8")
+    union_match = re.search(
+        r"export type LLMReviewReasonCode\s*=\s*(.*?);",
+        typescript,
+        flags=re.DOTALL,
+    )
+    assert union_match is not None
+    assert set(re.findall(r"'([^']+)'", union_match.group(1))) == reason_codes
+
+    for locale in ("en", "zh"):
+        translations = json.loads(
+            (
+                REPOSITORY_ROOT
+                / "apps"
+                / "web"
+                / "src"
+                / "i18n"
+                / "locales"
+                / locale
+                / "common.json"
+            ).read_text(encoding="utf-8")
+        )["review"]["detail"]
+        translation_codes = {
+            key.removeprefix("llm_reason_")
+            for key in translations
+            if key.startswith("llm_reason_") and key != "llm_reason_unknown"
+        }
+        assert translation_codes == reason_codes
 
 
 def test_schema_accepts_report_with_new_category_and_fields():

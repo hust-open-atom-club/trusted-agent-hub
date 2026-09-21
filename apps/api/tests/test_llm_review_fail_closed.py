@@ -126,4 +126,14 @@ def test_not_configured_result_preserves_manual_review_semantics(monkeypatch) ->
 
     assert result is expected
     assert result["status"] == "not_configured"
-    assert all("llm_label" not in finding for finding in findings)
+    assert result["reason_code"] == "provider_not_configured"
+    assert result["labels_summary"]["unavailable"] == 2
+    assert set(result["decisions"]) == {
+        "critical-dangerous",
+        "high-non-dangerous",
+    }
+    assert all(
+        finding.get("llm_label") == "llm:unavailable"
+        and finding.get("requires_manual_review") is True
+        for finding in findings[:2]
+    )

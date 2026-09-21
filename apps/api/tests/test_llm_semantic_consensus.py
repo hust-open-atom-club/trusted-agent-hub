@@ -1,4 +1,6 @@
 from pathlib import Path
+import re
+import threading
 from types import SimpleNamespace
 
 from packages.schema.extract_skills import extract_single_skill
@@ -130,6 +132,67 @@ def test_two_independent_benign_reviews_resolve_without_arbitration(monkeypatch)
     assert all("source, sink, activation path" in prompt for prompt in calls)
 
 
+def test_judges_and_arbitrations_use_bounded_concurrency(monkeypatch) -> None:
+    candidates = []
+    contexts: dict[str, str] = {}
+    for index in range(9):
+        candidate = _candidate()
+        finding_id = f"semantic-{index}"
+        candidate["id"] = finding_id
+        candidates.append(candidate)
+        contexts[finding_id] = _context("semantic-1")["semantic-1"]
+
+    arbitration_barrier = threading.Barrier(2)
+    counter_lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_call(prompt: str) -> dict[str, object]:
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            is_arbitration = prompt.startswith(
+                "You are the final security adjudicator"
+            )
+            if is_arbitration:
+                arbitration_barrier.wait(timeout=5)
+            finding_ids = list(dict.fromkeys(
+                re.findall(r'"id": "(semantic-\d+)"', prompt)
+            ))
+            malicious = is_arbitration or "judge A" in prompt
+            review = _review(
+                vulnerable=malicious,
+                harmful=malicious,
+                impact="high" if malicious else "none",
+                intent="malicious" if malicious else "benign",
+            )
+            return {
+                "reviews": [
+                    {"id": finding_id, **review}
+                    for finding_id in finding_ids
+                ]
+            }
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
+
+    result = llm_reviewer.run_llm_review(
+        candidates,
+        contexts,
+        {},
+        max_concurrency=2,
+    )
+
+    assert max_active == 2
+    assert result["arbitrated"] == 9
+    assert result["findings_reviewed"] == 9
+    assert result["review_configuration"]["max_concurrency"] == 2
+
+
 def test_review_progress_reports_judges_retries_and_completion(monkeypatch) -> None:
     calls = 0
     events: list[dict[str, object]] = []
@@ -155,11 +218,12 @@ def test_review_progress_reports_judges_retries_and_completion(monkeypatch) -> N
     )
 
     starts = [event for event in events if event["event"] == "request_started"]
-    assert [(event["phase"], event["attempt"]) for event in starts] == [
-        ("judge_a", 1),
-        ("judge_a", 2),
-        ("judge_b", 1),
-    ]
+    assert len(starts) == 3
+    assert any(event["attempt"] == 2 for event in starts)
+    assert [event["phase"] for event in starts] == sorted(
+        (event["phase"] for event in starts),
+        key={"judge_a": 0, "judge_b": 1}.__getitem__,
+    )
     assert any(event["event"] == "request_timed_out" for event in events)
     assert events[-1]["status"] == "completed"
     assert events[-1]["findings_reviewed"] == 1
@@ -193,6 +257,55 @@ def test_review_deadline_marks_unresolved_findings_unavailable(monkeypatch) -> N
     assert result["decisions"]["semantic-1"]["verdict"] == "unavailable"
     assert events[-1]["status"] == "timeout"
     assert events[-1]["phase"] == "judge_a"
+
+
+def test_exhausted_request_timeouts_have_structured_reason(monkeypatch) -> None:
+    monkeypatch.setattr(
+        llm_reviewer,
+        "_call_llm",
+        lambda _prompt: (_ for _ in ()).throw(
+            llm_reviewer.LLMReviewRequestTimeout("test timeout")
+        ),
+    )
+    monkeypatch.setattr(llm_reviewer.time, "sleep", lambda _seconds: None)
+
+    result = llm_reviewer.run_llm_review(
+        [_candidate()],
+        _context("semantic-1"),
+        {},
+    )
+
+    assert result["status"] == "call_failed"
+    assert result["reason_code"] == "provider_request_timeout"
+    assert result["phase"] == "judge_b"
+    assert result["attempt"] == llm_reviewer.LLM_MAX_ATTEMPTS
+    assert result["findings_pending"] == 1
+
+
+def test_request_rejection_stops_each_judge_without_retry(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def reject_request(_prompt: str) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        raise llm_reviewer.LLMReviewRequestRejected("request rejected")
+
+    monkeypatch.setattr(llm_reviewer, "_call_llm", reject_request)
+    monkeypatch.setattr(llm_reviewer.time, "sleep", sleeps.append)
+
+    result = llm_reviewer.run_llm_review(
+        [_candidate()],
+        _context("semantic-1"),
+        {},
+    )
+
+    assert calls == 2
+    assert sleeps == []
+    assert result["status"] == "call_failed"
+    assert result["reason_code"] == "provider_request_rejected"
+    assert result["attempt"] == 1
+    assert result["attempts"] == 2
 
 
 def test_prompt_redacts_secrets_from_manifest_and_finding_evidence(monkeypatch) -> None:

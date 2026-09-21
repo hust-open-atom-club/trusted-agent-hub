@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatLLMReviewPhase,
   formatScanStatusMessage,
   isScanTerminalFailure,
   scanPollDelayMs,
@@ -55,6 +56,23 @@ describe('scan polling policy', () => {
       '已处理：0/3',
       '已等待：3 分 20 秒',
     ].join('\n'));
+  });
+
+  it('shows a partial report as completed but requiring manual review', () => {
+    expect(formatScanStatusMessage({
+      status: 'complete',
+      report_status: 'partial',
+      llm_review: {
+        status: 'timeout',
+        reason_code: 'scan_budget_exhausted',
+      },
+    })).toBe('扫描流程已结束，报告不完整，需人工复核');
+    expect(formatLLMReviewPhase('arbitration')).toBe('仲裁');
+  });
+
+  it('keeps the historical llm timeout label report-neutral', () => {
+    expect(formatScanStatusMessage({ status: 'llm_timeout' }))
+      .toBe('LLM 审查超时，扫描已结束');
   });
 
   it('never turns a stop-polling interval into a busy loop', () => {

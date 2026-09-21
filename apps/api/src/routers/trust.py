@@ -34,7 +34,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Dict, List, Any, Optional
+from typing import Callable, Dict, List, Any, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -50,6 +50,10 @@ from pydantic import BaseModel, Field
 from src.auth import require_role, verify_resource_access
 from src.database import create_session_factory, get_runtime_engine
 from src.dependencies import CurrentUser
+from src.llm_progress import (
+    finalize_running_llm_progress,
+    nonnegative_int as _nonnegative_int,
+)
 from src.models.common import require_safe_source_subdirectory
 from src.repositories.producer_sqlalchemy import (
     ProducerRepository,
@@ -75,6 +79,7 @@ _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from scanners.risk_scanner.redaction import (
+    DEFAULT_CONTEXT_BATCH_BYTES,
     build_finding_context_bundle,
     redact_report,
     redact_value,
@@ -178,10 +183,6 @@ class ScanSourceReacquisitionError(RuntimeError):
     """A callback could not reacquire its immutable source snapshot yet."""
 
 
-class ScanLLMTimeoutError(TimeoutError):
-    """The bounded LLM review exceeded its dedicated deadline."""
-
-
 class ScanTotalTimeoutError(TimeoutError):
     """The complete scan exceeded the task's total execution deadline."""
 
@@ -196,6 +197,8 @@ _SCAN_EXECUTING_STATUSES = frozenset({
 })
 _SCAN_FAILURE_STATUSES = frozenset({
     "error",
+    # Historical persisted tasks only. New LLM timeouts finish with a partial
+    # report and do not write the task-level ``llm_timeout`` status.
     "llm_timeout",
     "total_timeout",
 })
@@ -212,13 +215,36 @@ _PUBLIC_LLM_PROGRESS_FIELDS = frozenset({
     "last_update_at",
     "deadline_at",
     "fallback",
+    "reason_code",
 })
 _LLM_PROGRESS_STATUSES = frozenset({"running", "completed", "degraded", "timeout"})
-_LLM_PROGRESS_PHASES = frozenset({"judge_a", "judge_b", "arbitration", "complete"})
+_LLM_PROGRESS_PHASES = frozenset({
+    "not_started",
+    "judge_a",
+    "judge_b",
+    "arbitration",
+    "complete",
+})
 _LLM_PROGRESS_FALLBACKS = frozenset({
     "manual_review_required",
     "manual_review_for_unresolved",
     "manual_review_for_incomplete_context",
+})
+_LLM_REASON_CODES = frozenset({
+    "scan_budget_exhausted",
+    "review_deadline_exceeded",
+    "provider_request_timeout",
+    "provider_rate_limited",
+    "provider_request_rejected",
+    "provider_unavailable",
+    "network_error",
+    "invalid_provider_response",
+    "provider_not_configured",
+    "context_incomplete",
+})
+_LLM_PARTIAL_REPORT_REASON_CODES = frozenset({
+    "scan_budget_exhausted",
+    "review_deadline_exceeded",
 })
 
 _LOGGER = logging.getLogger(__name__)
@@ -629,13 +655,6 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _nonnegative_int(value: Any, default: int = 0) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
-
-
 def _llm_review_deadline_seconds() -> int:
     """Resolve the bounded LLM review budget from settings.
 
@@ -656,9 +675,45 @@ def _llm_review_deadline_seconds() -> int:
     return configured
 
 
-def _initial_llm_progress(findings_total: int) -> tuple[dict[str, Any], float]:
+def _effective_llm_review_budget(
+    scan_id: str,
+    *,
+    now: datetime | None = None,
+) -> tuple[float, bool]:
+    """Return the LLM budget left after reserving report-finalization time.
+
+    The boolean reports whether the scan's remaining wall-clock budget, rather
+    than the configured LLM deadline, constrained the result.  A timeout at a
+    scan-constrained deadline is exposed as ``scan_budget_exhausted``.
+    """
+    configured = float(_llm_review_deadline_seconds())
+    with _SCAN_PROGRESS_LOCK:
+        cached = _scans.get(scan_id)
+        info = dict(cached) if cached is not None else None
+    if info is None:
+        info = _load_scan_info(scan_id)
+    deadline = _scan_execution_deadline(info or {})
+    if deadline is None:
+        return configured, False
+
+    current = now or datetime.now(timezone.utc)
+    remaining = max(0.0, (deadline - current).total_seconds())
+    reserve = float(get_settings().scan_finalization_reserve_seconds)
+    available = max(0.0, remaining - reserve)
+    return min(configured, available), available < configured
+
+
+def _initial_llm_progress(
+    findings_total: int,
+    *,
+    budget_seconds: float | None = None,
+) -> tuple[dict[str, Any], float]:
     started = datetime.now(timezone.utc)
-    budget = _llm_review_deadline_seconds()
+    budget = (
+        float(_llm_review_deadline_seconds())
+        if budget_seconds is None
+        else max(0.0, float(budget_seconds))
+    )
     deadline = started + timedelta(seconds=budget)
     return ({
         "status": "running",
@@ -674,34 +729,28 @@ def _initial_llm_progress(findings_total: int) -> tuple[dict[str, Any], float]:
     }, _time.monotonic() + budget)
 
 
-def _llm_review_timeout_detail(result: dict[str, Any], total: int) -> str:
-    """Summarize an interrupted review so the failure stays diagnosable.
-
-    Without these counts a timed-out review only reports that it ran out of
-    time, which cannot distinguish "the model was slow" from "most candidates
-    never received source context".
-    """
-    coverage = result.get("context_coverage")
-    coverage = coverage if isinstance(coverage, dict) else {}
-    return (
-        f"(reviewed={_nonnegative_int(result.get('findings_reviewed', 0))}/{total},"
-        f" context complete={_nonnegative_int(coverage.get('complete', 0))}"
-        f" partial={_nonnegative_int(coverage.get('partial', 0))}"
-        f" missing={_nonnegative_int(coverage.get('missing', 0))})"
-    )
-
-
-def _update_llm_progress(scan_id: str, update: dict[str, Any]) -> None:
+def _update_llm_progress(
+    scan_id: str,
+    update: dict[str, Any],
+) -> dict[str, Any] | None:
     """Atomically publish only the safe, user-facing LLM progress fields."""
     next_progress: dict[str, Any] | None = None
+    previous_progress: dict[str, Any] | None = None
+    previous_updated_at: Any = None
+    published_updated_at: Any = None
     lease_token: str | None = None
     with _SCAN_PROGRESS_LOCK:
         info = _scans.get(scan_id)
         if info is None:
             return
+        scan_status = str(info.get("status") or "")
+        if scan_status and scan_status not in _SCAN_EXECUTING_STATUSES:
+            return
         current = info.get("llm_review")
         if not isinstance(current, dict):
             return
+        previous_progress = dict(current)
+        previous_updated_at = info.get("updated_at")
         next_progress = dict(current)
         status_value = update.get("status")
         if status_value in _LLM_PROGRESS_STATUSES:
@@ -727,43 +776,79 @@ def _update_llm_progress(scan_id: str, update: dict[str, Any]) -> None:
         fallback_value = update.get("fallback")
         if fallback_value in _LLM_PROGRESS_FALLBACKS:
             next_progress["fallback"] = fallback_value
+        reason_code = update.get("reason_code")
+        if reason_code in _LLM_REASON_CODES:
+            next_progress["reason_code"] = reason_code
         next_progress["last_update_at"] = _utc_now_iso()
         info["llm_review"] = next_progress
         info["updated_at"] = _utc_now_iso()
+        published_updated_at = info["updated_at"]
         if isinstance(info.get("lease_token"), str):
             lease_token = info["lease_token"]
     if next_progress is not None:
-        _persist_scan_updates(
+        persisted = _persist_scan_updates(
             scan_id,
             {"llm_review": next_progress},
             lease_token=lease_token,
+            expected_statuses=_SCAN_EXECUTING_STATUSES,
         )
+        if not persisted:
+            with _SCAN_PROGRESS_LOCK:
+                info = _scans.get(scan_id)
+                if (
+                    info is not None
+                    and info.get("llm_review") == next_progress
+                    and info.get("updated_at") == published_updated_at
+                ):
+                    info["llm_review"] = previous_progress
+                    info["updated_at"] = previous_updated_at
+    return dict(next_progress) if next_progress is not None else None
 
 
 def _heartbeat_llm_progress(scan_id: str, stop_event: threading.Event) -> None:
     """Keep last_update_at fresh while a bounded provider call is in flight."""
     while not stop_event.wait(_LLM_PROGRESS_HEARTBEAT_SECONDS):
         next_progress: dict[str, Any] | None = None
+        previous_progress: dict[str, Any] | None = None
+        previous_updated_at: Any = None
+        published_updated_at: Any = None
         lease_token: str | None = None
         with _SCAN_PROGRESS_LOCK:
             info = _scans.get(scan_id)
             if info is None:
                 return
+            scan_status = str(info.get("status") or "")
+            if scan_status and scan_status not in _SCAN_EXECUTING_STATUSES:
+                return
             current = info.get("llm_review")
             if not isinstance(current, dict) or current.get("status") != "running":
                 return
+            previous_progress = dict(current)
+            previous_updated_at = info.get("updated_at")
             next_progress = dict(current)
             next_progress["last_update_at"] = _utc_now_iso()
             info["llm_review"] = next_progress
             info["updated_at"] = _utc_now_iso()
+            published_updated_at = info["updated_at"]
             if isinstance(info.get("lease_token"), str):
                 lease_token = info["lease_token"]
         if next_progress is not None:
-            _persist_scan_updates(
+            persisted = _persist_scan_updates(
                 scan_id,
                 {"llm_review": next_progress},
                 lease_token=lease_token,
+                expected_statuses=_SCAN_EXECUTING_STATUSES,
             )
+            if not persisted:
+                with _SCAN_PROGRESS_LOCK:
+                    info = _scans.get(scan_id)
+                    if (
+                        info is not None
+                        and info.get("llm_review") == next_progress
+                        and info.get("updated_at") == published_updated_at
+                    ):
+                        info["llm_review"] = previous_progress
+                        info["updated_at"] = previous_updated_at
 
 
 class _DeterministicAcquisitionError(ValueError):
@@ -1138,6 +1223,7 @@ class LLMReviewProgressResponse(BaseModel):
     last_update_at: Optional[str] = None
     deadline_at: Optional[str] = None
     fallback: Optional[str] = None
+    reason_code: Optional[str] = None
 
 
 class ScanStatusResponse(BaseModel):
@@ -1157,6 +1243,10 @@ class ScanStatusResponse(BaseModel):
     summary: Optional[Dict[str, Any]] = None
     trust_score: Optional[Dict[str, Any]] = None
     llm_review: Optional[LLMReviewProgressResponse] = None
+    report_status: Optional[
+        Literal["complete", "partial", "failed", "report_unavailable"]
+    ] = None
+    scan_status: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     # Resolved immutable source identity, so clients can rebuild
     # subdirectory scan URLs without guessing the default branch.
@@ -1224,6 +1314,38 @@ def _scan_execution_deadline(info: dict[str, Any]) -> datetime | None:
 def _scan_execution_deadline_iso(info: dict[str, Any]) -> str | None:
     deadline = _scan_execution_deadline(info)
     return deadline.isoformat() if deadline is not None else None
+
+
+def _scan_report_contract_status(
+    info: dict[str, Any],
+) -> dict[str, Any] | None:
+    full_report = info.get("full_report")
+    if not isinstance(full_report, dict):
+        return None
+    scan_report = full_report.get("scan_report")
+    if not isinstance(scan_report, dict):
+        return None
+    scan_status = scan_report.get("scan_status")
+    return dict(scan_status) if isinstance(scan_status, dict) else None
+
+
+def _scan_report_status(info: dict[str, Any]) -> str | None:
+    """Project report completeness independently from task completion."""
+    scan_status = _scan_report_contract_status(info)
+    state = str((scan_status or {}).get("state") or "")
+    if state in {"complete", "partial", "failed"}:
+        return state
+    task_status = str(info.get("status") or "")
+    full_report = info.get("full_report")
+    has_report = (
+        isinstance(full_report, dict)
+        and isinstance(full_report.get("scan_report"), dict)
+    )
+    if task_status == "complete":
+        return "complete" if has_report else "report_unavailable"
+    if task_status in _SCAN_FAILURE_STATUSES:
+        return "report_unavailable"
+    return None
 
 
 def _scan_is_auto_expirable(info: dict[str, Any]) -> bool:
@@ -1547,6 +1669,7 @@ def _persist_scan_updates(
     *,
     required: bool = False,
     lease_token: str | None = None,
+    expected_statuses: frozenset[str] | None = None,
 ) -> bool:
     """Persist scan progress, retrying and surfacing required failures."""
     repository = _get_scan_task_repository()
@@ -1603,17 +1726,16 @@ def _persist_scan_updates(
     last_error: Exception | None = None
     for attempt in range(1, _SCAN_PERSIST_RETRY_ATTEMPTS + 1):
         try:
+            update_options: dict[str, object] = {}
             if lease_token:
-                persisted = repository.update_scan_task(
-                    scan_id,
-                    database_updates,
-                    lease_token=lease_token,
-                )
-            else:
-                persisted = repository.update_scan_task(
-                    scan_id,
-                    database_updates,
-                )
+                update_options["lease_token"] = lease_token
+            if expected_statuses is not None:
+                update_options["expected_statuses"] = expected_statuses
+            persisted = repository.update_scan_task(
+                scan_id,
+                database_updates,
+                **update_options,
+            )
             if persisted:
                 return True
             last_error = ScanTaskPersistenceError(
@@ -1692,12 +1814,16 @@ def _update_scan_state(
 
     persisted = True
     if not required:
+        llm_progress_only = set(updates) == {"llm_review"}
         persisted = _persist_scan_updates(
             scan_id,
             updates,
             lease_token=lease_token if isinstance(lease_token, str) else None,
+            expected_statuses=(
+                _SCAN_EXECUTING_STATUSES if llm_progress_only else None
+            ),
         )
-        if not persisted and "status" in updates:
+        if not persisted and ("status" in updates or llm_progress_only):
             return False
     with _SCAN_PROGRESS_LOCK:
         info = _scans.get(scan_id)
@@ -2596,9 +2722,23 @@ def _load_llm_reviewer() -> Any:
     return module
 
 
+def _llm_reason_code_for_exception(error: BaseException) -> str:
+    reason_code = getattr(error, "reason_code", None)
+    if reason_code in _LLM_REASON_CODES:
+        return str(reason_code)
+    if isinstance(error, TimeoutError):
+        return "review_deadline_exceeded"
+    return "provider_unavailable"
+
+
 def _mark_llm_review_unavailable(
     findings: list[dict[str, Any]],
     error: Exception,
+    *,
+    status: str = "call_failed",
+    reason_code: str | None = None,
+    phase: str = "not_started",
+    attempt: int = 0,
 ) -> dict[str, Any]:
     """Preserve unresolved severities and require manual review."""
     labels: dict[str, str] = {}
@@ -2646,10 +2786,18 @@ def _mark_llm_review_unavailable(
 
     return {
         "triggered": True,
-        "findings_reviewed": reviewed_count,
+        "findings_total": reviewed_count,
+        "findings_reviewed": 0,
         "findings_skipped": skipped_count,
         "findings_pending": reviewed_count,
-        "status": "call_failed",
+        "status": status,
+        "reason_code": (
+            reason_code
+            if reason_code in _LLM_REASON_CODES
+            else _llm_reason_code_for_exception(error)
+        ),
+        "phase": phase if phase in _LLM_PROGRESS_PHASES else "not_started",
+        "attempt": max(0, attempt),
         "attempts": 0,
         "review_rounds": 0,
         "arbitrated": 0,
@@ -2683,6 +2831,7 @@ def _mark_llm_review_unavailable(
             "provider": "unavailable",
             "model": "unavailable",
             "batch_size": 0,
+            "max_concurrency": 0,
             "temperature": 0.0,
             "max_output_tokens": 1024,
         },
@@ -2694,7 +2843,11 @@ def _mark_llm_review_unavailable(
             "total_context_bytes": 0,
         },
         "error": f"{type(error).__name__}: {error}",
-        "fallback": "manual_review_required",
+        "fallback": (
+            "manual_review_for_unresolved"
+            if status == "timeout"
+            else "manual_review_required"
+        ),
     }
 
 
@@ -2851,6 +3004,122 @@ def _apply_llm_decisions(
         finding["severity"] = effective_after
 
 
+def _ensure_required_llm_decisions(
+    required_finding_ids: set[str],
+    result: dict[str, Any],
+    context_audit: dict[str, Any] | None,
+) -> None:
+    """Fail closed when a reviewer omits an explicitly required candidate."""
+    labels = result.setdefault("labels", {})
+    decisions = result.setdefault("decisions", {})
+    if not isinstance(labels, dict) or not isinstance(decisions, dict):
+        raise ValueError("LLM review labels and decisions must be objects")
+    audits = (
+        context_audit.get("findings", {})
+        if isinstance(context_audit, dict)
+        and isinstance(context_audit.get("findings"), dict)
+        else {}
+    )
+    added = 0
+    for finding_id in sorted(required_finding_ids):
+        if isinstance(decisions.get(finding_id), dict):
+            continue
+        finding_audit = audits.get(finding_id)
+        if not isinstance(finding_audit, dict):
+            finding_audit = {
+                "delivery_status": "missing",
+                "context_bytes": 0,
+                "line_ranges": [],
+            }
+        labels[finding_id] = "llm:unavailable"
+        decisions[finding_id] = {
+            "verdict": "unavailable",
+            "impact": "unknown",
+            "intent": "benign",
+            "confidence": 0.0,
+            "context_role": "unknown",
+            "evidence_sufficient": False,
+            "missing_context": ["LLM semantic review did not return a decision"],
+            "supporting_evidence": [],
+            "explanation": "LLM semantic review unavailable",
+            "rounds": 0,
+            "context_audit": finding_audit,
+        }
+        added += 1
+
+    result["findings_total"] = len(required_finding_ids)
+    if added:
+        unresolved = sum(
+            isinstance(decision, dict)
+            and decision.get("verdict") in {"uncertain", "unavailable"}
+            for decision in decisions.values()
+        )
+        result["findings_pending"] = max(
+            _nonnegative_int(result.get("findings_pending")),
+            unresolved,
+        )
+        summary = result.setdefault("labels_summary", {})
+        if isinstance(summary, dict):
+            summary["unavailable"] = sum(
+                label == "llm:unavailable" for label in labels.values()
+            )
+
+
+def _build_batched_llm_context_bundle(
+    findings: list[dict[str, Any]],
+    file_contents: dict[str, str],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Build one bounded context bundle per provider request batch."""
+    reviewable = [
+        finding
+        for finding in findings
+        if isinstance(finding, dict)
+        and finding.get("id")
+        and _is_llm_reviewable_finding(finding)
+    ]
+    contexts: dict[str, str] = {}
+    finding_audits: dict[str, dict[str, Any]] = {}
+    batch_summaries: list[dict[str, Any]] = []
+    for batch_index, start in enumerate(
+        range(0, len(reviewable), REVIEW_BATCH_SIZE)
+    ):
+        batch_contexts, batch_audit = build_finding_context_bundle(
+            reviewable[start : start + REVIEW_BATCH_SIZE],
+            file_contents,
+        )
+        contexts.update(batch_contexts)
+        batch_findings = batch_audit.get("findings", {})
+        if isinstance(batch_findings, dict):
+            finding_audits.update(batch_findings)
+        batch_summary = batch_audit.get("summary", {})
+        if isinstance(batch_summary, dict):
+            batch_summaries.append({
+                **batch_summary,
+                "batch_index": batch_index,
+            })
+
+    statuses = [
+        str(item.get("delivery_status") or "missing")
+        for item in finding_audits.values()
+    ]
+    return contexts, {
+        "findings": finding_audits,
+        "summary": {
+            "candidates": len(finding_audits),
+            "complete": statuses.count("complete"),
+            "partial": statuses.count("partial"),
+            "missing": statuses.count("missing"),
+            "total_context_bytes": sum(
+                _nonnegative_int(item.get("context_bytes"))
+                for item in finding_audits.values()
+            ),
+            "batch_count": len(batch_summaries),
+            "max_bytes_per_batch": DEFAULT_CONTEXT_BATCH_BYTES,
+            "batches": batch_summaries,
+        },
+    }
+
+
 def _run_llm_review_with_fallback(
     findings: list[dict[str, Any]],
     scanner: Any,
@@ -2867,7 +3136,14 @@ def _run_llm_review_with_fallback(
         ):
             raise TimeoutError("LLM review deadline exceeded")
         reviewer = _load_llm_reviewer()
-        finding_contexts, context_audit = build_finding_context_bundle(
+        required_decision_ids = {
+            str(finding.get("id"))
+            for finding in findings
+            if isinstance(finding, dict)
+            and _is_llm_reviewable_finding(finding)
+            and finding.get("id")
+        }
+        finding_contexts, context_audit = _build_batched_llm_context_bundle(
             findings,
             scanner._file_contents,
         )
@@ -2883,6 +3159,7 @@ def _run_llm_review_with_fallback(
             context_audit=context_audit,
             progress_callback=progress_callback,
             deadline_monotonic=deadline_monotonic,
+            max_concurrency=get_settings().llm_review_max_concurrency,
         )
         labels = result.get("labels", {})
         if not isinstance(labels, dict):
@@ -2890,6 +3167,25 @@ def _run_llm_review_with_fallback(
         decisions = result.get("decisions", {})
         if not isinstance(decisions, dict):
             raise ValueError("LLM review decisions must be an object")
+        result_status = str(result.get("status") or "call_failed")
+        default_reason_codes = {
+            "timeout": "review_deadline_exceeded",
+            "call_failed": "provider_unavailable",
+            "not_configured": "provider_not_configured",
+            "context_incomplete": "context_incomplete",
+        }
+        if result.get("reason_code") not in _LLM_REASON_CODES:
+            result["reason_code"] = default_reason_codes.get(result_status)
+        if result.get("phase") not in _LLM_PROGRESS_PHASES:
+            result["phase"] = (
+                "judge_a" if result_status == "timeout" else "complete"
+            )
+        result["attempt"] = _nonnegative_int(result.get("attempt"))
+        _ensure_required_llm_decisions(
+            required_decision_ids,
+            result,
+            context_audit,
+        )
         _apply_llm_decisions(findings, result, finding_contexts)
 
         labels_summary = result.get("labels_summary")
@@ -2906,12 +3202,50 @@ def _run_llm_review_with_fallback(
         return result
     except Exception as exc:
         print(f"[TAH-trust]     LLM 审查跳过（{exc}）")
-        result = _mark_llm_review_unavailable(findings, exc)
-        if isinstance(exc, TimeoutError) or type(exc).__name__ == "LLMReviewDeadlineExceeded":
-            result["status"] = "timeout"
-            result["findings_reviewed"] = 0
+        is_timeout = (
+            isinstance(exc, TimeoutError)
+            or type(exc).__name__ == "LLMReviewDeadlineExceeded"
+        )
+        result = _mark_llm_review_unavailable(
+            findings,
+            exc,
+            status="timeout" if is_timeout else "call_failed",
+        )
+        if is_timeout:
             result["fallback"] = "manual_review_for_unresolved"
         return result
+
+
+def _mark_scan_report_for_llm_review(
+    scan_report: dict[str, Any],
+    llm_result: dict[str, Any],
+) -> None:
+    """Mark reports partial only when review exhausts its bounded budget."""
+    reason_code = llm_result.get("reason_code")
+    if reason_code not in _LLM_PARTIAL_REPORT_REASON_CODES:
+        return
+
+    current = scan_report.get("scan_status")
+    current = dict(current) if isinstance(current, dict) else {}
+    raw_reasons = current.get("reasons")
+    reasons = (
+        [str(reason) for reason in raw_reasons]
+        if isinstance(raw_reasons, list)
+        else []
+    )
+    reasons.append("llm_review_incomplete")
+    reasons.append(str(reason_code))
+    current.update(
+        {
+            "state": (
+                "failed" if current.get("state") == "failed" else "partial"
+            ),
+            "conclusion": "inconclusive",
+            "complete": False,
+            "reasons": list(dict.fromkeys(reasons)),
+        }
+    )
+    scan_report["scan_status"] = current
 
 
 # ---------------------------------------------------------------------------
@@ -4696,6 +5030,7 @@ def _mark_total_scan_timeout(
     finished_at = datetime.now(timezone.utc)
     error = "Scan failed: ScanTotalTimeoutError: total scan deadline exceeded"
     expires_at = finished_at + timedelta(seconds=_SCAN_TTL_SECONDS)
+    persisted_llm_review: dict[str, Any] | None = None
     repository = _get_scan_task_repository()
     if repository is not None:
         try:
@@ -4714,6 +5049,17 @@ def _mark_total_scan_timeout(
             return False
         if not marked:
             return False
+        try:
+            refreshed = repository.get_scan_task(scan_id)
+        except Exception:  # pragma: no cover - timeout is already durable
+            _logger.exception(
+                "Failed to refresh terminal LLM progress for %s", scan_id
+            )
+        else:
+            if refreshed is not None and isinstance(
+                refreshed.get("llm_review"), dict
+            ):
+                persisted_llm_review = deepcopy(refreshed["llm_review"])
 
     with _SCAN_PROGRESS_LOCK:
         info = _scans.get(scan_id)
@@ -4738,6 +5084,17 @@ def _mark_total_scan_timeout(
                 "updated_at": finished_at.isoformat(),
             }
         )
+        if persisted_llm_review is not None:
+            info["llm_review"] = persisted_llm_review
+        else:
+            llm_review = finalize_running_llm_progress(
+                info.get("llm_review"),
+                terminal_status="timeout",
+                reason_code="scan_budget_exhausted",
+                last_update_at=finished_at.isoformat(),
+            )
+            if llm_review is not None:
+                info["llm_review"] = llm_review
     return True
 
 
@@ -5433,54 +5790,77 @@ def _run_scan_task_body(
 
         # Step 2.5: LLM 语义复核。上下文候选通常双审，冲突时第三审仲裁。
         findings = scan_report.get("findings", [])
-        if findings:
-            _raise_if_scan_total_timeout(scan_id, total_timeout_event)
-            _update_scan_state(scan_id, {"status": "llm_review"})
-            reviewable_total = sum(
+        reviewable_total = (
+            sum(
                 1
                 for finding in findings
                 if isinstance(finding, dict)
                 and finding.get("id")
                 and _is_llm_reviewable_finding(finding)
             )
-            progress, deadline_monotonic = _initial_llm_progress(reviewable_total)
-            _update_scan_state(scan_id, {"llm_review": progress})
-            heartbeat_stop = threading.Event()
-            heartbeat_thread = threading.Thread(
-                target=_heartbeat_llm_progress,
-                args=(scan_id, heartbeat_stop),
-                name=f"llm-progress-{scan_id}",
-                daemon=True,
+            if isinstance(findings, list)
+            else 0
+        )
+        terminal_llm_progress: dict[str, Any] | None = None
+        if reviewable_total:
+            _raise_if_scan_total_timeout(scan_id, total_timeout_event)
+            _update_scan_state(scan_id, {"status": "llm_review"})
+            review_budget, scan_budget_limited = _effective_llm_review_budget(
+                scan_id
             )
-            heartbeat_thread.start()
-            review_budget = _llm_review_deadline_seconds()
+            progress, deadline_monotonic = _initial_llm_progress(
+                reviewable_total,
+                budget_seconds=review_budget,
+            )
+            _update_scan_state(scan_id, {"llm_review": progress})
             review_batches = math.ceil(reviewable_total / REVIEW_BATCH_SIZE)
             review_calls = review_batches * 2
-            if review_calls:
-                print(
-                    f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查，"
-                    f"批量 {REVIEW_BATCH_SIZE} → 约 {review_batches} 批 × 2 次调用，"
-                    f"预算 {review_budget} 秒"
-                    f"（≈{review_budget / review_calls:.1f} 秒/次）"
+            review_concurrency = get_settings().llm_review_max_concurrency
+            print(
+                f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查，"
+                f"批量 {REVIEW_BATCH_SIZE} → 约 {review_calls} 次调用，"
+                f"最大并发 {review_concurrency}，预算 {review_budget} 秒"
+            )
+            if review_budget <= 0:
+                scan_report["llm_review"] = _mark_llm_review_unavailable(
+                    findings,
+                    TimeoutError(
+                        "scan budget exhausted before LLM review could start"
+                    ),
+                    status="timeout",
+                    reason_code="scan_budget_exhausted",
+                    phase="not_started",
                 )
             else:
-                print(f"[TAH-trust]     LLM 审查: {reviewable_total} findings 待审查")
-            try:
-                scan_report["llm_review"] = _run_llm_review_with_fallback(
-                    findings,
-                    scanner,
-                    manifest=package_metadata,
-                    progress_callback=lambda update: _update_llm_progress(
-                        scan_id, update
-                    ),
-                    deadline_monotonic=deadline_monotonic,
+                heartbeat_stop = threading.Event()
+                heartbeat_thread = threading.Thread(
+                    target=_heartbeat_llm_progress,
+                    args=(scan_id, heartbeat_stop),
+                    name=f"llm-progress-{scan_id}",
+                    daemon=True,
                 )
-            finally:
-                heartbeat_stop.set()
-                heartbeat_thread.join(timeout=1.0)
+                heartbeat_thread.start()
+                try:
+                    scan_report["llm_review"] = _run_llm_review_with_fallback(
+                        findings,
+                        scanner,
+                        manifest=package_metadata,
+                        progress_callback=lambda update: _update_llm_progress(
+                            scan_id, update
+                        ),
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                finally:
+                    heartbeat_stop.set()
+                    heartbeat_thread.join(timeout=1.0)
 
             llm_result = scan_report["llm_review"]
             result_status = str(llm_result.get("status") or "call_failed")
+            if result_status == "timeout" and scan_budget_limited:
+                llm_result["reason_code"] = "scan_budget_exhausted"
+                llm_result["error"] = (
+                    "LLM review stopped to preserve the scan finalization budget"
+                )
             public_status = (
                 "timeout"
                 if result_status == "timeout"
@@ -5497,25 +5877,36 @@ def _run_scan_task_body(
                 "findings_pending": _nonnegative_int(
                     llm_result.get("findings_pending", 0)
                 ),
+                "attempt": _nonnegative_int(llm_result.get("attempt", 0)),
             }
-            if public_status != "timeout":
-                final_progress["phase"] = "complete"
+            result_phase = llm_result.get("phase")
+            final_progress["phase"] = (
+                result_phase
+                if result_phase in _LLM_PROGRESS_PHASES
+                else "complete" if public_status != "timeout" else "judge_a"
+            )
             fallback = llm_result.get("fallback")
             if isinstance(fallback, str) and fallback:
                 final_progress["fallback"] = fallback
-            _update_llm_progress(scan_id, final_progress)
-            if result_status == "timeout":
-                raise ScanLLMTimeoutError(
-                    "LLM review deadline exceeded "
-                    + _llm_review_timeout_detail(llm_result, reviewable_total)
-                )
+            reason_code = llm_result.get("reason_code")
+            if reason_code in _LLM_REASON_CODES:
+                final_progress["reason_code"] = reason_code
+            terminal_llm_progress = _update_llm_progress(
+                scan_id,
+                final_progress,
+            )
         else:
+            no_review_status = "not_required" if findings else "not_triggered"
             scan_report["llm_review"] = {
-                "triggered": False,
+                "triggered": bool(findings),
+                "findings_total": 0,
                 "findings_reviewed": 0,
-                "findings_skipped": 0,
+                "findings_skipped": len(findings) if isinstance(findings, list) else 0,
                 "findings_pending": 0,
-                "status": "not_triggered",
+                "status": no_review_status,
+                "reason_code": None,
+                "phase": "complete",
+                "attempt": 0,
                 "attempts": 0,
                 "review_rounds": 0,
                 "arbitrated": 0,
@@ -5536,6 +5927,14 @@ def _run_scan_task_body(
                     }
                 },
             )
+            with _SCAN_PROGRESS_LOCK:
+                current_progress = _scans.get(scan_id, {}).get("llm_review")
+                if isinstance(current_progress, dict):
+                    terminal_llm_progress = deepcopy(current_progress)
+        _mark_scan_report_for_llm_review(
+            scan_report,
+            scan_report["llm_review"],
+        )
         refresh_report_summaries(scan_report)
 
         _raise_if_scan_total_timeout(scan_id, total_timeout_event)
@@ -5640,27 +6039,32 @@ def _run_scan_task_body(
         )
 
         # Step 5: 更新内存状态
+        completion_updates: dict[str, Any] = {
+            "status": "complete",
+            "finished_at": full_report["finished_at"],
+            "expires_at": standalone_retention_expires_at,
+            "full_report": full_report,
+            "package_metadata": package_metadata,
+            "acquisition_facts": acquisition_facts,
+            "package_claims": package_claims,
+            "summary": scan_report.get("summary", {}),
+            "trust_score": {
+                "level": trust_score_result.get("risk_summary", {}).get("level"),
+                "grade": trust_score_result.get("risk_summary", {}).get("grade"),
+                "recommendation": trust_score_result.get("risk_summary", {}).get(
+                    "install_recommendation"
+                ),
+            },
+            "callback_status": "pending" if on_complete else "not_required",
+            "callback_next_attempt_at": None,
+            "callback_last_error": None,
+            "completion_delivered_at": None,
+        }
+        if terminal_llm_progress is not None:
+            completion_updates["llm_review"] = terminal_llm_progress
         _update_scan_state(
             scan_id,
-            {
-                "status": "complete",
-                "finished_at": full_report["finished_at"],
-                "expires_at": standalone_retention_expires_at,
-                "full_report": full_report,
-                "package_metadata": package_metadata,
-                "acquisition_facts": acquisition_facts,
-                "package_claims": package_claims,
-                "summary": scan_report.get("summary", {}),
-                "trust_score": {
-                    "level": trust_score_result.get("risk_summary", {}).get("level"),
-                    "grade": trust_score_result.get("risk_summary", {}).get("grade"),
-                    "recommendation": trust_score_result.get("risk_summary", {}).get("install_recommendation"),
-                },
-                "callback_status": "pending" if on_complete else "not_required",
-                "callback_next_attempt_at": None,
-                "callback_last_error": None,
-                "completion_delivered_at": None,
-            },
+            completion_updates,
             required=True,
         )
 
@@ -5691,10 +6095,7 @@ def _run_scan_task_body(
         token = get_settings().github_token or ""
         if token and token in err_msg:
             err_msg = err_msg.replace(token, "***")
-        if isinstance(exc, ScanLLMTimeoutError):
-            terminal_status = "llm_timeout"
-            public_error = f"Scan failed: {err_msg}"
-        elif isinstance(exc, ScanTotalTimeoutError):
+        if isinstance(exc, ScanTotalTimeoutError):
             terminal_status = "total_timeout"
             public_error = "Scan failed: total scan deadline exceeded"
         elif isinstance(exc, _DeterministicAcquisitionError):
@@ -5705,6 +6106,34 @@ def _run_scan_task_body(
             public_error = f"Scan failed: {type(exc).__name__}: {err_msg}"
         finished_at = datetime.now(timezone.utc)
         failure_expires_at = finished_at + timedelta(seconds=_SCAN_TTL_SECONDS)
+        failure_updates: dict[str, Any] = {
+            "status": terminal_status,
+            "error": public_error,
+            "finished_at": finished_at.isoformat(),
+            "expires_at": failure_expires_at,
+            "callback_status": "pending" if on_complete else "not_required",
+            "callback_next_attempt_at": None,
+            "callback_last_error": None,
+            "completion_delivered_at": None,
+        }
+        with _SCAN_PROGRESS_LOCK:
+            current_llm_progress = _scans.get(scan_id, {}).get("llm_review")
+            terminal_progress = finalize_running_llm_progress(
+                current_llm_progress,
+                terminal_status=(
+                    "timeout"
+                    if terminal_status == "total_timeout"
+                    else "degraded"
+                ),
+                reason_code=(
+                    "scan_budget_exhausted"
+                    if terminal_status == "total_timeout"
+                    else None
+                ),
+                last_update_at=finished_at.isoformat(),
+            )
+            if terminal_progress is not None:
+                failure_updates["llm_review"] = terminal_progress
         error_state_persisted = False
         if not lease_lost.is_set() and not isinstance(
             exc, ScanTaskPersistenceError
@@ -5712,18 +6141,7 @@ def _run_scan_task_body(
             try:
                 error_state_persisted = _update_scan_state(
                     scan_id,
-                    {
-                        "status": terminal_status,
-                        "error": public_error,
-                        "finished_at": finished_at.isoformat(),
-                        "expires_at": failure_expires_at,
-                        "callback_status": (
-                            "pending" if on_complete else "not_required"
-                        ),
-                        "callback_next_attempt_at": None,
-                        "callback_last_error": None,
-                        "completion_delivered_at": None,
-                    },
+                    failure_updates,
                     required=True,
                 )
             except Exception:
@@ -6310,6 +6728,8 @@ def get_scan_status(
         "summary": info.get("summary"),
         "trust_score": info.get("trust_score"),
         "llm_review": info.get("llm_review"),
+        "report_status": _scan_report_status(info),
+        "scan_status": _scan_report_contract_status(info),
         "error": info.get("error"),
         "source_ref": info.get("source_ref"),
         "source_subdirectory": info.get("source_subdirectory"),

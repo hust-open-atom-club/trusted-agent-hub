@@ -419,7 +419,8 @@ function SubmitForm() {
     }
     if (isScanTerminalFailure(data.status)) {
       setScanTerminal(true);
-      throw new TerminalScanError(data.error || formatScanStatusMessage(data));
+      const message = data.error || formatScanStatusMessage(data);
+      throw new TerminalScanError(message);
     }
     return false;
   };
@@ -826,6 +827,13 @@ function SubmitForm() {
   const hint: React.CSSProperties = { fontSize: '0.76rem', color: 'var(--color-muted)', lineHeight: 1.4 };
   const warnHint: React.CSSProperties = { ...hint, color: 'var(--color-warning)' };
   const availableClients = getAllowedSubmissionClients(pkgType);
+  const scanReportStatus = scanResult?.report_status
+    || scanResult?.scan_status?.state
+    || 'complete';
+  const scanReportStatusLabel = t(
+    `review.detail.scan_report_status_${scanReportStatus}`,
+    { defaultValue: scanReportStatus },
+  );
 
   return (
     <div className={`submit-page${phase === 'confirm' && scanResult ? ' submit-page--with-actions' : ''}`}>
@@ -1000,11 +1008,39 @@ function SubmitForm() {
                   </span>
                 </div>
               )}
-              {(scanResult.llm_review?.status === 'timeout'
+              {(scanResult.scan_status?.reasons?.includes('llm_review_incomplete')
+                || scanResult.llm_review?.status === 'timeout'
                 || scanResult.llm_review?.status === 'degraded'
                 || Boolean(scanResult.llm_review?.fallback)) && (
                 <div className="submit-error" style={{ marginTop: '0.9rem', marginBottom: 0 }}>
-                  LLM 审查未能完成全部裁决；扫描结果已保存，未解决的问题需要人工审核。
+                  <strong>
+                    {t('review.detail.scan_report_status')}: {scanReportStatusLabel}
+                  </strong>
+                  <div style={{ marginTop: '0.3rem' }}>
+                    {t('review.detail.llm_incomplete_description')}
+                  </div>
+                  {scanResult.llm_review?.reason_code && (
+                    <div style={{ marginTop: '0.3rem' }}>
+                      {t('review.detail.llm_incomplete_reason')}: {t(
+                        `review.detail.llm_reason_${scanResult.llm_review.reason_code}`,
+                        { defaultValue: scanResult.llm_review.reason_code },
+                      )}
+                      {scanResult.llm_review.phase
+                        ? ` · ${t('review.detail.llm_incomplete_phase')}: ${t(
+                            `review.detail.llm_phase_${scanResult.llm_review.phase}`,
+                            { defaultValue: scanResult.llm_review.phase },
+                          )}`
+                        : ''}
+                      {typeof scanResult.llm_review.attempt === 'number'
+                        ? ` · ${t('review.detail.llm_incomplete_attempt')}: ${scanResult.llm_review.attempt}`
+                        : ''}
+                    </div>
+                  )}
+                  <div style={{ marginTop: '0.3rem' }}>
+                    {t('review.detail.llm_findings_reviewed')}: {scanResult.llm_review?.findings_reviewed ?? 0}/
+                    {scanResult.llm_review?.findings_total ?? 0}
+                    {' · '}{t('review.detail.llm_findings_pending')}: {scanResult.llm_review?.findings_pending ?? 0}
+                  </div>
                 </div>
               )}
             </div>
