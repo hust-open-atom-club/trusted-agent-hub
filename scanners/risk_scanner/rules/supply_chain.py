@@ -145,7 +145,16 @@ def _dependency_usage_near_line(
     lines: list[str], line_no: int
 ) -> DependencySourceUsage:
     line = lines[line_no - 1].casefold() if 0 < line_no <= len(lines) else ""
+    if 1 < line_no <= len(lines):
+        previous_line = lines[line_no - 2].rstrip()
+        if previous_line.endswith("\\"):
+            line = f"{previous_line[:-1].casefold()} {line}"
     if re.search(r"(?:^|\s)--find-links(?:\s|=)", line):
+        return "resolved_download"
+    if (
+        re.search(r"(?:^|\s)-f(?:\s|=)", line)
+        and _dependency_ecosystem_near_line(lines, line_no) == "pypi"
+    ):
         return "resolved_download"
     if re.search(
         r"\bregistry\b|--(?:extra-)?index-url\b"

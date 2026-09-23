@@ -21,6 +21,10 @@ _VCS_REFERENCE = re.compile(
     r"^(?:git|hg|svn|bzr)\+[^\s]+://[^\s]+",
     re.IGNORECASE,
 )
+_HTTP_REFERENCE = re.compile(
+    r"^(?P<url>https?://\S+)",
+    re.IGNORECASE,
+)
 _EGG_NAME = re.compile(r"(?:^|[&])egg=([^&]+)", re.IGNORECASE)
 
 
@@ -31,16 +35,23 @@ def _requirement_source(line: str) -> tuple[str | None, str] | None:
 
     editable = _EDITABLE_REFERENCE.match(line)
     candidate = editable.group("url") if editable else line
-    if not _VCS_REFERENCE.match(candidate):
-        return None
-    egg = _EGG_NAME.search(candidate.partition("#")[2])
-    return (egg.group(1) if egg else None), candidate
+    if _VCS_REFERENCE.match(candidate):
+        egg = _EGG_NAME.search(candidate.partition("#")[2])
+        return (egg.group(1) if egg else None), candidate
+
+    # Bare URLs keep fragments; only an explicit egg supplies a package name.
+    remote = _HTTP_REFERENCE.match(candidate)
+    if remote:
+        url = remote.group("url")
+        egg = _EGG_NAME.search(url.partition("#")[2])
+        return (egg.group(1) if egg else None), url
+    return None
 
 
 def parse_requirement_sources(
     content: str,
 ) -> list[tuple[str | None, str]]:
-    """Return remote direct/VCS URLs, including editable requirement lines."""
+    """Return remote direct, VCS, and bare HTTP(S) requirement URLs."""
     sources: list[tuple[str | None, str]] = []
     for raw_line in content.splitlines():
         line = re.split(r"\s+#", raw_line, maxsplit=1)[0].strip()

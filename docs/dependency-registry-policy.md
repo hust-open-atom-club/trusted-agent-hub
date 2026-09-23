@@ -19,7 +19,7 @@ advisory 会按处置方式区分三类拒绝原因：`unknown_host`、`non_regi
 
 GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时会进入同一条聚合 advisory；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
 
-`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
+`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。requirements 中裸写的 HTTP(S) URL、`-f`/`--find-links` 指向的 HTTP(S) 地址，以及安装脚本中 `pip install -f URL` / `pip install --find-links URL` 使用的 HTTP(S) 地址，均按 `resolved_download` 采集。非 VCS 的 `-e`/`--editable` HTTP(S) URL 也会形成来源观察；有 `#egg=` 时关联显式依赖名，否则不推断名称。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
 
 ## 匹配规则
 

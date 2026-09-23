@@ -287,16 +287,18 @@ def test_npm_and_python_git_sources_are_observed_and_rejected():
     } == {"non_registry_source", "unknown_host"}
 
 
+@pytest.mark.parametrize("option", ["--find-links", "-f"])
+@pytest.mark.parametrize("separator", [" ", "="])
 @pytest.mark.parametrize(
     ("allow_download", "expected_allowed"),
     [(False, False), (True, True)],
 )
 def test_find_links_requires_resolved_download_approval(
-    allow_download, expected_allowed
+    option, separator, allow_download, expected_allowed
 ):
     source = "https://files.corp.example/wheels/demo.whl"
     observations = parse_dependency_sources({
-        "requirements.txt": f"--find-links {source}\n"
+        "requirements.txt": f"{option}{separator}{source}\n"
     })
     entry = RegistryEntry(
         ecosystem="pypi",
@@ -321,14 +323,70 @@ def test_find_links_requires_resolved_download_approval(
     )
 
 
-def test_find_links_is_not_classified_as_a_registry_api_in_inline_rules():
+def test_bare_http_requirements_are_observed_without_inventing_names():
+    observations = parse_dependency_sources({
+        "requirements.txt": (
+            "https://packages.example/demo-1.0-py3-none-any.whl"
+            "#sha256=cafebabe # verified artifact\n"
+            "http://packages.example/source-demo-1.0.tar.gz?download=1\n"
+            "-e https://packages.example/editable#egg=editable-demo\n"
+            "./local-demo-1.0-py3-none-any.whl\n"
+        )
+    })
+
+    assert len(observations) == 3
+    assert {
+        (item.url, item.usage, item.dependency_name)
+        for item in observations
+    } == {
+        (
+            "https://packages.example/demo-1.0-py3-none-any.whl"
+            "#sha256=cafebabe",
+            "resolved_download",
+            None,
+        ),
+        (
+            "http://packages.example/source-demo-1.0.tar.gz?download=1",
+            "resolved_download",
+            None,
+        ),
+        (
+            "https://packages.example/editable#egg=editable-demo",
+            "resolved_download",
+            "editable-demo",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install --find-links https://registry.example/wheels demo",
+        "pip install --find-links=https://registry.example/wheels demo",
+        "pip install -f https://registry.example/wheels demo",
+        "pip install -f=https://registry.example/wheels demo",
+    ],
+)
+def test_find_links_is_not_classified_as_a_registry_api_in_inline_rules(
+    command,
+):
     from scanners.risk_scanner.rules.supply_chain import (
         _dependency_usage_near_line,
     )
 
     assert _dependency_usage_near_line(
-        ["pip install --find-links https://registry.example/wheels demo"], 1
+        [command], 1
     ) == "resolved_download"
+
+
+def test_npm_force_is_not_classified_as_pip_find_links():
+    from scanners.risk_scanner.rules.supply_chain import (
+        _dependency_usage_near_line,
+    )
+
+    assert _dependency_usage_near_line(
+        ["npm install -f --registry https://mirror.internal/ demo"], 1
+    ) == "registry_api"
 
 
 def test_dependency_scan_reports_osv_query_failures(tmp_path):

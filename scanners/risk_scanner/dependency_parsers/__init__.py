@@ -116,7 +116,7 @@ def parse_dependency_sources(
 
         if name.startswith("requirements") and name.endswith(".txt"):
             for match in re.finditer(
-                r"(?im)^\s*(?P<option>--(?:extra-)?index-url|--find-links|-i)"
+                r"(?im)^\s*(?P<option>--(?:extra-)?index-url|--find-links|-i|-f)"
                 r"(?:\s+|=)(?P<url>\S+)",
                 content,
             ):
@@ -126,7 +126,7 @@ def parse_dependency_sources(
                     match.group("url"),
                     (
                         "resolved_download"
-                        if option == "--find-links"
+                        if option in {"--find-links", "-f"}
                         else "registry_api"
                     ),
                     path,
