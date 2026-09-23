@@ -16,7 +16,7 @@
   "properties": {
     "review_advisories": {
       "type": "array",
-      "description": "Reviewer-facing quality/provenance/consistency warnings that are not security findings.",
+      "description": "Reviewer-facing quality, provenance, consistency, or dependency-registry policy warnings that are not security findings.",
       "items": {
         "type": "object",
         "required": [
@@ -29,7 +29,7 @@
           "code": { "type": "string" },
           "category": {
             "type": "string",
-            "enum": ["metadata_quality", "provenance", "permission_consistency"]
+            "enum": ["metadata_quality", "provenance", "permission_consistency", "registry_policy"]
           },
           "level": { "type": "string", "enum": ["high", "warning", "info"] },
           "title": { "type": "string" },

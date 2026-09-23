@@ -172,6 +172,9 @@ class Settings:
     # Keep enough of the scan's total wall-clock budget for summary refresh,
     # scoring, report persistence, and the submission completion callback.
     scan_finalization_reserve_seconds: int = 2 * 60
+    # Server-controlled approvals only. Scan submitters cannot inject registry
+    # trust decisions into an individual request.
+    approved_private_registries_json: str | None = None
     initial_admin_email: str | None = None
     initial_admin_password: str | None = None
     initial_admin_display_name: str = "Administrator"
@@ -216,6 +219,9 @@ class Settings:
             ),
             scan_finalization_reserve_seconds=_integer(
                 "TAH_SCAN_FINALIZATION_RESERVE_SECONDS", 2 * 60
+            ),
+            approved_private_registries_json=_optional(
+                "TAH_APPROVED_PRIVATE_REGISTRIES_JSON"
             ),
             initial_admin_email=_optional("INITIAL_ADMIN_EMAIL"),
             initial_admin_password=_optional("INITIAL_ADMIN_PASSWORD"),

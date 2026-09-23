@@ -60,7 +60,7 @@ TrustedAgentHub/
 | SR-005b | 远程代码执行 (AST 行为分析层) |
 | SR-006 | 过度权限 + 自主决策 |
 | SR-007 | 网络访问无白名单 |
-| SR-008 | 供应链风险 (Typosquatting + CVE) |
+| SR-008 | 供应链风险（Typosquatting + CVE；未批准 HTTPS 来源生成 `high` 人工复核 advisory，不扣分、不改评级；HTTP 来源另报 `medium` finding） |
 | SR-009 | 来源完整性 |
 | SR-010 | 元数据质量 |
 | SR-011 | 输出处理风险 |
@@ -73,6 +73,8 @@ TrustedAgentHub/
 | SR-018 | Plugin 安全 (内联 MCP + Hook 注入) |
 | SR-019 | Subagent 安全 (自主模式 + 危险工具) |
 | SR-020 | 安装器安全 (生命周期脚本 + 破坏性安装操作) |
+
+SR-008 的官方、私有和未知依赖源采用可审计的分级策略，并将同根因的未批准来源聚合为一次人工复核提示。npm/Python 依赖声明中的 Git 托管直链不会自动视为生态官方源：未获批的 `git+https://...` 通常以 `unknown_host` 拒绝，`git+ssh://...` 会被采集并以 `non_registry_source` 拒绝。采集范围、内置端点、精确匹配规则和服务端私有源配置见 [依赖来源策略](docs/dependency-registry-policy.md)。
 
 另有本地语义检测（`mcp_security.py` + fastembed 嵌入模型）：SR-017 对 MCP 工具描述与权限声明做语义对比，检测"描述投毒"；未安装模型时自动降级为纯规则模式。
 

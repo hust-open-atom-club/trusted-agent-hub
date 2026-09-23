@@ -2,7 +2,7 @@
 
 Checks for:
   - curl/wget pipe to shell (critical)
-  - Non-official package registries (high)
+  - Dependency registry policy mismatches (one review advisory per scan)
   - Unpinned / risky dependency versions (medium)
   - HTTP download URLs (medium)
   - Abandoned / deprecated packages (medium)
@@ -20,7 +20,7 @@ import re
 import time
 import urllib.request
 import urllib.error
-from urllib.parse import urlsplit
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -34,13 +34,22 @@ from scanners.risk_scanner.analyzers.url_context import (
 )
 from scanners.risk_scanner.patterns import (
     BUILTIN_WELL_KNOWN_PACKAGES,
-    DOMAIN_WHITELIST,
     SUPPLY_CHAIN_PATTERNS,
-    TRIGGER_RISK_PATTERNS,
 )
-from scanners.risk_scanner.dependency_parsers import parse_dependencies
-from scanners.risk_scanner.dependency_parsers.models import DependencyRecord
+from scanners.risk_scanner.dependency_parsers import (
+    parse_dependencies,
+    parse_dependency_sources,
+)
+from scanners.risk_scanner.dependency_parsers.models import (
+    DependencyRecord,
+    DependencySourceObservation,
+    DependencySourceUsage,
+)
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.registry_policy import (
+    DEFAULT_REGISTRY_POLICY,
+    RegistryPolicy,
+)
 
 _CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CVE_CACHE_TTL = 3600
@@ -67,20 +76,124 @@ _DEPRECATION_BASED_DESCS = frozenset({
     "包声明已废弃/不再维护",
 })
 
+_TRIGGER_WILDCARD_PATTERN = re.compile(
+    r"\btriggers?\b[\"']?\s*[=:]\s*\[[^\]]*?\*[^\]]*?\]",
+    re.IGNORECASE,
+)
+_TRIGGER_DECLARATION_EXTENSIONS = frozenset({
+    ".json",
+    ".jsonc",
+    ".toml",
+    ".yaml",
+    ".yml",
+})
+# ``#`` is a line-comment marker for these syntaxes.  It is intentionally
+# not treated as a comment in JavaScript/JSON-like files, where it can be a
+# private-field or other language token.
+_HASH_COMMENT_EXTENSIONS = frozenset({
+    ".bash",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".sh",
+    ".toml",
+    ".yml",
+    ".yaml",
+    ".zsh",
+})
+_UNAPPROVED_SOURCE_REASONS = frozenset({
+    "invalid_url",
+    "non_registry_source",
+    "unknown_host",
+})
+_POLICY_MISMATCH_REASONS = frozenset({
+    "canonical_url_mismatch",
+    "unapproved_port",
+    "usage_not_allowed",
+    "wrong_ecosystem",
+})
+_UNSAFE_TRANSPORT_REASONS = frozenset({
+    "credentials_in_url",
+    "insecure_scheme",
+})
+
+
 def _is_code_file(fname: str) -> bool:
     ext = Path(fname).suffix.lower()
     return ext in CODE_FILE_EXTENSIONS
 
 
-def _is_whitelisted_url(value: str) -> bool:
-    """Match a parsed hostname exactly or as a real subdomain of an allowlisted host."""
-    try:
-        url_match = re.search(r"https?://[^\s\"'<>`)]+", value, re.IGNORECASE)
-        url = (url_match.group(0) if url_match else value).rstrip(".,;:!?")
-        hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
-    except ValueError:
-        return False
-    return any(hostname == host or hostname.endswith(f".{host}") for host in DOMAIN_WHITELIST)
+def _dependency_ecosystem_near_line(
+    lines: list[str], line_no: int
+) -> str | None:
+    """Infer ecosystem only when installer/registry syntax makes it explicit."""
+    start = max(0, line_no - 3)
+    end = min(len(lines), line_no + 2)
+    context = "\n".join(lines[start:end]).casefold()
+    if re.search(r"\b(?:npm|pnpm|yarn|node)\b|\.npmrc", context):
+        return "npm"
+    if re.search(r"\b(?:pip|pip3|poetry|pypi|python\s+-m\s+pip)\b", context):
+        return "pypi"
+    if re.search(r"\b(?:cargo|crates\.io)\b", context):
+        return "cargo"
+    if re.search(r"\b(?:nuget|dotnet\s+(?:add|restore))\b", context):
+        return "nuget"
+    return None
+
+
+def _dependency_usage_near_line(
+    lines: list[str], line_no: int
+) -> DependencySourceUsage:
+    line = lines[line_no - 1].casefold() if 0 < line_no <= len(lines) else ""
+    if re.search(r"(?:^|\s)--find-links(?:\s|=)", line):
+        return "resolved_download"
+    if re.search(
+        r"\bregistry\b|--(?:extra-)?index-url\b"
+        r"|(?:^|\s)-i(?=\s|=|$)|\badd\s+source\b",
+        line,
+    ):
+        return "registry_api"
+    return "resolved_download"
+
+
+def _has_unquoted_line_comment(prefix: str, filename: str) -> bool:
+    hash_comments = Path(filename).suffix.casefold() in _HASH_COMMENT_EXTENSIONS
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(prefix):
+        char = prefix[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in {"\"", "'", "`"}:
+            quote = char
+        elif (hash_comments and char == "#") or (
+            prefix.startswith("//", index)
+            and (index == 0 or prefix[index - 1] != ":")
+        ):
+            return True
+        elif prefix.startswith("<!--", index):
+            return True
+        index += 1
+    return False
+
+
+def _match_is_commented(content: str, match_start: int, filename: str) -> bool:
+    line_start = content.rfind("\n", 0, match_start) + 1
+    if _has_unquoted_line_comment(
+        content[line_start:match_start], filename
+    ):
+        return True
+    preceding = content[:match_start]
+    return (
+        preceding.rfind("/*") > preceding.rfind("*/")
+        or preceding.rfind("<!--") > preceding.rfind("-->")
+    )
 
 
 def _is_inside_html_comment(lines: list[str], line_no: int) -> bool:
@@ -205,11 +318,183 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
         normalized_ecosystem = {"pypi": "PyPI", "python": "PyPI", "npm": "npm", "rust": "crates.io"}.get(str(ecosystem).lower(), str(ecosystem))
         for value in values:
             if isinstance(value, dict):
-                records.append(DependencyRecord(str(value.get("name", "")), value.get("version"), normalized_ecosystem,
-                                                True, source_file, value.get("registry"), value.get("integrity")))
+                registry = value.get("registry")
+                records.append(
+                    DependencyRecord(
+                        str(value.get("name", "")),
+                        value.get("version"),
+                        normalized_ecosystem,
+                        True,
+                        source_file,
+                        registry=registry,
+                        integrity=value.get("integrity"),
+                        registry_usage="registry_api" if registry else None,
+                    )
+                )
             elif value:
                 records.append(DependencyRecord(str(value), None, normalized_ecosystem, True, source_file))
     return [record for record in records if record.name]
+
+
+def _format_counter(counter: Counter[str], *, limit: int = 5) -> str:
+    ordered = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    shown = ", ".join(f"{name} ({count})" for name, count in ordered[:limit])
+    omitted = len(ordered) - limit
+    return f"{shown}; 另有 {omitted} 个" if omitted > 0 else shown
+
+
+def _check_dependency_sources(
+    scanner: Any,
+    observations: list[DependencySourceObservation],
+) -> None:
+    policy: RegistryPolicy = (
+        getattr(scanner, "registry_policy", None) or DEFAULT_REGISTRY_POLICY
+    )
+    unique_observations: dict[
+        tuple[str, str, DependencySourceUsage],
+        DependencySourceObservation,
+    ] = {}
+    observation_files: dict[
+        tuple[str, str, DependencySourceUsage], set[str]
+    ] = {}
+    for observation in observations:
+        key = (
+            observation.ecosystem.casefold(),
+            observation.url,
+            observation.usage,
+        )
+        observation_files.setdefault(key, set()).add(observation.source_file)
+        existing = unique_observations.get(key)
+        if existing is None or (
+            existing.dependency_name is None
+            and observation.dependency_name is not None
+        ):
+            unique_observations[key] = observation
+
+    rejected = []
+    file_counts: Counter[str] = Counter()
+    for key, observation in unique_observations.items():
+        decision = policy.evaluate(
+            observation.ecosystem,
+            observation.url,
+            observation.usage,
+        )
+        if not decision.allowed:
+            rejected.append((observation, decision))
+            file_counts.update(observation_files[key])
+    if not rejected:
+        return
+
+    host_counts: Counter[str] = Counter(
+        decision.normalized_host or "<invalid-or-non-registry-url>"
+        for _, decision in rejected
+    )
+    reason_counts: Counter[str] = Counter(
+        decision.reason for _, decision in rejected
+    )
+    reason_group_counts: Counter[str] = Counter()
+    for reason, count in reason_counts.items():
+        if reason in _UNAPPROVED_SOURCE_REASONS:
+            reason_group_counts["source_unapproved"] += count
+        elif reason in _POLICY_MISMATCH_REASONS:
+            reason_group_counts["policy_mismatch"] += count
+        elif reason in _UNSAFE_TRANSPORT_REASONS:
+            reason_group_counts["unsafe_transport"] += count
+        else:
+            reason_group_counts["other"] += count
+    affected_dependencies = {
+        (
+            observation.ecosystem.casefold(),
+            observation.dependency_name.casefold(),
+        )
+        for observation, _ in rejected
+        if observation.dependency_name
+    }
+    source_files = sorted(file_counts)
+    dependency_summary = (
+        f"影响 {len(affected_dependencies)} 个依赖名称；"
+        if affected_dependencies
+        else "未能关联到具体依赖；"
+    )
+    review_actions: list[str] = []
+    if reason_group_counts["source_unapproved"]:
+        review_actions.append(
+            f"来源本身未经批准 "
+            f"{reason_group_counts['source_unapproved']} 条"
+            "（改用官方源，或经运维审核后加入 "
+            "TAH_APPROVED_PRIVATE_REGISTRIES_JSON）"
+        )
+    if reason_group_counts["policy_mismatch"]:
+        review_actions.append(
+            f"已批准端点的使用方式不匹配 "
+            f"{reason_group_counts['policy_mismatch']} 条"
+            "（修正路径、端口、生态或用途，通常无需新增审批）"
+        )
+    if reason_group_counts["unsafe_transport"]:
+        review_actions.append(
+            f"传输或凭据不安全 "
+            f"{reason_group_counts['unsafe_transport']} 条"
+            "（改用 HTTPS 并移除 URL 内嵌凭据）"
+        )
+    if reason_group_counts["other"]:
+        review_actions.append(
+            f"其他策略拒绝 {reason_group_counts['other']} 条"
+            "（按 evidence 中的 reason 人工复核）"
+        )
+    scanner._add_advisory(
+        code="dependency_registry_policy",
+        category="registry_policy",
+        level="high",
+        title="依赖来源策略需要人工复核",
+        description=(
+            f"检测到 {len(rejected)} 条依赖来源策略记录需要复核，"
+            f"涉及 {len(host_counts)} 个 host，{dependency_summary}"
+            f"处置分类：{'；'.join(review_actions)}。"
+            "来源获批与依赖本身是否安全是两个独立判断。"
+        ),
+        deduction=0,
+        affects_grade=False,
+        requires_manual_review=True,
+        evidence=(
+            f"policy={policy.version}; hosts={_format_counter(host_counts)}; "
+            f"reasons={_format_counter(reason_counts)}; "
+            f"groups={_format_counter(reason_group_counts)}; "
+            f"files={_format_counter(file_counts)}"
+        ),
+        location={"file": source_files[0]} if source_files else None,
+    )
+
+    insecure = [
+        (observation, decision)
+        for observation, decision in rejected
+        if decision.reason == "insecure_scheme"
+    ]
+    if insecure:
+        insecure_hosts: Counter[str] = Counter(
+            decision.normalized_host or "<invalid-url>"
+            for _, decision in insecure
+        )
+        scanner._add_finding(
+            rule_id="SR-008",
+            severity="medium",
+            category="supply_chain",
+            title="依赖来源使用 HTTP 明文传输",
+            description=(
+                f"检测到 {len(insecure)} 条通过 HTTP 访问依赖来源的记录，"
+                "传输过程可能被篡改。"
+            ),
+            location={"file": insecure[0][0].source_file},
+            evidence=f"Hosts: {_format_counter(insecure_hosts)}",
+            remediation="将依赖源和下载地址改为经策略批准的 HTTPS 端点。",
+            kind="vulnerability",
+            disposition="confirmed_vulnerability",
+            sink_kind="dependency_resolution",
+            source_kind="dependency_registry",
+            source_control="remote_publisher",
+            reachability="dependency_installation",
+            activation="direct",
+            trust_boundary_crossed=True,
+        )
 
 
 def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> None:
@@ -217,14 +502,12 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
         scanner.dependency_scan = {"status": "complete", "dependencies_found": 0,
                                    "dependencies_queried": 0, "query_failures": 0}
         return
-    manifest_file = records[0].source_file
     locked_keys = {
         (record.ecosystem.lower(), record.name.lower())
         for record in records
         if _is_lockfile(record.source_file) and record.version and not _is_unlocked_version(record.version)
     }
     for record in records:
-        version = record.version or ""
         reconciled_with_lockfile = (
             not _is_lockfile(record.source_file)
             and (record.ecosystem.lower(), record.name.lower()) in locked_keys
@@ -237,14 +520,6 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                 location={"file": record.source_file},
                 evidence=f"Dependency version: {record.version or 'missing'}",
                 remediation="在清单和锁文件中使用可复现的精确依赖版本。",
-            )
-        if record.registry and not _is_whitelisted_url(record.registry):
-            scanner._add_finding(
-                rule_id="SR-008", severity="high", category="supply_chain",
-                title=f"非官方依赖源: {record.name}",
-                description=f"依赖 {record.name} 使用未列入白名单的 registry。",
-                location={"file": record.source_file}, evidence=f"Registry: {record.registry}",
-                remediation="仅使用受信任的官方 HTTPS registry。",
             )
     client = getattr(scanner, "osv_client", None)
     compatibility_mode = client is None
@@ -285,12 +560,45 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
 
 def run(scanner: Any) -> None:
     rule_id = "SR-008"
+    inline_source_observations: list[DependencySourceObservation] = []
+    wildcard_trigger_location: dict[str, Any] | None = None
+    wildcard_trigger_evidence = ""
 
     for fname in scanner.scanned_files:
         content = scanner._read_file_content(fname)
         if not content:
             continue
         lines = content.split("\n")
+
+        # Parsed metadata is the preferred trigger source, but projects without
+        # a manifest still need deterministic coverage for code/config arrays.
+        if wildcard_trigger_location is None and (
+            _is_code_file(fname)
+            or Path(fname).suffix.casefold() in _TRIGGER_DECLARATION_EXTENSIONS
+        ):
+            for trigger_match in _TRIGGER_WILDCARD_PATTERN.finditer(content):
+                if _match_is_commented(content, trigger_match.start(), fname):
+                    continue
+                wildcard_offsets = (
+                    trigger_match.start() + match.start()
+                    for match in re.finditer(r"\*", trigger_match.group())
+                )
+                if not any(
+                    not _match_is_commented(content, offset, fname)
+                    for offset in wildcard_offsets
+                ):
+                    continue
+                trigger_line = content[:trigger_match.start()].count("\n") + 1
+                snippet = lines[trigger_line - 1] if trigger_line <= len(lines) else ""
+                wildcard_trigger_location = {
+                    "file": fname,
+                    "line": trigger_line,
+                    "snippet": snippet[:200],
+                }
+                wildcard_trigger_evidence = (
+                    f"匹配: {trigger_match.group()[:120]}"
+                )
+                break
 
         for pattern, desc, severity in SUPPLY_CHAIN_PATTERNS:
             is_url_based = desc in _URL_BASED_DESCS
@@ -307,6 +615,12 @@ def run(scanner: Any) -> None:
                 line_no = content[: match.start()].count("\n") + 1
                 url_usage = classify_url_usage(content, line_no, matched_url)
 
+                if (
+                    desc == "依赖版本号使用通配符 *"
+                    and _match_is_commented(content, match.start(), fname)
+                ):
+                    continue
+
                 if is_url_based:
                     if "://" in matched_url and is_loopback_url(matched_url):
                         continue
@@ -315,8 +629,22 @@ def run(scanner: Any) -> None:
                         # installer context is required before SR-008 applies.
                         if url_usage != URL_USAGE_DEPENDENCY:
                             continue
-                        if _is_whitelisted_url(matched_url):
-                            continue
+                        inline_source_observations.append(
+                            DependencySourceObservation(
+                                ecosystem=(
+                                    _dependency_ecosystem_near_line(
+                                        lines, line_no
+                                    )
+                                    or "unknown"
+                                ),
+                                url=matched_url.rstrip(".,;:!?"),
+                                usage=_dependency_usage_near_line(
+                                    lines, line_no
+                                ),
+                                source_file=fname,
+                            )
+                        )
+                        continue
                     elif desc == "HTTP 请求指向未知地址":
                         # Arbitrary outbound requests are network behavior,
                         # not evidence of dependency compromise.
@@ -325,12 +653,16 @@ def run(scanner: Any) -> None:
                         "使用 HTTP 明文下载",
                         "通过 HTTP 明文下载",
                         "依赖解析地址使用 HTTP 明文",
-                    } and url_usage not in {
-                        URL_USAGE_DEPENDENCY,
-                        URL_USAGE_DOWNLOAD_EXECUTE,
-                        URL_USAGE_NETWORK_REQUEST,
                     }:
-                        continue
+                        if url_usage == URL_USAGE_DEPENDENCY:
+                            # Dependency HTTP is emitted once by the structured
+                            # source-policy aggregation below.
+                            continue
+                        if url_usage not in {
+                            URL_USAGE_DOWNLOAD_EXECUTE,
+                            URL_USAGE_NETWORK_REQUEST,
+                        }:
+                            continue
 
                 if is_deprecation and _is_inside_html_comment(lines, line_no):
                     continue
@@ -384,23 +716,39 @@ def run(scanner: Any) -> None:
                 )
             if any("*" in str(t) for t in triggers):
                 manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
-                scanner._add_finding(
-                    rule_id=rule_id,
-                    severity="low",
-                    category="supply_chain",
-                    title="触发器使用通配符",
-                    description="触发器列表包含 * 通配符，可能匹配过多内容。",
-                    location={"file": manifest_file},
-                    evidence="Wildcard trigger detected",
-                    remediation="将通配符替换为具体关键词。",
-                )
+                if wildcard_trigger_location is None:
+                    wildcard_trigger_location = {"file": manifest_file}
+                    wildcard_trigger_evidence = "Wildcard trigger detected"
+
+    if wildcard_trigger_location is not None:
+        scanner._add_finding(
+            rule_id=rule_id,
+            severity="low",
+            category="supply_chain",
+            title="触发器使用通配符",
+            description="触发器列表包含 * 通配符，可能匹配过多内容。",
+            location=wildcard_trigger_location,
+            evidence=wildcard_trigger_evidence,
+            remediation="将通配符替换为具体关键词。",
+        )
 
     # Lockfiles/manifests are parsed once into normalized records. Lockfiles are
     # intentionally absent from scanner.scanned_files, so generic regex rules do
     # not inspect their structured contents.
+    manifest_records = _manifest_records(meta) if meta else []
     records = parse_dependencies(getattr(scanner, "_file_contents", {}))
-    if not records and meta:
-        records = _manifest_records(meta)
+    if records:
+        # Parsed files and manifest metadata can describe distinct sources.
+        source_records = [*records, *manifest_records]
+    else:
+        records = manifest_records
+        source_records = records
+    sources = parse_dependency_sources(
+        getattr(scanner, "_file_contents", {}),
+        source_records,
+    )
+    sources.extend(inline_source_observations)
+    _check_dependency_sources(scanner, sources)
     if records and meta:
         normalized_meta = dict(meta)
         normalized_meta["dependencies"] = {

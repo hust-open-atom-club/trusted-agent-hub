@@ -9,10 +9,32 @@ def parse_cargo_lock(content: str, source_file: str) -> list[DependencyRecord]:
     result: list[DependencyRecord] = []
     current: dict[str, str] = {}
     for line in content.splitlines() + [""]:
-        match = re.match(r"^(name|version)\s*=\s*\"([^\"]+)\"", line.strip())
+        match = re.match(
+            r"^(name|version|source|checksum)\s*=\s*\"([^\"]+)\"",
+            line.strip(),
+        )
         if match:
             current[match.group(1)] = match.group(2)
         elif not line.strip() and current.get("name"):
-            result.append(DependencyRecord(current["name"], current.get("version"), "crates.io", True, source_file))
+            registry = current.get("source")
+            usage = (
+                "registry_api"
+                if registry and registry.startswith(("registry+", "sparse+"))
+                else "resolved_download"
+                if registry
+                else None
+            )
+            result.append(
+                DependencyRecord(
+                    current["name"],
+                    current.get("version"),
+                    "crates.io",
+                    True,
+                    source_file,
+                    registry=registry,
+                    integrity=current.get("checksum"),
+                    registry_usage=usage,
+                )
+            )
             current = {}
     return result

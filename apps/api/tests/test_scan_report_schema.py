@@ -13,7 +13,7 @@ from typing import get_args
 import jsonschema
 import pytest
 
-from src.models.packages import LLMReview, ScanReport
+from src.models.packages import LLMReview, ReviewAdvisory, ScanReport
 from src.routers import trust
 from packages.schema.constants import FINDING_CATEGORY_POLICY, FindingCategory
 from scanners.risk_scanner import llm_reviewer
@@ -124,6 +124,35 @@ def test_schema_categories_match_shared_finding_policy():
     assert enum == set(FINDING_CATEGORY_POLICY)
     assert {category.value for category in FindingCategory} == enum
     assert "installation_security" in enum
+
+
+def test_review_advisory_categories_match_api_and_web_contracts():
+    schema_categories = set(
+        SCHEMA["properties"]["review_advisories"]["items"]["properties"]
+        ["category"]["enum"]
+    )
+    model_categories = _literal_strings(
+        ReviewAdvisory.model_fields["category"].annotation
+    )
+    assert model_categories == schema_categories
+    assert "registry_policy" in schema_categories
+
+    if REPOSITORY_ROOT is None:
+        pytest.skip("web source tree is not available in this test artifact")
+    typescript = (
+        REPOSITORY_ROOT / "apps" / "web" / "src" / "types" / "index.ts"
+    ).read_text(encoding="utf-8")
+    interface_match = re.search(
+        r"export interface ReviewAdvisory\s*\{(.*?)\n\}",
+        typescript,
+        flags=re.DOTALL,
+    )
+    assert interface_match is not None
+    category_match = re.search(
+        r"category:\s*(.*?);", interface_match.group(1), flags=re.DOTALL
+    )
+    assert category_match is not None
+    assert set(re.findall(r"'([^']+)'", category_match.group(1))) == schema_categories
 
 
 def _literal_strings(annotation: object) -> set[str]:
