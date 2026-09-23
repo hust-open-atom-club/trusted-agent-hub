@@ -29,7 +29,7 @@ _NETWORK_CALL = re.compile(
 )
 _DEPENDENCY_USE = re.compile(
     r"\b(?:pip|npm|pnpm|yarn|cargo|install|registry|dependency|dependencies|"
-    r"resolved|download|curl|wget)\b",
+    r"resolved|download|curl|wget)\b|\bdotnet\s+nuget\s+add\s+source\b",
     re.IGNORECASE,
 )
 _STATIC_ASSET = re.compile(

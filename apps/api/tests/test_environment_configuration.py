@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 from urllib.parse import unquote
@@ -10,7 +11,9 @@ from alembic.config import Config
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
+from src import main as main_module
 from src.database import create_engine_from_url, create_session_factory
+from src.routers import trust as trust_module
 from src.repositories.orm_producer import UserRow
 from src.scripts.bootstrap_admin import bootstrap_initial_admin
 from src.scripts.seed_producer import _configured_seed_users
@@ -161,6 +164,63 @@ def test_scan_finalization_reserve_defaults_and_parses(
     assert Settings.from_environment().scan_finalization_reserve_seconds == 180
 
 
+def test_approved_private_registries_are_server_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TAH_APPROVED_PRIVATE_REGISTRIES_JSON",
+        json.dumps([{
+            "ecosystem": "npm",
+            "exact_host": "npm.corp.example",
+            "evidence_url": "https://security.corp.example/npm-registry",
+            "allow_as_resolved_download": True,
+            "note": "Company-managed registry.",
+            "reviewed_at": "2026-09-20",
+        }]),
+    )
+
+    previous = trust_module.get_registry_policy()
+    monkeypatch.setattr(trust_module, "_REGISTRY_POLICY", previous)
+    raw = Settings.from_environment().approved_private_registries_json
+    configured = trust_module.configure_registry_policy(raw)
+
+    assert trust_module.get_registry_policy() is configured
+    decision = configured.evaluate(
+        "npm",
+        "https://npm.corp.example/demo/-/demo-1.0.0.tgz",
+        "resolved_download",
+    )
+    assert decision.allowed is True
+    assert decision.classification.value == "approved_private"
+
+
+def test_approved_private_registry_config_rejects_wildcards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = trust_module.get_registry_policy()
+    # Register monkeypatch teardown so the process-global policy is restored.
+    monkeypatch.setattr(trust_module, "_REGISTRY_POLICY", previous)
+    settings = Settings(
+        approved_private_registries_json=json.dumps([{
+            "ecosystem": "npm",
+            "exact_host": "*.corp.example",
+            "evidence_url": "https://security.corp.example/npm-registry",
+            "note": "Invalid wildcard registry.",
+            "reviewed_at": "2026-09-20",
+        }])
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "TAH_APPROVED_PRIVATE_REGISTRIES_JSON.*exact hostname"
+        ),
+    ):
+        main_module.create_app()
+    assert trust_module.get_registry_policy() is previous
+
+
 @pytest.mark.parametrize("value", ["soon", "0", "-30"])
 def test_llm_review_deadline_rejects_unusable_values(
     monkeypatch: pytest.MonkeyPatch,
@@ -263,6 +323,7 @@ def test_environment_template_keeps_context_specific_values_blank() -> None:
     assert values["API_RELOAD"] == ""
     assert values["ARTIFACTS_ROOT"] == ""
     assert values["SOURCE_SNAPSHOT_DIR"] == ""
+    assert values["TAH_APPROVED_PRIVATE_REGISTRIES_JSON"] == ""
     assert values["FASTEMBED_CACHE_PATH"] == ""
     assert values["TEST_DATABASE_URL"] == ""
     assert "FASTEMBED_CACHE_HOST_PATH" not in values
@@ -371,6 +432,10 @@ def test_compose_and_dockerfiles_keep_context_specific_configuration_aligned(
     assert (
         "TAH_SCAN_FINALIZATION_RESERVE_SECONDS: "
         "${TAH_SCAN_FINALIZATION_RESERVE_SECONDS:-}" in compose
+    )
+    assert (
+        "TAH_APPROVED_PRIVATE_REGISTRIES_JSON: "
+        "${TAH_APPROVED_PRIVATE_REGISTRIES_JSON:-}" in compose
     )
     assert "FASTEMBED_CACHE_HOST_PATH" not in compose
     assert "FASTEMBED_CACHE_PATH: ${FASTEMBED_CACHE_PATH:-/fastembed-cache}" in compose

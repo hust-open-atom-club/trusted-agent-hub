@@ -38,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import uuid
 from copy import deepcopy
@@ -55,6 +56,12 @@ from scanners.risk_scanner.analyzers import analyze_snapshot
 from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.registry_policy import (
+    DEFAULT_REGISTRY_POLICY,
+    RegistryPolicy,
+    build_registry_policy,
+    parse_approved_private_registries,
+)
 from scanners.risk_scanner.rule_runner import RULE_SPECS, RuleRunner
 from scanners.risk_scanner.reporting import (
     aggregate_findings,
@@ -100,6 +107,15 @@ _ALWAYS_SEMANTIC_VALIDATION_CATEGORIES = frozenset({
 })
 
 
+def _registry_policy_from_environment() -> RegistryPolicy:
+    """Build the standalone scanner policy from operator-owned environment."""
+    return build_registry_policy(
+        parse_approved_private_registries(
+            os.environ.get("TAH_APPROVED_PRIVATE_REGISTRIES_JSON")
+        )
+    )
+
+
 class RiskScanner:
     """自动风险扫描器 — 静态分析 Agent 能力包目录。"""
 
@@ -109,10 +125,12 @@ class RiskScanner:
         *,
         source_commit_hash: str = "",
         policy: ScanPolicy | None = None,
+        registry_policy: RegistryPolicy | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
         self.source_commit_hash = source_commit_hash
         self.policy = policy or ScanPolicy()
+        self.registry_policy = registry_policy or DEFAULT_REGISTRY_POLICY
         self.findings: list[dict[str, Any]] = []
         self.review_advisories: list[dict[str, Any]] = []
         self.scanned_files: list[str] = []
@@ -942,7 +960,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     target = sys.argv[1]
-    scanner = RiskScanner(target)
+    registry_policy = _registry_policy_from_environment()
+    scanner = RiskScanner(target, registry_policy=registry_policy)
     report = scanner.scan()
 
     if "--json" in sys.argv:

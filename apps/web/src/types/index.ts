@@ -567,7 +567,7 @@ export interface PermissionEvidence {
 export interface ReviewAdvisory {
   id: string;
   code: string;
-  category: 'metadata_quality' | 'provenance' | 'permission_consistency';
+  category: 'metadata_quality' | 'provenance' | 'permission_consistency' | 'registry_policy';
   level: 'high' | 'warning' | 'info';
   title: string;
   description: string;

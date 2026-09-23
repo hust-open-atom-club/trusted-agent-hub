@@ -377,7 +377,10 @@ class ReviewAdvisory(StrictContractModel):
     id: str
     code: str
     category: Literal[
-        "metadata_quality", "provenance", "permission_consistency"
+        "metadata_quality",
+        "provenance",
+        "permission_consistency",
+        "registry_policy",
     ]
     level: Literal["high", "warning", "info"]
     title: str

@@ -23,8 +23,11 @@ from .routers.producer import router as producer_router
 from .routers.review import router as review_router
 from .routers.stats import router as stats_router
 from .routers.admin import router as admin_router
-from .routers.trust import router as trust_router
-from .routers.trust import v1_router as trust_v1_router
+from .routers.trust import (
+    configure_registry_policy,
+    router as trust_router,
+    v1_router as trust_v1_router,
+)
 from .routers.trust_scores import router as trust_scores_router
 from .settings import get_settings
 
@@ -74,6 +77,15 @@ async def lifespan(_application: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the TrustedAgentHub API application."""
     settings = get_settings()
+    # Validate server-owned trust configuration before accepting scans. Scan
+    # workers reuse the immutable policy constructed here.
+    try:
+        configure_registry_policy(settings.approved_private_registries_json)
+    except ValueError as exc:
+        raise RuntimeError(
+            "Invalid TAH_APPROVED_PRIVATE_REGISTRIES_JSON configuration: "
+            f"{exc}"
+        ) from exc
     application = FastAPI(
         title="Trusted Agent Hub API",
         version="0.1.0",

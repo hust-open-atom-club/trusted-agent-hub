@@ -1,5 +1,7 @@
 """SR-008: Supply chain risk rule unit tests."""
 
+import json
+
 import pytest
 
 from scanners.risk_scanner.rules import supply_chain
@@ -13,6 +15,21 @@ def _no_osv_network(monkeypatch):
 
 
 class TestSR008SupplyChain:
+
+    @staticmethod
+    def _package_lock(host: str, count: int) -> str:
+        packages = {
+            f"node_modules/dependency-{index}": {
+                "version": "1.0.0",
+                "resolved": (
+                    f"https://{host}/dependency-{index}/-/"
+                    f"dependency-{index}-1.0.0.tgz"
+                ),
+                "integrity": f"sha512-{index}",
+            }
+            for index in range(count)
+        }
+        return json.dumps({"lockfileVersion": 3, "packages": packages})
 
     def test_curl_pipe_shell_in_code_file(self):
         """curl | sh in code file → critical finding (may co-trigger HTTP patterns)."""
@@ -68,6 +85,402 @@ class TestSR008SupplyChain:
 
         assert not any("版本未锁定" in finding["title"] for finding in s.findings)
 
+    def test_unknown_registry_flood_is_one_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package-lock.json": self._package_lock(
+                "registry.npmmirror.com", 275
+            )
+        }
+
+        supply_chain.run(s)
+
+        assert not any("非官方依赖源" in finding["title"] for finding in s.findings)
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert advisories[0]["level"] == "high"
+        assert advisories[0]["category"] == "registry_policy"
+        assert advisories[0]["deduction"] == 0
+        assert advisories[0]["affects_grade"] is False
+        assert advisories[0]["requires_manual_review"] is True
+        assert "275 条" in advisories[0]["description"]
+        assert "来源本身未经批准 275 条" in advisories[0]["description"]
+        assert (
+            "TAH_APPROVED_PRIVATE_REGISTRIES_JSON"
+            in advisories[0]["description"]
+        )
+        assert "registry.npmmirror.com (275)" in advisories[0]["evidence"]
+
+    def test_official_registry_produces_no_source_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package-lock.json": self._package_lock(
+                "registry.npmjs.org", 20
+            )
+        }
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+        assert not any("依赖来源" in finding["title"] for finding in s.findings)
+
+    def test_yarn_classic_default_lockfile_produces_no_source_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "yarn.lock": (
+                "# yarn lockfile v1\n\n"
+                "lodash@^4.17.0:\n"
+                '  version "4.17.21"\n'
+                '  resolved "https://registry.yarnpkg.com/lodash/-/'
+                'lodash-4.17.21.tgz#deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"\n'
+                "  integrity sha512-demo\n"
+            )
+        }
+
+        supply_chain.run(s)
+
+        assert not any(
+            advisory["code"] == "dependency_registry_policy"
+            for advisory in s.review_advisories
+        )
+
+    def test_manifest_registry_is_checked_alongside_lockfile_sources(self):
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "dependencies": {
+                    "npm": [{
+                        "name": "demo",
+                        "version": "1.0.0",
+                        "registry": "https://npm.corp.example/",
+                    }]
+                }
+            },
+        )
+        s._file_contents = {
+            "package-lock.json": self._package_lock("registry.npmjs.org", 1)
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert "npm.corp.example" in s.review_advisories[0]["evidence"]
+
+    def test_python_and_npm_git_sources_are_one_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package.json": json.dumps({
+                "dependencies": {
+                    "npm-git-demo": "git+ssh://git@github.com/example/npm-demo.git",
+                    "npm-shortcut-demo": "github:example/short-demo",
+                }
+            }),
+            "requirements.txt": (
+                "python-git-demo[security] @ "
+                "git+ssh://git@gitlab.com/example/python-demo.git\n"
+            ),
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["level"] == "high"
+        assert "github.com" in advisory["evidence"]
+        assert "gitlab.com" in advisory["evidence"]
+        assert "non_registry_source (2)" in advisory["evidence"]
+        assert "unknown_host (1)" in advisory["evidence"]
+        assert not any(
+            "非官方依赖源" in finding["title"] for finding in s.findings
+        )
+
+    def test_registry_advisory_lists_only_five_hosts_plus_count(self):
+        packages = {
+            f"node_modules/dependency-{index}": {
+                "version": "1.0.0",
+                "resolved": f"https://registry-{index}.example/pkg.tgz",
+            }
+            for index in range(7)
+        }
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package-lock.json": json.dumps({
+                "lockfileVersion": 3,
+                "packages": packages,
+            })
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        evidence = s.review_advisories[0]["evidence"]
+        assert "registry-4.example" in evidence
+        assert "registry-5.example" not in evidence
+        assert "registry-6.example" not in evidence
+        assert "另有 2 个" in evidence
+
+    def test_registry_advisory_evidence_includes_source_file_distribution(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            ".npmrc": "registry=https://registry.corp.example/\n",
+            "package-lock.json": self._package_lock(
+                "registry.corp.example", 2
+            ),
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        evidence = s.review_advisories[0]["evidence"]
+        assert "files=" in evidence
+        assert "package-lock.json (2)" in evidence
+        assert ".npmrc (1)" in evidence
+
+    def test_dependency_urls_in_code_join_the_same_policy_advisory(self):
+        s = MockScanner(files={
+            "setup.sh": (
+                "npm config set registry https://registry-one.example/\n"
+                "npm config set registry https://registry-two.example/\n"
+            )
+        })
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert "registry-one.example" in s.review_advisories[0]["evidence"]
+        assert "registry-two.example" in s.review_advisories[0]["evidence"]
+        assert not any(
+            "非官方包源" in finding["title"] for finding in s.findings
+        )
+
+    def test_duplicate_inline_dependency_urls_count_once(self):
+        source = "https://registry.corp.example/"
+        s = MockScanner(files={
+            "setup.sh": (
+                f"npm config set registry {source}\n"
+                f"npm config set registry {source}\n"
+            )
+        })
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert "检测到 1 条" in advisory["description"]
+        assert "registry.corp.example (1)" in advisory["evidence"]
+
+    def test_official_dependency_url_in_code_is_clean(self):
+        s = MockScanner(files={
+            "setup.sh": (
+                "npm config set registry https://registry.npmjs.org/\n"
+            )
+        })
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+        assert s.findings == []
+
+    def test_bare_official_npm_download_url_in_code_is_clean(self):
+        s = MockScanner(files={
+            "install.py": (
+                'DOWNLOAD_URL = "https://registry.npmjs.org/'
+                'lodash/-/lodash-4.17.21.tgz"\n'
+            )
+        }, _package_metadata={"name": "demo", "version": "1.0.0"})
+
+        supply_chain.run(s)
+
+        assert not any(
+            advisory["code"] == "dependency_registry_policy"
+            for advisory in s.review_advisories
+        )
+
+    def test_real_scanner_bare_official_npm_url_is_clean(self, tmp_path):
+        from scanners.risk_scanner.scanner import RiskScanner
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({
+                "name": "registry-regression",
+                "version": "1.0.0",
+                "type": "skill",
+                "description": "Registry policy regression fixture.",
+                "author": "TrustedAgentHub",
+                "license": "Apache-2.0",
+                "permissions": {},
+            }),
+            encoding="utf-8",
+        )
+        (tmp_path / "install.py").write_text(
+            'DOWNLOAD_URL = "https://registry.npmjs.org/'
+            'lodash/-/lodash-4.17.21.tgz"\n',
+            encoding="utf-8",
+        )
+
+        report = RiskScanner(tmp_path).scan()
+
+        assert not any(
+            advisory["code"] == "dependency_registry_policy"
+            for advisory in report["review_advisories"]
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pip install -i https://pypi.org/simple flask\n",
+            (
+                "dotnet nuget add source "
+                "https://api.nuget.org/v3/index.json\n"
+            ),
+        ],
+    )
+    def test_official_short_form_registry_commands_have_no_advisory(
+        self, command
+    ):
+        assert supply_chain._dependency_usage_near_line(
+            command.split("\n"), 1
+        ) == "registry_api"
+        s = MockScanner(files={"setup.sh": command})
+
+        supply_chain.run(s)
+
+        assert not any(
+            advisory["code"] == "dependency_registry_policy"
+            for advisory in s.review_advisories
+        )
+
+    def test_http_dependency_sources_are_aggregated_separately(self):
+        s = MockScanner(files={})
+        lock = json.loads(self._package_lock("registry.npmjs.org", 3))
+        for package in lock["packages"].values():
+            package["resolved"] = package["resolved"].replace(
+                "https://", "http://"
+            )
+        s._file_contents = {"package-lock.json": json.dumps(lock)}
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        transport_findings = [
+            finding for finding in s.findings
+            if finding["title"] == "依赖来源使用 HTTP 明文传输"
+        ]
+        assert len(transport_findings) == 1
+        assert transport_findings[0]["severity"] == "medium"
+        assert "3 条" in transport_findings[0]["description"]
+
+    def test_unknown_http_registry_still_reports_transport_risk(self):
+        s = MockScanner(files={})
+        lock = json.loads(self._package_lock("registry.unknown.example", 2))
+        for package in lock["packages"].values():
+            package["resolved"] = package["resolved"].replace(
+                "https://", "http://"
+            )
+        s._file_contents = {"package-lock.json": json.dumps(lock)}
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert "传输或凭据不安全 2 条" in advisory["description"]
+        assert "改用 HTTPS" in advisory["description"]
+        assert "insecure_scheme (2)" in advisory["evidence"]
+        assert sum(
+            finding["title"] == "依赖来源使用 HTTP 明文传输"
+            for finding in s.findings
+        ) == 1
+
+    def test_registry_advisory_distinguishes_endpoint_usage_mismatch(self):
+        s = MockScanner(files={
+            "setup.sh": "pip install https://pypi.org/simple/demo/\n"
+        })
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert (
+            "已批准端点的使用方式不匹配 1 条"
+            in advisory["description"]
+        )
+        assert "通常无需新增审批" in advisory["description"]
+        assert "usage_not_allowed (1)" in advisory["evidence"]
+        assert "来源本身未经批准" not in advisory["description"]
+
+    def test_registry_approval_does_not_skip_cve_lookup(self, monkeypatch):
+        monkeypatch.setattr(
+            supply_chain,
+            "_query_osv",
+            lambda *args, **kwargs: ["CVE-2099-0001"],
+        )
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package-lock.json": self._package_lock("registry.npmjs.org", 1)
+        }
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+        assert any(
+            "CVE-2099-0001" in finding["title"] for finding in s.findings
+        )
+
+    def test_requirement_version_fragment_is_not_sent_to_osv(self, monkeypatch):
+        queries = []
+
+        def capture_query(package_name, version, ecosystem):
+            queries.append((package_name, version, ecosystem))
+            return []
+
+        monkeypatch.setattr(supply_chain, "_query_osv", capture_query)
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": "requests==2.31.0#sha256=deadbeef\n"
+        }
+
+        supply_chain.run(s)
+
+        assert queries == [("requests", "2.31.0", "PyPI")]
+
+    def test_risk_scanner_end_to_end_collapses_registry_flood(self, tmp_path):
+        from scanners.risk_scanner.dependency_parsers.osv_client import (
+            OSVQueryResult,
+        )
+        from scanners.risk_scanner.scanner import RiskScanner
+
+        (tmp_path / "package-lock.json").write_text(
+            self._package_lock("registry.npmmirror.com", 275),
+            encoding="utf-8",
+        )
+        scanner = RiskScanner(tmp_path)
+
+        class NoVulnerabilityClient:
+            max_queries = 500
+            queried = 0
+
+            def query(self, dependency):
+                self.queried += 1
+                return OSVQueryResult([], None)
+
+        scanner.osv_client = NoVulnerabilityClient()
+
+        report = scanner.scan()
+
+        policy_advisories = [
+            item for item in report["review_advisories"]
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(policy_advisories) == 1
+        assert "275 条" in policy_advisories[0]["description"]
+        assert not any(
+            "非官方依赖源" in finding["title"]
+            for finding in report["findings"]
+        )
+        assert report["dependency_scan"]["dependencies_queried"] == 275
+
     def test_typosquatting_dependency(self, tmp_path):
         """Dependency 'requets' is 1 edit from known 'requests' → high finding."""
         s = MockScanner(
@@ -110,6 +523,141 @@ class TestSR008SupplyChain:
         supply_chain.run(s)
         titles = [f["title"] for f in s.findings]
         assert any("通配符" in t for t in titles)
+
+    def test_wildcard_trigger_without_manifest(self):
+        s = MockScanner(
+            files={"automation.py": "triggers = [*]\n"},
+            _package_metadata=None,
+        )
+
+        supply_chain.run(s)
+
+        wildcard_findings = [
+            finding for finding in s.findings
+            if finding["title"] == "触发器使用通配符"
+        ]
+        assert len(wildcard_findings) == 1
+        assert wildcard_findings[0]["location"]["file"] == "automation.py"
+
+    def test_multiline_wildcard_trigger_without_manifest(self):
+        s = MockScanner(
+            files={
+                "automation.json": '{\n  "triggers": [\n    "*"\n  ]\n}\n'
+            },
+            _package_metadata=None,
+        )
+
+        supply_chain.run(s)
+
+        wildcard_findings = [
+            finding for finding in s.findings
+            if finding["title"] == "触发器使用通配符"
+        ]
+        assert len(wildcard_findings) == 1
+        assert wildcard_findings[0]["location"]["file"] == "automation.json"
+
+    def test_url_scheme_before_wildcard_trigger_is_not_a_comment(self):
+        s = MockScanner(
+            files={
+                "setup.sh": (
+                    "URL=https://registry.npmjs.org/; triggers: [\"*\"]\n"
+                )
+            },
+            _package_metadata=None,
+        )
+
+        supply_chain.run(s)
+
+        titles = {finding["title"] for finding in s.findings}
+        assert "触发器使用通配符" in titles
+        assert "供应链风险 — 依赖版本号使用通配符 *" in titles
+
+    def test_js_private_field_does_not_hide_wildcard_trigger(self):
+        s = MockScanner(
+            files={
+                "setup.js": (
+                    "const value = obj.#field; triggers = [\"*\"];\n"
+                )
+            },
+            _package_metadata=None,
+        )
+
+        supply_chain.run(s)
+
+        assert any(
+            finding["title"] == "触发器使用通配符"
+            for finding in s.findings
+        )
+
+    @pytest.mark.parametrize(
+        ("filename", "content"),
+        [
+            ("setup.sh", '# triggers = ["*"]\n'),
+            ("setup.js", '// triggers = ["*"]\n'),
+            ("setup.js", '/* triggers = ["*"] */\n'),
+            (
+                "setup.js",
+                (
+                    "const endpoint = https://registry.npmjs.org/; "
+                    '// triggers = ["*"];\n'
+                ),
+            ),
+            (
+                "setup.js",
+                'const triggers = [\n  // "*"\n];\n',
+            ),
+        ],
+    )
+    def test_commented_wildcard_trigger_is_ignored(self, filename, content):
+        s = MockScanner(files={filename: content}, _package_metadata=None)
+
+        supply_chain.run(s)
+
+        assert s.findings == []
+
+    def test_commented_trigger_does_not_override_manifest_location(self):
+        s = MockScanner(
+            files={"setup.sh": '# triggers = ["*"]\n'},
+            _package_metadata={"triggers": ["*"]},
+        )
+
+        supply_chain.run(s)
+
+        wildcard = next(
+            finding for finding in s.findings
+            if finding["title"] == "触发器使用通配符"
+        )
+        assert wildcard["location"]["file"] == "SKILL.md"
+
+    def test_manifest_fallback_records_are_passed_to_source_parser_once(
+        self, monkeypatch
+    ):
+        captured_records = []
+
+        def capture_sources(_files, records):
+            captured_records.extend(records)
+            return []
+
+        monkeypatch.setattr(
+            supply_chain, "parse_dependency_sources", capture_sources
+        )
+        s = MockScanner(
+            files={},
+            _package_metadata={
+                "dependencies": {
+                    "npm": [{
+                        "name": "demo",
+                        "version": "1.0.0",
+                        "registry": "https://registry.npmjs.org/",
+                    }]
+                }
+            },
+        )
+
+        supply_chain.run(s)
+
+        assert len(captured_records) == 1
+        assert captured_records[0].name == "demo"
 
     def test_benign_code_no_finding(self, tmp_path):
         """Clean code + no metadata → no findings."""

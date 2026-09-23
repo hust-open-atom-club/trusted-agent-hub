@@ -98,12 +98,34 @@ from scanners.risk_scanner.inventory import (
     load_text_files,
 )
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.registry_policy import (
+    DEFAULT_REGISTRY_POLICY,
+    RegistryPolicy,
+    build_registry_policy,
+    parse_approved_private_registries,
+)
 from scanners.risk_scanner.permission_consistency import (
     reconcile_permission_advisories,
 )
 from scanners.risk_scanner.reporting import refresh_report_summaries
 from packages.schema.frontmatter import parse_frontmatter
 from schema.constants import HASH_SCOPE_SCANNED_SOURCE, UserRole
+
+_REGISTRY_POLICY: RegistryPolicy = DEFAULT_REGISTRY_POLICY
+
+
+def configure_registry_policy(raw_json: str | None) -> RegistryPolicy:
+    """Validate startup configuration and publish one immutable scan policy."""
+    global _REGISTRY_POLICY
+    policy = build_registry_policy(parse_approved_private_registries(raw_json))
+    _REGISTRY_POLICY = policy
+    return policy
+
+
+def get_registry_policy() -> RegistryPolicy:
+    """Return the policy configured during application startup."""
+    return _REGISTRY_POLICY
+
 
 # ---------------------------------------------------------------------------
 # 内存状态存储（scans 字典）
@@ -5756,6 +5778,7 @@ def _run_scan_task_body(
             scan_dir,
             source_commit_hash=commit_hash,
             policy=_SOURCE_POLICY,
+            registry_policy=get_registry_policy(),
         )
         scan_report = scanner.scan()
         _raise_if_scan_total_timeout(scan_id, total_timeout_event)

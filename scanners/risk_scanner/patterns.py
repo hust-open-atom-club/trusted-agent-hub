@@ -234,16 +234,6 @@ SUPPLY_CHAIN_PATTERNS: list[tuple[str, str, str]] = [
     (r"(?:deprecated|abandoned|unmaintained|archived|obsolete)", "包声明已废弃/不再维护", "medium"),
 ]
 
-DOMAIN_WHITELIST = [
-    "pypi.org", "npmjs.com", "registry.npmjs.org", "crates.io",
-    "github.com", "gitlab.com", "bitbucket.org", "raw.githubusercontent.com",
-    "fonts.googleapis.com", "fonts.gstatic.com", "cdnjs.cloudflare.com",
-    "unpkg.com", "jsdelivr.net", "esm.sh", "skypack.dev",
-    "w3.org", "w3c.org",
-    "openai.com",
-    "example.com", "example.org", "example.net",
-]
-
 BUILTIN_WELL_KNOWN_PACKAGES: list[str] = [
     "react", "vue", "angular", "express", "lodash", "axios", "request",
     "flask", "django", "numpy", "pandas", "requests", "pytest", "scipy",
@@ -383,14 +373,6 @@ TOOL_MISUSE_PATTERNS: list[tuple[str, str, str]] = [
     (r'privileged\s*:\s*true', "Kubernetes 特权容器", "high"),
     (r'hostNetwork\s*:\s*true', "Kubernetes hostNetwork 模式", "high"),
     (r'hostPID\s*:\s*true', "Kubernetes hostPID 模式", "high"),
-]
-
-# =============================================================================
-# SR-008 Supplemental: Trigger risk patterns
-# =============================================================================
-
-TRIGGER_RISK_PATTERNS: list[tuple[str, str, str]] = [
-    (r'triggers?\s*[=:]\s*\[[^]]*\*', "触发器使用通配符 *（过度触发）", "low"),
 ]
 
 # =============================================================================
