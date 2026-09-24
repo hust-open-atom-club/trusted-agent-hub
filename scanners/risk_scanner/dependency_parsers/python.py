@@ -4,6 +4,8 @@ import json
 import re
 import tomllib
 
+from scanners.risk_scanner.logical_lines import iter_logical_lines
+
 from .models import DependencyRecord
 
 
@@ -21,7 +23,20 @@ _VCS_REFERENCE = re.compile(
     r"^(?:git|hg|svn|bzr)\+[^\s]+://[^\s]+",
     re.IGNORECASE,
 )
+_HTTP_REFERENCE = re.compile(
+    r"^(?P<url>https?://\S+)",
+    re.IGNORECASE,
+)
 _EGG_NAME = re.compile(r"(?:^|[&])egg=([^&]+)", re.IGNORECASE)
+_SOURCE_OPTION = re.compile(
+    r"(?:^|\s)(?P<option>--(?:extra-)?index-url|--find-links|-i|-f)"
+    r"(?:\s+|=)(?P<url>\"[^\"]+\"|'[^']+'|\S+)",
+    re.IGNORECASE,
+)
+_INCOMPLETE_SOURCE_OPTION_PREFIX = re.compile(
+    r"^(?:--(?:extra-)?index-url|--find-links|-i|-f)=\s+(?=https?://)",
+    re.IGNORECASE,
+)
 
 
 def _requirement_source(line: str) -> tuple[str | None, str] | None:
@@ -31,44 +46,57 @@ def _requirement_source(line: str) -> tuple[str | None, str] | None:
 
     editable = _EDITABLE_REFERENCE.match(line)
     candidate = editable.group("url") if editable else line
-    if not _VCS_REFERENCE.match(candidate):
-        return None
-    egg = _EGG_NAME.search(candidate.partition("#")[2])
-    return (egg.group(1) if egg else None), candidate
+    if _VCS_REFERENCE.match(candidate):
+        egg = _EGG_NAME.search(candidate.partition("#")[2])
+        return (egg.group(1) if egg else None), candidate
+
+    # Bare URLs keep fragments; only an explicit egg supplies a package name.
+    remote = _HTTP_REFERENCE.match(candidate)
+    if remote:
+        url = remote.group("url")
+        egg = _EGG_NAME.search(url.partition("#")[2])
+        return (egg.group(1) if egg else None), url
+    return None
 
 
 def parse_requirement_sources(
     content: str,
 ) -> list[tuple[str | None, str]]:
-    """Return remote direct/VCS URLs, including editable requirement lines."""
+    """Return remote direct, VCS, and bare HTTP(S) requirement URLs."""
     sources: list[tuple[str | None, str]] = []
-    for raw_line in content.splitlines():
-        line = re.split(r"\s+#", raw_line, maxsplit=1)[0].strip()
+    for logical_line in iter_logical_lines(content, requirement_comments=True):
+        line = logical_line.text.strip()
         if not line:
             continue
+        # Retain trailing URLs in incomplete source declarations for review,
+        # even when pip ignores them. This only adds a download observation;
+        # it must not grant registry usage or create a dependency record.
+        line = _INCOMPLETE_SOURCE_OPTION_PREFIX.sub("", line, count=1)
         source = _requirement_source(line)
         if source:
             sources.append(source)
     return sources
 
 
+def parse_requirement_options(content: str) -> list[tuple[str, str]]:
+    """Return source option/value pairs from complete logical requirements."""
+    return [
+        (match.group("option").casefold(), match.group("url").strip("\"'"))
+        for line in iter_logical_lines(content, requirement_comments=True)
+        for match in _SOURCE_OPTION.finditer(line.text)
+    ]
+
+
 def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]:
     result: list[DependencyRecord] = []
     index_url: str | None = None
-    for line in content.splitlines():
-        # Preserve URL fragments such as ``#sha256=...`` while still handling
-        # ordinary inline requirement comments.
-        line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+    for logical_line in iter_logical_lines(content, requirement_comments=True):
+        line = logical_line.text.strip()
         if not line:
             continue
-        index_match = re.match(
-            r"^(?:--index-url(?:=|\s+)|-i(?:=|\s+))(\S+)$",
-            line,
-            re.IGNORECASE,
-        )
-        if index_match:
-            index_url = index_match.group(1)
-            continue
+        for option in _SOURCE_OPTION.finditer(line):
+            if option.group("option").casefold() in {"--index-url", "-i"}:
+                index_url = option.group("url").strip("\"'")
         source = _requirement_source(line)
         if source:
             dependency_name, source_url = source

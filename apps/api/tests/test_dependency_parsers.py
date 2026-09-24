@@ -287,16 +287,18 @@ def test_npm_and_python_git_sources_are_observed_and_rejected():
     } == {"non_registry_source", "unknown_host"}
 
 
+@pytest.mark.parametrize("option", ["--find-links", "-f"])
+@pytest.mark.parametrize("separator", [" ", "="])
 @pytest.mark.parametrize(
     ("allow_download", "expected_allowed"),
     [(False, False), (True, True)],
 )
 def test_find_links_requires_resolved_download_approval(
-    allow_download, expected_allowed
+    option, separator, allow_download, expected_allowed
 ):
     source = "https://files.corp.example/wheels/demo.whl"
     observations = parse_dependency_sources({
-        "requirements.txt": f"--find-links {source}\n"
+        "requirements.txt": f"{option}{separator}{source}\n"
     })
     entry = RegistryEntry(
         ecosystem="pypi",
@@ -321,14 +323,235 @@ def test_find_links_requires_resolved_download_approval(
     )
 
 
-def test_find_links_is_not_classified_as_a_registry_api_in_inline_rules():
+def test_bare_http_requirements_are_observed_without_inventing_names():
+    observations = parse_dependency_sources({
+        "requirements.txt": (
+            "https://packages.example/demo-1.0-py3-none-any.whl"
+            "#sha256=cafebabe # verified artifact\n"
+            "http://packages.example/source-demo-1.0.tar.gz?download=1\n"
+            "-e https://packages.example/editable#egg=editable-demo\n"
+            "./local-demo-1.0-py3-none-any.whl\n"
+        )
+    })
+
+    assert len(observations) == 3
+    assert {
+        (item.url, item.usage, item.dependency_name)
+        for item in observations
+    } == {
+        (
+            "https://packages.example/demo-1.0-py3-none-any.whl"
+            "#sha256=cafebabe",
+            "resolved_download",
+            None,
+        ),
+        (
+            "http://packages.example/source-demo-1.0.tar.gz?download=1",
+            "resolved_download",
+            None,
+        ),
+        (
+            "https://packages.example/editable#egg=editable-demo",
+            "resolved_download",
+            "editable-demo",
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("option", "usage"),
+    [
+        ("--index-url", "registry_api"),
+        ("--extra-index-url", "registry_api"),
+        ("-i", "registry_api"),
+        ("--find-links", "resolved_download"),
+        ("-f", "resolved_download"),
+    ],
+)
+@pytest.mark.parametrize("separator", [" \\\n  \\\n  ", "=\\\r\n"])
+def test_requirements_continued_options_keep_their_usage(option, usage, separator):
+    url = "https://packages.example/simple#fragment"
+    files = {
+        "requirements.txt": (
+            f"{option}{separator}{url} # source comment\n"
+            "requests==\\\n2.31.0\n"
+        )
+    }
+
+    records = parse_dependencies(files)
+    observations = parse_dependency_sources(files, records)
+
+    assert len(records) == 1
+    assert (records[0].name, records[0].version) == ("requests", "2.31.0")
+    if option in {"--index-url", "-i"}:
+        assert records[0].registry == url
+        assert records[0].registry_usage == "registry_api"
+    assert [(item.url, item.usage) for item in observations] == [(url, usage)]
+
+
+@pytest.mark.parametrize(
+    "option", ["--index-url", "--extra-index-url", "-i", "--find-links", "-f"]
+)
+@pytest.mark.parametrize("separator", ["=\\\n    ", "=\\\r\n\t"])
+def test_requirements_incomplete_source_option_retains_trailing_url(
+    option, separator
+):
+    url = "https://packages.example/demo.whl#sha256=deadbeef"
+    files = {
+        "requirements.txt": (
+            f"{option}{separator}{url} # trailing URL for review\n"
+            "requests==2.31.0\n"
+        )
+    }
+
+    records = parse_dependencies(files)
+    observations = parse_dependency_sources(files, records)
+
+    assert [(record.name, record.registry) for record in records] == [
+        ("requests", None),
+    ]
+    assert [
+        (item.url, item.usage, item.dependency_name) for item in observations
+    ] == [(url, "resolved_download", None)]
+
+
+def test_incomplete_source_option_does_not_consume_next_source_option():
+    observations = parse_dependency_sources({
+        "requirements.txt": (
+            "--index-url=\\\n    --extra-index-url https://packages.example/simple\n"
+        )
+    })
+
+    assert [(item.url, item.usage) for item in observations] == [
+        ("https://packages.example/simple", "registry_api"),
+    ]
+
+
+def test_requirements_continued_references_preserve_names_and_fragments():
+    files = {
+        "requirements.txt": (
+            "--index-url \\\n  https://pypi.org/simple\n"
+            "demo[security] \\\n  @ \\\n"
+            "  https://packages.example/demo.whl#sha256=cafebabe\n"
+            "-e \\\n  git+https://git.example/demo.git#egg=editable-demo\n"
+            "https://packages.example/\\\n"
+            "bare.whl#sha256=deadbeef # artifact comment\n"
+        )
+    }
+
+    records = parse_dependencies(files)
+    observations = parse_dependency_sources(files, records)
+
+    assert {record.name for record in records} == {"demo", "editable-demo"}
+    assert all(record.registry_usage == "resolved_download" for record in records)
+    assert {(item.url, item.usage, item.dependency_name) for item in observations} == {
+        ("https://pypi.org/simple", "registry_api", None),
+        (
+            "https://packages.example/demo.whl#sha256=cafebabe",
+            "resolved_download", "demo",
+        ),
+        (
+            "git+https://git.example/demo.git#egg=editable-demo",
+            "resolved_download", "editable-demo",
+        ),
+        (
+            "https://packages.example/bare.whl#sha256=deadbeef",
+            "resolved_download", None,
+        ),
+    }
+
+
+def test_requirements_commented_continuation_does_not_consume_bare_url():
+    observations = parse_dependency_sources({
+        "requirements.txt": (
+            "# --index-url \\\n"
+            "https://packages.example/demo.whl#sha256=deadbeef\n"
+        )
+    })
+
+    assert [(item.url, item.usage) for item in observations] == [
+        ("https://packages.example/demo.whl#sha256=deadbeef", "resolved_download"),
+    ]
+
+
+def test_requirements_multiple_continued_options_share_one_logical_line():
+    files = {
+        "requirements.txt": (
+            '--index-url \\\n  "https://pypi.org/simple" \\\n'
+            '  --extra-index-url="https://mirror.example/simple" \\\n'
+            '  --find-links \\\n  "https://files.example/wheels/"\n'
+            "requests==2.31.0\n"
+        )
+    }
+
+    records = parse_dependencies(files)
+    observations = parse_dependency_sources(files, records)
+
+    assert records[0].registry == "https://pypi.org/simple"
+    assert {(item.url, item.usage) for item in observations} == {
+        ("https://pypi.org/simple", "registry_api"),
+        ("https://mirror.example/simple", "registry_api"),
+        ("https://files.example/wheels/", "resolved_download"),
+    }
+
+
+@pytest.mark.parametrize("separator", ["\r", "\f", "\v", "\x1c"])
+def test_requirements_preserve_existing_line_separator_behavior(separator):
+    records = parse_dependencies({
+        "requirements.txt": f"requests==2.31.0{separator}flask==3.0.0"
+    })
+
+    assert {(record.name, record.version) for record in records} == {
+        ("requests", "2.31.0"), ("flask", "3.0.0"),
+    }
+
+
+def test_logical_requirements_preserve_original_line_numbers():
+    from scanners.risk_scanner.logical_lines import iter_logical_lines
+
+    lines = list(iter_logical_lines(
+        "# source configuration\r\n"
+        "--index-url \\\r\n  \\\r\n  https://pypi.org/simple\r\n"
+        "demo @ \\\r\n  https://packages.example/demo.whl\r\n"
+        "requests==2.31.0",
+        requirement_comments=True,
+    ))
+
+    assert [line.start_line for line in lines] == [1, 2, 5, 7]
+    assert lines[1].source_line(lines[1].text.index("https://")) == 4
+    assert lines[2].source_line(lines[2].text.index("https://")) == 6
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pip install --find-links https://registry.example/wheels demo",
+        "pip install --find-links=https://registry.example/wheels demo",
+        "pip install -f https://registry.example/wheels demo",
+        "pip install -f=https://registry.example/wheels demo",
+    ],
+)
+def test_find_links_is_not_classified_as_a_registry_api_in_inline_rules(
+    command,
+):
     from scanners.risk_scanner.rules.supply_chain import (
-        _dependency_usage_near_line,
+        _dependency_usage_for_url,
     )
 
-    assert _dependency_usage_near_line(
-        ["pip install --find-links https://registry.example/wheels demo"], 1
+    assert _dependency_usage_for_url(
+        command, command.index("https://")
     ) == "resolved_download"
+
+
+def test_npm_force_is_not_classified_as_pip_find_links():
+    from scanners.risk_scanner.rules.supply_chain import (
+        _dependency_usage_for_url,
+    )
+
+    command = "npm install -f --registry https://mirror.internal/ demo"
+    assert _dependency_usage_for_url(
+        command, command.index("https://")
+    ) == "registry_api"
 
 
 def test_dependency_scan_reports_osv_query_failures(tmp_path):
