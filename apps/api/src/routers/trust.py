@@ -2717,6 +2717,8 @@ _LLM_SEVERITY_RANK = {
 
 
 def _is_llm_reviewable_finding(finding: dict[str, Any]) -> bool:
+    if finding.get("llm_review_exempt") is True:
+        return False
     severity = str(
         finding.get("candidate_severity")
         or finding.get("static_severity")

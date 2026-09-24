@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from pathlib import PurePosixPath
 
-from .models import DependencyRecord
+from .models import DependencyRecord, DependencyScope
 
 
 _DIRECT_REFERENCE = re.compile(
@@ -21,6 +22,10 @@ _VCS_REFERENCE = re.compile(
     r"^(?:git|hg|svn|bzr)\+[^\s]+://[^\s]+",
     re.IGNORECASE,
 )
+_HTTP_REFERENCE = re.compile(
+    r"^(?P<url>https?://\S+)",
+    re.IGNORECASE,
+)
 _EGG_NAME = re.compile(r"(?:^|[&])egg=([^&]+)", re.IGNORECASE)
 
 
@@ -31,16 +36,23 @@ def _requirement_source(line: str) -> tuple[str | None, str] | None:
 
     editable = _EDITABLE_REFERENCE.match(line)
     candidate = editable.group("url") if editable else line
-    if not _VCS_REFERENCE.match(candidate):
-        return None
-    egg = _EGG_NAME.search(candidate.partition("#")[2])
-    return (egg.group(1) if egg else None), candidate
+    if _VCS_REFERENCE.match(candidate):
+        egg = _EGG_NAME.search(candidate.partition("#")[2])
+        return (egg.group(1) if egg else None), candidate
+
+    # Bare URLs keep fragments; only an explicit egg supplies a package name.
+    remote = _HTTP_REFERENCE.match(candidate)
+    if remote:
+        url = remote.group("url")
+        egg = _EGG_NAME.search(url.partition("#")[2])
+        return (egg.group(1) if egg else None), url
+    return None
 
 
 def parse_requirement_sources(
     content: str,
 ) -> list[tuple[str | None, str]]:
-    """Return remote direct/VCS URLs, including editable requirement lines."""
+    """Return remote direct, VCS, and bare HTTP(S) requirement URLs."""
     sources: list[tuple[str | None, str]] = []
     for raw_line in content.splitlines():
         line = re.split(r"\s+#", raw_line, maxsplit=1)[0].strip()
@@ -55,7 +67,14 @@ def parse_requirement_sources(
 def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]:
     result: list[DependencyRecord] = []
     index_url: str | None = None
-    for line in content.splitlines():
+    basename = PurePosixPath(source_file.replace("\\", "/")).stem.casefold()
+    tokens = set(re.split(r"[-_.]", basename))
+    scope: DependencyScope = (
+        "test" if tokens & {"test", "tests", "spec", "specs"}
+        else "dev" if tokens & {"dev", "development"}
+        else "runtime"
+    )
+    for line_no, line in enumerate(content.splitlines(), 1):
         # Preserve URL fragments such as ``#sha256=...`` while still handling
         # ordinary inline requirement comments.
         line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
@@ -83,6 +102,9 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
                     source_file,
                     registry=source_url,
                     registry_usage="resolved_download",
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
             )
             continue
@@ -104,6 +126,9 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
                     source_file,
                     registry=index_url,
                     registry_usage="registry_api" if index_url else None,
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
             )
     return result
@@ -131,7 +156,7 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
     if not isinstance(packages, list):
         return _parse_toml_packages(content, source_file)
     result: list[DependencyRecord] = []
-    for package in packages:
+    for package_index, package in enumerate(packages):
         if not isinstance(package, dict) or not package.get("name"):
             continue
         source = package.get("source")
@@ -148,6 +173,25 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
             if registry
             else None
         )
+        groups = package.get("groups")
+        if not isinstance(groups, list):
+            groups = []
+        group_names = {group.casefold() for group in groups if isinstance(group, str)}
+        if "main" in group_names:
+            scope = "mixed" if len(group_names) > 1 else "runtime"
+        elif group_names and group_names <= {"dev", "test"}:
+            scope = "test" if "test" in group_names else "dev"
+        elif group_names:
+            scope = "unknown"
+        else:
+            category = package.get("category")
+            scope = (
+                {"main": "runtime", "dev": "dev", "test": "test"}.get(
+                    category, "unknown"
+                )
+                if isinstance(category, str)
+                else "unknown"
+            )
         result.append(
             DependencyRecord(
                 str(package["name"]),
@@ -157,6 +201,8 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
                 source_file,
                 registry=str(registry) if registry else None,
                 registry_usage=registry_usage,
+                scope=scope,
+                source_ref=f"package[{package_index}]",
             )
         )
     return result
@@ -166,6 +212,8 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
         return []
     result: list[DependencyRecord] = []
     source_urls: dict[str, str] = {}
@@ -185,7 +233,7 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
                 registry = default_registry
                 if isinstance(info, dict):
                     hashes = info.get("hashes")
-                    integrity = hashes[0] if isinstance(hashes, list) and hashes else None
+                    integrity = hashes[0] if isinstance(hashes, list) and hashes and isinstance(hashes[0], str) else None
                     index_name = info.get("index")
                     if index_name:
                         registry = source_urls.get(str(index_name))
@@ -199,6 +247,8 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
                         registry=registry,
                         integrity=integrity,
                         registry_usage="registry_api" if registry else None,
+                        scope="runtime" if section == "default" else "dev",
+                        source_ref=f"#/{section}/{name.replace('~', '~0').replace('/', '~1')}",
                     )
                 )
     return result

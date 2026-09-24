@@ -156,6 +156,7 @@ export interface Finding {
   candidate_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info';
   requires_llm_validation?: boolean;
   llm_adjudication_eligible?: boolean;
+  llm_review_exempt?: boolean;
   llm_adjudication_reason?: string;
   llm_label?: string;
   llm_review_state?: 'pending' | 'confirmed_harmful' | 'confirmed_risky' | 'likely_benign' | 'uncertain' | 'unavailable';
@@ -564,6 +565,29 @@ export interface PermissionEvidence {
   evidence: string;
 }
 
+export interface RegistryPolicyOccurrence {
+  file: string;
+  source_ref?: string | null;
+  line?: number | null;
+  dependency_name?: string | null;
+  version?: string | null;
+  resolved_url: string;
+  integrity?: string | null;
+  scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
+  usage: 'registry_api' | 'resolved_download';
+}
+
+export interface RegistryPolicyEvidence {
+  ecosystem: string;
+  registry_host: string;
+  policy_reason: string;
+  source_file: string;
+  scope: RegistryPolicyOccurrence['scope'];
+  occurrence_count: number;
+  occurrences: RegistryPolicyOccurrence[];
+  truncated: boolean;
+}
+
 export interface ReviewAdvisory {
   id: string;
   code: string;
@@ -577,6 +601,7 @@ export interface ReviewAdvisory {
   requires_manual_review: boolean;
   evidence?: string | null;
   location?: { file?: string; line?: number } | null;
+  registry_policy?: RegistryPolicyEvidence | null;
 }
 
 export interface AdvisorySummary {

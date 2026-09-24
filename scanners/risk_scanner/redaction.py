@@ -63,6 +63,8 @@ def build_finding_contexts(
 
 
 def _reviewable_finding(finding: dict[str, Any]) -> bool:
+    if finding.get("llm_review_exempt") is True:
+        return False
     review_severity = str(
         finding.get("candidate_severity")
         or finding.get("static_severity")

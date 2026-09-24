@@ -39,6 +39,49 @@
           "grade_downgrade_steps": { "type": "integer", "minimum": 0, "maximum": 1 },
           "requires_manual_review": { "type": "boolean" },
           "evidence": { "type": "string" },
+          "registry_policy": {
+            "type": ["object", "null"],
+            "required": [
+              "ecosystem", "registry_host", "policy_reason", "source_file",
+              "scope", "occurrence_count", "occurrences", "truncated"
+            ],
+            "properties": {
+              "ecosystem": { "type": "string" },
+              "registry_host": { "type": "string" },
+              "policy_reason": { "type": "string" },
+              "source_file": { "type": "string", "maxLength": 512 },
+              "scope": {
+                "type": "string",
+                "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
+              },
+              "occurrence_count": { "type": "integer", "minimum": 1 },
+              "occurrences": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "required": ["file", "resolved_url", "scope", "usage"],
+                  "properties": {
+                    "file": { "type": "string", "maxLength": 512 },
+                    "source_ref": { "type": ["string", "null"], "maxLength": 256 },
+                    "line": { "type": ["integer", "null"], "minimum": 1 },
+                    "dependency_name": { "type": ["string", "null"], "maxLength": 128 },
+                    "version": { "type": ["string", "null"], "maxLength": 128 },
+                    "resolved_url": { "type": "string", "maxLength": 512 },
+                    "integrity": { "type": ["string", "null"], "maxLength": 160 },
+                    "scope": {
+                      "type": "string",
+                      "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
+                    },
+                    "usage": { "type": "string", "enum": ["registry_api", "resolved_download"] }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "truncated": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
           "location": {
             "type": "object",
             "properties": {
@@ -468,6 +511,10 @@
             "type": "boolean",
             "description": "该发现满足受控 LLM 有效严重度裁决的静态资格"
           },
+          "llm_review_exempt": {
+            "type": "boolean",
+            "description": "可由依赖元数据或确定性验证直接判定，不占用 LLM 语义复核配额"
+          },
           "llm_adjudication_reason": { "type": "string" },
           "llm_review_state": {
             "type": "string",
@@ -679,7 +726,31 @@
         "dependencies_found": { "type": "integer", "minimum": 0 },
         "dependencies_queried": { "type": "integer", "minimum": 0 },
         "query_failures": { "type": "integer", "minimum": 0 },
-        "query_limit": { "type": "integer", "minimum": 1 }
+        "query_limit": { "type": "integer", "minimum": 1 },
+        "integrity": {
+          "type": "object",
+          "required": ["status", "claimed_count", "verified_count", "mismatch_count", "unavailable_count", "unsupported_count"],
+          "properties": {
+            "status": { "type": "string", "enum": ["not_applicable", "not_checked", "unsupported", "partial", "verified", "mismatch"] },
+            "claimed_count": { "type": "integer", "minimum": 0 },
+            "verified_count": { "type": "integer", "minimum": 0 },
+            "mismatch_count": { "type": "integer", "minimum": 0 },
+            "unavailable_count": { "type": "integer", "minimum": 0 },
+            "unsupported_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "manifest_lock": {
+          "type": "object",
+          "required": ["status", "checked_pairs", "mismatch_count", "unchecked_count"],
+          "properties": {
+            "status": { "type": "string", "enum": ["not_checked", "partial", "matched", "mismatch"] },
+            "checked_pairs": { "type": "integer", "minimum": 0 },
+            "mismatch_count": { "type": "integer", "minimum": 0 },
+            "unchecked_count": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false,
       "description": "依赖解析和 OSV 查询覆盖率"

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 
 class DependencySourceUsage(StrEnum):
@@ -7,6 +8,9 @@ class DependencySourceUsage(StrEnum):
 
     REGISTRY_API = "registry_api"
     RESOLVED_DOWNLOAD = "resolved_download"
+
+
+DependencyScope = Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -19,6 +23,9 @@ class DependencyRecord:
     registry: str | None = None
     integrity: str | None = None
     registry_usage: DependencySourceUsage | None = None
+    scope: DependencyScope = "unknown"
+    source_ref: str | None = None
+    line: int | None = None
 
 
 @dataclass(frozen=True)
@@ -28,3 +35,8 @@ class DependencySourceObservation:
     usage: DependencySourceUsage
     source_file: str
     dependency_name: str | None = None
+    dependency_version: str | None = None
+    integrity: str | None = None
+    scope: DependencyScope = "unknown"
+    source_ref: str | None = None
+    line: int | None = None

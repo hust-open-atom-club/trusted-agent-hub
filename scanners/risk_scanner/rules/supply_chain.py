@@ -2,7 +2,7 @@
 
 Checks for:
   - curl/wget pipe to shell (critical)
-  - Dependency registry policy mismatches (one review advisory per scan)
+  - Dependency registry policy mismatches (grouped review advisories)
   - Unpinned / risky dependency versions (medium)
   - HTTP download URLs (medium)
   - Abandoned / deprecated packages (medium)
@@ -15,14 +15,19 @@ to avoid flagging normal hyperlinks in HTML/MD files.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import json
 import re
 import time
 import urllib.request
 import urllib.error
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
 from scanners.risk_scanner.analyzers.url_context import (
@@ -49,7 +54,9 @@ from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.registry_policy import (
     DEFAULT_REGISTRY_POLICY,
     RegistryPolicy,
+    normalize_ecosystem,
 )
+from scanners.risk_scanner.redaction import redact_text
 
 _CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CVE_CACHE_TTL = 3600
@@ -59,6 +66,9 @@ _LOCKFILE_NAMES = frozenset({
     "pnpm-lock.yaml",
     "yarn.lock",
 })
+_MAX_REGISTRY_POLICY_GROUPS = 25
+_MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP = 100
+_MAX_REGISTRY_POLICY_OCCURRENCES_TOTAL = 500
 
 _URL_BASED_DESCS = frozenset({
     "非官方包源 URL",
@@ -145,7 +155,16 @@ def _dependency_usage_near_line(
     lines: list[str], line_no: int
 ) -> DependencySourceUsage:
     line = lines[line_no - 1].casefold() if 0 < line_no <= len(lines) else ""
+    if 1 < line_no <= len(lines):
+        previous_line = lines[line_no - 2].rstrip()
+        if previous_line.endswith("\\"):
+            line = f"{previous_line[:-1].casefold()} {line}"
     if re.search(r"(?:^|\s)--find-links(?:\s|=)", line):
+        return "resolved_download"
+    if (
+        re.search(r"(?:^|\s)-f(?:\s|=)", line)
+        and _dependency_ecosystem_near_line(lines, line_no) == "pypi"
+    ):
         return "resolved_download"
     if re.search(
         r"\bregistry\b|--(?:extra-)?index-url\b"
@@ -316,9 +335,15 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
         if not isinstance(values, list):
             continue
         normalized_ecosystem = {"pypi": "PyPI", "python": "PyPI", "npm": "npm", "rust": "crates.io"}.get(str(ecosystem).lower(), str(ecosystem))
-        for value in values:
+        # A source_ref is a JSON Pointer into the input manifest, so its token
+        # must use the original key rather than the normalized ecosystem label.
+        ecosystem_pointer = str(ecosystem).replace("~", "~0").replace("/", "~1")
+        for index, value in enumerate(values):
             if isinstance(value, dict):
                 registry = value.get("registry")
+                scope = value.get("scope", "runtime")
+                if not isinstance(scope, str) or scope not in {"runtime", "dev", "test", "optional", "mixed", "unknown"}:
+                    scope = "unknown"
                 records.append(
                     DependencyRecord(
                         str(value.get("name", "")),
@@ -327,12 +352,18 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
                         True,
                         source_file,
                         registry=registry,
-                        integrity=value.get("integrity"),
+                        integrity=value.get("integrity") if isinstance(value.get("integrity"), str) else None,
                         registry_usage="registry_api" if registry else None,
+                        scope=scope,
+                        source_ref=f"#/dependencies/{ecosystem_pointer}/{index}",
                     )
                 )
             elif value:
-                records.append(DependencyRecord(str(value), None, normalized_ecosystem, True, source_file))
+                records.append(DependencyRecord(
+                    str(value), None, normalized_ecosystem, True, source_file,
+                    scope="runtime",
+                    source_ref=f"#/dependencies/{ecosystem_pointer}/{index}",
+                ))
     return [record for record in records if record.name]
 
 
@@ -343,6 +374,22 @@ def _format_counter(counter: Counter[str], *, limit: int = 5) -> str:
     return f"{shown}; 另有 {omitted} 个" if omitted > 0 else shown
 
 
+def _source_evidence_url(value: str) -> str:
+    """Retain the source address without exposing URL credentials or tokens."""
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return redact_text(value.split("?", 1)[0].split("#", 1)[0])
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    return redact_text(urlunsplit((parsed.scheme, netloc, parsed.path, "", "")))
+
+
+def _evidence_sample(value: str | None, limit: int) -> str | None:
+    if value is None or len(value) <= limit:
+        return value
+    return value[:limit - 1] + "…"
+
+
 def _check_dependency_sources(
     scanner: Any,
     observations: list[DependencySourceObservation],
@@ -350,30 +397,14 @@ def _check_dependency_sources(
     policy: RegistryPolicy = (
         getattr(scanner, "registry_policy", None) or DEFAULT_REGISTRY_POLICY
     )
-    unique_observations: dict[
-        tuple[str, str, DependencySourceUsage],
-        DependencySourceObservation,
-    ] = {}
-    observation_files: dict[
-        tuple[str, str, DependencySourceUsage], set[str]
-    ] = {}
-    for observation in observations:
-        key = (
-            observation.ecosystem.casefold(),
-            observation.url,
-            observation.usage,
-        )
-        observation_files.setdefault(key, set()).add(observation.source_file)
-        existing = unique_observations.get(key)
-        if existing is None or (
-            existing.dependency_name is None
-            and observation.dependency_name is not None
-        ):
-            unique_observations[key] = observation
-
     rejected = []
-    file_counts: Counter[str] = Counter()
-    for key, observation in unique_observations.items():
+    groups: dict[
+        tuple[str, str, str, str],
+        list[tuple[DependencySourceObservation, Any]],
+    ] = {}
+    # Exact duplicate observations are harmless, but URL-only deduplication
+    # erases separate lockfile entries and their integrity claims.
+    for observation in dict.fromkeys(observations):
         decision = policy.evaluate(
             observation.ecosystem,
             observation.url,
@@ -381,88 +412,187 @@ def _check_dependency_sources(
         )
         if not decision.allowed:
             rejected.append((observation, decision))
-            file_counts.update(observation_files[key])
+            key = (
+                normalize_ecosystem(observation.ecosystem),
+                decision.normalized_host or observation.url,
+                observation.source_file,
+                decision.reason,
+            )
+            groups.setdefault(key, []).append((observation, decision))
     if not rejected:
         return
 
-    host_counts: Counter[str] = Counter(
-        decision.normalized_host or "<invalid-or-non-registry-url>"
-        for _, decision in rejected
+    ordered_groups = sorted(
+        groups.items(),
+        key=lambda entry: (
+            1 if {item.scope for item, _ in entry[1]} <= {"dev", "test"} else 0,
+            -len(entry[1]),
+            entry[0],
+        ),
     )
-    reason_counts: Counter[str] = Counter(
-        decision.reason for _, decision in rejected
+    visible_groups = ordered_groups[:_MAX_REGISTRY_POLICY_GROUPS]
+    base_quota = min(
+        _MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP,
+        max(1, _MAX_REGISTRY_POLICY_OCCURRENCES_TOTAL // len(visible_groups)),
     )
-    reason_group_counts: Counter[str] = Counter()
-    for reason, count in reason_counts.items():
+    quotas = [min(len(items), base_quota) for _, items in visible_groups]
+    remaining = _MAX_REGISTRY_POLICY_OCCURRENCES_TOTAL - sum(quotas)
+    for index, (_, items) in enumerate(visible_groups):
+        extra = min(
+            remaining,
+            len(items) - quotas[index],
+            _MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP - quotas[index],
+        )
+        quotas[index] += extra
+        remaining -= extra
+
+    for ((ecosystem, _registry_identity, source_file, reason), items), quota in zip(
+        visible_groups, quotas,
+    ):
+        count = len(items)
+        source_file_display = _evidence_sample(source_file, 512)
+        sorted_items = sorted(
+            items,
+            key=lambda entry: (
+                entry[0].source_file,
+                entry[0].dependency_name or "",
+                entry[0].line or 0,
+                _source_evidence_url(entry[0].url),
+                entry[0].source_ref or "",
+                entry[0].dependency_version or "",
+                entry[0].integrity or "",
+                entry[0].scope,
+                str(entry[0].usage),
+            ),
+        )
+        scopes = {observation.scope for observation, _ in items}
+        scope = next(iter(scopes)) if len(scopes) == 1 else "mixed"
+        host = items[0][1].normalized_host or "<invalid-or-non-registry-url>"
+        url_samples = ""
+        if items[0][1].normalized_host is None:
+            urls = sorted({
+                _evidence_sample(_source_evidence_url(observation.url), 160)
+                for observation, _ in items
+            })
+            url_samples = f"; url_samples={', '.join(urls[:5])}"
         if reason in _UNAPPROVED_SOURCE_REASONS:
-            reason_group_counts["source_unapproved"] += count
+            reason_group = "source_unapproved"
+            action = (
+                f"来源本身未经批准 {count} 条"
+                "（改用官方源，或经运维审核后加入 "
+                "TAH_APPROVED_PRIVATE_REGISTRIES_JSON）"
+            )
         elif reason in _POLICY_MISMATCH_REASONS:
-            reason_group_counts["policy_mismatch"] += count
+            reason_group = "policy_mismatch"
+            action = (
+                f"已批准端点的使用方式不匹配 {count} 条"
+                "（修正路径、端口、生态或用途，通常无需新增审批）"
+            )
         elif reason in _UNSAFE_TRANSPORT_REASONS:
-            reason_group_counts["unsafe_transport"] += count
+            reason_group = "unsafe_transport"
+            action = (
+                f"传输或凭据不安全 {count} 条"
+                "（改用 HTTPS 并移除 URL 内嵌凭据）"
+            )
         else:
-            reason_group_counts["other"] += count
-    affected_dependencies = {
-        (
-            observation.ecosystem.casefold(),
-            observation.dependency_name.casefold(),
+            reason_group = "other"
+            action = f"其他策略拒绝 {count} 条（按 reason 人工复核）"
+        affected_dependencies = {
+            observation.dependency_name.casefold()
+            for observation, _ in items
+            if observation.dependency_name
+        }
+        dependency_summary = (
+            f"影响 {len(affected_dependencies)} 个依赖名称；"
+            if affected_dependencies else "未能关联到具体依赖；"
         )
-        for observation, _ in rejected
-        if observation.dependency_name
-    }
-    source_files = sorted(file_counts)
-    dependency_summary = (
-        f"影响 {len(affected_dependencies)} 个依赖名称；"
-        if affected_dependencies
-        else "未能关联到具体依赖；"
-    )
-    review_actions: list[str] = []
-    if reason_group_counts["source_unapproved"]:
-        review_actions.append(
-            f"来源本身未经批准 "
-            f"{reason_group_counts['source_unapproved']} 条"
-            "（改用官方源，或经运维审核后加入 "
-            "TAH_APPROVED_PRIVATE_REGISTRIES_JSON）"
+        occurrences = [
+            {
+                "file": _evidence_sample(observation.source_file, 512),
+                "source_ref": _evidence_sample(observation.source_ref, 256),
+                "line": observation.line,
+                "dependency_name": _evidence_sample(observation.dependency_name, 128),
+                "version": _evidence_sample(observation.dependency_version, 128),
+                "resolved_url": _evidence_sample(_source_evidence_url(observation.url), 512),
+                "integrity": _evidence_sample(observation.integrity, 160),
+                "scope": observation.scope,
+                "usage": str(observation.usage),
+            }
+            for observation, _ in sorted_items[:quota]
+        ]
+        samples = [
+            f"{_evidence_sample(observation.dependency_name, 128)}@"
+            f"{_evidence_sample(observation.dependency_version, 128) or '?'}"
+            for observation, _ in sorted_items
+            if observation.dependency_name
+        ][:5]
+        scanner._add_advisory(
+            code="dependency_registry_policy",
+            category="registry_policy",
+            level="warning" if scopes <= {"dev", "test"} else "high",
+            title="依赖来源策略需要人工复核",
+            description=(
+                f"检测到 {count} 条依赖来源策略记录需要复核，"
+                f"涉及 1 个来源端点，{dependency_summary}"
+                f"处置分类：{action}。"
+                "来源获批与依赖本身是否安全是两个独立判断。"
+            ),
+            deduction=0,
+            affects_grade=False,
+            requires_manual_review=True,
+            evidence=(
+                f"policy={policy.version}; hosts={host} ({count}); "
+                f"reasons={reason} ({count}); groups={reason_group} ({count}); "
+                f"files={source_file_display} ({count}); scope={scope}; "
+                f"samples={', '.join(samples)}{url_samples}"
+            ),
+            location={"file": source_file_display},
+            registry_policy={
+                "ecosystem": ecosystem,
+                "registry_host": host,
+                "policy_reason": reason,
+                "source_file": source_file_display,
+                "scope": scope,
+                "occurrence_count": count,
+                "occurrences": occurrences,
+                "truncated": count > len(occurrences),
+            },
         )
-    if reason_group_counts["policy_mismatch"]:
-        review_actions.append(
-            f"已批准端点的使用方式不匹配 "
-            f"{reason_group_counts['policy_mismatch']} 条"
-            "（修正路径、端口、生态或用途，通常无需新增审批）"
+
+    omitted_groups = ordered_groups[_MAX_REGISTRY_POLICY_GROUPS:]
+    if omitted_groups:
+        omitted_count = sum(len(items) for _, items in omitted_groups)
+        omitted_hosts = Counter(
+            decision.normalized_host or "<invalid-or-non-registry-url>"
+            for _, items in omitted_groups
+            for _, decision in items
         )
-    if reason_group_counts["unsafe_transport"]:
-        review_actions.append(
-            f"传输或凭据不安全 "
-            f"{reason_group_counts['unsafe_transport']} 条"
-            "（改用 HTTPS 并移除 URL 内嵌凭据）"
+        omitted_reasons = Counter(
+            key[3] for key, items in omitted_groups for _ in items
         )
-    if reason_group_counts["other"]:
-        review_actions.append(
-            f"其他策略拒绝 {reason_group_counts['other']} 条"
-            "（按 evidence 中的 reason 人工复核）"
+        omitted_high = any(
+            not {observation.scope for observation, _ in items} <= {"dev", "test"}
+            for _, items in omitted_groups
         )
-    scanner._add_advisory(
-        code="dependency_registry_policy",
-        category="registry_policy",
-        level="high",
-        title="依赖来源策略需要人工复核",
-        description=(
-            f"检测到 {len(rejected)} 条依赖来源策略记录需要复核，"
-            f"涉及 {len(host_counts)} 个 host，{dependency_summary}"
-            f"处置分类：{'；'.join(review_actions)}。"
-            "来源获批与依赖本身是否安全是两个独立判断。"
-        ),
-        deduction=0,
-        affects_grade=False,
-        requires_manual_review=True,
-        evidence=(
-            f"policy={policy.version}; hosts={_format_counter(host_counts)}; "
-            f"reasons={_format_counter(reason_counts)}; "
-            f"groups={_format_counter(reason_group_counts)}; "
-            f"files={_format_counter(file_counts)}"
-        ),
-        location={"file": source_files[0]} if source_files else None,
-    )
+        scanner._add_advisory(
+            code="dependency_registry_policy_overflow",
+            category="registry_policy",
+            level="high" if omitted_high else "warning",
+            title="依赖来源策略分组超出报告上限",
+            description=(
+                f"另有 {len(omitted_groups)} 个来源策略分组、{omitted_count} 条记录"
+                "未逐组展示；仍需人工复核这些来源。"
+            ),
+            deduction=0,
+            affects_grade=False,
+            requires_manual_review=True,
+            evidence=(
+                f"omitted_groups={len(omitted_groups)}; omitted_occurrences={omitted_count}; "
+                f"hosts={_format_counter(omitted_hosts)}; "
+                f"reasons={_format_counter(omitted_reasons)}"
+            ),
+            location={"file": _evidence_sample(omitted_groups[0][0][2], 512)},
+        )
 
     insecure = [
         (observation, decision)
@@ -494,6 +624,7 @@ def _check_dependency_sources(
             reachability="dependency_installation",
             activation="direct",
             trust_boundary_crossed=True,
+            llm_review_exempt=True,
         )
 
 
@@ -520,6 +651,7 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                 location={"file": record.source_file},
                 evidence=f"Dependency version: {record.version or 'missing'}",
                 remediation="在清单和锁文件中使用可复现的精确依赖版本。",
+                llm_review_exempt=True,
             )
     client = getattr(scanner, "osv_client", None)
     compatibility_mode = client is None
@@ -547,6 +679,7 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                 description=f"依赖 {record.name}@{record.version or '*'} 存在已知漏洞 {cve_id}。",
                 location={"file": record.source_file}, evidence=f"OSV.dev: {cve_id}",
                 remediation=f"升级 {record.name} 到修复版本，或替换为安全替代包。",
+                llm_review_exempt=True,
             )
     scanner.dependency_scan = {
         "status": "partial" if failures or limit_reached else "complete",
@@ -556,6 +689,193 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
     }
     if limit_reached:
         scanner.dependency_scan["query_limit"] = getattr(client, "max_queries", None)
+
+
+def _integrity_matches(content: bytes, claim: object) -> bool | None:
+    """Verify the strongest usable SRI digest; None means the claim is unsupported."""
+    if not isinstance(claim, str):
+        return None
+    algorithms = {"sha512": 4, "sha384": 3, "sha256": 2, "sha1": 1}
+    candidates: list[tuple[int, str, bytes]] = []
+    for token in claim.split():
+        if ":" in token and "-" not in token:
+            algorithm, encoded = token.split(":", 1)
+            try:
+                expected = bytes.fromhex(encoded)
+            except ValueError:
+                continue
+        elif "-" in token:
+            algorithm, encoded = token.split("-", 1)
+            try:
+                expected = base64.b64decode(encoded.split("?", 1)[0], validate=True)
+            except (ValueError, binascii.Error):
+                continue
+        else:
+            continue
+        algorithm = algorithm.casefold()
+        if algorithm in algorithms and len(expected) == hashlib.new(algorithm).digest_size:
+            candidates.append((algorithms[algorithm], algorithm, expected))
+    if not candidates:
+        return None
+    strongest = max(candidate[0] for candidate in candidates)
+    return any(
+        hmac.compare_digest(hashlib.new(algorithm, content).digest(), expected)
+        for priority, algorithm, expected in candidates
+        if priority == strongest
+    )
+
+
+def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -> None:
+    """Check acquired bytes only; never fetch URLs authored by a package."""
+    claims = [
+        record for record in records
+        if _is_lockfile(record.source_file)
+        and record.integrity
+        and record.registry
+        and record.registry_usage == "resolved_download"
+    ]
+    artifacts = getattr(scanner, "dependency_artifacts", {})
+    verified = 0
+    unavailable = 0
+    unsupported = 0
+    mismatches: dict[str, list[DependencyRecord]] = {}
+    for record in claims:
+        content = artifacts.get(record.registry) if isinstance(artifacts, dict) else None
+        if not isinstance(content, bytes):
+            unavailable += 1
+            continue
+        matches = _integrity_matches(content, record.integrity)
+        if matches is None:
+            unsupported += 1
+        else:
+            verified += 1
+            if not matches:
+                mismatches.setdefault(record.source_file, []).append(record)
+    mismatch_count = sum(len(items) for items in mismatches.values())
+    for source_file, items in sorted(mismatches.items()):
+        samples = ", ".join(
+            f"{record.name}@{record.version or '?'} ({record.source_ref or '?'})"
+            for record in items[:5]
+        )
+        scanner._add_finding(
+            rule_id="SR-008", severity="high", category="supply_chain",
+            title="依赖制品与锁文件完整性摘要不一致",
+            description=f"已获取的依赖制品有 {len(items)} 条与锁文件声明的摘要不一致。",
+            location={"file": source_file},
+            evidence=f"mismatches={len(items)}; samples={samples}",
+            remediation="核对获取的制品、锁文件摘要与发布来源，重新锁定可信版本。",
+            llm_review_exempt=True,
+        )
+    if not claims:
+        status = "not_applicable"
+    elif mismatch_count:
+        status = "mismatch"
+    elif verified == len(claims):
+        status = "verified"
+    elif unsupported and not verified and not unavailable:
+        status = "unsupported"
+    elif verified or unsupported:
+        status = "partial"
+    else:
+        status = "not_checked"
+    scanner.dependency_scan["integrity"] = {
+        "status": status,
+        "claimed_count": len(claims),
+        "verified_count": verified,
+        "mismatch_count": mismatch_count,
+        "unavailable_count": unavailable,
+        "unsupported_count": unsupported,
+    }
+
+
+def _exact_npm_version(value: object) -> tuple[int, int, int, str, str] | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"\s*=?\s*v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?\s*",
+        value,
+    )
+    if not match:
+        return None
+    return (
+        int(match.group(1)), int(match.group(2)), int(match.group(3)),
+        match.group(4) or "", match.group(5) or "",
+    )
+
+
+def _same_npm_declaration(declared: object, locked: object) -> bool | None:
+    if not isinstance(declared, str) or not isinstance(locked, str):
+        return None
+    if declared == locked:
+        return True
+    declared_exact = _exact_npm_version(declared)
+    locked_exact = _exact_npm_version(locked)
+    if declared_exact is not None and locked_exact is not None:
+        return declared_exact == locked_exact
+    return None
+
+
+def _check_manifest_lock_consistency(scanner: Any, files: dict[str, str]) -> None:
+    """Compare declarations when equality is provable without resolving ranges."""
+    checked = 0
+    mismatch_count = 0
+    unchecked_count = 0
+    for lock_file, content in sorted(files.items()):
+        if PurePosixPath(lock_file).name.casefold() not in {
+            "package-lock.json", "npm-shrinkwrap.json",
+        }:
+            continue
+        manifest_file = str(PurePosixPath(lock_file).with_name("package.json"))
+        if manifest_file not in files:
+            continue
+        try:
+            manifest = json.loads(files[manifest_file])
+            lock = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(manifest, dict) or not isinstance(lock, dict):
+            continue
+        packages = lock.get("packages")
+        root = packages.get("") if isinstance(packages, dict) else None
+        if not isinstance(root, dict):
+            continue
+        checked += 1
+        differences: list[str] = []
+        for section in ("dependencies", "devDependencies", "optionalDependencies"):
+            declared = manifest.get(section, {})
+            locked = root.get(section, {})
+            if not isinstance(declared, dict) or not isinstance(locked, dict):
+                differences.append(f"{section}: invalid declaration")
+                continue
+            for name in sorted(declared.keys() | locked.keys()):
+                if name not in declared or name not in locked:
+                    differences.append(f"{section}/{name}")
+                    continue
+                same = _same_npm_declaration(declared[name], locked[name])
+                if same is False:
+                    differences.append(f"{section}/{name}")
+                elif same is None:
+                    unchecked_count += 1
+        if differences:
+            mismatch_count += len(differences)
+            scanner._add_finding(
+                rule_id="SR-008", severity="medium", category="supply_chain",
+                title="依赖清单与锁文件根声明不一致",
+                description=f"{manifest_file} 与 {lock_file} 存在 {len(differences)} 项直接依赖声明差异。",
+                location={"file": lock_file},
+                evidence=f"differences={len(differences)}; samples={', '.join(differences[:5])}",
+                remediation="重新生成锁文件并核对差异，再使用锁定的依赖安装。",
+                llm_review_exempt=True,
+            )
+    scanner.dependency_scan["manifest_lock"] = {
+        "status": (
+            "not_checked" if not checked else "mismatch" if mismatch_count
+            else "partial" if unchecked_count else "matched"
+        ),
+        "checked_pairs": checked,
+        "mismatch_count": mismatch_count,
+        "unchecked_count": unchecked_count,
+    }
 
 
 def run(scanner: Any) -> None:
@@ -642,6 +962,8 @@ def run(scanner: Any) -> None:
                                     lines, line_no
                                 ),
                                 source_file=fname,
+                                source_ref=f"L{line_no}",
+                                line=line_no,
                             )
                         )
                         continue
@@ -735,7 +1057,12 @@ def run(scanner: Any) -> None:
     # Lockfiles/manifests are parsed once into normalized records. Lockfiles are
     # intentionally absent from scanner.scanned_files, so generic regex rules do
     # not inspect their structured contents.
-    manifest_records = _manifest_records(meta) if meta else []
+    metadata_source = next(
+        (path for path in ("manifest.json", "plugin.json", "SKILL.md")
+         if path in getattr(scanner, "_file_contents", {})),
+        "manifest.json",
+    )
+    manifest_records = _manifest_records(meta, metadata_source) if meta else []
     records = parse_dependencies(getattr(scanner, "_file_contents", {}))
     if records:
         # Parsed files and manifest metadata can describe distinct sources.
@@ -756,3 +1083,5 @@ def run(scanner: Any) -> None:
         }
         _check_typosquatting(scanner, normalized_meta)
     _check_dependency_records(scanner, records)
+    _check_dependency_integrity(scanner, records)
+    _check_manifest_lock_consistency(scanner, getattr(scanner, "_file_contents", {}))

@@ -9,17 +9,19 @@ SR-008 将依赖来源判断与依赖安全判断分开处理。来源策略只�
 | `official` | 内置、具备官方文档证据的端点 | 允许策略声明的用途 |
 | `authoritative_mirror` | 具备维护方证据的镜像 | 允许策略声明的用途；内置 Yarn Classic 默认 registry |
 | `approved_private` | API 服务或本地扫描环境的运维配置 | 允许策略声明的用途 |
-| `unknown` | 未命中以上条目 | 进入一次人工复核 advisory |
+| `unknown` | 未命中以上条目 | 按仓库与来源文件聚合进入人工复核 advisory |
 
-同一次扫描中的所有未批准来源会合并为一条 `dependency_registry_policy` advisory。它的级别为 `high`，要求人工复核，但不扣分、不改变评级，也不进入针对安全 findings 的 LLM 批处理。相同 `(ecosystem, URL, usage)` 在代码或多个来源中重复出现时只计为一条逻辑来源，文件分布仍单独列出。证据最多展示五个 host 和五个文件，并给出其余数量与各拒绝原因的计数。使用 HTTP 的依赖来源还会额外合并为一条 `medium` 安全 finding。
+未批准来源按 `(ecosystem, registry host, 来源文件, policy reason)` 合并为 `dependency_registry_policy` advisory。每组 `occurrence_count` 保留全量计数，`registry_policy.occurrences` 按稳定顺序展示最多 100 条样本，并用 `truncated` 标记剩余记录；整份报告最多展示 25 个来源策略分组和 500 条样本。超出的分组聚合为一条含省略分组数、记录数和原因摘要的 advisory。样本包含依赖名、版本、锁文件指针或行号、resolved URL、integrity、用途和 runtime/dev/test 等范围；单项过长的文本也会截断并以省略号标记。URL 在报告中会移除用户信息、查询参数和片段，避免泄露认证值。审核页默认折叠逐条证据，可展开查看。组内有多种范围时标为 `mixed`；只涉及 dev/test 的组为 `warning`，涉及 runtime、optional 或未知范围的组为 `high`。来源策略 advisory 要求人工复核，但不扣分、不改变评级，也不进入针对安全 findings 的 LLM 批处理。使用 HTTP 的依赖来源还会额外合并为一条 `medium` 安全 finding。
+
+按 [npm lockfile 字段说明](https://docs.npmjs.com/files/package-lock.json/)，`devOptional=true` 表示依赖同时出现在开发依赖和非开发依赖的可选树中，因此归为 `mixed`；`dev=true` 与 `optional=true` 同时存在但没有 `devOptional` 时归为 `dev`。
 
 advisory 会按处置方式区分三类拒绝原因：`unknown_host`、`non_registry_source`、`invalid_url` 表示来源本身未经批准，应改用官方源或由运维审核私有源；`canonical_url_mismatch`、`wrong_ecosystem`、`unapproved_port`、`usage_not_allowed` 表示命中了已知端点但路径、生态、端口或用途不符合策略，通常应修正写法而不是新增审批；`insecure_scheme`、`credentials_in_url` 表示传输或凭据不安全，应改用 HTTPS 并移除 URL 内嵌凭据。具体 reason 及数量保留在 evidence 中。
 
-`registry.npmmirror.com` 当前没有足够的官方归属证据，因此不作为 npm 官方源或内置权威镜像；它会落入 `unknown`，但无论有多少依赖使用它，都只产生一条来源策略 advisory。
+`registry.npmmirror.com` 当前没有足够的官方归属证据，因此不作为 npm 官方源或内置权威镜像；它会落入 `unknown`。同一锁文件中的大量依赖会聚合为一条来源策略 advisory。
 
-GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时会进入同一条聚合 advisory；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
+GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时按来源文件、生态、主机和拒绝原因聚合；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
 
-`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
+`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。requirements 中裸写的 HTTP(S) URL、`-f`/`--find-links` 指向的 HTTP(S) 地址，以及安装脚本中 `pip install -f URL` / `pip install --find-links URL` 使用的 HTTP(S) 地址，均按 `resolved_download` 采集。非 VCS 的 `-e`/`--editable` HTTP(S) URL 也会形成来源观察；有 `#egg=` 时关联显式依赖名，否则不推断名称。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
 
 ## 匹配规则
 
@@ -76,4 +78,6 @@ NuGet 条目用于完整表达策略目录；当前依赖解析器尚未解析 N
 
 ## 当前解析覆盖
 
-来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中，但当前改动没有新增依赖制品下载或哈希复算，因此不能把“存在 integrity 字段”表述为“制品完整性已验证”。
+来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中。`dependency_scan.integrity` 单独报告声明数、实际验证数和不匹配数；只有调用方通过 `RiskScanner(dependency_artifacts={resolved_url: bytes})` 提供已获取的制品字节时才复算 SRI 摘要。`not_checked` 表示有摘要声明但均未取得制品字节；`unsupported` 表示已取得制品字节，但所有摘要算法或格式都不受支持；仅部分声明得到验证，或同时存在不同的未验证原因时为 `partial`，并通过 `unsupported_count` 与 `unavailable_count` 区分原因。当前 API 扫描调用尚未传入依赖制品字节，因此生产报告的这一状态通常为 `not_checked`。扫描器不会请求不可信锁文件给出的 URL，不能把摘要字段的存在当作制品已经验证。
+
+`dependency_scan.manifest_lock` 对同目录的 `package.json` 和 npm lockfile v2/v3 的根声明进行保守比对：相同字符串与等价的精确版本可判为一致；缺失声明或不同的精确版本产生独立的 SR-008 finding；其他范围、`file:`、`workspace:` 等无法在静态扫描中证明等价的写法计入 `unchecked_count`，状态为 `partial`，不会误报为不一致。没有可比对的根声明时为 `not_checked`。OSV 查询失败或超过预算时，`dependency_scan.status` 为 `partial`，不能把未完成查询的依赖视为没有漏洞。确定性的 CVE、HTTP 传输、完整性和清单差异 finding 不送入语义 LLM 审核；typosquatting 仍是启发式候选，可接受语义复核。

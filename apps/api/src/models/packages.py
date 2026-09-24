@@ -324,6 +324,7 @@ class ScanFinding(StrictContractModel):
     candidate_severity: str | None = None
     requires_llm_validation: bool | None = None
     llm_adjudication_eligible: bool | None = None
+    llm_review_exempt: bool | None = None
     llm_adjudication_reason: str | None = None
     llm_review_state: Literal[
         "pending",
@@ -373,6 +374,29 @@ class PermissionEvidence(StrictContractModel):
     evidence: str = Field(max_length=240)
 
 
+class RegistryPolicyOccurrence(StrictContractModel):
+    file: str = Field(max_length=512)
+    source_ref: str | None = Field(default=None, max_length=256)
+    line: int | None = Field(default=None, ge=1)
+    dependency_name: str | None = Field(default=None, max_length=128)
+    version: str | None = Field(default=None, max_length=128)
+    resolved_url: str = Field(max_length=512)
+    integrity: str | None = Field(default=None, max_length=160)
+    scope: Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
+    usage: Literal["registry_api", "resolved_download"]
+
+
+class RegistryPolicyEvidence(StrictContractModel):
+    ecosystem: str
+    registry_host: str
+    policy_reason: str
+    source_file: str = Field(max_length=512)
+    scope: Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
+    occurrence_count: int = Field(ge=1)
+    occurrences: list[RegistryPolicyOccurrence] = Field(max_length=100)
+    truncated: bool = False
+
+
 class ReviewAdvisory(StrictContractModel):
     id: str
     code: str
@@ -391,6 +415,7 @@ class ReviewAdvisory(StrictContractModel):
     requires_manual_review: bool = False
     evidence: str | None = None
     location: dict[str, object] | None = None
+    registry_policy: RegistryPolicyEvidence | None = None
 
 
 class AdvisorySummary(StrictContractModel):
