@@ -6243,6 +6243,37 @@ h3 {
   word-break: break-word;
 }
 
+.review-advisory-occurrences {
+  margin-top: 0.65rem;
+  font-size: 0.78rem;
+}
+
+.review-advisory-occurrences summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.review-advisory-occurrence-list {
+  margin-top: 0.5rem;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.review-advisory-occurrence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--color-rule);
+  overflow-wrap: anywhere;
+}
+
+.review-advisory-truncated {
+  margin: 0.55rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
 /* ── 元数据网格 ── */
 
 .review-meta-grid {

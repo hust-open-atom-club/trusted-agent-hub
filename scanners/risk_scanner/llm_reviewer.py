@@ -1123,6 +1123,9 @@ def run_llm_review(
 
     reviewable: list[dict[str, Any]] = []
     for finding in findings:
+        if finding.get("llm_review_exempt") is True:
+            result["findings_skipped"] += 1
+            continue
         fid = finding.get("id", "")
         severity = _reviewable_severity(finding)
         is_semantic_candidate = finding.get("requires_llm_validation") is True

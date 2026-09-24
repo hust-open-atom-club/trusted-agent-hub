@@ -53,6 +53,7 @@ class MockScanner:
         safeguards: list[str] | None = None,
         preconditions: list[str] | None = None,
         requires_manual_review: bool = False,
+        llm_review_exempt: bool = False,
     ) -> None:
         finding = {
             "rule_id": rule_id,
@@ -88,6 +89,8 @@ class MockScanner:
             finding["preconditions"] = list(preconditions)
         if requires_manual_review:
             finding["requires_manual_review"] = True
+        if llm_review_exempt:
+            finding["llm_review_exempt"] = True
         self.findings.append(finding)
 
     def _add_advisory(
@@ -104,6 +107,7 @@ class MockScanner:
         requires_manual_review: bool = False,
         evidence: str = "",
         location: dict[str, Any] | None = None,
+        registry_policy: dict[str, Any] | None = None,
     ) -> None:
         self.review_advisories.append({
             "id": f"advisory-{len(self.review_advisories) + 1}",
@@ -118,4 +122,5 @@ class MockScanner:
             "requires_manual_review": requires_manual_review,
             "evidence": evidence,
             "location": location or {},
+            **({"registry_policy": registry_policy} if registry_policy is not None else {}),
         })

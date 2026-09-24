@@ -7,6 +7,7 @@ from scanners.risk_scanner.dependency_parsers import (
     parse_dependencies,
     parse_dependency_sources,
 )
+from scanners.risk_scanner.dependency_parsers.python import parse_requirements
 from scanners.risk_scanner.registry_policy import (
     RegistryClassification,
     RegistryEntry,
@@ -24,6 +25,34 @@ def test_dependency_parsers_normalize_manifest_and_lockfiles():
     assert any(r.name == "lodash" and r.ecosystem == "npm" for r in records)
     assert any(r.name == "flask" and r.version is None for r in records)
     assert any(r.name == "serde" and r.ecosystem == "crates.io" for r in records)
+
+
+@pytest.mark.parametrize(
+    ("file_name", "expected_scope"),
+    [
+        ("requirements-latest.txt", "runtime"),
+        ("fastest.txt", "runtime"),
+        ("tests/requirements.txt", "runtime"),
+        ("requirements-dev.txt", "dev"),
+        ("requirements-tests.txt", "test"),
+    ],
+)
+def test_requirement_scope_matches_filename_tokens(file_name, expected_scope):
+    records = parse_requirements("demo==1.0.0\n", file_name)
+    assert records[0].scope == expected_scope
+
+
+def test_npm_lock_scope_distinguishes_dev_optional_from_dev_optional_subtree():
+    records = parse_dependencies({"package-lock.json": json.dumps({
+        "lockfileVersion": 3,
+        "packages": {
+            "node_modules/shared": {"version": "1.0.0", "devOptional": True},
+            "node_modules/dev-subtree": {"version": "1.0.0", "dev": True, "optional": True},
+        },
+    })})
+    assert {record.name: record.scope for record in records} == {
+        "shared": "mixed", "dev-subtree": "dev",
+    }
 
 
 def test_dependency_parsers_preserve_registry_source_and_usage():
@@ -107,6 +136,31 @@ def test_python_lock_parsers_preserve_configured_sources():
     assert requests.registry == "https://pypi.corp.example/simple"
     assert flask.registry == "https://poetry.corp.example/simple"
     assert requests.registry_usage == flask.registry_usage == "registry_api"
+
+
+@pytest.mark.parametrize(
+    ("groups", "category", "expected_scope"),
+    [
+        (["dev"], None, "dev"),
+        (["test"], None, "test"),
+        (["main"], None, "runtime"),
+        (["main", "dev"], None, "mixed"),
+        (["dev", "docs"], None, "unknown"),
+        (None, "dev", "dev"),
+        (None, "main", "runtime"),
+    ],
+)
+def test_poetry_lock_scope_uses_groups_then_legacy_category(groups, category, expected_scope):
+    group_line = f"groups = {json.dumps(groups)}\n" if groups is not None else ""
+    category_line = f'category = "{category}"\n' if category else ""
+    records = parse_dependencies({
+        "poetry.lock": (
+            '[[package]]\nname = "demo"\nversion = "1.0.0"\n'
+            f"{group_line}{category_line}"
+        ),
+    })
+    assert len(records) == 1
+    assert records[0].scope == expected_scope
 
 
 def test_dependency_source_discovery_covers_manager_configuration():

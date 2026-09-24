@@ -798,6 +798,37 @@ export default function ReviewDetailPage() {
                 {advisory.evidence && (
                   <div className="review-advisory-evidence">{advisory.evidence}</div>
                 )}
+                {advisory.registry_policy && (
+                  <details className="review-advisory-occurrences">
+                    <summary>
+                      {t('review.detail.advisory_occurrences', {
+                        count: advisory.registry_policy.occurrence_count,
+                      })}
+                    </summary>
+                    <div className="review-advisory-occurrence-list">
+                      {advisory.registry_policy.occurrences.map((occurrence, index) => (
+                        <div className="review-advisory-occurrence" key={`${occurrence.file}:${occurrence.source_ref ?? occurrence.line ?? index}:${index}`}>
+                          <strong>
+                            {occurrence.dependency_name
+                              ? `${occurrence.dependency_name}@${occurrence.version ?? '?'}`
+                              : t('review.detail.advisory_source_declaration')}
+                          </strong>
+                          <code>{occurrence.file}{occurrence.source_ref ? ` ${occurrence.source_ref}` : occurrence.line ? `:${occurrence.line}` : ''}</code>
+                          <span>{t('review.detail.advisory_scope')}: {occurrence.scope}</span>
+                          <code>{occurrence.resolved_url}</code>
+                          {occurrence.integrity && <code>integrity: {occurrence.integrity}</code>}
+                        </div>
+                      ))}
+                    </div>
+                    {advisory.registry_policy.truncated && (
+                      <p className="review-advisory-truncated">
+                        {t('review.detail.advisory_occurrences_omitted', {
+                          count: advisory.registry_policy.occurrence_count - advisory.registry_policy.occurrences.length,
+                        })}
+                      </p>
+                    )}
+                  </details>
+                )}
               </article>
             ))}
           </div>
