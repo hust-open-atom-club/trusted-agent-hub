@@ -19,7 +19,13 @@ advisory 会按处置方式区分三类拒绝原因：`unknown_host`、`non_regi
 
 GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时会进入同一条聚合 advisory；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
 
-`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
+`package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。requirements 中裸写的 HTTP(S) URL、`-f`/`--find-links` 指向的 HTTP(S) 地址，以及安装脚本中 `pip install -f URL` / `pip install --find-links URL` 使用的 HTTP(S) 地址，均按 `resolved_download` 采集。非 VCS 的 `-e`/`--editable` HTTP(S) URL 也会形成来源观察；有 `#egg=` 时关联显式依赖名，否则不推断名称。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
+
+requirements 与安装脚本中的 `\` 续行会折叠为保留原始行号的逻辑行后再分类。只有选项自身的值按该选项的用途归类：`--index-url` 的值为 `registry_api`，`-f`/`--find-links` 的值为 `resolved_download`。命令中的位置参数 URL 仍为 `resolved_download`，不会因前一行的 registry 选项被放行；如果端点仅批准 registry API 用途，会产生 `usage_not_allowed` 人工复核提示。
+
+安装脚本中，续行不会去掉下一行的缩进。`--index-url=\` 后接缩进 URL 会形成 `--index-url=` 和 URL 两个参数：前者指定空值，后者仍是位置参数。需要在下一行缩进填写源地址时，应使用 `--index-url \`（不带等号）；npm 的 `--registry` 同理。
+
+requirements 中，行首源选项以 `=` 结尾、后面用空白分隔的裸 HTTP(S) URL（包括续行后的缩进 URL），会作为不完整声明保守采集为 `resolved_download` 观察，不新增依赖记录，也不赋予 registry API 用途。这是静态来源复核行为，不代表 pip 会实际安装该 URL；正常的非空 `--index-url=URL` 和不带等号的 `--index-url URL` 续行仍按 `registry_api` 采集。
 
 ## 匹配规则
 

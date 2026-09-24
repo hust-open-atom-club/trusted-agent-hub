@@ -46,6 +46,7 @@ from scanners.risk_scanner.dependency_parsers.models import (
     DependencySourceUsage,
 )
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.logical_lines import LogicalLine, iter_logical_lines
 from scanners.risk_scanner.registry_policy import (
     DEFAULT_REGISTRY_POLICY,
     RegistryPolicy,
@@ -116,6 +117,12 @@ _UNSAFE_TRANSPORT_REASONS = frozenset({
     "credentials_in_url",
     "insecure_scheme",
 })
+_COMMAND_TOKEN = re.compile(
+    r'''(?:[^\s"';&|]+|"(?:\\.|[^"\\])*"|'[^']*')+|[;&|]+'''
+)
+_REGISTRY_OPTIONS = frozenset({
+    "--index-url", "--extra-index-url", "-i", "--registry",
+})
 
 
 def _is_code_file(fname: str) -> bool:
@@ -141,18 +148,59 @@ def _dependency_ecosystem_near_line(
     return None
 
 
-def _dependency_usage_near_line(
-    lines: list[str], line_no: int
+def _is_registry_config_key(value: str) -> bool:
+    return value == "registry" or (
+        value.startswith(("@", "//")) and value.endswith(":registry")
+    )
+
+
+def _dependency_usage_for_url(
+    command: str, url_offset: int
 ) -> DependencySourceUsage:
-    line = lines[line_no - 1].casefold() if 0 < line_no <= len(lines) else ""
-    if re.search(r"(?:^|\s)--find-links(?:\s|=)", line):
-        return "resolved_download"
-    if re.search(
-        r"\bregistry\b|--(?:extra-)?index-url\b"
-        r"|(?:^|\s)-i(?=\s|=|$)|\badd\s+source\b",
-        line,
-    ):
-        return "registry_api"
+    """Bind only this URL occurrence to its option in the logical command."""
+    previous: list[str] = []
+    options_ended = False
+    for token in _COMMAND_TOKEN.finditer(command):
+        if token.start() <= url_offset < token.end():
+            if options_ended:
+                break
+            prefix = command[token.start():url_offset].strip("\"'").casefold()
+            if prefix:
+                # --index-url=URL (optionally quoted), or the short -iURL form.
+                option = prefix[:-1] if prefix.endswith("=") else prefix
+                if (
+                    option in _REGISTRY_OPTIONS or _is_registry_config_key(option)
+                ) and (
+                    prefix.endswith("=") or option == "-i"
+                ):
+                    return "registry_api"
+            elif previous:
+                option = previous[-1]
+                # Do not strip a trailing '=': --option= supplies an empty
+                # value, leaving a whitespace-separated URL positional, even
+                # when that whitespace is indentation on a continued line.
+                if option == "=" and len(previous) > 1:
+                    option = previous[-2]
+                    if _is_registry_config_key(option):
+                        return "registry_api"
+                if (
+                    option in _REGISTRY_OPTIONS
+                    or (
+                        previous[-2:-1] == ["set"]
+                        and _is_registry_config_key(option)
+                    )
+                    or previous[-3:] == ["nuget", "add", "source"]
+                ):
+                    return "registry_api"
+            break
+        value = token.group().strip("\"'").casefold()
+        if value in {";", "&", "&&", "|", "||"}:
+            previous = []
+            options_ended = False
+        else:
+            previous.append(value)
+            if value == "--":
+                options_ended = True
     return "resolved_download"
 
 
@@ -569,6 +617,7 @@ def run(scanner: Any) -> None:
         if not content:
             continue
         lines = content.split("\n")
+        logical_lines: dict[int, tuple[LogicalLine, int]] | None = None
 
         # Parsed metadata is the preferred trigger source, but projects without
         # a manifest still need deterministic coverage for code/config arrays.
@@ -625,6 +674,27 @@ def run(scanner: Any) -> None:
                     if "://" in matched_url and is_loopback_url(matched_url):
                         continue
                     if desc == "非官方包源 URL":
+                        if logical_lines is None:
+                            logical_lines = {
+                                logical.start_line + index: (logical, offset)
+                                for logical in iter_logical_lines(content)
+                                for index, offset in enumerate(logical.line_offsets)
+                            }
+                        logical, line_offset = logical_lines.get(line_no, (None, 0))
+                        command = logical.text if logical is not None else lines[line_no - 1]
+                        url_offset = line_offset + match.start() - (
+                            content.rfind("\n", 0, match.start()) + 1
+                        )
+                        # Broader context may reveal an installer, but a later
+                        # pipeline must not erase an existing dependency use.
+                        if (
+                            url_usage != URL_USAGE_DEPENDENCY
+                            and logical is not None
+                            and len(logical.line_offsets) > 1
+                            and classify_url_usage(command, 1, matched_url)
+                            == URL_USAGE_DEPENDENCY
+                        ):
+                            url_usage = URL_USAGE_DEPENDENCY
                         # A URL literal is not a package source. Registry and
                         # installer context is required before SR-008 applies.
                         if url_usage != URL_USAGE_DEPENDENCY:
@@ -633,13 +703,14 @@ def run(scanner: Any) -> None:
                             DependencySourceObservation(
                                 ecosystem=(
                                     _dependency_ecosystem_near_line(
-                                        lines, line_no
+                                        [command], 1
                                     )
+                                    or _dependency_ecosystem_near_line(lines, line_no)
                                     or "unknown"
                                 ),
                                 url=matched_url.rstrip(".,;:!?"),
-                                usage=_dependency_usage_near_line(
-                                    lines, line_no
+                                usage=_dependency_usage_for_url(
+                                    command, url_offset
                                 ),
                                 source_file=fname,
                             )

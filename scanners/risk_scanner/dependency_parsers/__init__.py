@@ -15,6 +15,7 @@ from scanners.risk_scanner.dependency_parsers.npm import parse_package_json, par
 from scanners.risk_scanner.dependency_parsers.python import (
     parse_pipfile_lock,
     parse_poetry_lock,
+    parse_requirement_options,
     parse_requirement_sources,
     parse_requirements,
 )
@@ -115,18 +116,13 @@ def parse_dependency_sources(
         name = normalized_path.rsplit("/", 1)[-1]
 
         if name.startswith("requirements") and name.endswith(".txt"):
-            for match in re.finditer(
-                r"(?im)^\s*(?P<option>--(?:extra-)?index-url|--find-links|-i)"
-                r"(?:\s+|=)(?P<url>\S+)",
-                content,
-            ):
-                option = match.group("option").casefold()
+            for option, source_url in parse_requirement_options(content):
                 observation = _source_observation(
                     "pypi",
-                    match.group("url"),
+                    source_url,
                     (
                         "resolved_download"
-                        if option == "--find-links"
+                        if option in {"--find-links", "-f"}
                         else "registry_api"
                     ),
                     path,
