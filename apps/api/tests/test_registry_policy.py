@@ -114,6 +114,23 @@ def test_unknown_ecosystem_falls_back_to_audited_official_endpoint():
     assert decision.reason == "matched"
 
 
+@pytest.mark.parametrize(
+    ("url", "reason"),
+    [
+        ("https://registry.npmjs.org/demo.tgz", "ambiguous_ecosystem"),
+        ("http://registry.npmjs.org/demo.tgz", "insecure_scheme"),
+    ],
+)
+def test_ambiguous_ecosystem_disables_fallback_without_skipping_transport(url, reason):
+    decision = DEFAULT_REGISTRY_POLICY.evaluate(
+        "unknown", url, "resolved_download",
+        allow_unknown_ecosystem_fallback=False,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == reason
+
+
 def test_unknown_ecosystem_fallback_remains_path_and_usage_scoped():
     wrong_path = DEFAULT_REGISTRY_POLICY.evaluate(
         "unknown", "https://pypi.org/project/requests/", "registry_api"

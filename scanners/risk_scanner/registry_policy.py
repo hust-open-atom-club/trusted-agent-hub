@@ -284,7 +284,10 @@ class RegistryPolicy:
         ecosystem: str,
         raw_url: str,
         usage: RegistryUsage | str,
+        *,
+        allow_unknown_ecosystem_fallback: bool = True,
     ) -> RegistryDecision:
+        """Evaluate a source; ambiguous installer context must disable fallback."""
         normalized_ecosystem = normalize_ecosystem(ecosystem)
         normalized_usage = RegistryUsage(usage)
         parsed, parse_reason = _parse_source_url(raw_url)
@@ -305,8 +308,10 @@ class RegistryPolicy:
             and (
                 entry.ecosystem == normalized_ecosystem
                 if ecosystem_is_known
-                else entry.classification
-                in _UNKNOWN_ECOSYSTEM_FALLBACK_CLASSIFICATIONS
+                else (
+                    allow_unknown_ecosystem_fallback
+                    and entry.classification in _UNKNOWN_ECOSYSTEM_FALLBACK_CLASSIFICATIONS
+                )
             )
         )
         path_matches = tuple(
@@ -359,7 +364,11 @@ class RegistryPolicy:
             else:
                 # Unknown observations may use an audited official/private
                 # endpoint, but a host/path miss must remain fail-closed.
-                reason = "unknown_host"
+                reason = (
+                    "unknown_host"
+                    if allow_unknown_ecosystem_fallback
+                    else "ambiguous_ecosystem"
+                )
                 matched = None
             return RegistryDecision(
                 matched.classification if matched else RegistryClassification.UNKNOWN,

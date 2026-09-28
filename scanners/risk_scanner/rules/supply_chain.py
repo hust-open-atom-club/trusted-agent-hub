@@ -46,6 +46,7 @@ from scanners.risk_scanner.dependency_parsers.models import (
     DependencySourceUsage,
 )
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.logical_lines import LogicalLine, iter_logical_lines
 from scanners.risk_scanner.registry_policy import (
     DEFAULT_REGISTRY_POLICY,
     RegistryPolicy,
@@ -107,6 +108,7 @@ _UNAPPROVED_SOURCE_REASONS = frozenset({
     "unknown_host",
 })
 _POLICY_MISMATCH_REASONS = frozenset({
+    "ambiguous_ecosystem",
     "canonical_url_mismatch",
     "unapproved_port",
     "usage_not_allowed",
@@ -116,6 +118,21 @@ _UNSAFE_TRANSPORT_REASONS = frozenset({
     "credentials_in_url",
     "insecure_scheme",
 })
+_COMMAND_TOKEN = re.compile(
+    r'''(?:[^\s"';&|]+|"(?:\\.|[^"\\])*"|'[^']*')+|[;&|]+'''
+)
+_REGISTRY_OPTIONS = frozenset({
+    "--index-url", "--extra-index-url", "-i", "--registry",
+})
+_PYPI_SOURCE_OPTIONS = frozenset({
+    "--index-url", "--extra-index-url", "--find-links",
+})
+_COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||"})
+_INSTALLER_ECOSYSTEMS = {
+    "npm": "npm", "pnpm": "npm", "yarn": "npm", "npx": "npm",
+    "pip": "pypi", "pip3": "pypi", "poetry": "pypi",
+    "cargo": "cargo", "nuget": "nuget", "dotnet": "nuget",
+}
 
 
 def _is_code_file(fname: str) -> bool:
@@ -123,34 +140,151 @@ def _is_code_file(fname: str) -> bool:
     return ext in CODE_FILE_EXTENSIONS
 
 
-def _dependency_ecosystem_near_line(
-    lines: list[str], line_no: int
-) -> str | None:
-    """Infer ecosystem only when installer/registry syntax makes it explicit."""
-    start = max(0, line_no - 3)
-    end = min(len(lines), line_no + 2)
-    context = "\n".join(lines[start:end]).casefold()
-    if re.search(r"\b(?:npm|pnpm|yarn|node)\b|\.npmrc", context):
-        return "npm"
-    if re.search(r"\b(?:pip|pip3|poetry|pypi|python\s+-m\s+pip)\b", context):
-        return "pypi"
-    if re.search(r"\b(?:cargo|crates\.io)\b", context):
-        return "cargo"
-    if re.search(r"\b(?:nuget|dotnet\s+(?:add|restore))\b", context):
-        return "nuget"
+def _command_segment_for_url(command: str, url_offset: int) -> tuple[str, int]:
+    """Locate the URL's command without splitting quoted shell operators."""
+    start = 0
+    end = len(command)
+    for token in _COMMAND_TOKEN.finditer(command):
+        if token.group() not in _COMMAND_SEPARATORS:
+            continue
+        if token.end() <= url_offset:
+            start = token.end()
+        elif token.start() > url_offset:
+            end = token.start()
+            break
+    return command[start:end], url_offset - start
+
+
+def _installer_ecosystem(command: str) -> str | None:
+    # A leading unquoted '(' opens a subshell, not part of the executable.
+    # Leave arithmetic expressions and quoted command strings unresolved.
+    command = command.lstrip()
+    while command.startswith("(") and not command.startswith("(("):
+        command = command[1:].lstrip()
+    tokens = [token.group().strip("\"'") for token in _COMMAND_TOKEN.finditer(command)]
+    wrappers = {"sudo", "env", "command", "exec", "nohup", "time"}
+    value_options = {"-u", "--user", "--unset", "-g", "--group", "-a"}
+    flag_options = {"-E", "-H", "-n", "-i", "--ignore-environment", "-p", "-l", "-c"}
+    while tokens:
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+            tokens.pop(0)
+            continue
+        executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        executable = executable.removesuffix(".exe")
+        if executable not in wrappers:
+            if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)*)?|py)", executable):
+                while len(tokens) > 1 and tokens[1] in {
+                    "-I", "-s", "-S", "-E", "-B", "-u", "-q", "-O", "-OO",
+                }:
+                    tokens.pop(1)
+                return "pypi" if tokens[1:3] == ["-m", "pip"] else None
+            if re.fullmatch(r"pip\d+(?:\.\d+)*", executable):
+                return "pypi"
+            return _INSTALLER_ECOSYSTEMS.get(executable)
+        tokens.pop(0)
+        while tokens and tokens[0].startswith("-"):
+            option = tokens.pop(0)
+            if option == "--":
+                break
+            if option.partition("=")[0] in value_options:
+                if "=" not in option and tokens:
+                    tokens.pop(0)
+            elif option not in flag_options:
+                return None
     return None
 
 
-def _dependency_usage_near_line(
-    lines: list[str], line_no: int
+def _dependency_ecosystem_for_url(command: str, url_offset: int) -> tuple[str, bool]:
+    """Infer from the owning installer/option, keeping ambiguity explicit."""
+    installer = _installer_ecosystem(command)
+    option = _dependency_option_for_url(command, url_offset)
+    option_ecosystem = "pypi" if option in _PYPI_SOURCE_OPTIONS else None
+    if installer:
+        if option_ecosystem and installer != option_ecosystem:
+            return "unknown", True
+        return installer, False
+
+    # Unparsed wrappers or nested command strings may contain installers, but
+    # their arguments cannot establish which installer owns this URL.
+    prefix_tokens = [
+        token.group().strip("\"'").casefold()
+        for token in _COMMAND_TOKEN.finditer(command[:url_offset])
+    ]
+    candidates = {
+        _INSTALLER_ECOSYSTEMS[name]
+        for name, action in zip(prefix_tokens, prefix_tokens[1:])
+        if name in _INSTALLER_ECOSYSTEMS
+        and action in {"install", "config", "set", "add", "restore"}
+    }
+    if option_ecosystem and not (candidates - {option_ecosystem}):
+        return option_ecosystem, False
+    return "unknown", bool(candidates)
+
+
+def _is_registry_config_key(value: str) -> bool:
+    return value == "registry" or (
+        value.startswith(("@", "//")) and value.endswith(":registry")
+    )
+
+
+def _dependency_option_for_url(
+    command: str, url_offset: int
+) -> str | None:
+    """Bind only this URL occurrence to its option in the logical command."""
+    previous: list[str] = []
+    options_ended = False
+    for token in _COMMAND_TOKEN.finditer(command):
+        if token.start() <= url_offset < token.end():
+            if options_ended:
+                break
+            prefix = command[token.start():url_offset].strip("\"'").casefold()
+            if prefix:
+                # --index-url=URL (optionally quoted), or the short -iURL form.
+                option = prefix[:-1] if prefix.endswith("=") else prefix
+                if (
+                    option in _REGISTRY_OPTIONS | {"--find-links", "-f"}
+                    or _is_registry_config_key(option)
+                ) and (
+                    prefix.endswith("=") or option in {"-i", "-f"}
+                ):
+                    return option
+            elif previous:
+                option = previous[-1]
+                # Do not strip a trailing '=': --option= supplies an empty
+                # value, leaving a whitespace-separated URL positional, even
+                # when that whitespace is indentation on a continued line.
+                if option == "=" and len(previous) > 1:
+                    option = previous[-2]
+                    if _is_registry_config_key(option):
+                        return option
+                if (
+                    option in _REGISTRY_OPTIONS | {"--find-links", "-f"}
+                    or (
+                        previous[-2:-1] == ["set"]
+                        and _is_registry_config_key(option)
+                    )
+                ):
+                    return option
+                if previous[-3:] == ["nuget", "add", "source"]:
+                    return "source"
+            break
+        value = token.group().strip("\"'").casefold()
+        if token.group() in _COMMAND_SEPARATORS:
+            previous = []
+            options_ended = False
+        else:
+            previous.append(value)
+            if value == "--":
+                options_ended = True
+    return None
+
+
+def _dependency_usage_for_url(
+    command: str, url_offset: int
 ) -> DependencySourceUsage:
-    line = lines[line_no - 1].casefold() if 0 < line_no <= len(lines) else ""
-    if re.search(r"(?:^|\s)--find-links(?:\s|=)", line):
-        return "resolved_download"
-    if re.search(
-        r"\bregistry\b|--(?:extra-)?index-url\b"
-        r"|(?:^|\s)-i(?=\s|=|$)|\badd\s+source\b",
-        line,
+    option = _dependency_option_for_url(command, url_offset)
+    if option and (
+        option in _REGISTRY_OPTIONS | {"source"} or _is_registry_config_key(option)
     ):
         return "registry_api"
     return "resolved_download"
@@ -351,17 +485,18 @@ def _check_dependency_sources(
         getattr(scanner, "registry_policy", None) or DEFAULT_REGISTRY_POLICY
     )
     unique_observations: dict[
-        tuple[str, str, DependencySourceUsage],
+        tuple[str, str, DependencySourceUsage, bool],
         DependencySourceObservation,
     ] = {}
     observation_files: dict[
-        tuple[str, str, DependencySourceUsage], set[str]
+        tuple[str, str, DependencySourceUsage, bool], set[str]
     ] = {}
     for observation in observations:
         key = (
             observation.ecosystem.casefold(),
             observation.url,
             observation.usage,
+            observation.ecosystem_ambiguous,
         )
         observation_files.setdefault(key, set()).add(observation.source_file)
         existing = unique_observations.get(key)
@@ -378,6 +513,7 @@ def _check_dependency_sources(
             observation.ecosystem,
             observation.url,
             observation.usage,
+            allow_unknown_ecosystem_fallback=not observation.ecosystem_ambiguous,
         )
         if not decision.allowed:
             rejected.append((observation, decision))
@@ -569,6 +705,7 @@ def run(scanner: Any) -> None:
         if not content:
             continue
         lines = content.split("\n")
+        logical_lines: dict[int, tuple[LogicalLine, int]] | None = None
 
         # Parsed metadata is the preferred trigger source, but projects without
         # a manifest still need deterministic coverage for code/config arrays.
@@ -625,23 +762,44 @@ def run(scanner: Any) -> None:
                     if "://" in matched_url and is_loopback_url(matched_url):
                         continue
                     if desc == "非官方包源 URL":
+                        if logical_lines is None:
+                            logical_lines = {
+                                logical.start_line + index: (logical, offset)
+                                for logical in iter_logical_lines(content)
+                                for index, offset in enumerate(logical.line_offsets)
+                            }
+                        logical, line_offset = logical_lines.get(line_no, (None, 0))
+                        command = logical.text if logical is not None else lines[line_no - 1]
+                        url_offset = line_offset + match.start() - (
+                            content.rfind("\n", 0, match.start()) + 1
+                        )
+                        # Broader context may reveal an installer, but a later
+                        # pipeline must not erase an existing dependency use.
+                        if (
+                            url_usage != URL_USAGE_DEPENDENCY
+                            and logical is not None
+                            and len(logical.line_offsets) > 1
+                            and classify_url_usage(command, 1, matched_url)
+                            == URL_USAGE_DEPENDENCY
+                        ):
+                            url_usage = URL_USAGE_DEPENDENCY
                         # A URL literal is not a package source. Registry and
                         # installer context is required before SR-008 applies.
                         if url_usage != URL_USAGE_DEPENDENCY:
                             continue
+                        command, url_offset = _command_segment_for_url(command, url_offset)
+                        ecosystem, ecosystem_ambiguous = _dependency_ecosystem_for_url(
+                            command, url_offset
+                        )
                         inline_source_observations.append(
                             DependencySourceObservation(
-                                ecosystem=(
-                                    _dependency_ecosystem_near_line(
-                                        lines, line_no
-                                    )
-                                    or "unknown"
-                                ),
+                                ecosystem=ecosystem,
                                 url=matched_url.rstrip(".,;:!?"),
-                                usage=_dependency_usage_near_line(
-                                    lines, line_no
+                                usage=_dependency_usage_for_url(
+                                    command, url_offset
                                 ),
                                 source_file=fname,
+                                ecosystem_ambiguous=ecosystem_ambiguous,
                             )
                         )
                         continue
