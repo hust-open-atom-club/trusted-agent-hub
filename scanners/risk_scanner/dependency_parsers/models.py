@@ -28,3 +28,5 @@ class DependencySourceObservation:
     usage: DependencySourceUsage
     source_file: str
     dependency_name: str | None = None
+    # Distinguish conflicting/unresolved installer context from absent context.
+    ecosystem_ambiguous: bool = False
