@@ -84,9 +84,16 @@ from scanners.risk_scanner.redaction import (
     redact_report,
     redact_value,
 )
+from scanners.risk_scanner.llm_candidates import is_llm_candidate
 from scanners.risk_scanner.llm_reviewer import (
     REVIEW_BATCH_SIZE,
     validate_supporting_evidence,
+)
+from scanners.risk_scanner.dependency_artifact_verifier import (
+    ArtifactFetchConfig,
+    DependencyArtifactAcquisition,
+    acquire_dependency_verifications,
+    is_dependency_manifest_path,
 )
 from scanners.risk_scanner.provenance import (
     build_verification_capabilities,
@@ -125,6 +132,59 @@ def configure_registry_policy(raw_json: str | None) -> RegistryPolicy:
 def get_registry_policy() -> RegistryPolicy:
     """Return the policy configured during application startup."""
     return _REGISTRY_POLICY
+
+
+def _acquire_dependency_artifacts_for_scan(
+    scan_dir: str | Path,
+    registry_policy: RegistryPolicy,
+) -> DependencyArtifactAcquisition | None:
+    """Run the bounded production acquisition stage when enabled."""
+
+    settings = get_settings()
+    if not settings.dependency_artifact_verification_enabled:
+        return None
+    # Use the same inventory decisions as RiskScanner. This prevents a file
+    # that the scanner would reject for size/depth/total-budget reasons from
+    # causing outbound artifact downloads first.
+    inventory = build_inventory(Path(scan_dir), _SOURCE_POLICY)
+    manifest_paths = {
+        record.relative_path
+        for record in inventory.files
+        if is_dependency_manifest_path(record.relative_path)
+    }
+    manifest_files = load_text_files(
+        inventory,
+        policy=_SOURCE_POLICY,
+        only_paths=manifest_paths,
+    )
+    collection_errors = {
+        f"manifest_{record.skip_reason or record.read_status}"
+        for record in inventory.files
+        if record.relative_path in manifest_paths
+        and record.relative_path not in manifest_files
+    }
+    if inventory.discovered_at_least:
+        collection_errors.add("manifest_inventory_file_limit")
+    if "max_depth" in inventory.limit_violations:
+        collection_errors.add("manifest_inventory_depth_limit")
+    return acquire_dependency_verifications(
+        scan_dir,
+        registry_policy,
+        config=ArtifactFetchConfig(
+            max_artifacts=settings.dependency_artifact_max_artifacts,
+            max_concurrency=settings.dependency_artifact_max_concurrency,
+            max_artifact_bytes=settings.dependency_artifact_max_bytes,
+            max_total_bytes=settings.dependency_artifact_max_total_bytes,
+            timeout_seconds=settings.dependency_artifact_timeout_seconds,
+            max_manifest_file_bytes=_SOURCE_POLICY.max_file_bytes,
+            max_manifest_total_bytes=_SOURCE_POLICY.max_total_bytes,
+            max_manifest_files=_SOURCE_POLICY.max_files,
+            max_examined_files=_SOURCE_POLICY.max_files,
+            max_depth=_SOURCE_POLICY.max_depth,
+        ),
+        manifest_files=manifest_files,
+        manifest_collection_errors=collection_errors,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,12 +517,6 @@ def _get_scan(scan_id: str) -> dict[str, Any] | None:
     with _SCAN_PROGRESS_LOCK:
         info = _scans.get(scan_id)
         return dict(info) if info is not None else None
-
-
-def _scan_initiator_id(info: dict[str, Any]) -> str:
-    """Return the operator that initiated the scan."""
-    owner = info.get("user_id") or info.get("source_owner_id")
-    return str(owner) if owner else ""
 
 
 def _scan_finished(info: dict[str, Any]) -> bool:
@@ -2705,8 +2759,6 @@ def _load_scanner():
     return mod.RiskScanner
 
 
-_LLM_REVIEWED_SEVERITIES = frozenset({"critical", "high"})
-_LLM_SEMANTIC_REVIEWED_SEVERITIES = frozenset({"critical", "high", "medium"})
 _LLM_SEVERITY_RANK = {
     "info": 1,
     "low": 2,
@@ -2716,18 +2768,22 @@ _LLM_SEVERITY_RANK = {
 }
 
 
-def _is_llm_reviewable_finding(finding: dict[str, Any]) -> bool:
-    severity = str(
-        finding.get("candidate_severity")
-        or finding.get("static_severity")
-        or finding.get("severity", "")
-    ).lower()
-    return severity in _LLM_REVIEWED_SEVERITIES or (
-        (
-            finding.get("requires_llm_validation") is True
-            or finding.get("llm_adjudication_eligible") is True
-        )
-        and severity in _LLM_SEMANTIC_REVIEWED_SEVERITIES
+def _is_llm_reviewable_finding(
+    finding: dict[str, Any],
+    *,
+    file_contents: dict[str, str] | None = None,
+    finding_context: str | None = None,
+    context_audit: dict[str, Any] | None = None,
+    require_built_context: bool = False,
+    record_skip: bool = False,
+) -> bool:
+    return is_llm_candidate(
+        finding,
+        file_contents=file_contents,
+        finding_context=finding_context,
+        context_audit=context_audit,
+        require_built_context=require_built_context,
+        record_skip=record_skip,
     )
 
 
@@ -2757,6 +2813,7 @@ def _mark_llm_review_unavailable(
     findings: list[dict[str, Any]],
     error: Exception,
     *,
+    file_contents: dict[str, str] | None = None,
     status: str = "call_failed",
     reason_code: str | None = None,
     phase: str = "not_started",
@@ -2773,7 +2830,11 @@ def _mark_llm_review_unavailable(
             skipped_count += 1
             continue
 
-        if not _is_llm_reviewable_finding(finding):
+        if not _is_llm_reviewable_finding(
+            finding,
+            file_contents=file_contents,
+            record_skip=True,
+        ):
             skipped_count += 1
             continue
 
@@ -3097,7 +3158,11 @@ def _build_batched_llm_context_bundle(
         for finding in findings
         if isinstance(finding, dict)
         and finding.get("id")
-        and _is_llm_reviewable_finding(finding)
+        and _is_llm_reviewable_finding(
+            finding,
+            file_contents=file_contents,
+            record_skip=True,
+        )
     ]
     contexts: dict[str, str] = {}
     finding_audits: dict[str, dict[str, Any]] = {}
@@ -3151,6 +3216,9 @@ def _run_llm_review_with_fallback(
     deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Run multi-judge review and attach structured verdicts to findings."""
+    file_contents = getattr(scanner, "_file_contents", {})
+    if not isinstance(file_contents, dict):
+        file_contents = {}
     try:
         if (
             deadline_monotonic is not None
@@ -3158,17 +3226,21 @@ def _run_llm_review_with_fallback(
         ):
             raise TimeoutError("LLM review deadline exceeded")
         reviewer = _load_llm_reviewer()
+        finding_contexts, context_audit = _build_batched_llm_context_bundle(
+            findings,
+            file_contents,
+        )
         required_decision_ids = {
             str(finding.get("id"))
             for finding in findings
             if isinstance(finding, dict)
-            and _is_llm_reviewable_finding(finding)
             and finding.get("id")
+            and _is_llm_reviewable_finding(
+                finding,
+                file_contents=file_contents,
+                record_skip=True,
+            )
         }
-        finding_contexts, context_audit = _build_batched_llm_context_bundle(
-            findings,
-            scanner._file_contents,
-        )
         if (
             deadline_monotonic is not None
             and _time.monotonic() >= deadline_monotonic
@@ -3177,7 +3249,11 @@ def _run_llm_review_with_fallback(
         result = reviewer.run_llm_review(
             findings=findings,
             finding_contexts=finding_contexts,
-            manifest=manifest if manifest is not None else scanner._package_metadata,
+            manifest=(
+                manifest
+                if manifest is not None
+                else getattr(scanner, "_package_metadata", {})
+            ),
             context_audit=context_audit,
             progress_callback=progress_callback,
             deadline_monotonic=deadline_monotonic,
@@ -3231,6 +3307,7 @@ def _run_llm_review_with_fallback(
         result = _mark_llm_review_unavailable(
             findings,
             exc,
+            file_contents=file_contents,
             status="timeout" if is_timeout else "call_failed",
         )
         if is_timeout:
@@ -5773,12 +5850,33 @@ def _run_scan_task_body(
         _raise_if_scan_total_timeout(scan_id, total_timeout_event)
         _update_scan_state(scan_id, {"status": "scanning"})
         print(f"[TAH-trust]     加载扫描器, scan_dir={scan_dir}")
+        registry_policy = get_registry_policy()
+        dependency_verifications: dict[str, object] | None = None
+        acquisition = _acquire_dependency_artifacts_for_scan(
+            scan_dir,
+            registry_policy,
+        )
+        if acquisition is not None:
+            dependency_verifications = dict(acquisition.verifications)
+            print(
+                "[TAH-trust]     依赖制品完整性获取: "
+                f"status={acquisition.status}, "
+                f"requested={acquisition.requested_count}, "
+                f"fetched={acquisition.fetched_count}, "
+                f"unavailable={acquisition.unavailable_count}, "
+                f"bytes={acquisition.bytes_downloaded}"
+            )
+            _raise_if_scan_total_timeout(scan_id, total_timeout_event)
         RiskScanner = _load_scanner()
         scanner = RiskScanner(
             scan_dir,
             source_commit_hash=commit_hash,
             policy=_SOURCE_POLICY,
-            registry_policy=get_registry_policy(),
+            registry_policy=registry_policy,
+            dependency_verifications=dependency_verifications,
+            dependency_acquisition=(
+                acquisition.as_dict() if acquisition is not None else None
+            ),
         )
         scan_report = scanner.scan()
         _raise_if_scan_total_timeout(scan_id, total_timeout_event)
@@ -5819,7 +5917,11 @@ def _run_scan_task_body(
                 for finding in findings
                 if isinstance(finding, dict)
                 and finding.get("id")
-                and _is_llm_reviewable_finding(finding)
+                and _is_llm_reviewable_finding(
+                    finding,
+                    file_contents=scanner._file_contents,
+                    record_skip=True,
+                )
             )
             if isinstance(findings, list)
             else 0
@@ -5850,6 +5952,7 @@ def _run_scan_task_body(
                     TimeoutError(
                         "scan budget exhausted before LLM review could start"
                     ),
+                    file_contents=scanner._file_contents,
                     status="timeout",
                     reason_code="scan_budget_exhausted",
                     phase="not_started",

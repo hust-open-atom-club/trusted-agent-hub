@@ -8,16 +8,18 @@ import tomllib
 
 from scanners.risk_scanner.dependency_parsers.models import (
     DependencyRecord,
+    DependencyScope,
     DependencySourceObservation,
     DependencySourceUsage,
 )
 from scanners.risk_scanner.dependency_parsers.npm import parse_package_json, parse_package_lock, parse_pnpm_lock, parse_yarn_lock
 from scanners.risk_scanner.dependency_parsers.python import (
+    iter_requirement_options,
+    iter_requirement_sources,
     parse_pipfile_lock,
     parse_poetry_lock,
-    parse_requirement_options,
-    parse_requirement_sources,
     parse_requirements,
+    requirement_scope,
 )
 from scanners.risk_scanner.dependency_parsers.rust import parse_cargo_lock
 
@@ -42,10 +44,9 @@ def parse_dependencies(files: dict[str, str]) -> list[DependencyRecord]:
             records.extend(parse_pipfile_lock(content, path))
         elif name == "cargo.lock":
             records.extend(parse_cargo_lock(content, path))
-    # Registry is intentionally part of record identity: collapsing the same
-    # package/version from two registries would erase policy-relevant source
-    # evidence. The OSV client independently caches lookups by package/version.
-    unique: dict[tuple[str, str, str | None, str, str | None], DependencyRecord] = {}
+    # Distinct lockfile entries may share a tarball URL while having different
+    # scopes or integrity claims. Preserve each addressable occurrence.
+    unique: dict[tuple[object, ...], DependencyRecord] = {}
     for record in records:
         key = (
             record.ecosystem,
@@ -53,6 +54,10 @@ def parse_dependencies(files: dict[str, str]) -> list[DependencyRecord]:
             record.version,
             record.source_file,
             record.registry,
+            record.integrity,
+            record.scope,
+            record.source_ref,
+            record.line,
         )
         unique[key] = record
     return list(unique.values())
@@ -64,6 +69,11 @@ def _source_observation(
     usage: DependencySourceUsage,
     source_file: str,
     dependency_name: str | None = None,
+    dependency_version: str | None = None,
+    integrity: str | None = None,
+    scope: DependencyScope = "unknown",
+    source_ref: str | None = None,
+    line: int | None = None,
 ) -> DependencySourceObservation | None:
     value = str(url or "").strip().strip('"\'')
     if not value or "://" not in value:
@@ -74,6 +84,11 @@ def _source_observation(
         usage=usage,
         source_file=source_file,
         dependency_name=dependency_name,
+        dependency_version=dependency_version,
+        integrity=integrity,
+        scope=scope,
+        source_ref=source_ref,
+        line=line,
     )
 
 
@@ -98,7 +113,8 @@ def parse_dependency_sources(
     """
 
     observations: list[DependencySourceObservation] = []
-    for record in records if records is not None else parse_dependencies(files):
+    source_records = records if records is not None else parse_dependencies(files)
+    for record in source_records:
         if not record.registry:
             continue
         observation = _source_observation(
@@ -107,6 +123,11 @@ def parse_dependency_sources(
             record.registry_usage or "registry_api",
             record.source_file,
             record.name,
+            record.version,
+            record.integrity,
+            record.scope,
+            record.source_ref,
+            record.line,
         )
         if observation:
             observations.append(observation)
@@ -116,7 +137,13 @@ def parse_dependency_sources(
         name = normalized_path.rsplit("/", 1)[-1]
 
         if name.startswith("requirements") and name.endswith(".txt"):
-            for option, source_url in parse_requirement_options(content):
+            scope = requirement_scope(path)
+            for option, source_url, line_no in iter_requirement_options(content):
+                if option not in {"--find-links", "-f"} and any(
+                    record.source_file == path and record.registry == source_url
+                    for record in source_records
+                ):
+                    continue
                 observation = _source_observation(
                     "pypi",
                     source_url,
@@ -126,16 +153,29 @@ def parse_dependency_sources(
                         else "registry_api"
                     ),
                     path,
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
                 if observation:
                     observations.append(observation)
-            for dependency_name, source_url in parse_requirement_sources(content):
+            record_sources = {
+                (record.name, record.registry)
+                for record in source_records
+                if record.source_file == path
+            }
+            for dependency_name, source_url, line_no in iter_requirement_sources(content):
+                if dependency_name and (dependency_name, source_url) in record_sources:
+                    continue
                 observation = _source_observation(
                     "pypi",
                     source_url,
                     "resolved_download",
                     path,
                     dependency_name,
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
                 if observation:
                     observations.append(observation)
@@ -202,32 +242,32 @@ def parse_dependency_sources(
                     observations.append(observation)
 
         elif name == "pnpm-lock.yaml":
-            for match in re.finditer(
-                r"(?im)^\s*tarball:\s*[\"']?([^\s\"']+)", content
-            ):
+            for line_no, line in enumerate(content.splitlines(), 1):
+                match = re.match(r"^\s*tarball:\s*[\"']?([^\s\"']+)", line, re.IGNORECASE)
+                if match is None:
+                    continue
                 observation = _source_observation(
-                    "npm", match.group(1), "resolved_download", path
+                    "npm", match.group(1), "resolved_download", path,
+                    source_ref=f"L{line_no}", line=line_no,
                 )
                 if observation:
                     observations.append(observation)
 
-    unique: dict[
-        tuple[str, str, DependencySourceUsage, str],
-        DependencySourceObservation,
-    ] = {}
+    unique: dict[tuple[object, ...], DependencySourceObservation] = {}
     for observation in observations:
         key = (
             observation.ecosystem.casefold(),
             observation.url,
             observation.usage,
             observation.source_file,
+            observation.dependency_name,
+            observation.dependency_version,
+            observation.integrity,
+            observation.scope,
+            observation.source_ref,
+            observation.line,
         )
-        existing = unique.get(key)
-        if existing is None or (
-            existing.dependency_name is None
-            and observation.dependency_name is not None
-        ):
-            unique[key] = observation
+        unique[key] = observation
     return list(unique.values())
 
 

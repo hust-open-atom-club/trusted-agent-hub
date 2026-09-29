@@ -9,29 +9,27 @@ SR-008 将依赖来源判断与依赖安全判断分开处理。来源策略只�
 | `official` | 内置、具备官方文档证据的端点 | 允许策略声明的用途 |
 | `authoritative_mirror` | 具备维护方证据的镜像 | 允许策略声明的用途；内置 Yarn Classic 默认 registry |
 | `approved_private` | API 服务或本地扫描环境的运维配置 | 允许策略声明的用途 |
-| `unknown` | 未命中以上条目 | 进入一次人工复核 advisory |
+| `unknown` | 未命中以上条目 | 按仓库与来源文件聚合进入人工复核 advisory |
 
-同一次扫描中的所有未批准来源会合并为一条 `dependency_registry_policy` advisory。它的级别为 `high`，要求人工复核，但不扣分、不改变评级，也不进入针对安全 findings 的 LLM 批处理。相同 `(ecosystem, URL, usage)` 且生态歧义状态一致的观察在代码或多个来源中重复出现时只计为一条逻辑来源，文件分布仍单独列出；有歧义的观察不会被缺少上下文的观察去重丢弃。证据最多展示五个 host 和五个文件，并给出其余数量与各拒绝原因的计数。使用 HTTP 的依赖来源还会额外合并为一条 `medium` 安全 finding。
+未批准来源按 `(ecosystem, registry host, 来源文件, policy reason)` 合并为 `dependency_registry_policy` advisory。每组 `occurrence_count` 保留全量计数，`registry_policy.occurrences` 按稳定顺序展示最多 100 条样本，并用 `truncated` 标记剩余记录；整份报告最多展示 25 个来源策略分组和 500 条样本。超出的分组聚合为一条含省略分组数、记录数和原因摘要的 advisory。样本包含依赖名、版本、锁文件指针或行号、resolved URL、integrity、用途和 runtime/dev/test 等范围；单项过长的文本也会截断并以省略号标记。URL 在报告中会移除用户信息、查询参数和片段，避免泄露认证值。审核页默认折叠逐条证据，可展开查看。组内有多种范围时标为 `mixed`；只涉及 dev/test 的组为 `warning`，涉及 runtime、optional 或未知范围的组为 `high`。来源策略 advisory 要求人工复核，但不扣分、不改变评级，也不进入针对安全 findings 的 LLM 批处理。使用 HTTP 的依赖来源还会额外合并为一条 `medium` 安全 finding。
+
+按 [npm lockfile 字段说明](https://docs.npmjs.com/files/package-lock.json/)，`devOptional=true` 表示依赖同时出现在开发依赖和非开发依赖的可选树中，因此归为 `mixed`；`dev=true` 与 `optional=true` 同时存在但没有 `devOptional` 时归为 `dev`。
 
 advisory 会按处置方式区分三类拒绝原因：`unknown_host`、`non_registry_source`、`invalid_url` 表示来源本身未经批准，应改用官方源或由运维审核私有源；`canonical_url_mismatch`、`wrong_ecosystem`、`unapproved_port`、`usage_not_allowed` 表示命中了已知端点但路径、生态、端口或用途不符合策略，`ambiguous_ecosystem` 表示安装器上下文存在歧义、无法安全选择生态批准项，这些情况通常应修正写法或确认实际生态而不是新增审批；`insecure_scheme`、`credentials_in_url` 表示传输或凭据不安全，应改用 HTTPS 并移除 URL 内嵌凭据。具体 reason 及数量保留在 evidence 中。
 
-`registry.npmmirror.com` 当前没有足够的官方归属证据，因此不作为 npm 官方源或内置权威镜像；它会落入 `unknown`，但无论有多少依赖使用它，都只产生一条来源策略 advisory。
+`registry.npmmirror.com` 当前没有足够的官方归属证据，因此不作为 npm 官方源或内置权威镜像；它会落入 `unknown`。同一锁文件中的大量依赖会聚合为一条来源策略 advisory。
 
-GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时会进入同一条聚合 advisory；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
+GitHub、GitLab、Bitbucket 和 `raw.githubusercontent.com` 等 Git 托管主机不会仅凭主机名被放行。`package.json` 中的 `git+https://github.com/...`、requirements 中的 `name @ git+https://...`，以及安装脚本中的 `pip install git+https://...`，在未命中当前生态批准的条目时按来源文件、生态、主机和拒绝原因聚合；未匹配的托管主机归类为 `unknown`（原因码 `unknown_host`）。`git+ssh://...` 直链也会被采集，但因其不是 HTTPS 来源，策略以 `non_registry_source` 拒绝。需要批准 HTTPS 直链时，运维可通过 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 添加例如 `ecosystem=npm`、`exact_host=github.com`、`allow_as_resolved_download=true` 的条目，并提供组织自己的证据与复核日期。批准整个托管主机意味着信任该主机上所有符合用途的直链，能使用更窄的 `canonical_url` 时应优先使用。
 
 `package.json` 的直接依赖会采集带 `://` 的 URL（包括 `git+ssh://`），并将 `github:owner/repo`、`gitlab:owner/repo`、`bitbucket:owner/repo` 和 `owner/repo` 等 npm Git 简写转换为对应主机的 `git+https://...` 来源。Python requirements 会采集带 extras 的 `name[extra] @ URL` 直接引用，以及裸写或通过 `-e`/`--editable` 声明的 Git、Hg、SVN、Bzr 远程 URL；`git+ssh://` 等非 HTTPS 来源仍交由策略拒绝。requirements 中裸写的 HTTP(S) URL、`-f`/`--find-links` 指向的 HTTP(S) 地址，以及安装脚本中 `pip install -f URL` / `pip install --find-links URL` 使用的 HTTP(S) 地址，均按 `resolved_download` 采集。非 VCS 的 `-e`/`--editable` HTTP(S) URL 也会形成来源观察；有 `#egg=` 时关联显式依赖名，否则不推断名称。代码文本中的 URL 观察器只从 HTTP(S) URL 的依赖上下文采集来源，不会单独识别 `git+ssh://` 文本。Cargo lockfile 的显式 `source` 字段由结构化解析器记录。
 
-requirements 与安装脚本中的 `\` 续行会折叠为保留原始行号的逻辑行后再分类。只有选项自身的值按该选项的用途归类：`--index-url` 的值为 `registry_api`，`-f`/`--find-links` 的值为 `resolved_download`。命令中的位置参数 URL 仍为 `resolved_download`，不会因前一行的 registry 选项被放行；如果端点仅批准 registry API 用途，会产生 `usage_not_allowed` 人工复核提示。
+requirements 与安装脚本中的 `\` 续行先折叠为逻辑行，再按每个 URL 绑定的选项分类，并保留原始行号作为证据。`--index-url` 的值为 `registry_api`，`-f`/`--find-links` 的值为 `resolved_download`；位置参数 URL 不会因前一行的 registry 选项被放行，端点仅获批 registry API 用途时会产生 `usage_not_allowed`。
 
-requirements 的源配置只从逻辑行前导的选项序列采集，同一行可以包含多个源选项。依赖声明、直接引用 URL 或带引号的参数内容中的 `--index-url`、`-f` 等文本不会被当成额外源配置，也不会改变后续依赖的 registry 归因。
+requirements 的源配置只从逻辑行前导选项序列采集，支持同一逻辑行中的多个源选项。依赖声明、直接引用 URL 或带引号的参数内容中的 `--index-url`、`-f` 等文本不会成为额外源配置，也不会污染后续依赖的 registry。遇到 editable 或包含文件选项时停止解析，保留此前源声明作为静态审查证据；这不表示 pip 会将混合行中的 index 应用为后续安装的全局源。独立 `=` 等非 URL 值不会覆盖 registry。
 
-遇到 editable 或包含文件选项时停止源选项解析，但保留此前已显式声明的源及其静态归因，供策略复核使用。这不表示 pip 会将混合行中的 index 应用为后续安装的全局源。`--index-url = URL` 中独立的 `=` 不作为源 URL，也不会覆盖已记录的 registry。
+续行保留缩进，因此 `--index-url=\` 后接缩进 URL 会形成空值选项和单独的 URL。安装脚本将后者按位置参数下载分类；requirements 保守保留 `resolved_download` 观察，不新增依赖记录，也不授予 registry API 用途。这不表示 pip 会实际安装该 URL。需要缩进填写 registry 地址时使用 `--index-url \`（不带等号）；npm 的 `--registry` 同理。
 
-安装脚本中的生态依据 URL 所在命令段的安装器及其绑定选项推断。未被引号包裹的 `&&`、`||`、`;`、`|` 等运算符会分隔命令段，其他命令或相邻行中的 npm、pip 不会改变当前 URL 的生态，包名与 URL 中的同名词也不会决定生态。安装器与选项冲突或无法确定安装器归属时，保留 `unknown` 并标记歧义，禁止跨生态回退批准，以 `ambiguous_ecosystem` 提示人工复核。
-
-安装脚本中，续行不会去掉下一行的缩进。`--index-url=\` 后接缩进 URL 会形成 `--index-url=` 和 URL 两个参数：前者指定空值，后者仍是位置参数。需要在下一行缩进填写源地址时，应使用 `--index-url \`（不带等号）；npm 的 `--registry` 同理。
-
-requirements 中，行首源选项以 `=` 结尾、后面用空白分隔的裸 HTTP(S) URL（包括续行后的缩进 URL），会作为不完整声明保守采集为 `resolved_download` 观察，不新增依赖记录，也不赋予 registry API 用途。这是静态来源复核行为，不代表 pip 会实际安装该 URL；正常的非空 `--index-url=URL` 和不带等号的 `--index-url URL` 续行仍按 `registry_api` 采集。
+安装脚本按 URL 所在命令段的安装器及其绑定选项推断生态。未被引号包裹的 `&&`、`||`、`;`、`|` 等运算符分隔命令段，其他命令、包名与 URL 中的 npm/pip 字样不会决定当前 URL 的生态。安装器归属不明确或与选项冲突时保留 `unknown` 并标记歧义，以 `ambiguous_ecosystem` 提示人工复核。
 
 ## 匹配规则
 
@@ -88,4 +86,8 @@ NuGet 条目用于完整表达策略目录；当前依赖解析器尚未解析 N
 
 ## 当前解析覆盖
 
-来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中，但当前改动没有新增依赖制品下载或哈希复算，因此不能把“存在 integrity 字段”表述为“制品完整性已验证”。
+来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中。`dependency_scan.integrity` 单独报告声明数、实际验证数和不匹配数。生产 API 在扫描器运行前通过独立的受信任获取层处理 lockfile：只读取扫描策略允许的 lockfile，只访问 registry policy 已批准的 HTTPS 下载地址，逐跳复核重定向和 DNS/IP，拒绝歧义 HTTP 分帧，并限制并发、单件大小、总流量与整个获取批次的共用超时；制品采用流式摘要，不保存正文。摘要结果通过 `RiskScanner(dependency_verifications=...)` 传入；测试和其他受信任调用方仍可使用兼容的 `dependency_artifacts={resolved_url: bytes}` 接口。
+
+`not_checked` 表示获取阶段未启用；`unsupported` 表示摘要算法或格式均不受支持；获取被策略阻止、超时、达到制品预算或只完成一部分时，`dependency_scan.integrity` / `artifact_acquisition` 的覆盖状态为 `partial`，并通过 `unavailable_count`、`unsupported_count` 与 `unavailable_reasons` 说明原因，不能把未取得的制品当作已验证。这类获取覆盖缺口会生成零扣分的 `dependency_artifact_coverage` provenance advisory，供审核页展示和人工复核；它本身不会把报告级 `dependency_scan.status` 或 `scan_status` 降为 `partial`，也不会改变自动评级。只有 lockfile 读取/解析等 `collection_errors`，以及 OSV 查询失败或超过预算等依赖安全分析缺口，才会传播为报告级 `partial`。`dependency_scan.artifact_acquisition` 保留 URL-free 的获取覆盖摘要和 `collection_errors`，使没有产生依赖记录的解析失败也保持可审计。运维可用 `TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED` 禁用获取，或通过 `TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS`、`TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY`、`TAH_DEPENDENCY_ARTIFACT_MAX_BYTES`、`TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES` 和 `TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS` 调整边界。扫描器本身不会请求不可信锁文件 URL。
+
+`dependency_scan.manifest_lock` 对同目录的 `package.json` 和 npm lockfile v2/v3 的根声明进行保守比对：相同字符串与等价的精确版本可判为一致；缺失声明或不同的精确版本产生独立的 SR-008 finding；其他范围、`file:`、`workspace:` 等无法在静态扫描中证明等价的写法计入 `unchecked_count`，状态为 `partial`，不会误报为不一致。没有可比对的根声明时为 `not_checked`。OSV 查询失败或超过预算时，`dependency_scan.status` 为 `partial`，不能把未完成查询的依赖视为没有漏洞。确定性的 registry、CVE、HTTP 传输、版本、typosquatting、完整性和清单差异结果不送入语义 LLM 审核；只有显式标记为需要语义判断、且具有真实扫描文件和有效行号的源码 finding 才能进入候选集合。

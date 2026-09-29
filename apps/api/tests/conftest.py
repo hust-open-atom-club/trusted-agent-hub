@@ -26,6 +26,9 @@ def _configured_test_database_url() -> str:
 # PostgreSQL integration tests opt in only through TEST_DATABASE_URL.
 _TEST_DATABASE_URL = _configured_test_database_url()
 os.environ["TRUSTED_AGENT_HUB_SKIP_DOTENV"] = "true"
+# Unit and contract tests must never acquire third-party dependency artifacts
+# unless an individual test explicitly enables and stubs that stage.
+os.environ["TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED"] = "false"
 for _database_key in (
     "DATABASE_URL",
     "DATABASE_DRIVER",

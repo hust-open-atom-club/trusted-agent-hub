@@ -16,8 +16,8 @@ Labels:
   - llm:unavailable          (configured LLM call failed after retries)
 
 When no provider key is configured, candidates retain their pre-review
-effective severity and are marked for manual review. High/critical findings
-are sent in bounded batches instead of one request per finding.
+effective severity and are marked for manual review. Explicit semantic
+candidates are sent in bounded batches instead of one request per finding.
 
 Reference: SkillSpector meta_analyzer.py PER_FILE_ANALYSIS_PROMPT
 """
@@ -38,15 +38,10 @@ from concurrent.futures import (
 )
 from typing import Any, Callable
 
+from scanners.risk_scanner.llm_candidates import is_llm_candidate
 from scanners.risk_scanner.redaction import redact_value
 
 
-# 高/严重级发现，以及被扫描器明确标记的中危语义候选，才消耗 LLM 调用。
-# 普通中低危确定性发现仍由静态策略直接处理。
-REVIEWED_SEVERITIES: frozenset[str] = frozenset({"critical", "high"})
-SEMANTIC_REVIEWED_SEVERITIES: frozenset[str] = frozenset(
-    {"critical", "high", "medium"}
-)
 REVIEW_BATCH_SIZE = 8
 DECISION_CONFIDENCE = 0.7
 BENIGN_DOWNGRADE_CONFIDENCE = 0.85
@@ -1123,24 +1118,31 @@ def run_llm_review(
 
     reviewable: list[dict[str, Any]] = []
     for finding in findings:
-        fid = finding.get("id", "")
-        severity = _reviewable_severity(finding)
-        is_semantic_candidate = finding.get("requires_llm_validation") is True
-        is_adjudication_candidate = (
-            finding.get("llm_adjudication_eligible") is True
-        )
-        is_reviewable = severity in REVIEWED_SEVERITIES or (
-            (is_semantic_candidate or is_adjudication_candidate)
-            and severity in SEMANTIC_REVIEWED_SEVERITIES
-        )
-        if not fid or not is_reviewable:
-            result["findings_skipped"] += 1
-            continue
-        fid = str(fid)
+        fid = str(finding.get("id") or "")
         code_context = finding_contexts.get(fid, "")
         finding_audit = provided_audits.get(fid)
         if not isinstance(finding_audit, dict):
             finding_audit = _implicit_context_audit(finding, code_context)
+        # Candidate identity and context delivery are separate decisions. A
+        # semantic candidate whose excerpt was truncated remains pending for
+        # manual review instead of disappearing as "not required".
+        if not is_llm_candidate(
+            finding,
+            record_skip=True,
+        ):
+            result["findings_skipped"] += 1
+            continue
+        context_admitted = is_llm_candidate(
+            finding,
+            finding_context=code_context,
+            context_audit=finding_audit,
+            require_built_context=True,
+            record_skip=True,
+        )
+        severity = _reviewable_severity(finding)
+        is_adjudication_candidate = (
+            finding.get("llm_adjudication_eligible") is True
+        )
         reviewable.append(redact_value({
             "id": fid,
             "rule_id": finding.get("rule_id", "UNKNOWN"),
@@ -1164,6 +1166,7 @@ def run_llm_review(
             "evidence": finding.get("evidence", ""),
             "code_context": code_context[:8192] or "(finding context not available)",
             "context_audit": finding_audit,
+            "context_admitted": context_admitted,
         }))
 
     if not reviewable:
@@ -1184,7 +1187,11 @@ def run_llm_review(
     result["findings_total"] = len(reviewable)
 
     statuses = [
-        str(item["context_audit"].get("delivery_status", "missing"))
+        (
+            str(item["context_audit"].get("delivery_status", "missing"))
+            if item.get("context_admitted") is True
+            else "missing"
+        )
         for item in reviewable
     ]
     result["context_coverage"] = {
@@ -1201,10 +1208,34 @@ def run_llm_review(
         status != "complete" for status in statuses
     )
 
+    ready = [
+        item
+        for item in reviewable
+        if item.get("context_admitted") is True
+        if item["context_audit"].get("delivery_status") != "missing"
+    ]
+    ready_ids = {item["id"] for item in ready}
+    for finding in reviewable:
+        if finding["id"] in ready_ids:
+            continue
+        result["decisions"][finding["id"]] = {
+            "verdict": "uncertain",
+            "impact": "unknown",
+            "intent": "benign",
+            "confidence": 0.0,
+            "context_role": "unknown",
+            "evidence_sufficient": False,
+            "missing_context": ["finding source context was not available"],
+            "supporting_evidence": [],
+            "explanation": "缺少 finding 对应的源码上下文，不能自动裁决",
+            "rounds": 0,
+            "context_audit": finding["context_audit"],
+        }
+
     # Permit injected local/test reviewers to run without provider credentials;
     # the built-in network implementation remains explicitly not-configured.
     injected_reviewer = getattr(_call_llm, "__module__", __name__) != __name__
-    if not _has_llm_config() and not injected_reviewer:
+    if ready and not _has_llm_config() and not injected_reviewer:
         result["status"] = "not_configured"
         result["reason_code"] = "provider_not_configured"
         result["findings_pending"] = len(reviewable)
@@ -1234,40 +1265,17 @@ def run_llm_review(
         )
         return result
 
-    if injected_reviewer:
+    if ready and injected_reviewer:
         result["review_configuration"].update({
             "provider": "injected",
             "model": getattr(_call_llm, "__name__", "injected_reviewer"),
         })
-    else:
+    elif ready:
         provider, _api_key, _base_url, model = _provider_configuration()
         result["review_configuration"].update({
             "provider": provider,
             "model": model,
         })
-
-    ready = [
-        item
-        for item in reviewable
-        if item["context_audit"].get("delivery_status") != "missing"
-    ]
-    ready_ids = {item["id"] for item in ready}
-    for finding in reviewable:
-        if finding["id"] in ready_ids:
-            continue
-        result["decisions"][finding["id"]] = {
-            "verdict": "uncertain",
-            "impact": "unknown",
-            "intent": "benign",
-            "confidence": 0.0,
-            "context_role": "unknown",
-            "evidence_sufficient": False,
-            "missing_context": ["finding source context was not available"],
-            "supporting_evidence": [],
-            "explanation": "缺少 finding 对应的源码上下文，不能自动裁决",
-            "rounds": 0,
-            "context_audit": finding["context_audit"],
-        }
 
     errors: list[str] = []
     last_error_reason_code: str | None = None

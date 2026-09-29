@@ -4,10 +4,12 @@ import json
 import re
 import shlex
 import tomllib
+from collections.abc import Iterator
+from pathlib import PurePosixPath
 
 from scanners.risk_scanner.logical_lines import iter_logical_lines
 
-from .models import DependencyRecord
+from .models import DependencyRecord, DependencyScope
 
 
 _DIRECT_REFERENCE = re.compile(
@@ -64,73 +66,96 @@ def _requirement_source(line: str) -> tuple[str | None, str] | None:
     return None
 
 
-def parse_requirement_sources(
+def iter_requirement_sources(
     content: str,
-) -> list[tuple[str | None, str]]:
-    """Return remote direct, VCS, and bare HTTP(S) requirement URLs."""
-    sources: list[tuple[str | None, str]] = []
-    for logical_line in iter_logical_lines(content, requirement_comments=True):
-        line = logical_line.text.strip()
+) -> Iterator[tuple[str | None, str, int]]:
+    """Yield requirement URLs with their original physical source lines."""
+    for logical in iter_logical_lines(content, requirement_comments=True):
+        line = logical.text.strip()
         if not line:
             continue
-        # Retain trailing URLs in incomplete source declarations for review,
-        # even when pip ignores them. This only adds a download observation;
-        # it must not grant registry usage or create a dependency record.
+        # Keep trailing URLs in incomplete source declarations for static
+        # review, without granting registry usage or creating dependencies.
         line = _INCOMPLETE_SOURCE_OPTION_PREFIX.sub("", line, count=1)
         source = _requirement_source(line)
         if source:
-            sources.append(source)
-    return sources
+            name, url = source
+            offset = logical.text.find(url)
+            yield name, url, logical.source_line(max(0, offset))
 
 
-def _source_options_for_line(line: str) -> list[tuple[str, str]]:
-    """Read leading options without searching dependency or argument text."""
+def _requirement_option_tokens(line: str) -> list[tuple[str, int, int]]:
+    """Split quoted arguments while retaining each token's source offset."""
+    lexer = shlex.shlex(line, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    tokens: list[tuple[str, int, int]] = []
+    while True:
+        offset = lexer.instream.tell()
+        token = lexer.get_token()
+        if token is None:
+            return tokens
+        while offset < len(line) and line[offset].isspace():
+            offset += 1
+        tokens.append((token, offset, lexer.instream.tell()))
+
+
+def _source_options_for_line(line: str) -> list[tuple[str, str, int]]:
+    """Read leading options, never option-looking text inside a payload."""
     try:
-        tokens = iter(shlex.split(line))
+        tokens = iter(_requirement_option_tokens(line))
     except ValueError:
         return []
-
-    sources: list[tuple[str, str]] = []
-    for token in tokens:
+    sources: list[tuple[str, str, int]] = []
+    for token, offset, end in tokens:
         option, has_equals, value = token.partition("=")
         option = option.casefold()
-        # Keep explicit preceding sources for static review, even though pip
-        # does not apply their global options on an editable/include line.
-        # Stop before its payload so embedded option text cannot inject a source.
+        # Preserve preceding explicit sources as static evidence. Do not
+        # interpret the editable/include payload as more source declarations.
         if option in {"-e", "--editable", "-r", "--requirement", "-c", "--constraint"}:
             break
         if option in _VALUE_OPTIONS:
-            # An explicit empty value consumes no following token. Incomplete
-            # declarations retain their separate download observation above.
+            # An explicit empty value must not consume the following token.
             if not has_equals:
-                value = next(tokens, "")
-            # Match the source collector's URL gate before assigning registry
-            # provenance; placeholders such as '=' are not source URLs.
+                value, offset, end = next(tokens, ("", offset, end))
             if option in _SOURCE_OPTIONS and "://" in value:
-                sources.append((option, value))
+                # Dequoting may change the raw spelling. Never search a later
+                # argument with the same URL when locating this occurrence.
+                value_offset = line.find(value, offset, end)
+                sources.append((option, value, max(offset, value_offset)))
         elif option not in _FLAG_OPTIONS or has_equals:
-            # Stop at a requirement, bare URL, '--', or an unknown option.
             break
     return sources
 
 
-def parse_requirement_options(content: str) -> list[tuple[str, str]]:
-    """Return source option/value pairs from complete logical requirements."""
-    return [
-        source
-        for line in iter_logical_lines(content, requirement_comments=True)
-        for source in _source_options_for_line(line.text)
-    ]
+def iter_requirement_options(content: str) -> Iterator[tuple[str, str, int]]:
+    """Yield option/value pairs with the URL's original physical line."""
+    for logical in iter_logical_lines(content, requirement_comments=True):
+        for option, url, offset in _source_options_for_line(logical.text):
+            yield option, url, logical.source_line(offset)
+
+
+def requirement_scope(source_file: str) -> DependencyScope:
+    """Infer a requirements file's dependency scope from filename tokens."""
+    basename = PurePosixPath(source_file.replace("\\", "/")).stem.casefold()
+    tokens = set(re.split(r"[-_.]", basename))
+    return (
+        "test" if tokens & {"test", "tests", "spec", "specs"}
+        else "dev" if tokens & {"dev", "development"}
+        else "runtime"
+    )
 
 
 def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]:
     result: list[DependencyRecord] = []
     index_url: str | None = None
-    for logical_line in iter_logical_lines(content, requirement_comments=True):
-        line = logical_line.text.strip()
+    scope = requirement_scope(source_file)
+    for logical in iter_logical_lines(content, requirement_comments=True):
+        line_no = logical.start_line
+        line = logical.text.strip()
         if not line:
             continue
-        for option, source_url in _source_options_for_line(line):
+        for option, source_url, _ in _source_options_for_line(line):
             if option in {"--index-url", "-i"}:
                 index_url = source_url
         source = _requirement_source(line)
@@ -147,6 +172,9 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
                     source_file,
                     registry=source_url,
                     registry_usage="resolved_download",
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
             )
             continue
@@ -168,6 +196,9 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
                     source_file,
                     registry=index_url,
                     registry_usage="registry_api" if index_url else None,
+                    scope=scope,
+                    source_ref=f"L{line_no}",
+                    line=line_no,
                 )
             )
     return result
@@ -195,7 +226,7 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
     if not isinstance(packages, list):
         return _parse_toml_packages(content, source_file)
     result: list[DependencyRecord] = []
-    for package in packages:
+    for package_index, package in enumerate(packages):
         if not isinstance(package, dict) or not package.get("name"):
             continue
         source = package.get("source")
@@ -212,6 +243,25 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
             if registry
             else None
         )
+        groups = package.get("groups")
+        if not isinstance(groups, list):
+            groups = []
+        group_names = {group.casefold() for group in groups if isinstance(group, str)}
+        if "main" in group_names:
+            scope = "mixed" if len(group_names) > 1 else "runtime"
+        elif group_names and group_names <= {"dev", "test"}:
+            scope = "test" if "test" in group_names else "dev"
+        elif group_names:
+            scope = "unknown"
+        else:
+            category = package.get("category")
+            scope = (
+                {"main": "runtime", "dev": "dev", "test": "test"}.get(
+                    category, "unknown"
+                )
+                if isinstance(category, str)
+                else "unknown"
+            )
         result.append(
             DependencyRecord(
                 str(package["name"]),
@@ -221,6 +271,8 @@ def parse_poetry_lock(content: str, source_file: str) -> list[DependencyRecord]:
                 source_file,
                 registry=str(registry) if registry else None,
                 registry_usage=registry_usage,
+                scope=scope,
+                source_ref=f"package[{package_index}]",
             )
         )
     return result
@@ -230,6 +282,8 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
+        return []
+    if not isinstance(data, dict):
         return []
     result: list[DependencyRecord] = []
     source_urls: dict[str, str] = {}
@@ -249,7 +303,7 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
                 registry = default_registry
                 if isinstance(info, dict):
                     hashes = info.get("hashes")
-                    integrity = hashes[0] if isinstance(hashes, list) and hashes else None
+                    integrity = hashes[0] if isinstance(hashes, list) and hashes and isinstance(hashes[0], str) else None
                     index_name = info.get("index")
                     if index_name:
                         registry = source_urls.get(str(index_name))
@@ -263,6 +317,8 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
                         registry=registry,
                         integrity=integrity,
                         registry_usage="registry_api" if registry else None,
+                        scope="runtime" if section == "default" else "dev",
+                        source_ref=f"#/{section}/{name.replace('~', '~0').replace('/', '~1')}",
                     )
                 )
     return result

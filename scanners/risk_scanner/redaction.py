@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from scanners.risk_scanner.llm_candidates import is_llm_candidate
+
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _CONNECTION = re.compile(r"(?i)([a-z][a-z0-9+.-]*://[^\s/@:]+:)[^\s/@]+(@)")
@@ -41,39 +43,6 @@ def redact_value(value: Any) -> Any:
 def redact_report(report: dict[str, Any]) -> dict[str, Any]:
     """Return a recursively redacted report copy."""
     return redact_value(report)
-
-
-def build_finding_contexts(
-    findings: list[dict[str, Any]],
-    file_cache: dict[str, str],
-    *,
-    max_lines: int = 60,
-    max_bytes_per_finding: int = DEFAULT_FINDING_CONTEXT_BYTES,
-    max_total_bytes: int = DEFAULT_CONTEXT_BATCH_BYTES,
-) -> dict[str, str]:
-    """Return redacted source excerpts for backward-compatible callers."""
-    contexts, _ = build_finding_context_bundle(
-        findings,
-        file_cache,
-        max_lines=max_lines,
-        max_bytes_per_finding=max_bytes_per_finding,
-        max_total_bytes=max_total_bytes,
-    )
-    return contexts
-
-
-def _reviewable_finding(finding: dict[str, Any]) -> bool:
-    review_severity = str(
-        finding.get("candidate_severity")
-        or finding.get("static_severity")
-        or finding.get("severity", "")
-    ).lower()
-    semantic_candidate = finding.get("requires_llm_validation") is True
-    adjudication_candidate = finding.get("llm_adjudication_eligible") is True
-    return review_severity in {"critical", "high"} or (
-        (semantic_candidate or adjudication_candidate)
-        and review_severity == "medium"
-    )
 
 
 def _finding_locations(finding: dict[str, Any]) -> list[tuple[str, int]]:
@@ -134,7 +103,11 @@ def build_finding_context_bundle(
     finding_audits: dict[str, dict[str, Any]] = {}
     total = 0
     for finding in findings:
-        if not _reviewable_finding(finding):
+        if not is_llm_candidate(
+            finding,
+            file_contents=file_cache,
+            record_skip=True,
+        ):
             continue
         fid = str(finding.get("id", ""))
         if not fid:

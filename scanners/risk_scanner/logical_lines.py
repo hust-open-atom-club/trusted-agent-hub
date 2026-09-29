@@ -16,13 +16,14 @@ class LogicalLine:
     line_offsets: tuple[int, ...]
 
     def source_line(self, offset: int) -> int:
+        """Map a logical character offset to its physical source line."""
         return self.start_line + bisect_right(self.line_offsets, offset) - 1
 
 
 def iter_logical_lines(
     content: str, *, requirement_comments: bool = False
 ) -> Iterator[LogicalLine]:
-    """Remove continued newlines without inserting spaces into split tokens.
+    """Fold continuations without inserting spaces into split tokens.
 
     Requirements comments are removed after joining, preserving URL fragments.
     A comment-only line ends a logical requirement even if it ends in ``\\``.
@@ -53,7 +54,6 @@ def iter_logical_lines(
         parts = []
         offsets = []
         length = 0
-
     if parts:
         text = "".join(parts)
         if requirement_comments:

@@ -66,6 +66,19 @@ def _boolean(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _strict_boolean(name: str, default: bool = False) -> bool:
+    """Parse a security boundary without silently treating typos as false."""
+    value = _optional(name)
+    if value is None:
+        return default
+    normalized = value.casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
 def _literal_true(name: str) -> bool:
     """Enable security-sensitive exceptions only with the literal true."""
 
@@ -175,6 +188,14 @@ class Settings:
     # Server-controlled approvals only. Scan submitters cannot inject registry
     # trust decisions into an individual request.
     approved_private_registries_json: str | None = None
+    # Dependency artifacts are acquired by a separate, SSRF-resistant stage.
+    # These limits are operator-owned because lockfiles are untrusted input.
+    dependency_artifact_verification_enabled: bool = True
+    dependency_artifact_max_artifacts: int = 100
+    dependency_artifact_max_concurrency: int = 4
+    dependency_artifact_max_bytes: int = 20 * 1024 * 1024
+    dependency_artifact_max_total_bytes: int = 100 * 1024 * 1024
+    dependency_artifact_timeout_seconds: int = 10
     initial_admin_email: str | None = None
     initial_admin_password: str | None = None
     initial_admin_display_name: str = "Administrator"
@@ -222,6 +243,28 @@ class Settings:
             ),
             approved_private_registries_json=_optional(
                 "TAH_APPROVED_PRIVATE_REGISTRIES_JSON"
+            ),
+            dependency_artifact_verification_enabled=_strict_boolean(
+                "TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED", True
+            ),
+            dependency_artifact_max_artifacts=_integer(
+                "TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS", 100, maximum=1000
+            ),
+            dependency_artifact_max_concurrency=_integer(
+                "TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY", 4, maximum=16
+            ),
+            dependency_artifact_max_bytes=_integer(
+                "TAH_DEPENDENCY_ARTIFACT_MAX_BYTES",
+                20 * 1024 * 1024,
+                maximum=1024 * 1024 * 1024,
+            ),
+            dependency_artifact_max_total_bytes=_integer(
+                "TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES",
+                100 * 1024 * 1024,
+                maximum=4 * 1024 * 1024 * 1024,
+            ),
+            dependency_artifact_timeout_seconds=_integer(
+                "TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS", 10, maximum=300
             ),
             initial_admin_email=_optional("INITIAL_ADMIN_EMAIL"),
             initial_admin_password=_optional("INITIAL_ADMIN_PASSWORD"),

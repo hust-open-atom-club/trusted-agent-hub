@@ -263,8 +263,25 @@ def reconcile_findings(
         primary["kind"] = str(primary.get("kind") or "unclassified")
         primary["disposition"] = str(primary.get("disposition") or "pending")
         primary["occurrences"] = _occurrences(hits, max_occurrence_items)
+        if all(member.get("llm_review_exempt") is True for member in members):
+            primary["llm_review_exempt"] = True
+        else:
+            primary.pop("llm_review_exempt", None)
         if any(member.get("requires_llm_validation") is True for member in members):
             primary["requires_llm_validation"] = True
+        if any(
+            member.get("llm_adjudication_eligible") is True
+            for member in members
+        ):
+            primary["llm_adjudication_eligible"] = True
+            reasons = sorted({
+                str(member.get("llm_adjudication_reason"))
+                for member in members
+                if member.get("llm_adjudication_reason")
+            })
+            if reasons:
+                primary["llm_adjudication_reason"] = ",".join(reasons)
+            primary["llm_review_state"] = "pending"
         if any(member.get("requires_manual_review") is True for member in members):
             primary["requires_manual_review"] = True
         roots.append(primary)
