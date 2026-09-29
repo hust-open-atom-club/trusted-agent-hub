@@ -194,6 +194,75 @@ def test_approved_private_registries_are_server_configured(
     assert decision.classification.value == "approved_private"
 
 
+def test_dependency_artifact_verification_defaults_and_parses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names = (
+        "TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED",
+        "TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS",
+        "TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY",
+        "TAH_DEPENDENCY_ARTIFACT_MAX_BYTES",
+        "TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES",
+        "TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    defaults = Settings.from_environment()
+    assert defaults.dependency_artifact_verification_enabled is True
+    assert defaults.dependency_artifact_max_artifacts == 100
+    assert defaults.dependency_artifact_max_concurrency == 4
+    assert defaults.dependency_artifact_max_bytes == 20 * 1024 * 1024
+    assert defaults.dependency_artifact_max_total_bytes == 100 * 1024 * 1024
+    assert defaults.dependency_artifact_timeout_seconds == 10
+
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED", "false")
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS", "25")
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY", "2")
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_MAX_BYTES", "1048576")
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES", "4194304")
+    monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS", "5")
+
+    configured = Settings.from_environment()
+    assert configured.dependency_artifact_verification_enabled is False
+    assert configured.dependency_artifact_max_artifacts == 25
+    assert configured.dependency_artifact_max_concurrency == 2
+    assert configured.dependency_artifact_max_bytes == 1048576
+    assert configured.dependency_artifact_max_total_bytes == 4194304
+    assert configured.dependency_artifact_timeout_seconds == 5
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS", "0"),
+        ("TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY", "17"),
+        ("TAH_DEPENDENCY_ARTIFACT_MAX_BYTES", "invalid"),
+        ("TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES", "0"),
+        ("TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS", "301"),
+    ],
+)
+def test_dependency_artifact_verification_rejects_invalid_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_environment()
+
+
+def test_dependency_artifact_verification_rejects_invalid_boolean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = "TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED"
+    monkeypatch.setenv(name, "treu")
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_environment()
+
+
 def test_approved_private_registry_config_rejects_wildcards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

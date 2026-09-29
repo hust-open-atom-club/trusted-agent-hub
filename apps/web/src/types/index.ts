@@ -156,6 +156,7 @@ export interface Finding {
   candidate_severity?: 'critical' | 'high' | 'medium' | 'low' | 'info';
   requires_llm_validation?: boolean;
   llm_adjudication_eligible?: boolean;
+  llm_review_exempt?: boolean;
   llm_adjudication_reason?: string;
   llm_label?: string;
   llm_review_state?: 'pending' | 'confirmed_harmful' | 'confirmed_risky' | 'likely_benign' | 'uncertain' | 'unavailable';
@@ -476,6 +477,44 @@ export type SubmitterVersionDetail = Omit<VersionDetail, 'findings' | 'trust_sco
   trust_score?: SubmitterTrustScore | null;
 };
 
+export interface DependencyArtifactAcquisitionSummary {
+  status?: 'not_applicable' | 'complete' | 'partial';
+  requested_count?: number;
+  fetched_count?: number;
+  unavailable_count?: number;
+  bytes_downloaded?: number;
+  unavailable_reasons?: Record<string, number>;
+  collection_errors?: string[];
+}
+
+export interface DependencyIntegritySummary {
+  status?: 'not_applicable' | 'not_checked' | 'verified' | 'mismatch' | 'unsupported' | 'partial';
+  claimed_count?: number;
+  verified_count?: number;
+  mismatch_count?: number;
+  unavailable_count?: number;
+  unsupported_count?: number;
+  unavailable_reasons?: Record<string, number>;
+}
+
+export interface DependencyManifestLockSummary {
+  status?: 'not_checked' | 'matched' | 'mismatch' | 'partial';
+  checked_pairs?: number;
+  mismatch_count?: number;
+  unchecked_count?: number;
+}
+
+export interface DependencyScan {
+  status?: 'complete' | 'partial';
+  dependencies_found?: number;
+  dependencies_queried?: number;
+  query_failures?: number;
+  query_limit?: number;
+  artifact_acquisition?: DependencyArtifactAcquisitionSummary;
+  integrity?: DependencyIntegritySummary;
+  manifest_lock?: DependencyManifestLockSummary;
+}
+
 export interface ScanReport {
   scan_id?: string;
   package_name?: string | null;
@@ -494,7 +533,7 @@ export interface ScanReport {
   metadata_validation?: Record<string, unknown> | null;
   structure_check?: Record<string, unknown> | null;
   dependency_check?: Record<string, unknown> | null;
-  dependency_scan?: Record<string, unknown> | null;
+  dependency_scan?: DependencyScan | null;
   structural_analysis?: StructuralAnalysis | null;
   llm_review?: LLMReviewSummary | null;
   scanned_at?: string | null;
@@ -564,6 +603,29 @@ export interface PermissionEvidence {
   evidence: string;
 }
 
+export interface RegistryPolicyOccurrence {
+  file: string;
+  source_ref?: string | null;
+  line?: number | null;
+  dependency_name?: string | null;
+  version?: string | null;
+  resolved_url: string;
+  integrity?: string | null;
+  scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
+  usage: 'registry_api' | 'resolved_download';
+}
+
+export interface RegistryPolicyEvidence {
+  ecosystem: string;
+  registry_host: string;
+  policy_reason: string;
+  source_file: string;
+  scope: RegistryPolicyOccurrence['scope'];
+  occurrence_count: number;
+  occurrences: RegistryPolicyOccurrence[];
+  truncated: boolean;
+}
+
 export interface ReviewAdvisory {
   id: string;
   code: string;
@@ -577,6 +639,7 @@ export interface ReviewAdvisory {
   requires_manual_review: boolean;
   evidence?: string | null;
   location?: { file?: string; line?: number } | null;
+  registry_policy?: RegistryPolicyEvidence | null;
 }
 
 export interface AdvisorySummary {

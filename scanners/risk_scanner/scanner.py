@@ -41,6 +41,7 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +49,6 @@ from typing import Any
 
 from scanners.risk_scanner.common import (
     CODE_EXAMPLE_INDICATORS,
-    CODE_FILE_EXTENSIONS,
     BINARY_EXTENSIONS,
     REQUIRED_FILES_BY_TYPE,
 )
@@ -126,11 +126,33 @@ class RiskScanner:
         source_commit_hash: str = "",
         policy: ScanPolicy | None = None,
         registry_policy: RegistryPolicy | None = None,
+        dependency_artifacts: Mapping[str, bytes] | None = None,
+        dependency_verifications: Mapping[str, object] | None = None,
+        dependency_acquisition: Mapping[str, object] | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
         self.source_commit_hash = source_commit_hash
         self.policy = policy or ScanPolicy()
         self.registry_policy = registry_policy or DEFAULT_REGISTRY_POLICY
+        # Artifact bytes must come from a trusted acquisition path. The scanner
+        # never downloads a lockfile URL while evaluating untrusted packages.
+        self.dependency_artifacts = dict(dependency_artifacts or {})
+        # Production acquisition streams artifacts and retains only digests.
+        # ``None`` means acquisition was not attempted; an explicit mapping of
+        # unavailable results is reported as incomplete artifact coverage,
+        # independently from lockfile parsing and vulnerability-scan status.
+        self.dependency_verifications = (
+            dict(dependency_verifications)
+            if dependency_verifications is not None
+            else None
+        )
+        # URL-free acquisition coverage is persisted with dependency results
+        # so collection failures cannot disappear from the final report.
+        self.dependency_acquisition = (
+            deepcopy(dict(dependency_acquisition))
+            if dependency_acquisition is not None
+            else None
+        )
         self.findings: list[dict[str, Any]] = []
         self.review_advisories: list[dict[str, Any]] = []
         self.scanned_files: list[str] = []
@@ -580,6 +602,8 @@ class RiskScanner:
             severity = str(
                 finding.get("static_severity") or finding.get("severity", "info")
             ).lower()
+            if finding.get("llm_review_exempt") is True:
+                continue
             if severity not in {"critical", "high", "medium"}:
                 continue
             category = str(finding.get("category", ""))
@@ -648,6 +672,7 @@ class RiskScanner:
         safeguards: list[str] | None = None,
         preconditions: list[str] | None = None,
         requires_manual_review: bool = False,
+        llm_review_exempt: bool = False,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -695,6 +720,8 @@ class RiskScanner:
             finding["preconditions"] = list(preconditions)
         if requires_manual_review:
             finding["requires_manual_review"] = True
+        if llm_review_exempt:
+            finding["llm_review_exempt"] = True
 
         self.findings.append(finding)
 
@@ -712,6 +739,7 @@ class RiskScanner:
         requires_manual_review: bool = False,
         evidence: str = "",
         location: dict[str, Any] | None = None,
+        registry_policy: dict[str, Any] | None = None,
     ) -> None:
         """Add a reviewer-facing warning that is not a security finding."""
         advisory: dict[str, Any] = {
@@ -730,6 +758,8 @@ class RiskScanner:
             advisory["evidence"] = evidence
         if location:
             advisory["location"] = location
+        if registry_policy is not None:
+            advisory["registry_policy"] = registry_policy
         self.review_advisories.append(advisory)
 
     def _deduplicate_findings(self) -> None:

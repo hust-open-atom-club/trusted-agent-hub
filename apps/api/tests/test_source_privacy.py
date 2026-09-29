@@ -4,7 +4,6 @@ from pathlib import Path
 
 from scanners.risk_scanner.redaction import (
     build_finding_context_bundle,
-    build_finding_contexts,
     redact_report,
 )
 from src.services.source_snapshots import SourceSnapshotStore
@@ -16,8 +15,13 @@ def test_redaction_removes_secrets_from_report_and_context():
     assert "supersecret" not in str(report)
     assert "raw-key" not in str(report)
 
-    contexts = build_finding_contexts(
-        [{"id": "f1", "severity": "high", "location": {"file": "main.py", "line": 2}}],
+    contexts, _ = build_finding_context_bundle(
+        [{
+            "id": "f1",
+            "severity": "high",
+            "requires_llm_validation": True,
+            "location": {"file": "main.py", "line": 2},
+        }],
         {"main.py": "safe = 1\npassword=supersecret\nreturn safe\n"},
     )
     assert "supersecret" not in contexts["f1"]
@@ -25,7 +29,7 @@ def test_redaction_removes_secrets_from_report_and_context():
 
 
 def test_semantic_candidate_uses_original_severity_for_context():
-    contexts = build_finding_contexts(
+    contexts, _ = build_finding_context_bundle(
         [{
             "id": "semantic-1",
             "severity": "info",
@@ -45,6 +49,7 @@ def test_context_bundle_audits_all_referenced_locations_and_actual_ranges():
         [{
             "id": "f1",
             "severity": "high",
+            "requires_llm_validation": True,
             "location": {"file": "main.py", "line": 2},
             "occurrences": {
                 "count": 2,
@@ -77,6 +82,7 @@ def test_context_bundle_marks_byte_truncation_partial_without_overstating_lines(
         [{
             "id": "f1",
             "severity": "high",
+            "requires_llm_validation": True,
             "location": {"file": "main.py", "line": 3},
         }],
         {"main.py": "one\ntwo\nthree\nfour\nfive\n"},

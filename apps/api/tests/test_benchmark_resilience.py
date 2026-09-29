@@ -57,6 +57,7 @@ def _finding() -> dict[str, object]:
         "severity": "high",
         "effective_severity": "high",
         "category": "prompt_injection",
+        "requires_llm_validation": True,
         "location": {"file": "SKILL.md", "line": 1},
         "description": "Static prompt-injection candidate",
         "evidence": "untrusted text",

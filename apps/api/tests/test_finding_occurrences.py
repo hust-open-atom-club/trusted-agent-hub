@@ -102,3 +102,52 @@ def test_static_and_effective_severity_are_kept_separate():
     assert roots[0]["static_severity"] == "critical"
     assert roots[0]["effective_severity"] == "info"
     assert roots[0]["severity"] == "info"
+
+
+def test_exemption_does_not_hide_a_semantic_detector_in_the_same_root():
+    common = {
+        "severity": "high",
+        "category": "supply_chain",
+        "location": {"file": "setup.sh", "line": 3},
+        "sink_kind": "shell_exec",
+        "source_kind": "remote_publisher",
+    }
+    roots = aggregate_findings([
+        {**common, "id": "metadata", "rule_id": "SR-008", "llm_review_exempt": True},
+        {**common, "id": "semantic", "rule_id": "SR-008", "requires_llm_validation": True},
+    ])
+
+    assert len(roots) == 1
+    assert roots[0]["requires_llm_validation"] is True
+    assert roots[0].get("llm_review_exempt") is not True
+
+
+def test_secondary_adjudication_candidate_survives_root_cause_aggregation():
+    common = {
+        "severity": "high",
+        "category": "prompt_injection",
+        "location": {"file": "agent.py", "line": 7},
+        "sink_kind": "prompt",
+        "source_kind": "remote_input",
+    }
+    roots = aggregate_findings([
+        {
+            **common,
+            "id": "primary-by-sort",
+            "rule_id": "SR-001",
+        },
+        {
+            **common,
+            "id": "secondary-candidate",
+            "rule_id": "SR-002",
+            "llm_adjudication_eligible": True,
+            "llm_adjudication_reason": "context_dependent_code",
+            "requires_manual_review": True,
+        },
+    ])
+
+    assert len(roots) == 1
+    assert roots[0]["llm_adjudication_eligible"] is True
+    assert roots[0]["llm_adjudication_reason"] == "context_dependent_code"
+    assert roots[0]["llm_review_state"] == "pending"
+    assert roots[0]["requires_manual_review"] is True

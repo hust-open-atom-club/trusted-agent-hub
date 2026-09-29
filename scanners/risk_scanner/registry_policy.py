@@ -287,7 +287,6 @@ class RegistryPolicy:
         *,
         allow_unknown_ecosystem_fallback: bool = True,
     ) -> RegistryDecision:
-        """Evaluate a source; ambiguous installer context must disable fallback."""
         normalized_ecosystem = normalize_ecosystem(ecosystem)
         normalized_usage = RegistryUsage(usage)
         parsed, parse_reason = _parse_source_url(raw_url)
@@ -308,10 +307,8 @@ class RegistryPolicy:
             and (
                 entry.ecosystem == normalized_ecosystem
                 if ecosystem_is_known
-                else (
-                    allow_unknown_ecosystem_fallback
-                    and entry.classification in _UNKNOWN_ECOSYSTEM_FALLBACK_CLASSIFICATIONS
-                )
+                else allow_unknown_ecosystem_fallback and entry.classification
+                in _UNKNOWN_ECOSYSTEM_FALLBACK_CLASSIFICATIONS
             )
         )
         path_matches = tuple(

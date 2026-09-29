@@ -1,0 +1,67 @@
+{
+  "fixture_id": "real-world-nodemw-mcp-1a2081e",
+  "source": {
+    "repository": "https://github.com/xiedada05/nodemw-mcp",
+    "commit": "1a2081ea3ede1e45175832f633ea92376ece68ab",
+    "license": "BSD-2-Clause"
+  },
+  "normalization": {
+    "description": "Text files are stored with LF line endings for deterministic cross-platform CI fixtures.",
+    "credentials": "The two credential-shaped values are upstream synthetic test placeholders (fake-csrf-token and secret123), not live credentials; they are retained so the scanner regression remains representative."
+  },
+  "expected": {
+    "package_count": 405,
+    "registry_occurrences": {
+      "registry.npmmirror.com": 293,
+      "registry.npmjs.org": 111
+    },
+    "hardcoded_secret_locations": [
+      {
+        "path": "src/tools/__tests__/fakeNodemwBot.ts",
+        "line": 110
+      },
+      {
+        "path": "src/tools/__tests__/smoke.test.ts",
+        "line": 97
+      }
+    ]
+  },
+  "files": {
+    "LICENSE": {
+      "git_blob_sha1": "b149dc906e03f3f9965a38b8d097ca88ab054b2e",
+      "upstream_sha256": "d139f175d7f79de17e651fc01c45d258915b5ca656036e6a0fa0ff5bec969bcb",
+      "fixture_sha256": "d139f175d7f79de17e651fc01c45d258915b5ca656036e6a0fa0ff5bec969bcb",
+      "transformation": "none"
+    },
+    ".npmrc": {
+      "git_blob_sha1": "c27fcad713f64d26b86d516687ece6da4b6b65b5",
+      "upstream_sha256": "39828d83a86ce8b2c94718d341d4c58797f61e71e379b5883623e8733ad57365",
+      "fixture_sha256": "ca6f9e342930c8d67e38d7eadc6dfa37e50b69d6f5ae4b13f41ff5f85d55dc88",
+      "transformation": "crlf_to_lf"
+    },
+    "package-lock.json": {
+      "git_blob_sha1": "143284dd2917946910e05682cb16879e0670aa95",
+      "upstream_sha256": "3f7b6d370f7c696560f81c9939ad08d19ca3fb74e4afde3ce7a83b911d0e6220",
+      "fixture_sha256": "51deee3538e913c0d42a6f132f6005c22b0813c3b9bfbd128bd28bc663b150b9",
+      "transformation": "crlf_to_lf"
+    },
+    "package.json": {
+      "git_blob_sha1": "ca6b1f168d6cce2c02a933f6fcf71df627245a99",
+      "upstream_sha256": "5015d87663f46948df3c5008be582373b3b8b6d452521ff3a15322607b134338",
+      "fixture_sha256": "5015d87663f46948df3c5008be582373b3b8b6d452521ff3a15322607b134338",
+      "transformation": "none"
+    },
+    "src/tools/__tests__/fakeNodemwBot.ts": {
+      "git_blob_sha1": "1b38a9347f68e0d05a6e7f9b59ddfd0198c345bd",
+      "upstream_sha256": "c838cdf939e4cc6e88d6da3c1212dd113e90bae8963b5182b080cb7b165fd8b3",
+      "fixture_sha256": "c1220290df6ddee32bf90dd49ef0e591826bcdb677cb2f65900f9465bd6bb4b4",
+      "transformation": "lines 1-99 blanked; upstream lines 100-115 retained at their original line numbers"
+    },
+    "src/tools/__tests__/smoke.test.ts": {
+      "git_blob_sha1": "e5b29f50aa5dea53f9c567629294377ae03b7155",
+      "upstream_sha256": "58cca2f8706c44d8debefddd82474720e602c42a1358adf058efab77b5d59255",
+      "fixture_sha256": "07dc8f19f2744ae9bae8a54948b250e331d60c54c3d59d1d07dae7ec979870f7",
+      "transformation": "lines 1-89 blanked; upstream lines 90-101 retained at their original line numbers"
+    }
+  }
+}

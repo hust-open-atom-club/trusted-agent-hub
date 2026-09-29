@@ -208,6 +208,42 @@ def test_provenance_advisories_apply_exact_points_without_grade_change() -> None
     assert result["score"] == result["score_breakdown"]["base_score"]
 
 
+def test_artifact_coverage_advisory_does_not_change_rating_or_priority() -> None:
+    fx = _load_fixture("b2_postgres_explorer")
+    baseline = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=fx["scan_report"],
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+    scan = json.loads(json.dumps(fx["scan_report"]))
+    scan["review_advisories"] = [{
+        "code": "dependency_artifact_coverage",
+        "category": "provenance",
+        "level": "warning",
+        "title": "Dependency artifact verification coverage is incomplete",
+        "description": "One artifact hit the configured acquisition limit.",
+        "deduction": 0,
+        "affects_grade": False,
+        "grade_downgrade_steps": 0,
+        "requires_manual_review": True,
+        "evidence": "reasons=artifact_limit (1)",
+    }]
+
+    result = rate(
+        package_metadata=fx["package_metadata"],
+        scan_report=scan,
+        author_history=fx["author_history"],
+        review_records=fx["review_records"],
+    )
+
+    assert result["risk_summary"]["level"] == baseline["risk_summary"]["level"]
+    assert result["risk_summary"]["grade"] == baseline["risk_summary"]["grade"]
+    assert result["score"] == baseline["score"]
+    assert result["risk_summary"]["manual_security_review_required"] is False
+    assert result["risk_summary"]["review_priority"] == "normal"
+
+
 def test_documented_permission_mismatch_is_five_points_without_grade_change() -> None:
     fx = _load_fixture("b2_postgres_explorer")
     scan = json.loads(json.dumps(fx["scan_report"]))

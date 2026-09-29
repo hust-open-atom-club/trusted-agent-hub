@@ -95,6 +95,29 @@ def test_clean_package_output_schema_valid(tmp_path):
     ScanReport.model_validate(report)
 
 
+def test_dependency_acquisition_coverage_is_schema_valid(tmp_path):
+    (tmp_path / "SKILL.md").write_text(CLEAN_SKILL, encoding="utf-8")
+    acquisition = {
+        "status": "partial",
+        "requested_count": 0,
+        "fetched_count": 0,
+        "unavailable_count": 0,
+        "bytes_downloaded": 0,
+        "unavailable_reasons": {},
+        "collection_errors": ["manifest_inventory_file_limit"],
+    }
+    report = RiskScanner(
+        str(tmp_path),
+        dependency_verifications={},
+        dependency_acquisition=acquisition,
+    ).scan()
+
+    assert report["dependency_scan"]["status"] == "partial"
+    assert report["dependency_scan"]["artifact_acquisition"] == acquisition
+    jsonschema.validate(report, SCHEMA)
+    ScanReport.model_validate(report)
+
+
 def test_risky_package_emits_effective_total_and_pass_rate(tmp_path):
     report = _scan(tmp_path, {
         "SKILL.md": RISKY_SKILL,

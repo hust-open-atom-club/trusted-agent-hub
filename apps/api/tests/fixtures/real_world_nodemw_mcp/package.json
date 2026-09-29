@@ -1,0 +1,58 @@
+{
+  "name": "@xiedada/nodemw-mcp-server",
+  "version": "0.3.0",
+  "description": "MCP server for nodemw - MediaWiki API client",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiedada05/nodemw-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xiedada05/nodemw-mcp/issues"
+  },
+  "homepage": "https://github.com/xiedada05/nodemw-mcp#readme",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "nodemw-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js --watch",
+    "lint": "eslint src/**/*.ts",
+    "test": "vitest run",
+    "prepare": "npm run build",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "mcp",
+    "mediawiki",
+    "nodemw",
+    "wiki"
+  ],
+  "author": "",
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "nodemw": "^0.26.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.0.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.7"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

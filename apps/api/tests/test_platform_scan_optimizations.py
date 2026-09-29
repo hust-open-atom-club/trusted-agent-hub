@@ -580,8 +580,8 @@ def test_discover_capabilities_treats_manifest_as_boundary() -> None:
     assert caps[0]["path"] == ""
 
 
-def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
-    """LLM 复核只处理 critical/high，低/中危发现直接跳过。"""
+def test_llm_review_only_reviews_explicit_semantic_candidates(monkeypatch) -> None:
+    """Severity alone is insufficient; semantic candidates must opt in."""
     from scanners.risk_scanner import llm_reviewer
 
     calls: list[str] = []
@@ -632,6 +632,7 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
             "severity": "critical",
             "category": "prompt_injection",
             "title": "a",
+            "requires_llm_validation": True,
             "location": {"file": "SKILL.md", "line": 1},
         },
         {
@@ -640,6 +641,7 @@ def test_llm_review_only_reviews_critical_and_high(monkeypatch) -> None:
             "severity": "high",
             "category": "dangerous_shell",
             "title": "b",
+            "llm_adjudication_eligible": True,
             "location": {"file": "run.sh", "line": 1},
         },
         {
@@ -705,7 +707,12 @@ def test_llm_review_batches_large_finding_sets(monkeypatch) -> None:
 
     monkeypatch.setattr(llm_reviewer, "_call_llm", fake_call)
     findings = [
-        {"id": f"f-{i}", "severity": "high", "location": {"file": "a.py", "line": 1}}
+        {
+            "id": f"f-{i}",
+            "severity": "high",
+            "llm_adjudication_eligible": True,
+            "location": {"file": "a.py", "line": 1},
+        }
         for i in range(17)
     ]
     result = llm_reviewer.run_llm_review(
