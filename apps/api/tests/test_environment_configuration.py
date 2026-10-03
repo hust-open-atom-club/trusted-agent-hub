@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import re
@@ -261,6 +262,154 @@ def test_dependency_artifact_verification_rejects_invalid_boolean(
 
     with pytest.raises(ValueError, match=name):
         Settings.from_environment()
+
+
+def test_osv_query_settings_are_explicit_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    names = (
+        "TAH_OSV_ENABLED",
+        "TAH_OSV_BASE_URL",
+        "TAH_OSV_ALLOW_PRIVATE_COORDINATES",
+        "TAH_OSV_MAX_QUERIES",
+        "TAH_OSV_BATCH_SIZE",
+        "TAH_OSV_MAX_CONCURRENCY",
+        "TAH_OSV_TIMEOUT_SECONDS",
+        "TAH_OSV_MAX_RETRIES",
+        "TAH_OSV_RETRY_BACKOFF_MILLISECONDS",
+        "TAH_OSV_CACHE_TTL_SECONDS",
+        "TAH_OSV_CACHE_PATH",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+
+    defaults = Settings.from_environment()
+    assert defaults.osv_enabled is True
+    assert defaults.osv_base_url == "https://api.osv.dev"
+    assert defaults.osv_allow_private_coordinates is False
+    assert defaults.osv_max_queries == 5000
+    assert defaults.osv_batch_size == 100
+    assert defaults.osv_max_concurrency == 4
+    assert defaults.osv_timeout_seconds == 15
+    assert defaults.osv_max_retries == 2
+    assert defaults.osv_retry_backoff_milliseconds == 250
+    assert defaults.osv_cache_ttl_seconds == 3600
+    assert defaults.osv_cache_path
+    assert Path(defaults.osv_cache_path).parent == (
+        Path(defaults.artifacts_root) / "scanner-cache"
+    )
+
+    cache_path = tmp_path / "configured-osv-cache.sqlite3"
+    monkeypatch.setenv("TAH_OSV_ENABLED", "false")
+    monkeypatch.setenv("TAH_OSV_BASE_URL", "https://osv.internal.example")
+    monkeypatch.setenv("TAH_OSV_ALLOW_PRIVATE_COORDINATES", "true")
+    monkeypatch.setenv("TAH_OSV_MAX_QUERIES", "396")
+    monkeypatch.setenv("TAH_OSV_BATCH_SIZE", "50")
+    monkeypatch.setenv("TAH_OSV_MAX_CONCURRENCY", "3")
+    monkeypatch.setenv("TAH_OSV_TIMEOUT_SECONDS", "9")
+    monkeypatch.setenv("TAH_OSV_MAX_RETRIES", "0")
+    monkeypatch.setenv("TAH_OSV_RETRY_BACKOFF_MILLISECONDS", "0")
+    monkeypatch.setenv("TAH_OSV_CACHE_TTL_SECONDS", "7200")
+    monkeypatch.setenv("TAH_OSV_CACHE_PATH", str(cache_path))
+
+    configured = Settings.from_environment()
+    assert configured.osv_enabled is False
+    assert configured.osv_base_url == "https://osv.internal.example"
+    assert configured.osv_allow_private_coordinates is True
+    assert configured.osv_max_queries == 396
+    assert configured.osv_batch_size == 50
+    assert configured.osv_max_concurrency == 3
+    assert configured.osv_timeout_seconds == 9
+    assert configured.osv_max_retries == 0
+    assert configured.osv_retry_backoff_milliseconds == 0
+    assert configured.osv_cache_ttl_seconds == 7200
+    assert configured.osv_cache_path == str(cache_path)
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("TAH_OSV_MAX_QUERIES", "0"),
+        ("TAH_OSV_BATCH_SIZE", "1001"),
+        ("TAH_OSV_MAX_CONCURRENCY", "33"),
+        ("TAH_OSV_TIMEOUT_SECONDS", "0"),
+        ("TAH_OSV_MAX_RETRIES", "9"),
+        ("TAH_OSV_RETRY_BACKOFF_MILLISECONDS", "-1"),
+        ("TAH_OSV_CACHE_TTL_SECONDS", "invalid"),
+    ],
+)
+def test_osv_query_settings_reject_invalid_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["TAH_OSV_ENABLED", "TAH_OSV_ALLOW_PRIVATE_COORDINATES"],
+)
+def test_osv_query_settings_reject_invalid_booleans(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+) -> None:
+    monkeypatch.setenv(name, "treu")
+
+    with pytest.raises(ValueError, match=name):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://osv.example",
+        "https://user:secret@osv.example",
+        "https://osv.example/v1",
+    ],
+)
+def test_osv_base_url_rejects_unsafe_origins(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    monkeypatch.setenv("TAH_ALLOW_INSECURE_HTTP", "true")
+    monkeypatch.setenv("TAH_OSV_BASE_URL", value)
+
+    with pytest.raises(ValueError, match="TAH_OSV_BASE_URL"):
+        Settings.from_environment()
+
+
+def test_source_policy_does_not_eagerly_load_environment_settings() -> None:
+    source_path = REPOSITORY_ROOT / "apps" / "api" / "src" / "routers" / "trust.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_SOURCE_POLICY"
+            for target in node.targets
+        )
+    ]
+
+    assert len(assignments) == 1
+    constructor = assignments[0].value
+    assert isinstance(constructor, ast.Call)
+    assert isinstance(constructor.func, ast.Name)
+    assert constructor.func.id == "ScanPolicy"
+    assert constructor.args == []
+    assert constructor.keywords == []
+
+
+def test_effective_source_policy_uses_runtime_osv_limit() -> None:
+    policy = trust_module._effective_source_policy(396)
+
+    assert policy.max_osv_queries == 396
+    assert policy.max_files == trust_module._SOURCE_POLICY.max_files
 
 
 def test_approved_private_registry_config_rejects_wildcards(

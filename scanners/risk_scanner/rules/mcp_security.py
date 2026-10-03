@@ -334,7 +334,8 @@ def _check_tool_description_poisoning(
 
     permissions = meta.get("permissions")
     has_permissions = isinstance(permissions, dict) and bool(permissions)
-    model = _load_semantic_model()
+    model_loader = getattr(scanner, "mcp_semantic_model_loader", None)
+    model = model_loader() if callable(model_loader) else _load_semantic_model()
 
     evaluated: list[dict[str, Any]] = []
     for tool in tools:

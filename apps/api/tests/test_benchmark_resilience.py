@@ -186,7 +186,9 @@ def test_rule_exception_is_partial_and_quality_gate_input(tmp_path: Path, monkey
     assert any(error["rule_id"] == "SR-001" for error in report["scanner_errors"])
 
 
-def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: Path) -> None:
+def test_osv_no_result_is_complete_and_degraded_statuses_are_explicit(
+    tmp_path: Path,
+) -> None:
     class NoResultClient:
         max_queries = 10
 
@@ -195,21 +197,27 @@ def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: P
 
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
-            return OSVQueryResult([], None)
+            return OSVQueryResult([])
 
     class FailedClient(NoResultClient):
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
-            return OSVQueryResult([], "TimeoutError")
+            return OSVQueryResult(
+                [], status="failed", failure_reason="TimeoutError"
+            )
 
     class LimitedClient(NoResultClient):
         max_queries = 1
 
         def query(self, _dependency: object) -> OSVQueryResult:
             if self.queried >= self.max_queries:
-                return OSVQueryResult([], "query_limit_exceeded")
+                return OSVQueryResult(
+                    [],
+                    status="not_queried",
+                    failure_reason="query_limit_exceeded",
+                )
             self.queried += 1
-            return OSVQueryResult([], None)
+            return OSVQueryResult([])
 
     reports: list[dict[str, object]] = []
     for client in (NoResultClient(), FailedClient(), LimitedClient()):
@@ -222,11 +230,42 @@ def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: P
     no_result, failed, limited = reports
     assert no_result["dependency_scan"]["status"] == "complete"
     assert no_result["scan_status"]["state"] == "complete"
-    assert failed["dependency_scan"]["status"] == "partial"
+    assert failed["dependency_scan"]["status"] == "failed"
     assert failed["scan_status"]["state"] == "partial"
     assert limited["dependency_scan"]["status"] == "partial"
     assert limited["dependency_scan"]["query_limit"] == 1
+    assert limited["dependency_scan"]["succeeded"] == 1
+    assert limited["dependency_scan"]["skipped"] == 1
     assert limited["scan_status"]["state"] == "partial"
+
+
+def test_sequential_osv_client_without_its_own_limit_uses_scan_policy(
+    tmp_path: Path,
+) -> None:
+    class LegacyClient:
+        def __init__(self) -> None:
+            self.queried = 0
+
+        def query(self, _dependency: object) -> OSVQueryResult:
+            self.queried += 1
+            return OSVQueryResult([])
+
+    _write_dependency_fixture(tmp_path)
+    client = LegacyClient()
+    scanner = RiskScanner(
+        tmp_path,
+        source_commit_hash=SOURCE_COMMIT,
+        policy=ScanPolicy(max_osv_queries=1),
+    )
+    scanner.osv_client = client
+
+    report = scanner.scan()
+
+    assert client.queried == 1
+    assert report["dependency_scan"]["query_limit"] == 1
+    assert report["dependency_scan"]["succeeded"] == 1
+    assert report["dependency_scan"]["skipped"] == 1
+    assert report["dependency_scan"]["status"] == "partial"
 
 
 def test_llm_unavailable_and_timeout_use_deterministic_manual_fallback(monkeypatch) -> None:

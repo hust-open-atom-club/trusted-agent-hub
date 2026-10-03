@@ -711,7 +711,10 @@ export default function ReviewDetailPage() {
         </section>
       )}
 
-      <DependencyCoverageSummary dependencyScan={scanReport?.dependency_scan} />
+      <DependencyCoverageSummary
+        dependencyScan={scanReport?.dependency_scan}
+        dependencyCheck={scanReport?.dependency_check}
+      />
 
       {llmReviewIncomplete && (
         <section

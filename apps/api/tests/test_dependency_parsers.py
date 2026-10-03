@@ -788,11 +788,13 @@ def test_dependency_scan_reports_osv_query_failures(tmp_path):
 
         def query(self, dependency):
             from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
-            return OSVQueryResult([], "TimeoutError")
+            return OSVQueryResult(
+                [], status="failed", failure_reason="TimeoutError"
+            )
 
     scanner.osv_client = FailedClient()
     report = scanner.scan()
-    assert report["dependency_scan"]["status"] == "partial"
+    assert report["dependency_scan"]["status"] == "failed"
     assert report["dependency_scan"]["dependencies_found"] == 1
     assert report["dependency_scan"]["query_failures"] == 1
     assert report["scan_status"]["state"] == "partial"

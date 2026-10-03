@@ -405,6 +405,7 @@ class ReviewAdvisory(StrictContractModel):
         "provenance",
         "permission_consistency",
         "registry_policy",
+        "supply_chain",
     ]
     level: Literal["high", "warning", "info"]
     title: str

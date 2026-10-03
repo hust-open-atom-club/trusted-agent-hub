@@ -82,6 +82,56 @@ describe('DependencyCoverageSummary', () => {
     );
   });
 
+  it('makes incomplete vulnerability lookup explicit instead of looking clean', () => {
+    render(
+      <DependencyCoverageSummary
+        dependencyCheck={{
+          known_vulnerabilities: null,
+          vulnerability_status: 'not_assessed',
+        }}
+        dependencyScan={{
+          status: 'unavailable',
+          total_unique_dependencies: 396,
+          queryable: 396,
+          queried: 100,
+          succeeded: 90,
+          failed: 6,
+          rate_limited: 4,
+          skipped: 296,
+          unsupported: 0,
+          remaining: 306,
+          cache_hits: 20,
+          query_limit: 5000,
+          failure_reasons: {
+            network_error: 6,
+            rate_limited: 4,
+            query_limit_exceeded: 296,
+          },
+          non_osv_manifest_dependencies: {
+            total: 2,
+            categories: { system: 1, mcp_servers: 1 },
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('dependency-vulnerability-coverage')).toHaveTextContent(
+      '唯一坐标数396可查询396查询成功90查询失败6被限流4未查询296不支持0未完成306缓存命中20查询上限5,000',
+    );
+    expect(screen.getByTestId('dependency-vulnerability-coverage')).toHaveTextContent(
+      '已知漏洞数未完成评估',
+    );
+    expect(screen.getByTestId('dependency-non-osv-manifest')).toHaveTextContent(
+      '不属于 OSV 包生态的清单依赖：2System: 1Mcp Servers: 1',
+    );
+    expect(screen.getByText(
+      '漏洞查询尚未完整执行；未报告漏洞不代表这些依赖没有已知漏洞。',
+    )).toBeInTheDocument();
+    expect(screen.getByTestId('dependency-vulnerability-reasons')).toHaveTextContent(
+      'OSV 网络请求失败 (network_error): 6',
+    );
+  });
+
   it('renders nothing when coverage data is unavailable', () => {
     const { container } = render(
       <DependencyCoverageSummary dependencyScan={{ status: 'complete' }} />,

@@ -197,8 +197,9 @@
         ],
         "forbidden_effective_severities": [],
         "capabilities": [],
-        "security_grade": ["B"],
-        "manual_review": "not_required"
+        "security_grade": ["C"],
+        "manual_review": "required",
+        "scan_state": "partial"
       },
       "enforcement": "blocking"
     },
