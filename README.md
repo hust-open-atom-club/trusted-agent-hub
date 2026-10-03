@@ -60,7 +60,7 @@ TrustedAgentHub/
 | SR-005b | 远程代码执行 (AST 行为分析层) |
 | SR-006 | 过度权限 + 自主决策 |
 | SR-007 | 网络访问无白名单 |
-| SR-008 | 供应链风险（Typosquatting + CVE；未批准 HTTPS 来源生成 `high` 人工复核 advisory，不扣分、不改评级；HTTP 来源另报 `medium` finding） |
+| SR-008 | 供应链风险（Typosquatting + OSV 已知漏洞；未批准 HTTPS 来源生成 `high` 人工复核 advisory，不扣分、不改评级；HTTP 来源另报 `medium` finding） |
 | SR-009 | 来源完整性 |
 | SR-010 | 元数据质量 |
 | SR-011 | 输出处理风险 |
@@ -183,6 +183,10 @@ python -m src.scripts.seed_producer
 - `API_HOST`、`ARTIFACTS_ROOT`、`SOURCE_SNAPSHOT_DIR` 和 `FASTEMBED_CACHE_PATH`
   保持为空时，本机使用开发默认值，Compose 注入容器值。`API_RELOAD` 只供
   `python apps/api/run.py` 使用；Docker 镜像始终以不启用 reload 的方式启动。
+- `TAH_OSV_ENABLED` 控制是否启用 OSV 查询，`TAH_OSV_BASE_URL` 可切换到经批准的
+  HTTPS 内部镜像；默认不会把明确来自非公共依赖源的包坐标发送给 OSV，只有明确设置
+  `TAH_OSV_ALLOW_PRIVATE_COORDINATES=true` 才会放行。批量、并发、重试、查询上限及
+  续扫缓存由其余 `TAH_OSV_*` 变量控制，安全默认值见 `.env.example`。
 - `PUBLIC_API_BASE_URL` 是后端生成 install-manifest 制品下载地址时使用的固定
   公开 API 基址，必须填写为用户和 CLI 可访问的真实地址；公网部署应使用 HTTPS。
 - Docker 首次启动会创建 PostgreSQL 数据库、执行全部 Alembic 迁移，并按

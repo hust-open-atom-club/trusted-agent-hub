@@ -37,8 +37,11 @@ class _OfflinePartialOSVClient:
 
     def query(self, _dependency: object) -> OSVQueryResult:
         self.queried += 1
-        error = "fixture_offline" if self.queried == 1 else None
-        return OSVQueryResult([], error)
+        if self.queried == 1:
+            return OSVQueryResult(
+                [], status="failed", failure_reason="fixture_offline"
+            )
+        return OSVQueryResult([])
 
 
 @pytest.fixture(scope="module")

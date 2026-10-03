@@ -31,7 +31,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Any, Literal, Optional
@@ -95,6 +95,7 @@ from scanners.risk_scanner.dependency_artifact_verifier import (
     acquire_dependency_verifications,
     is_dependency_manifest_path,
 )
+from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
 from scanners.risk_scanner.provenance import (
     build_verification_capabilities,
     build_verification_facts,
@@ -220,6 +221,12 @@ _SCAN_TEMP_ORPHAN_TTL_SECONDS = 24 * 60 * 60
 _SCAN_TEMP_CLEANUP_BATCH_SIZE = 200
 _LLM_PROGRESS_HEARTBEAT_SECONDS = 5.0
 _SOURCE_POLICY = ScanPolicy()
+
+
+def _effective_source_policy(osv_max_queries: int) -> ScanPolicy:
+    return replace(_SOURCE_POLICY, max_osv_queries=osv_max_queries)
+
+
 _ZIP_READ_CHUNK_BYTES = 64 * 1024
 _GITHUB_API_TIMEOUT_SECONDS = 30
 _GITHUB_API_MAX_ATTEMPTS = 3
@@ -5868,14 +5875,33 @@ def _run_scan_task_body(
             )
             _raise_if_scan_total_timeout(scan_id, total_timeout_event)
         RiskScanner = _load_scanner()
+        settings = get_settings()
+        scan_policy = _effective_source_policy(settings.osv_max_queries)
         scanner = RiskScanner(
             scan_dir,
             source_commit_hash=commit_hash,
-            policy=_SOURCE_POLICY,
+            policy=scan_policy,
             registry_policy=registry_policy,
             dependency_verifications=dependency_verifications,
             dependency_acquisition=(
                 acquisition.as_dict() if acquisition is not None else None
+            ),
+            osv_client=OSVClient(
+                enabled=settings.osv_enabled,
+                base_url=settings.osv_base_url,
+                allow_private_coordinates=(
+                    settings.osv_allow_private_coordinates
+                ),
+                timeout=settings.osv_timeout_seconds,
+                max_queries=settings.osv_max_queries,
+                cache_ttl=settings.osv_cache_ttl_seconds,
+                batch_size=settings.osv_batch_size,
+                max_concurrency=settings.osv_max_concurrency,
+                max_retries=settings.osv_max_retries,
+                retry_backoff_seconds=(
+                    settings.osv_retry_backoff_milliseconds / 1000
+                ),
+                cache_path=settings.osv_cache_path,
             ),
         )
         scan_report = scanner.scan()

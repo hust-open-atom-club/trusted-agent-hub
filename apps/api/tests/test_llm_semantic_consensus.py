@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from packages.schema.extract_skills import extract_single_skill
 from scanners.risk_scanner import llm_reviewer
+from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
 from scanners.risk_scanner.permission_consistency import (
     reconcile_permission_advisories,
 )
@@ -654,10 +655,7 @@ def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -
     # Keep this regression focused on semantic false positives. Real OSV
     # results are independently covered by supply-chain tests and can change
     # as new advisories are published.
-    scanner.osv_client.query = lambda _dependency: SimpleNamespace(
-        vulnerability_ids=[],
-        error=None,
-    )
+    scanner.osv_client.query = lambda _dependency: OSVQueryResult([])
     report = scanner.scan()
     metadata = extract_single_skill(
         root,

@@ -199,7 +199,8 @@
           "uniqueItems": true,
           "items": { "enum": ["A", "B", "C", "D", "E"] }
         },
-        "manual_review": { "enum": ["required", "not_required", "either"] }
+        "manual_review": { "enum": ["required", "not_required", "either"] },
+        "scan_state": { "enum": ["complete", "partial"] }
       },
       "additionalProperties": false
     },

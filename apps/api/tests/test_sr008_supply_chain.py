@@ -18,6 +18,10 @@ from scanners.risk_scanner.dependency_parsers.models import (
     DependencySourceObservation,
     DependencySourceUsage,
 )
+from scanners.risk_scanner.dependency_parsers.osv_client import (
+    OSVQueryResult,
+    dependency_coordinate,
+)
 from scanners.risk_scanner.registry_policy import (
     RegistryClassification,
     RegistryEntry,
@@ -259,10 +263,25 @@ class TestShellRegistrySourceBinding:
         assert details["occurrences"][0]["line"] == 3
 
 
+class _StaticOSVClient:
+    max_queries = 5_000
+    allow_private_coordinates = False
+
+    def __init__(self, vulnerability_ids=()):
+        self.vulnerability_ids = list(vulnerability_ids)
+        self.queried = 0
+        self.request_count = 0
+
+    def query(self, _dependency):
+        self.queried += 1
+        return OSVQueryResult(self.vulnerability_ids)
+
+
 @pytest.fixture(autouse=True)
 def _no_osv_network(monkeypatch):
-    """SR-008 must never hit the real OSV.dev API in tests."""
-    monkeypatch.setattr(supply_chain, "_query_osv", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        MockScanner, "osv_client", _StaticOSVClient(), raising=False
+    )
 
 
 @pytest.fixture
@@ -707,8 +726,12 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 1
-        advisory = s.review_advisories[0]
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 1
+        advisory = advisories[0]
         occurrence = advisory["registry_policy"]["occurrences"][0]
         expected = "https://registry.example/demo.tgz"
         assert occurrence["resolved_url"] == expected
@@ -905,10 +928,14 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 3
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 3
         groups = {
             (item["registry_policy"]["registry_host"], item["registry_policy"]["policy_reason"])
-            for item in s.review_advisories
+            for item in advisories
         }
         assert groups == {
             ("github.com", "non_registry_source"),
@@ -1236,13 +1263,9 @@ class TestSR008SupplyChain:
         assert "usage_not_allowed (1)" in advisory["evidence"]
         assert "来源本身未经批准" not in advisory["description"]
 
-    def test_registry_approval_does_not_skip_cve_lookup(self, monkeypatch):
-        monkeypatch.setattr(
-            supply_chain,
-            "_query_osv",
-            lambda *args, **kwargs: ["CVE-2099-0001"],
-        )
+    def test_registry_approval_does_not_skip_cve_lookup(self):
         s = MockScanner(files={})
+        s.osv_client = _StaticOSVClient(["CVE-2099-0001"])
         s._file_contents = {
             "package-lock.json": self._package_lock("registry.npmjs.org", 1)
         }
@@ -1254,13 +1277,13 @@ class TestSR008SupplyChain:
             "CVE-2099-0001" in finding["title"] for finding in s.findings
         )
 
-    def test_known_dependency_vulnerability_skips_llm_semantic_review(self, monkeypatch):
+    def test_known_dependency_vulnerability_skips_llm_semantic_review(self):
         from src.routers import trust
         from scanners.risk_scanner import llm_reviewer
         from scanners.risk_scanner.redaction import build_finding_context_bundle
 
-        monkeypatch.setattr(supply_chain, "_query_osv", lambda *args, **kwargs: ["CVE-2099-0001"])
         s = MockScanner(files={})
+        s.osv_client = _StaticOSVClient(["CVE-2099-0001"])
         s._file_contents = {
             "package-lock.json": self._package_lock("registry.npmjs.org", 1)
         }
@@ -1276,15 +1299,20 @@ class TestSR008SupplyChain:
         assert result["status"] == "not_required"
         assert result["findings_skipped"] == 1
 
-    def test_requirement_version_fragment_is_not_sent_to_osv(self, monkeypatch):
+    def test_requirement_version_fragment_is_not_sent_to_osv(self):
         queries = []
 
-        def capture_query(package_name, version, ecosystem):
-            queries.append((package_name, version, ecosystem))
-            return []
+        class CaptureClient(_StaticOSVClient):
+            def query(self, dependency):
+                self.queried += 1
+                ecosystem, _normalized_name, version = dependency_coordinate(
+                    dependency
+                )
+                queries.append((dependency.name, version, ecosystem))
+                return OSVQueryResult([])
 
-        monkeypatch.setattr(supply_chain, "_query_osv", capture_query)
         s = MockScanner(files={})
+        s.osv_client = CaptureClient()
         s._file_contents = {
             "requirements.txt": "requests==2.31.0#sha256=deadbeef\n"
         }
@@ -1294,9 +1322,6 @@ class TestSR008SupplyChain:
         assert queries == [("requests", "2.31.0", "PyPI")]
 
     def test_risk_scanner_end_to_end_collapses_registry_flood(self, tmp_path):
-        from scanners.risk_scanner.dependency_parsers.osv_client import (
-            OSVQueryResult,
-        )
         from scanners.risk_scanner.scanner import RiskScanner
 
         (tmp_path / "package-lock.json").write_text(
@@ -1309,9 +1334,9 @@ class TestSR008SupplyChain:
             max_queries = 500
             queried = 0
 
-            def query(self, dependency):
+            def query(self, _dependency):
                 self.queried += 1
-                return OSVQueryResult([], None)
+                return OSVQueryResult([])
 
         scanner.osv_client = NoVulnerabilityClient()
 
@@ -1335,7 +1360,6 @@ class TestSR008SupplyChain:
         ScanReport.model_validate(report)
 
     def test_risk_scanner_verifies_supplied_dependency_artifact(self, tmp_path):
-        from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
         from scanners.risk_scanner.scanner import RiskScanner
 
         artifact = b"npm tarball bytes supplied by acquisition"
@@ -1356,7 +1380,7 @@ class TestSR008SupplyChain:
 
             def query(self, _dependency):
                 self.queried += 1
-                return OSVQueryResult([], None)
+                return OSVQueryResult([])
 
         scanner.osv_client = NoVulnerabilityClient()
         report = scanner.scan()
@@ -1574,15 +1598,19 @@ class TestSR008SupplyChain:
 
         supply_chain.run(s)
 
-        assert len(s.review_advisories) == 3
-        assert all(item["level"] == "high" for item in s.review_advisories)
+        advisories = [
+            item for item in s.review_advisories
+            if item["code"] == "dependency_registry_policy"
+        ]
+        assert len(advisories) == 3
+        assert all(item["level"] == "high" for item in advisories)
         groups = {
             (
                 item["registry_policy"]["registry_host"],
                 item["registry_policy"]["policy_reason"],
                 item["registry_policy"]["occurrence_count"],
             )
-            for item in s.review_advisories
+            for item in advisories
         }
         assert groups == {
             ("github.com", "non_registry_source", 1),
