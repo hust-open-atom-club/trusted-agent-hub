@@ -22,6 +22,7 @@ from benchmarks.runner import (
     run_benchmark,
 )
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.rules import mcp_security
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -89,6 +90,17 @@ def test_v2_incomplete_scans_rule_errors_and_fixture_drift_always_fail():
         "benchmark contains incomplete scans",
         "benchmark contains rule execution failures",
     ]
+
+
+def test_v2_expected_incomplete_scan_does_not_fail_the_global_gate():
+    result = _v2_result(enforcement="blocking")
+    result["coverage"] = {
+        "incomplete_scan_ratio": 0.25,
+        "unexpected_scan_state_ratio": 0,
+        "rule_exception_ratio": 0,
+    }
+
+    assert _benchmark_check_failures(result) == []
 
 
 def test_v2_quality_gates_fail_on_aggregate_metric_regression():
@@ -184,6 +196,11 @@ def test_v2_schema_rejects_invalid_case_and_unexplained_observe():
     observed.pop("known_gap", None)
     with pytest.raises(BenchmarkConfigError, match="known_gap"):
         _validate_v2_config(unexplained, V2_CONFIG)
+
+    invalid_scan_state = deepcopy(config)
+    invalid_scan_state["cases"][0]["expected_target"]["scan_state"] = "failed"
+    with pytest.raises(BenchmarkConfigError, match="scan_state"):
+        _validate_v2_config(invalid_scan_state, V2_CONFIG)
 
 
 def test_v2_fixture_revision_must_contain_the_labeled_corpus():
@@ -295,6 +312,30 @@ def test_v2_root_matching_and_metric_calculation():
     assert evaluation["root_fp"] == 0
     assert evaluation["root_fn"] == 0
 
+    partial_case = deepcopy(case)
+    partial_case["expected_target"].update(
+        {
+            "security_grade": ["C"],
+            "manual_review": "required",
+            "scan_state": "partial",
+        }
+    )
+    partial_report = deepcopy(report)
+    partial_report["scan_status"] = {
+        "state": "partial",
+        "conclusion": "inconclusive",
+    }
+    partial_result, partial_evaluation = _evaluate_v2_case(
+        partial_case,
+        partial_report,
+        grade="C",
+        manual_review="required",
+        content_hash="a" * 64,
+    )
+    assert partial_result["differences"] == []
+    assert partial_evaluation["incomplete"] is True
+    assert partial_evaluation["scan_state_matches"] is True
+
     raw: dict[str, dict[str, int]] = {}
     _evaluate_case({"SR-002", "SR-008"}, {"SR-002", "SR-009"}, raw)
     overall = {
@@ -319,7 +360,8 @@ def test_osv_fixture_never_uses_the_network(monkeypatch):
     result = client.query(object())
 
     assert result.vulnerability_ids == []
-    assert result.error is None
+    assert result.status == "succeeded"
+    assert result.failure_reason is None
     assert client.queried == 1
     assert client.failures == 0
 
@@ -330,8 +372,10 @@ def test_offline_osv_client_enforces_query_limit():
     first = client.query(object())
     limited = client.query(object())
 
-    assert first.error is None
-    assert limited.error == "query_limit_exceeded"
+    assert first.status == "succeeded"
+    assert first.failure_reason is None
+    assert limited.status == "not_queried"
+    assert limited.failure_reason == "query_limit_exceeded"
     assert client.queried == 1
     assert client.limit_reached is True
 
@@ -389,9 +433,37 @@ def test_legacy_and_v2_scan_targets_keep_distinct_parent_license_policies(tmp_pa
     assert v2_scanner.policy.allow_parent_license_files is False
 
 
+def test_benchmark_scan_disables_optional_sr017_semantic_model(monkeypatch):
+    def unexpected_model_load():
+        raise AssertionError("benchmark scans must not load the optional semantic model")
+
+    monkeypatch.setattr(mcp_security, "_load_semantic_model", unexpected_model_load)
+    target = ROOT / "benchmarks/corpus/malicious-code/sr017-tool-poisoning"
+
+    _, report, _, _ = _scan_target(
+        target,
+        "a" * 40,
+        policy=ScanPolicy(allow_parent_license_files=False),
+    )
+
+    findings = [
+        finding
+        for finding in report["findings"]
+        if finding["rule_id"] == "SR-017"
+    ]
+    assert len(findings) == 1
+    assert findings[0]["effective_severity"] == "high"
+
+
 def test_v2_corpus_is_complete_checkable_and_deterministic():
     first = run_benchmark(V2_CONFIG)
     second = run_benchmark(V2_CONFIG)
+    labels = json.loads(V2_CONFIG.read_text(encoding="utf-8"))
+    expected_incomplete = sum(
+        (case.get("expected_target") or {}).get("scan_state", "complete")
+        != "complete"
+        for case in labels["cases"]
+    )
 
     assert first["corpus"] == {
         "case_count": 59,
@@ -403,7 +475,15 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         },
         "enforcement_distribution": {"blocking": 59, "observe": 0},
     }
-    assert first["coverage"]["complete_scan_ratio"] == 1.0
+    case_count = first["corpus"]["case_count"]
+    assert first["coverage"]["complete_scan_ratio"] == round(
+        (case_count - expected_incomplete) / case_count, 4
+    )
+    assert first["coverage"]["incomplete_scan_ratio"] == round(
+        expected_incomplete / case_count, 4
+    )
+    assert first["coverage"]["scan_state_match_ratio"] == 1.0
+    assert first["coverage"]["unexpected_scan_state_ratio"] == 0.0
     assert first["coverage"]["rule_exception_ratio"] == 0.0
     assert first["integrity"] == {
         "content_hash_mismatches": 0,
@@ -411,6 +491,7 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         "fixture_revision_verified": True,
         "scanner_implementation_sha256": first["integrity"]["scanner_implementation_sha256"],
         "offline_osv": True,
+        "mcp_semantic_model": "disabled",
         "llm_mode": "not_invoked",
     }
     assert len(first["integrity"]["scanner_implementation_sha256"]) == 64

@@ -2,10 +2,13 @@
 
 import { useTranslation } from 'react-i18next';
 
-import type { DependencyScan } from '@/types';
+import type { DependencyCheck, DependencyScan } from '@/types';
+
+import DependencyQueryResults from './DependencyQueryResults';
 
 interface DependencyCoverageSummaryProps {
   dependencyScan: DependencyScan | null | undefined;
+  dependencyCheck?: DependencyCheck | null;
 }
 
 function humanize(value: string): string {
@@ -14,6 +17,7 @@ function humanize(value: string): string {
 
 export default function DependencyCoverageSummary({
   dependencyScan,
+  dependencyCheck,
 }: DependencyCoverageSummaryProps) {
   const { t } = useTranslation();
   const acquisition = dependencyScan?.artifact_acquisition;
@@ -21,7 +25,22 @@ export default function DependencyCoverageSummary({
   const manifestLock = dependencyScan?.manifest_lock;
   const acquisitionReasons = Object.entries(acquisition?.unavailable_reasons || {});
   const integrityReasons = Object.entries(integrity?.unavailable_reasons || {});
+  const vulnerabilityReasons = Object.entries(dependencyScan?.failure_reasons || {});
+  const nonOsvManifest = dependencyScan?.non_osv_manifest_dependencies;
+  const nonOsvCategories = Object.entries(nonOsvManifest?.categories || {});
   const collectionErrors = acquisition?.collection_errors || [];
+
+  const showVulnerability = Boolean(
+    dependencyScan
+    && (
+      dependencyScan.total_unique_dependencies !== undefined
+      || dependencyScan.queryable !== undefined
+      || (dependencyScan.query_results?.length ?? 0) > 0
+      || dependencyScan.query_results_truncated
+      || dependencyCheck?.known_vulnerabilities !== undefined
+      || dependencyCheck?.vulnerability_status !== undefined
+    ),
+  );
 
   const showAcquisition = Boolean(
     acquisition
@@ -49,12 +68,13 @@ export default function DependencyCoverageSummary({
     ),
   );
 
-  if (!dependencyScan || (!showAcquisition && !showIntegrity && !showManifestLock)) {
+  if (!dependencyScan || (!showVulnerability && !showAcquisition && !showIntegrity && !showManifestLock)) {
     return null;
   }
 
   const hasGap = Boolean(
-    dependencyScan.status === 'partial'
+    (showVulnerability && dependencyScan.status !== 'complete')
+    || dependencyCheck?.vulnerability_status === 'not_assessed'
     || acquisition?.status === 'partial'
     || (acquisition?.unavailable_count ?? 0) > 0
     || collectionErrors.length > 0
@@ -74,14 +94,24 @@ export default function DependencyCoverageSummary({
     `review.detail.dependency_coverage_reason_${reason}`,
     { defaultValue: humanize(reason) },
   );
-  const metric = (label: string, value: number | undefined) => (
+  const metric = (label: string, value: number | string | undefined) => (
     <div className="review-meta-field">
       <span className="review-meta-label">{label}</span>
       <span className="review-meta-value">
-        {value === undefined ? '—' : value.toLocaleString()}
+        {value === undefined
+          ? '—'
+          : typeof value === 'number'
+            ? value.toLocaleString()
+            : value}
       </span>
     </div>
   );
+  const knownVulnerabilities = (
+    dependencyCheck?.vulnerability_status === 'not_assessed'
+    || dependencyCheck?.known_vulnerabilities === null
+  )
+    ? t('review.detail.dependency_coverage_not_assessed')
+    : dependencyCheck?.known_vulnerabilities;
 
   return (
     <section className="review-detail-section" data-testid="dependency-coverage">
@@ -95,6 +125,68 @@ export default function DependencyCoverageSummary({
         <summary style={{ cursor: 'pointer', fontWeight: 700 }}>
           {t('review.detail.dependency_coverage_overall_status')}: {statusLabel(dependencyScan.status)}
         </summary>
+
+        {showVulnerability && (
+          <div style={{ marginTop: '0.9rem' }} data-testid="dependency-vulnerability-coverage">
+            <h3 className="review-meta-subtitle">
+              {t('review.detail.dependency_coverage_vulnerability_title')}
+            </h3>
+            {dependencyScan.status !== 'complete' && (
+              <p style={{ color: 'var(--color-warning)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                {t('review.detail.dependency_coverage_vulnerability_incomplete')}
+              </p>
+            )}
+            <div className="review-meta-grid">
+              <div className="review-meta-field">
+                <span className="review-meta-label">{t('review.detail.dependency_coverage_status')}</span>
+                <span className="review-meta-value">{statusLabel(dependencyScan.status)}</span>
+              </div>
+              {metric(
+                t('review.detail.dependency_coverage_known_vulnerabilities'),
+                knownVulnerabilities,
+              )}
+              {metric(t('review.detail.dependency_coverage_unique'), dependencyScan.total_unique_dependencies)}
+              {metric(t('review.detail.dependency_coverage_queryable'), dependencyScan.queryable)}
+              {metric(t('review.detail.dependency_coverage_succeeded'), dependencyScan.succeeded)}
+              {metric(t('review.detail.dependency_coverage_failed'), dependencyScan.failed)}
+              {metric(t('review.detail.dependency_coverage_rate_limited'), dependencyScan.rate_limited)}
+              {metric(t('review.detail.dependency_coverage_skipped'), dependencyScan.skipped)}
+              {metric(t('review.detail.dependency_coverage_unsupported'), dependencyScan.unsupported)}
+              {metric(t('review.detail.dependency_coverage_remaining'), dependencyScan.remaining)}
+              {metric(t('review.detail.dependency_coverage_cache_hits'), dependencyScan.cache_hits)}
+              {metric(t('review.detail.dependency_coverage_query_limit'), dependencyScan.query_limit)}
+              {metric(t('review.detail.dependency_coverage_provider_requests'), dependencyScan.provider_requests)}
+            </div>
+            {(nonOsvManifest?.total ?? 0) > 0 && (
+              <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }} data-testid="dependency-non-osv-manifest">
+                <strong>
+                  {t('review.detail.dependency_coverage_non_osv_manifest', {
+                    count: nonOsvManifest?.total ?? 0,
+                  })}
+                </strong>
+                <ul>
+                  {nonOsvCategories.map(([category, count]) => (
+                    <li key={category}>{humanize(category)}: {count}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {vulnerabilityReasons.length > 0 && (
+              <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }}>
+                <strong>{t('review.detail.dependency_coverage_failure_reasons')}</strong>
+                <ul data-testid="dependency-vulnerability-reasons">
+                  {vulnerabilityReasons.map(([reason, count]) => (
+                    <li key={reason}>{reasonLabel(reason)} ({reason}): {count}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <DependencyQueryResults
+              results={dependencyScan.query_results ?? []}
+              truncated={dependencyScan.query_results_truncated}
+            />
+          </div>
+        )}
 
         {showAcquisition && acquisition && (
           <div style={{ marginTop: '0.9rem' }} data-testid="dependency-artifact-acquisition">
@@ -142,7 +234,11 @@ export default function DependencyCoverageSummary({
             <div className="review-meta-grid">
               <div className="review-meta-field">
                 <span className="review-meta-label">{t('review.detail.dependency_coverage_status')}</span>
-                <span className="review-meta-value">{statusLabel(integrity.status)}</span>
+                <span className="review-meta-value">
+                  {integrity.status === 'unsupported'
+                    ? t('review.detail.dependency_coverage_status_integrity_unsupported')
+                    : statusLabel(integrity.status)}
+                </span>
               </div>
               {metric(t('review.detail.dependency_coverage_claimed'), integrity.claimed_count)}
               {metric(t('review.detail.dependency_coverage_verified'), integrity.verified_count)}

@@ -1,5 +1,7 @@
 """Strict HTTP contract tests for safe install manifests."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
@@ -7,10 +9,27 @@ from pydantic import TypeAdapter, ValidationError
 from src.models.install import ManifestInstallationStep
 from src.models.packages import Dependencies, InstallationStep
 from src.repositories.mock import JsonPackageRepository
+from src.routers import install as install_router
 from src.settings import clear_settings_cache
 
 
 MANIFEST_PATH = "/api/v0/packages/code-review-skill/install-manifest"
+
+
+def test_scanner_cache_subdirectory_is_not_downloadable_as_an_artifact(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    cache_path = artifact_root / "scanner-cache" / "osv-query-cache.sqlite3"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b"private scanner cache")
+    monkeypatch.setattr(install_router, "ARTIFACTS_ROOT", artifact_root)
+
+    response = client.get("/api/v0/artifacts/osv-query-cache.sqlite3")
+
+    assert response.status_code == 404
 
 
 def test_dependencies_accept_mcp_server_args_and_env_arrays() -> None:

@@ -504,15 +504,74 @@ export interface DependencyManifestLockSummary {
   unchecked_count?: number;
 }
 
+export interface DependencyQueryOccurrence {
+  source_file: string;
+  source_ref?: string;
+  line?: number;
+  scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
+  direct: boolean;
+  registry?: string;
+}
+
+export interface DependencyQueryResult {
+  ecosystem: string;
+  package_name: string;
+  version: string | null;
+  status: 'succeeded' | 'failed' | 'rate_limited' | 'unsupported' | 'not_queried';
+  data_source: 'OSV';
+  queried_at: string | null;
+  response_status: number | null;
+  failure_reason: string | null;
+  from_cache: boolean;
+  cache_source?: 'memory' | 'persistent';
+  cache_age_seconds?: number;
+  attempts: number;
+  vulnerability_count: number;
+  occurrence_count: number;
+  occurrences: DependencyQueryOccurrence[];
+  occurrences_truncated: boolean;
+}
+
+export interface NonOSVManifestDependencySummary {
+  total: number;
+  categories: Record<string, number>;
+}
+
 export interface DependencyScan {
-  status?: 'complete' | 'partial';
+  status?: 'complete' | 'partial' | 'failed' | 'unavailable' | 'unsupported' | 'not_queried';
+  data_source?: 'OSV';
   dependencies_found?: number;
   dependencies_queried?: number;
   query_failures?: number;
   query_limit?: number;
+  total_dependencies?: number;
+  total_unique_dependencies?: number;
+  queryable?: number;
+  queried?: number;
+  succeeded?: number;
+  failed?: number;
+  skipped?: number;
+  unsupported?: number;
+  rate_limited?: number;
+  remaining?: number;
+  cache_hits?: number;
+  provider_requests?: number;
+  known_vulnerabilities?: number;
+  non_osv_manifest_dependencies?: NonOSVManifestDependencySummary;
+  failure_reasons?: Record<string, number>;
+  query_results?: DependencyQueryResult[];
+  query_results_truncated?: boolean;
   artifact_acquisition?: DependencyArtifactAcquisitionSummary;
   integrity?: DependencyIntegritySummary;
   manifest_lock?: DependencyManifestLockSummary;
+}
+
+export interface DependencyCheck {
+  total_dependencies?: number;
+  known_vulnerabilities?: number | null;
+  vulnerability_status?: 'assessed' | 'not_assessed';
+  unlocked_versions?: number;
+  suspicious_packages?: string[];
 }
 
 export interface ScanReport {
@@ -532,7 +591,7 @@ export interface ScanReport {
   scanner_errors?: ScannerError[] | null;
   metadata_validation?: Record<string, unknown> | null;
   structure_check?: Record<string, unknown> | null;
-  dependency_check?: Record<string, unknown> | null;
+  dependency_check?: DependencyCheck | null;
   dependency_scan?: DependencyScan | null;
   structural_analysis?: StructuralAnalysis | null;
   llm_review?: LLMReviewSummary | null;
@@ -629,7 +688,7 @@ export interface RegistryPolicyEvidence {
 export interface ReviewAdvisory {
   id: string;
   code: string;
-  category: 'metadata_quality' | 'provenance' | 'permission_consistency' | 'registry_policy';
+  category: 'metadata_quality' | 'provenance' | 'permission_consistency' | 'registry_policy' | 'supply_chain';
   level: 'high' | 'warning' | 'info';
   title: string;
   description: string;

@@ -118,7 +118,7 @@ def _source_options_for_line(line: str) -> list[tuple[str, str, int]]:
             # An explicit empty value must not consume the following token.
             if not has_equals:
                 value, offset, end = next(tokens, ("", offset, end))
-            if option in _SOURCE_OPTIONS and "://" in value:
+            if option in _SOURCE_OPTIONS and value not in {"", "="}:
                 # Dequoting may change the raw spelling. Never search a later
                 # argument with the same URL when locating this occurrence.
                 value_offset = line.find(value, offset, end)
@@ -182,11 +182,13 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
             continue
         if line.startswith(("git+", "http:", "https:")):
             continue
-        match = re.match(r"^([A-Za-z0-9_.-]+)\s*(?:(==|===|>=|<=|~=|>|<)\s*([^;\s]+))?", line)
+        match = re.match(r"^([A-Za-z0-9_.-]+)\s*(?:(===|==|>=|<=|~=|>|<)\s*([^;\s]+))?", line)
         if match:
             version = match.group(3)
             if version:
                 version = version.split("#", 1)[0]
+                if match.group(2) not in {"==", "==="}:
+                    version = match.group(2) + version
             result.append(
                 DependencyRecord(
                     match.group(1),

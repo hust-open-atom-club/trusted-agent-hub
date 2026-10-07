@@ -30,6 +30,25 @@ def test_dependency_parsers_normalize_manifest_and_lockfiles():
     assert any(r.name == "serde" and r.ecosystem == "crates.io" for r in records)
 
 
+@pytest.mark.parametrize("specifier,version,unlocked", [
+    ("==1.0.0", "1.0.0", False),
+    ("===1.0.0", "1.0.0", False),
+    ("==1.0.0+linux.x86", "1.0.0+linux.x86", False),
+    (">=1.0.0", ">=1.0.0", True),
+    ("~=1.0.0", "~=1.0.0", True),
+    ("==1.0.*", "1.0.*", True),
+])
+def test_requirement_versions_preserve_constraints(specifier, version, unlocked):
+    from scanners.risk_scanner.rules.supply_chain import _is_unlocked_version
+    from scanners.risk_scanner.dependency_parsers.osv_client import dependency_queryability
+
+    records = parse_requirements(f"python-box{specifier}\n", "requirements.txt")
+
+    assert records[0].version == version
+    assert _is_unlocked_version(records[0].version, records[0].ecosystem) is unlocked
+    assert dependency_queryability(records[0])[0] is not unlocked
+
+
 @pytest.mark.parametrize(
     ("file_name", "expected_scope"),
     [
@@ -776,6 +795,9 @@ def test_npm_force_is_not_classified_as_pip_find_links():
 def test_dependency_scan_reports_osv_query_failures(tmp_path):
     from scanners.risk_scanner.scanner import RiskScanner
 
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (tmp_path / "package.json").write_text(
         '{"name":"demo","version":"1.0.0","dependencies":{"lodash":"4.17.21"}}',
         encoding="utf-8",
@@ -788,11 +810,13 @@ def test_dependency_scan_reports_osv_query_failures(tmp_path):
 
         def query(self, dependency):
             from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
-            return OSVQueryResult([], "TimeoutError")
+            return OSVQueryResult(
+                [], status="failed", failure_reason="osv_timeout"
+            )
 
     scanner.osv_client = FailedClient()
     report = scanner.scan()
-    assert report["dependency_scan"]["status"] == "partial"
+    assert report["dependency_scan"]["status"] == "unavailable"
     assert report["dependency_scan"]["dependencies_found"] == 1
     assert report["dependency_scan"]["query_failures"] == 1
     assert report["scan_status"]["state"] == "partial"

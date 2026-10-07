@@ -40,6 +40,9 @@ def _write_skill(root: Path, *, license_value: str = "Apache-2.0") -> None:
 
 def _write_dependency_fixture(root: Path) -> None:
     _write_skill(root)
+    (root / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (root / "package.json").write_text(
         json.dumps({
             "name": "resilience-fixture",
@@ -186,7 +189,9 @@ def test_rule_exception_is_partial_and_quality_gate_input(tmp_path: Path, monkey
     assert any(error["rule_id"] == "SR-001" for error in report["scanner_errors"])
 
 
-def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: Path) -> None:
+def test_osv_no_result_is_complete_and_degraded_statuses_are_explicit(
+    tmp_path: Path,
+) -> None:
     class NoResultClient:
         max_queries = 10
 
@@ -195,21 +200,27 @@ def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: P
 
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
-            return OSVQueryResult([], None)
+            return OSVQueryResult([])
 
     class FailedClient(NoResultClient):
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
-            return OSVQueryResult([], "TimeoutError")
+            return OSVQueryResult(
+                [], status="failed", failure_reason="osv_timeout"
+            )
 
     class LimitedClient(NoResultClient):
         max_queries = 1
 
         def query(self, _dependency: object) -> OSVQueryResult:
             if self.queried >= self.max_queries:
-                return OSVQueryResult([], "query_limit_exceeded")
+                return OSVQueryResult(
+                    [],
+                    status="not_queried",
+                    failure_reason="query_limit_exceeded",
+                )
             self.queried += 1
-            return OSVQueryResult([], None)
+            return OSVQueryResult([])
 
     reports: list[dict[str, object]] = []
     for client in (NoResultClient(), FailedClient(), LimitedClient()):
@@ -222,11 +233,93 @@ def test_osv_no_result_is_complete_but_failure_and_limit_are_partial(tmp_path: P
     no_result, failed, limited = reports
     assert no_result["dependency_scan"]["status"] == "complete"
     assert no_result["scan_status"]["state"] == "complete"
-    assert failed["dependency_scan"]["status"] == "partial"
+    assert failed["dependency_scan"]["status"] == "unavailable"
     assert failed["scan_status"]["state"] == "partial"
     assert limited["dependency_scan"]["status"] == "partial"
     assert limited["dependency_scan"]["query_limit"] == 1
+    assert limited["dependency_scan"]["succeeded"] == 1
+    assert limited["dependency_scan"]["skipped"] == 1
     assert limited["scan_status"]["state"] == "partial"
+
+
+def test_sequential_osv_client_without_its_own_limit_uses_scan_policy(
+    tmp_path: Path,
+) -> None:
+    class LegacyClient:
+        def __init__(self) -> None:
+            self.queried = 0
+
+        def query(self, _dependency: object) -> OSVQueryResult:
+            self.queried += 1
+            return OSVQueryResult([])
+
+    _write_dependency_fixture(tmp_path)
+    client = LegacyClient()
+    scanner = RiskScanner(
+        tmp_path,
+        source_commit_hash=SOURCE_COMMIT,
+        policy=ScanPolicy(max_osv_queries=1),
+    )
+    scanner.osv_client = client
+
+    report = scanner.scan()
+
+    assert client.queried == 1
+    assert report["dependency_scan"]["query_limit"] == 1
+    assert report["dependency_scan"]["succeeded"] == 1
+    assert report["dependency_scan"]["skipped"] == 1
+    assert report["dependency_scan"]["status"] == "partial"
+
+
+def test_missing_osv_client_never_constructs_a_network_fallback(tmp_path: Path, monkeypatch) -> None:
+    _write_dependency_fixture(tmp_path)
+    scanner = RiskScanner(tmp_path, policy=ScanPolicy(max_osv_queries=1))
+    scanner.osv_client = None
+
+    def unexpected_request(*_args, **_kwargs):
+        pytest.fail("a missing client must not trigger an OSV request")
+
+    monkeypatch.setattr(
+        "scanners.risk_scanner.dependency_parsers.osv_client.OSVClient._default_requester",
+        unexpected_request,
+    )
+    report = scanner.scan()
+
+    assert report["rule_execution"]["failed"] == 0
+    assert report["dependency_scan"]["status"] == "not_queried"
+    assert report["dependency_scan"]["query_limit"] == 1
+    assert report["dependency_scan"]["provider_requests"] == 0
+    assert report["dependency_scan"]["failure_reasons"] == {"provider_error": 2}
+    assert report["dependency_check"]["known_vulnerabilities"] is None
+
+
+@pytest.mark.parametrize("fail_after_query", [False, True])
+def test_sr008_failure_never_claims_dependencies_are_assessed(
+    tmp_path: Path, monkeypatch, fail_after_query: bool,
+) -> None:
+    from scanners.risk_scanner.rules import supply_chain
+
+    _write_skill(tmp_path)
+    scanner = RiskScanner(tmp_path)
+    assert scanner.scan()["dependency_check"]["vulnerability_status"] == "assessed"
+    original_run = supply_chain.run
+    observed: list[str] = []
+
+    def broken(current_scanner):
+        observed.append(current_scanner.dependency_scan["status"])
+        if fail_after_query:
+            original_run(current_scanner)
+            observed.append(current_scanner.dependency_scan["status"])
+        raise RuntimeError("synthetic SR-008 failure")
+
+    monkeypatch.setattr(supply_chain, "run", broken)
+    report = scanner.scan()
+
+    assert observed == (["not_queried", "complete"] if fail_after_query else ["not_queried"])
+    assert report["dependency_scan"]["status"] == "failed"
+    assert report["dependency_check"]["vulnerability_status"] == "not_assessed"
+    assert report["dependency_check"]["known_vulnerabilities"] is None
+    assert any(error["rule_id"] == "SR-008" for error in report["scanner_errors"])
 
 
 def test_llm_unavailable_and_timeout_use_deterministic_manual_fallback(monkeypatch) -> None:

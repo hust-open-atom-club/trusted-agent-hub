@@ -47,8 +47,9 @@ used as the benchmark authority.
 Corpus files are scanned as text; none of the commands or services in a sample
 are executed. The runner installs an in-memory OSV fixture before every scan,
 so dependencies never cause a real OSV or external network request. The static
-scanner does not invoke the LLM reviewer, and the benchmark does not load a
-model client.
+scanner does not invoke the LLM reviewer, and the benchmark explicitly disables
+the optional SR-017 fastembed model so results do not depend on local model
+availability.
 
 Each case records the scanner's content-tree SHA-256. Fixture drift is fatal in
 check mode regardless of enforcement. The scoring engine receives the same
@@ -86,6 +87,9 @@ runs.
 - `security_grade` is an allowed set of final grades under the fixed scoring
   context.
 - `manual_review` is `required`, `not_required`, or `either`.
+- `scan_state` is optional and defaults to `complete`. Use `partial` only for a
+  fixture that intentionally cannot produce a complete report, such as an
+  unlocked dependency with no queryable version.
 - `enforcement` is either `blocking` or `observe`.
 
 For legacy scan reports, a missing `root_cause_id` falls back to the finding ID
@@ -106,7 +110,8 @@ The runner emits:
 - a root-level severity confusion matrix, including `none` for missed and
   unexpected roots;
 - final grade distribution;
-- incomplete-scan and rule-exception ratios; and
+- actual complete/incomplete ratios, expected scan-state match ratio, and
+  rule-exception ratio; and
 - a registry-derived detector coverage table with positive, negative, context,
   true-positive, false-positive, false-negative, and coverage-status fields;
 - per-case duration, aggregate duration, and peak traced memory.
@@ -133,8 +138,10 @@ query-limit responses, and unavailable or timed-out LLM review. Its expected
 contract is: a deterministic OSV no-result is complete/benign; malformed
 metadata is an SR-010 finding but remains complete; external symlinks, resource
 limits, rule exceptions, OSV failures/limits, and review timeouts are explicit
-partial or inconclusive states. Injecting any partial or exception result into
-the blocking v2 benchmark must fail its coverage gate.
+partial or inconclusive states. An unexpected partial or failed result in the
+blocking v2 benchmark fails its coverage gate. An intentionally partial fixture
+must declare `scan_state: partial`; it remains visible in the incomplete-scan
+ratio and passes only when its state, grade, and review requirement all match.
 
 ## Human annotation workflow
 

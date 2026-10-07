@@ -720,7 +720,7 @@ def test_artifact_coverage_gap_does_not_make_report_inconclusive(
 
         def query(self, _dependency: DependencyRecord) -> OSVQueryResult:
             self.queried += 1
-            return OSVQueryResult([], None)
+            return OSVQueryResult([])
 
     scanner.osv_client = NoVulnerabilityClient()
     report = scanner.scan()

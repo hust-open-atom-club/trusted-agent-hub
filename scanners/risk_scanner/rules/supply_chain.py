@@ -7,7 +7,7 @@ Checks for:
   - HTTP download URLs (medium)
   - Abandoned / deprecated packages (medium)
   - Typosquatting (Levenshtein distance < 2)
-  - Live CVE lookup via OSV.dev API
+  - Live known-vulnerability lookup via the configured OSV API
 
 URL-based patterns run only on code files (.py, .js, .ts, .sh, etc.)
 to avoid flagging normal hyperlinks in HTML/MD files.
@@ -15,12 +15,10 @@ to avoid flagging normal hyperlinks in HTML/MD files.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+import hashlib
 import json
 import re
-import time
-import urllib.request
-import urllib.error
 from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -47,7 +45,16 @@ from scanners.risk_scanner.dependency_parsers.models import (
     DependencySourceObservation,
     DependencySourceUsage,
 )
-from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.dependency_parsers.osv_client import (
+    OSVClient,
+    OSVQueryResult,
+    dependency_coordinate,
+    dependency_queryability,
+)
+from scanners.risk_scanner.dependency_coverage import (
+    empty_dependency_scan,
+    normalize_query_limit,
+)
 from scanners.risk_scanner.dependency_artifact_verifier import (
     DependencyArtifactVerification,
     integrity_claim_supported,
@@ -57,22 +64,35 @@ from scanners.risk_scanner.dependency_artifact_verifier import (
 from scanners.risk_scanner.logical_lines import LogicalLine, iter_logical_lines
 from scanners.risk_scanner.registry_policy import (
     DEFAULT_REGISTRY_POLICY,
+    RegistryClassification,
     RegistryPolicy,
     normalize_ecosystem,
 )
 from scanners.risk_scanner.redaction import redact_text
 
-_CVE_CACHE: dict[str, tuple[float, list[str]]] = {}
-_CVE_CACHE_TTL = 3600
 _LOCKFILE_NAMES = frozenset({
     "package-lock.json",
     "npm-shrinkwrap.json",
     "pnpm-lock.yaml",
     "yarn.lock",
+    "poetry.lock",
+    "pipfile.lock",
+    "cargo.lock",
 })
 _MAX_REGISTRY_POLICY_GROUPS = 25
 _MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP = 100
 _MAX_REGISTRY_POLICY_OCCURRENCES_TOTAL = 500
+_MAX_OSV_OCCURRENCES_PER_COORDINATE = 100
+_MAX_OSV_QUERY_RESULTS = 500
+_MANIFEST_OSV_ECOSYSTEMS = {
+    "npm": "npm",
+    "pip": "PyPI",
+    "pypi": "PyPI",
+    "python": "PyPI",
+    "rust": "crates.io",
+    "cargo": "crates.io",
+    "crates.io": "crates.io",
+}
 
 _URL_BASED_DESCS = frozenset({
     "非官方包源 URL",
@@ -344,14 +364,57 @@ def _is_lockfile(path: str) -> bool:
     return Path(path).name.lower() in _LOCKFILE_NAMES
 
 
-def _is_unlocked_version(version: str | None) -> bool:
+def _is_unlocked_version(version: str | None, ecosystem: str) -> bool:
     value = (version or "").strip()
-    return (
-        not value
-        or value.startswith(("^", "~", ">", "<", "*"))
-        or "x" in value.lower()
-        or value.lower() in {"latest", "stable", "next"}
+    if len(value) > 256:
+        return True
+    if normalize_ecosystem(ecosystem) == "pypi":
+        value = value.removeprefix("===").removeprefix("==").strip()
+        return re.fullmatch(
+            r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
+            r"(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]*)?"
+            r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?"
+            r"(?:[-_.]?dev[-_.]?[0-9]*)?"
+            r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?",
+            value,
+            re.IGNORECASE,
+        ) is None
+    return _exact_npm_version(value) is None
+
+
+def _lockfile_satisfies(record: DependencyRecord, locked: DependencyRecord) -> bool:
+    if not _is_lockfile(locked.source_file) or _is_unlocked_version(locked.version, locked.ecosystem):
+        return False
+    directory = PurePosixPath(record.source_file.replace("\\", "/")).parent
+    lock_directory = PurePosixPath(locked.source_file.replace("\\", "/")).parent
+    if not directory.is_relative_to(lock_directory):
+        return False
+    declared_key = dependency_coordinate(record)
+    locked_key = dependency_coordinate(locked)
+    if declared_key[:2] != locked_key[:2]:
+        return False
+    declared, resolved = declared_key[2], locked_key[2]
+    if declared == resolved:
+        return True
+    if normalize_ecosystem(record.ecosystem) not in {"npm", "cargo"}:
+        return False
+    locked_version = _exact_npm_version(resolved)
+    exact = _exact_npm_version(declared)
+    if exact is not None:
+        return exact == locked_version
+    if not declared.startswith(("^", "~")):
+        return False
+    lower = _exact_npm_version(declared[1:])
+    if lower is None or locked_version is None or lower[3] or locked_version[3]:
+        return False
+    major, minor, patch = lower[:3]
+    upper = (
+        (major, minor + 1, 0) if declared.startswith("~")
+        else (major + 1, 0, 0) if major
+        else (0, minor + 1, 0) if minor
+        else (0, 0, patch + 1)
     )
+    return lower[:3] <= locked_version[:3] < upper
 
 
 def _levenshtein(s1: str, s2: str) -> int:
@@ -370,34 +433,6 @@ def _levenshtein(s1: str, s2: str) -> int:
             ))
         prev = curr
     return prev[-1]
-
-
-def _query_osv(package_name: str, version: str, ecosystem: str = "PyPI") -> list[str]:
-    cache_key = f"{ecosystem}:{package_name}:{version}"
-    now = time.time()
-    if cache_key in _CVE_CACHE:
-        ts, result = _CVE_CACHE[cache_key]
-        if now - ts < _CVE_CACHE_TTL:
-            return result
-
-    try:
-        body = json.dumps({
-            "package": {"name": package_name, "ecosystem": ecosystem},
-            "version": version,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.osv.dev/v1/query",
-            data=body,
-            headers={"Content-Type": "application/json"},
-        )
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode("utf-8"))
-        vulns = [v.get("id", "CVE-UNKNOWN") for v in data.get("vulns", [])]
-        _CVE_CACHE[cache_key] = (now, vulns)
-        return vulns
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
-        _CVE_CACHE[cache_key] = (now, [])
-        return []
 
 
 def _check_typosquatting(scanner: Any, meta: dict[str, Any]) -> None:
@@ -475,7 +510,10 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
     for ecosystem, values in deps.items():
         if not isinstance(values, list):
             continue
-        normalized_ecosystem = {"pypi": "PyPI", "python": "PyPI", "npm": "npm", "rust": "crates.io"}.get(str(ecosystem).lower(), str(ecosystem))
+        normalized_ecosystem = _MANIFEST_OSV_ECOSYSTEMS.get(
+            str(ecosystem).strip().casefold(),
+            str(ecosystem),
+        )
         # A source_ref is a JSON Pointer into the input manifest, so its token
         # must use the original key rather than the normalized ecosystem label.
         ecosystem_pointer = str(ecosystem).replace("~", "~0").replace("/", "~1")
@@ -506,6 +544,22 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
                     source_ref=f"#/dependencies/{ecosystem_pointer}/{index}",
                 ))
     return [record for record in records if record.name]
+
+
+def _non_osv_manifest_dependencies(meta: dict[str, Any]) -> dict[str, Any]:
+    dependencies = meta.get("dependencies", {})
+    categories: dict[str, int] = {}
+    if isinstance(dependencies, dict):
+        for ecosystem, values in dependencies.items():
+            normalized = str(ecosystem).strip().casefold()
+            if normalized in _MANIFEST_OSV_ECOSYSTEMS or not isinstance(values, list):
+                continue
+            if values:
+                categories[normalized or "unknown"] = len(values)
+    return {
+        "total": sum(categories.values()),
+        "categories": dict(sorted(categories.items())),
+    }
 
 
 def _format_counter(counter: Counter[str], *, limit: int = 5) -> str:
@@ -780,22 +834,287 @@ def _check_dependency_sources(
         )
 
 
-def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> None:
-    if not records:
-        scanner.dependency_scan = {"status": "complete", "dependencies_found": 0,
-                                   "dependencies_queried": 0, "query_failures": 0}
-        return
-    locked_keys = {
-        (record.ecosystem.lower(), record.name.lower())
-        for record in records
-        if _is_lockfile(record.source_file) and record.version and not _is_unlocked_version(record.version)
+def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
+    occurrence: dict[str, Any] = {
+        "source_file": record.source_file,
+        "scope": record.scope,
+        "direct": bool(record.direct),
     }
+    if record.source_ref:
+        occurrence["source_ref"] = _evidence_sample(record.source_ref, 512)
+    if record.line is not None:
+        occurrence["line"] = max(1, int(record.line))
+    if record.registry:
+        occurrence["registry"] = _evidence_sample(
+            _source_evidence_url(record.registry), 512
+        )
+    return occurrence
+
+
+def _dependency_query_groups(
+    records: list[DependencyRecord],
+) -> dict[tuple[str, str, str], list[DependencyRecord]]:
+    """Attach manifest ranges only to compatible lockfile coordinates."""
+    groups: dict[tuple[str, str, str], list[DependencyRecord]] = {}
+    exact_by_package: dict[tuple[str, str], list[DependencyRecord]] = {}
+    deferred: list[DependencyRecord] = []
+    for record in records:
+        key = dependency_coordinate(record)
+        queryable, _reason = dependency_queryability(record)
+        if queryable:
+            groups.setdefault(key, []).append(record)
+            if _is_lockfile(record.source_file):
+                exact_by_package.setdefault(key[:2], []).append(record)
+        else:
+            deferred.append(record)
+
+    for record in deferred:
+        key = dependency_coordinate(record)
+        queryable, reason = dependency_queryability(record)
+        resolved = sorted({
+            dependency_coordinate(locked)
+            for locked in exact_by_package.get(key[:2], [])
+            if _lockfile_satisfies(record, locked)
+        })
+        if not queryable and reason in {"missing_version", "non_exact_version"} and resolved:
+            for resolved_key in resolved:
+                groups.setdefault(resolved_key, []).append(record)
+            continue
+        groups.setdefault(key, []).append(record)
+    return groups
+
+
+def _is_requirement_index(source: DependencySourceObservation) -> bool:
+    name = PurePosixPath(source.source_file.replace("\\", "/")).name.casefold()
+    return (
+        name.startswith("requirements") and name.endswith(".txt")
+        and source.usage == DependencySourceUsage.REGISTRY_API
+    )
+
+
+def _coordinate_requires_private_opt_in(
+    scanner: Any,
+    client: Any,
+    occurrences: list[DependencyRecord],
+    sources: Sequence[DependencySourceObservation] = (),
+) -> bool:
+    if getattr(client, "allow_private_coordinates", False) is True:
+        return False
+    policy = getattr(scanner, "registry_policy", None)
+    evaluate = getattr(policy, "evaluate", None)
+    if not callable(evaluate):
+        return True
+    public_classifications = {
+        RegistryClassification.OFFICIAL,
+        RegistryClassification.AUTHORITATIVE_MIRROR,
+    }
+
+    def is_public(ecosystem: str, url: str, usage: DependencySourceUsage) -> bool:
+        try:
+            decision = evaluate(ecosystem, url, usage)
+        except (TypeError, ValueError):
+            return False
+        return decision.allowed and decision.classification in public_classifications
+
+    public_directories: set[PurePosixPath] = set()
+    directories = {
+        PurePosixPath(record.source_file.replace("\\", "/")).parent
+        for record in occurrences
+    }
+    coordinate = dependency_coordinate(occurrences[0])
+    for record in occurrences:
+        if record.registry:
+            if not is_public(
+                record.ecosystem,
+                record.registry,
+                record.registry_usage or DependencySourceUsage.REGISTRY_API,
+            ):
+                return True
+            public_directories.add(
+                PurePosixPath(record.source_file.replace("\\", "/")).parent
+            )
+    for source in sources:
+        path = PurePosixPath(source.source_file.replace("\\", "/"))
+        name = path.name.casefold()
+        npm_scope = (source.source_ref or "").casefold().removesuffix(":registry")
+        if name == ".npmrc" and npm_scope.startswith("@"):
+            if not coordinate[1].startswith(npm_scope + "/"):
+                continue
+        if source.ecosystem_ambiguous or normalize_ecosystem(
+            source.ecosystem
+        ) in {"", "unknown"}:
+            return True
+        if not is_public(source.ecosystem, source.url, source.usage):
+            return True
+        if source.dependency_name and not _is_requirement_index(source):
+            if source.dependency_version == coordinate[2]:
+                public_directories.add(path.parent)
+        elif source.usage == DependencySourceUsage.REGISTRY_API:
+            if name == ".npmrc":
+                public_directories.update(
+                    directory for directory in directories
+                    if directory.is_relative_to(path.parent)
+                )
+            elif (
+                name in {"config", "config.toml"}
+                and path.parent.name == ".cargo"
+            ):
+                public_directories.update(
+                    directory for directory in directories
+                    if directory.is_relative_to(path.parent.parent)
+                )
+            elif name in {"pyproject.toml", "pipfile.lock"} or _is_requirement_index(source):
+                public_directories.add(path.parent)
+    if directories.issubset(public_directories):
+        return False
+    default_registry = {
+        "npm": "https://registry.npmjs.org/",
+        "pypi": "https://pypi.org/simple/",
+        "cargo": "https://index.crates.io/",
+    }.get(normalize_ecosystem(coordinate[0]))
+    return default_registry is None or not is_public(
+        coordinate[0], default_registry, DependencySourceUsage.REGISTRY_API
+    )
+
+
+def _osv_source_index(
+    sources: list[DependencySourceObservation],
+) -> dict[tuple[str, str | None], list[DependencySourceObservation]]:
+    indexed: dict[tuple[str, str | None], list[DependencySourceObservation]] = {}
+    seen: set[tuple[object, ...]] = set()
+    for source in sources:
+        coordinate = dependency_coordinate(DependencyRecord(
+            source.dependency_name or "", source.dependency_version,
+            source.ecosystem, False, source.source_file,
+        ))
+        if source.ecosystem_ambiguous:
+            key = ("unknown", None)
+        else:
+            key = (
+                coordinate[0],
+                coordinate[1]
+                if source.dependency_name and not _is_requirement_index(source)
+                else None,
+            )
+        identity = (
+            key, source.source_file, source.url, source.usage,
+            source.dependency_version if key[1] is not None else None,
+            source.source_ref if source.source_file.casefold().endswith(".npmrc") else None,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        indexed.setdefault(key, []).append(source)
+    return indexed
+
+
+def _sequential_osv_results(
+    client: Any,
+    representatives: list[DependencyRecord],
+    *,
+    query_limit: int,
+) -> dict[tuple[str, str, str], OSVQueryResult]:
+    results: dict[tuple[str, str, str], OSVQueryResult] = {}
+    try:
+        already_queried = max(0, int(getattr(client, "queried", 0)))
+    except (TypeError, ValueError):
+        already_queried = 0
+    remaining_budget = max(query_limit - already_queried, 0)
+    attempted = 0
+    for record in representatives:
+        key = dependency_coordinate(record)
+        queryable, reason = dependency_queryability(record)
+        if not queryable:
+            results[key] = OSVQueryResult(
+                [], status="unsupported", failure_reason=reason
+            )
+            continue
+        if attempted >= remaining_budget:
+            results[key] = OSVQueryResult(
+                [],
+                status="not_queried",
+                failure_reason="query_limit_exceeded",
+            )
+            continue
+        attempted += 1
+        result = client.query(record)
+        if isinstance(result, OSVQueryResult):
+            results[key] = result
+        else:
+            results[key] = OSVQueryResult(
+                [],
+                status="failed",
+                failure_reason="invalid_client_response",
+            )
+    return results
+
+
+def _uses_default_osv_query(client: Any) -> bool:
+    """Detect OSVClient query overrides without inspecting instance storage."""
+    if not isinstance(client, OSVClient):
+        return True
+    query = getattr(client, "query", None)
+    implementation = getattr(query, "__func__", query)
+    return implementation is OSVClient.query
+
+
+def _dependency_scan_status(
+    *,
+    queryable: int,
+    succeeded: int,
+    failed: int,
+    rate_limited: int,
+    skipped: int,
+    failure_reasons: Counter[str],
+) -> str:
+    if queryable == 0:
+        return "unsupported"
+    if succeeded == queryable:
+        return "complete"
+    if succeeded > 0:
+        return "partial"
+    if skipped == queryable:
+        return "not_queried"
+    transient_reasons = {
+        "network_error",
+        "osv_timeout",
+        "provider_server_error",
+        "rate_limited",
+    }
+    active_reasons = {
+        reason for reason, count in failure_reasons.items() if count > 0
+    }
+    if failed + rate_limited > 0 and active_reasons <= transient_reasons:
+        return "unavailable"
+    return "failed"
+
+
+def _check_dependency_records(
+    scanner: Any,
+    records: list[DependencyRecord],
+    sources: list[DependencySourceObservation],
+) -> None:
+    if not records:
+        configured_limit = getattr(
+            getattr(scanner, "osv_client", None),
+            "max_queries",
+            getattr(getattr(scanner, "policy", None), "max_osv_queries", 5000),
+        )
+        scanner.dependency_scan = empty_dependency_scan(configured_limit, status="complete")
+        return
+    locked_by_package: dict[tuple[str, str], list[DependencyRecord]] = {}
+    for record in records:
+        if _is_lockfile(record.source_file):
+            locked_by_package.setdefault(dependency_coordinate(record)[:2], []).append(record)
     for record in records:
         reconciled_with_lockfile = (
             not _is_lockfile(record.source_file)
-            and (record.ecosystem.lower(), record.name.lower()) in locked_keys
+            and any(
+                _lockfile_satisfies(record, locked)
+                for locked in locked_by_package.get(dependency_coordinate(record)[:2], [])
+            )
         )
-        if _is_unlocked_version(record.version) and not reconciled_with_lockfile:
+        if _is_unlocked_version(record.version, record.ecosystem) and not reconciled_with_lockfile:
             scanner._add_finding(
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title=f"依赖版本未锁定: {record.name}",
@@ -806,41 +1125,259 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                 llm_review_exempt=True,
             )
     client = getattr(scanner, "osv_client", None)
-    compatibility_mode = client is None
-    client = client or OSVClient()
-    queried = 0
-    failures = 0
-    limit_reached = False
-    for record in records:
-        if compatibility_mode:
-            vulnerabilities = _query_osv(record.name, record.version or "*", record.ecosystem)
-            result_error = None
-            queried += 1
-        else:
-            result = client.query(record)
-            vulnerabilities = result.vulnerability_ids
-            result_error = result.error
-            if result_error:
-                failures += 1
-                limit_reached = result_error == "query_limit_exceeded"
-            queried = client.queried
-        for cve_id in vulnerabilities:
-            scanner._add_finding(
-                rule_id="SR-008", severity="high", category="supply_chain",
-                title=f"供应链风险 — 已知 CVE: {cve_id} in {record.name}@{record.version or '*'}",
-                description=f"依赖 {record.name}@{record.version or '*'} 存在已知漏洞 {cve_id}。",
-                location={"file": record.source_file}, evidence=f"OSV.dev: {cve_id}",
-                remediation=f"升级 {record.name} 到修复版本，或替换为安全替代包。",
-                llm_review_exempt=True,
+    groups = _dependency_query_groups(records)
+    source_index = _osv_source_index(sources)
+    representatives: list[DependencyRecord] = []
+    precomputed_results: dict[tuple[str, str, str], OSVQueryResult] = {}
+    for key in sorted(groups):
+        occurrences = groups[key]
+        queryable, reason = dependency_queryability(occurrences[0])
+        relevant_sources = [
+            *source_index.get(key[:2], []),
+            *source_index.get((key[0], None), []),
+            *source_index.get(("unknown", None), []),
+        ]
+        if client is None:
+            precomputed_results[key] = OSVQueryResult(
+                [],
+                status="not_queried" if queryable else "unsupported",
+                failure_reason="provider_error" if queryable else reason,
             )
-    scanner.dependency_scan = {
-        "status": "partial" if failures or limit_reached else "complete",
-        "dependencies_found": len(records),
-        "dependencies_queried": queried,
-        "query_failures": failures,
+        elif queryable and _coordinate_requires_private_opt_in(
+            scanner, client, occurrences, relevant_sources
+        ):
+            precomputed_results[key] = OSVQueryResult(
+                [],
+                status="not_queried",
+                failure_reason="non_public_registry_not_queried",
+            )
+        else:
+            representatives.append(occurrences[0])
+    configured_limit = getattr(
+        client,
+        "max_queries",
+        getattr(getattr(scanner, "policy", None), "max_osv_queries", 5000),
+    )
+    query_limit = normalize_query_limit(
+        configured_limit,
+        fallback=max(1, len(groups)),
+    )
+    use_batch_query = (
+        callable(getattr(client, "query_many", None))
+        and _uses_default_osv_query(client)
+    )
+    if not representatives:
+        results = {}
+    elif use_batch_query:
+        results = client.query_many(representatives)
+    else:
+        results = _sequential_osv_results(
+            client,
+            representatives,
+            query_limit=query_limit,
+        )
+    results.update(precomputed_results)
+
+    query_results: list[dict[str, Any]] = []
+    query_results_truncated = False
+    cache_hits = 0
+    failure_reasons: Counter[str] = Counter()
+    query_failure_reasons: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    known_vulnerability_roots: set[tuple[str, str, str, str]] = set()
+    for key in sorted(groups):
+        occurrences = groups[key]
+        representative = occurrences[0]
+        result = results.get(key) or OSVQueryResult(
+            [],
+            status="failed",
+            failure_reason="missing_client_result",
+        )
+        status_counts[result.status] += 1
+        if result.status != "succeeded" and result.failure_reason:
+            failure_reasons[result.failure_reason] += 1
+            if result.status in {"failed", "rate_limited"}:
+                query_failure_reasons[result.failure_reason] += 1
+        cache_hits += int(result.from_cache)
+
+        if len(query_results) < _MAX_OSV_QUERY_RESULTS:
+            all_occurrences = [
+                _dependency_occurrence(record) for record in occurrences
+            ]
+            package_name = key[1][:256]
+            if not package_name:
+                package_name = str(representative.name or "").strip()[:256]
+            if not package_name:
+                package_name = "<invalid>"
+            response_status = result.response_status
+            if (
+                not isinstance(response_status, int)
+                or not 100 <= response_status <= 599
+            ):
+                response_status = None
+            query_result: dict[str, Any] = {
+                "ecosystem": key[0][:64] or "unknown",
+                "package_name": package_name,
+                "version": key[2][:256] or None,
+                "status": result.status,
+                "data_source": "OSV",
+                "queried_at": result.queried_at,
+                "response_status": response_status,
+                "failure_reason": (
+                    str(result.failure_reason)[:128]
+                    if result.failure_reason
+                    else None
+                ),
+                "from_cache": result.from_cache,
+                "attempts": max(0, int(result.attempts)),
+                "vulnerability_count": len(result.vulnerability_ids),
+                "occurrence_count": len(all_occurrences),
+                "occurrences": all_occurrences[
+                    :_MAX_OSV_OCCURRENCES_PER_COORDINATE
+                ],
+                "occurrences_truncated": (
+                    len(all_occurrences) > _MAX_OSV_OCCURRENCES_PER_COORDINATE
+                ),
+            }
+            if result.cache_source:
+                query_result["cache_source"] = result.cache_source
+            if result.cache_age_seconds is not None:
+                query_result["cache_age_seconds"] = result.cache_age_seconds
+            query_results.append(query_result)
+        else:
+            query_results_truncated = True
+
+        if not result.vulnerability_ids:
+            continue
+        locations = {
+            (record.source_file, max(0, int(record.line or 0)))
+            for record in occurrences
+        }
+        occurrence_items = [
+            {"file": file, **({"line": line} if line else {})}
+            for file, line in sorted(locations)[:_MAX_OSV_OCCURRENCES_PER_COORDINATE]
+        ]
+        for vulnerability_id in sorted(set(result.vulnerability_ids)):
+            known_vulnerability_roots.add((*key, vulnerability_id))
+            root_digest = hashlib.sha256(
+                "|".join((*key, vulnerability_id)).encode("utf-8")
+            ).hexdigest()[:20]
+            root_cause_id = f"root-{root_digest}"
+            scanner._add_finding(
+                rule_id="SR-008",
+                severity="high",
+                category="supply_chain",
+                title=(
+                    "供应链风险 — 已知 OSV 漏洞: "
+                    f"{vulnerability_id} in {key[1]}@{key[2] or '*'}"
+                ),
+                description=(
+                    f"依赖 {key[1]}@{key[2] or '*'} "
+                    f"存在 OSV 已知漏洞或安全公告 {vulnerability_id}。"
+                ),
+                location=occurrence_items[0],
+                evidence=f"OSV: {vulnerability_id}; coordinate={key[0]}/{key[1]}@{key[2]}",
+                remediation=f"升级 {key[1]} 到修复版本，或替换为安全替代包。",
+                kind="vulnerability",
+                disposition="confirmed_vulnerability",
+                sink_kind="dependency_resolution",
+                source_kind="osv_advisory",
+                source_control="remote_publisher",
+                reachability="dependency_installation",
+                activation="direct" if any(record.direct for record in occurrences) else "transitive",
+                trust_boundary_crossed=True,
+                llm_review_exempt=True,
+                root_cause_id=root_cause_id,
+                occurrences={
+                    "count": len(locations),
+                    "items": occurrence_items,
+                    "truncated": len(locations) > len(occurrence_items),
+                },
+            )
+
+    succeeded = status_counts["succeeded"]
+    failed = status_counts["failed"]
+    rate_limited = status_counts["rate_limited"]
+    skipped = status_counts["not_queried"]
+    unsupported = status_counts["unsupported"]
+    queryable = len(groups) - unsupported
+    queried = succeeded + failed + rate_limited
+    attempted_statuses = {"succeeded", "failed", "rate_limited"}
+    covered_occurrence_ids = {
+        id(record)
+        for key, occurrences in groups.items()
+        if (
+            results.get(key)
+            or OSVQueryResult(
+                [], status="failed", failure_reason="missing_client_result"
+            )
+        ).status
+        in attempted_statuses
+        for record in occurrences
     }
-    if limit_reached:
-        scanner.dependency_scan["query_limit"] = getattr(client, "max_queries", None)
+    dependencies_queried = sum(
+        id(record) in covered_occurrence_ids for record in records
+    )
+    remaining = max(queryable - succeeded, 0)
+    status = _dependency_scan_status(
+        queryable=queryable,
+        succeeded=succeeded,
+        failed=failed,
+        rate_limited=rate_limited,
+        skipped=skipped,
+        failure_reasons=query_failure_reasons,
+    )
+    if status == "complete" and unsupported:
+        status = "partial"
+    scanner.dependency_scan = {
+        "status": status,
+        "data_source": "OSV",
+        "dependencies_found": len(records),
+        "dependencies_queried": dependencies_queried,
+        "query_failures": failed + rate_limited,
+        "query_limit": query_limit,
+        "total_dependencies": len(records),
+        "total_unique_dependencies": len(groups),
+        "queryable": queryable,
+        "queried": queried,
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped": skipped,
+        "unsupported": unsupported,
+        "rate_limited": rate_limited,
+        "remaining": remaining,
+        "cache_hits": cache_hits,
+        "provider_requests": int(getattr(client, "request_count", queried)),
+        "known_vulnerabilities": len(known_vulnerability_roots),
+        "failure_reasons": dict(sorted(failure_reasons.items())),
+        "query_results": query_results,
+        "query_results_truncated": query_results_truncated,
+    }
+    if status != "complete":
+        add_advisory = getattr(scanner, "_add_advisory", None)
+        if callable(add_advisory):
+            add_advisory(
+                code="dependency_vulnerability_coverage",
+                category="supply_chain",
+                level="warning",
+                title="依赖漏洞查询未完整执行",
+                description=(
+                    "依赖坐标均无法转换为 OSV 支持的精确版本查询；当前结果"
+                    "不能解释为未发现已知漏洞。"
+                    if status == "unsupported"
+                    else "依赖漏洞查询未覆盖全部可查询坐标；当前结果不能解释为"
+                    "未发现已知漏洞。"
+                ),
+                deduction=0,
+                affects_grade=False,
+                requires_manual_review=True,
+                evidence=(
+                    f"status={status}; queryable={queryable}; succeeded={succeeded}; "
+                    f"failed={failed}; rate_limited={rate_limited}; skipped={skipped}; "
+                    f"unsupported={unsupported}; remaining={remaining}"
+                ),
+                location={"file": records[0].source_file},
+            )
 
 
 def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -> None:
@@ -1326,13 +1863,14 @@ def run(scanner: Any) -> None:
         "manifest.json",
     )
     manifest_records = _manifest_records(meta, metadata_source) if meta else []
-    records = parse_dependencies(getattr(scanner, "_file_contents", {}))
-    if records:
-        # Parsed files and manifest metadata can describe distinct sources.
-        source_records = [*records, *manifest_records]
-    else:
-        records = manifest_records
-        source_records = records
+    parsed_records = parse_dependencies(getattr(scanner, "_file_contents", {}))
+    manifest_osv_records = [
+        record
+        for record in manifest_records
+        if record.ecosystem in {"npm", "PyPI", "crates.io"}
+    ]
+    records = [*parsed_records, *manifest_osv_records]
+    source_records = [*parsed_records, *manifest_records]
     sources = parse_dependency_sources(
         getattr(scanner, "_file_contents", {}),
         source_records,
@@ -1354,6 +1892,12 @@ def run(scanner: Any) -> None:
             ]
         }
         _check_typosquatting(scanner, normalized_meta)
-    _check_dependency_records(scanner, records)
+    _check_dependency_records(scanner, records, sources)
+    scanner.dependency_scan["non_osv_manifest_dependencies"] = (
+        _non_osv_manifest_dependencies(meta) if meta else {
+            "total": 0,
+            "categories": {},
+        }
+    )
     _check_dependency_integrity(scanner, records)
     _check_manifest_lock_consistency(scanner, getattr(scanner, "_file_contents", {}))

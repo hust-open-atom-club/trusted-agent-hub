@@ -13,7 +13,9 @@ class ScanPolicy:
     max_files: int = 5000
     max_depth: int = 32
     max_findings: int = 10000
-    max_osv_queries: int = 10
+    # Large enough for normal lockfiles, while still providing an explicit
+    # operator-owned ceiling for unusually large or adversarial manifests.
+    max_osv_queries: int = 5000
     max_skipped_samples: int = 20
     # Real repository extraction may intentionally inherit a repository-level
     # LICENSE. Benchmark fixtures disable this so their labels cannot depend

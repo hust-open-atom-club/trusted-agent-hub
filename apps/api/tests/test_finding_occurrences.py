@@ -87,6 +87,26 @@ def test_root_id_is_stable_across_detector_input_order():
     assert forward[0]["detector_ids"] == reverse[0]["detector_ids"]
 
 
+def test_preaggregated_locations_keep_their_count_and_truncation():
+    occurrences = {
+        "count": 110,
+        "items": [{"file": f"package-{index}/package-lock.json"} for index in range(100)],
+        "truncated": True,
+    }
+    raw = [{
+        "id": "osv", "rule_id": "SR-008", "severity": "high",
+        "category": "supply_chain", "root_cause_id": "root-osv",
+        "location": occurrences["items"][0], "occurrences": occurrences,
+    }]
+
+    roots = aggregate_findings(raw)
+
+    assert roots[0]["occurrences"] == occurrences
+    assert aggregate_findings(roots)[0]["occurrences"] == occurrences
+    assert build_findings_summary(roots)["occurrences_total"] == 110
+    assert raw[0]["occurrences"] == occurrences
+
+
 def test_static_and_effective_severity_are_kept_separate():
     roots = aggregate_findings([{
         "id": "semantic",

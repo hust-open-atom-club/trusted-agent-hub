@@ -36,6 +36,9 @@ if str(ROOT) not in sys.path:
 from scanners.risk_scanner.scanner import RiskScanner  # noqa: E402
 from scanners.risk_scanner.rule_runner import RULE_SPECS  # noqa: E402
 from scanners.risk_scanner.policy import ScanPolicy  # noqa: E402
+from scanners.risk_scanner.dependency_parsers.osv_client import (  # noqa: E402
+    OSVQueryResult,
+)
 from benchmarks.fixture_paths import (  # noqa: E402
     generated_artifact_source_path,
     is_generated_artifact_path,
@@ -52,18 +55,10 @@ class BenchmarkConfigError(ValueError):
     """Raised when benchmark labels are invalid or unsafe to resolve."""
 
 
-class _OfflineOSVResult:
-    def __init__(
-        self,
-        vulnerability_ids: list[str] | None = None,
-        error: str | None = None,
-    ) -> None:
-        self.vulnerability_ids = vulnerability_ids or []
-        self.error = error
-
-
 class _OfflineOSVClient:
     """Deterministic OSV fixture used by every benchmark scan."""
+
+    allow_private_coordinates = True
 
     def __init__(self, *, max_queries: int = 10) -> None:
         self.max_queries = max_queries
@@ -71,12 +66,16 @@ class _OfflineOSVClient:
         self.failures = 0
         self.limit_reached = False
 
-    def query(self, _dependency: Any) -> _OfflineOSVResult:
+    def query(self, _dependency: Any) -> OSVQueryResult:
         if self.queried >= self.max_queries:
             self.limit_reached = True
-            return _OfflineOSVResult([], "query_limit_exceeded")
+            return OSVQueryResult(
+                [],
+                status="not_queried",
+                failure_reason="query_limit_exceeded",
+            )
         self.queried += 1
-        return _OfflineOSVResult()
+        return OSVQueryResult([])
 
 
 def _percentile(values: list[float], percentile: float) -> float:
@@ -587,7 +586,13 @@ def _benchmark_check_failures(result: dict[str, Any]) -> list[str]:
             failures.append(f"missing expected rule findings (fn={overall['fn']})")
 
     coverage = result.get("coverage") or {}
-    if float(coverage.get("incomplete_scan_ratio", 0)):
+    incomplete_gate = coverage.get("incomplete_scan_ratio", 0)
+    if result.get("schema_version") == "2.0":
+        incomplete_gate = coverage.get(
+            "unexpected_scan_state_ratio",
+            incomplete_gate,
+        )
+    if float(incomplete_gate):
         failures.append("benchmark contains incomplete scans")
     if float(coverage.get("rule_exception_ratio", 0)):
         failures.append("benchmark contains rule execution failures")
@@ -823,6 +828,7 @@ def _scan_target(
         target,
         source_commit_hash=source_commit_hash,
         policy=policy,
+        mcp_semantic_model_loader=lambda: None,
     )
     scanner.osv_client = _OfflineOSVClient(max_queries=scanner.policy.max_osv_queries)
     tracemalloc.start()
@@ -1222,8 +1228,9 @@ def _evaluate_v2_case(
         differences.append(_difference("content_tree_sha256", case["content_tree_sha256"], content_hash))
 
     state = str((report.get("scan_status") or {}).get("state", "failed"))
-    if state != "complete":
-        differences.append(_difference("scan_state", "complete", state))
+    expected_state = str(target.get("scan_state", "complete"))
+    if state != expected_state:
+        differences.append(_difference("scan_state", expected_state, state))
     execution = report.get("rule_execution") or {}
     if int(execution.get("failed", 0)):
         differences.append(_difference("rule_execution.failed", 0, int(execution["failed"])))
@@ -1270,6 +1277,7 @@ def _evaluate_v2_case(
         "rule_failed": int(execution.get("failed", 0)),
         "rule_total": int(execution.get("total", 0)),
         "incomplete": state != "complete",
+        "scan_state_matches": state == expected_state,
     }
     return case_result, evaluation
 
@@ -1304,6 +1312,7 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
     malicious_total = 0
     malicious_high_critical = 0
     incomplete = 0
+    matching_scan_states = 0
     rule_failures = 0
     rule_total = 0
     content_hash_mismatches = 0
@@ -1372,6 +1381,7 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
         grade_key = evaluation["grade"] if evaluation["grade"] in grade_distribution else "unknown"
         grade_distribution[grade_key] += 1
         incomplete += int(evaluation["incomplete"])
+        matching_scan_states += int(evaluation["scan_state_matches"])
         rule_failures += int(evaluation["rule_failed"])
         rule_total += int(evaluation["rule_total"])
         content_hash_mismatches += int(evaluation["content_hash_mismatch"])
@@ -1416,6 +1426,11 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             if case_results else 1.0,
             "incomplete_scan_ratio": round(incomplete / len(case_results), 4)
             if case_results else 0.0,
+            "scan_state_match_ratio": round(matching_scan_states / len(case_results), 4)
+            if case_results else 1.0,
+            "unexpected_scan_state_ratio": round(
+                (len(case_results) - matching_scan_states) / len(case_results), 4
+            ) if case_results else 0.0,
             "rule_exception_ratio": round(rule_failures / rule_total, 4) if rule_total else 0.0,
             "failed_rule_executions": rule_failures,
             "total_rule_executions": rule_total,
@@ -1429,6 +1444,7 @@ def _run_v2(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
             "fixture_revision_verified": True,
             "scanner_implementation_sha256": _scanner_implementation_fingerprint(),
             "offline_osv": True,
+            "mcp_semantic_model": "disabled",
             "llm_mode": "not_invoked",
         },
         "performance": {
@@ -1465,7 +1481,7 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail on blocking mismatches, fixture drift, incomplete scans, or rule errors",
+        help="fail on blocking mismatches, fixture drift, unexpected scan states, or rule errors",
     )
     args = parser.parse_args()
     try:

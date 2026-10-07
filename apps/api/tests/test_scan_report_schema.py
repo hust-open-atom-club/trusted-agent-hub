@@ -118,6 +118,31 @@ def test_dependency_acquisition_coverage_is_schema_valid(tmp_path):
     ScanReport.model_validate(report)
 
 
+@pytest.mark.parametrize(
+    ("check", "valid"),
+    [
+        ({"vulnerability_status": "assessed", "known_vulnerabilities": 0}, True),
+        ({"vulnerability_status": "assessed", "known_vulnerabilities": None}, False),
+        ({"vulnerability_status": "not_assessed", "known_vulnerabilities": None}, True),
+        ({"vulnerability_status": "not_assessed", "known_vulnerabilities": 5}, False),
+        ({"vulnerability_status": "assessed"}, False),
+        ({"vulnerability_status": "not_assessed"}, False),
+        ({"known_vulnerabilities": 0}, True),
+        ({}, True),
+    ],
+)
+def test_dependency_assessment_status_matches_vulnerability_count(check, valid):
+    validator = jsonschema.Draft202012Validator(SCHEMA["properties"]["dependency_check"])
+    assert validator.is_valid(check) is valid
+
+
+def test_dependency_failure_reason_counts_allow_zero():
+    schema = SCHEMA["properties"]["dependency_scan"]["properties"]["failure_reasons"]
+    jsonschema.validate({"osv_timeout": 0}, schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"osv_timeout": -1}, schema)
+
+
 def test_risky_package_emits_effective_total_and_pass_rate(tmp_path):
     report = _scan(tmp_path, {
         "SKILL.md": RISKY_SKILL,

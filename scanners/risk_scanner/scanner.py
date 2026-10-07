@@ -1,5 +1,5 @@
 """
-Risk Scanner — 自动风险扫描器 v0.13.0
+Risk Scanner — 自动风险扫描器 v0.14.0
 
 遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
@@ -41,7 +41,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +54,7 @@ from scanners.risk_scanner.common import (
 )
 from scanners.risk_scanner.analyzers import analyze_snapshot
 from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
+from scanners.risk_scanner.dependency_coverage import empty_dependency_scan
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.registry_policy import (
@@ -77,7 +78,7 @@ from packages.schema.frontmatter import parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.13.0"
+SCANNER_VERSION = "0.14.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -129,6 +130,8 @@ class RiskScanner:
         dependency_artifacts: Mapping[str, bytes] | None = None,
         dependency_verifications: Mapping[str, object] | None = None,
         dependency_acquisition: Mapping[str, object] | None = None,
+        osv_client: OSVClient | None = None,
+        mcp_semantic_model_loader: Callable[[], Any] | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
         self.source_commit_hash = source_commit_hash
@@ -160,7 +163,11 @@ class RiskScanner:
         self.analyzed_files: list[str] = []
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
-        self.osv_client = OSVClient(max_queries=self.policy.max_osv_queries)
+        self.mcp_semantic_model_loader = mcp_semantic_model_loader
+        self.osv_client = (
+            osv_client if osv_client is not None
+            else OSVClient(max_queries=self.policy.max_osv_queries)
+        )
         self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False
@@ -182,8 +189,9 @@ class RiskScanner:
         self.rule_execution = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors = []
         self.findings_limit_exceeded = False
-        self.dependency_scan = {"status": "complete", "dependencies_found": 0,
-                                "dependencies_queried": 0, "query_failures": 0}
+        self.dependency_scan = empty_dependency_scan(
+            getattr(self.osv_client, "max_queries", self.policy.max_osv_queries)
+        )
         self._file_contents = {}
         self.analysis = None
         self._content_tree_hash = None
@@ -199,8 +207,6 @@ class RiskScanner:
         self.analyzed_files = [r.relative_path for r in self._inventory.files if r.read_status == "analyzed"]
         self.scanned_files = [r.relative_path for r in self._inventory.files
                               if r.read_status == "analyzed" and r.skip_reason != "general_rule_excluded"]
-        self.dependency_scan: dict[str, Any] = {"status": "complete", "dependencies_found": 0,
-                                                "dependencies_queried": 0, "query_failures": 0}
         self._load_metadata()
         # Keep the package-authored metadata available for audit/explanation,
         # but never use it as the source of acquisition provenance.
@@ -215,6 +221,8 @@ class RiskScanner:
         self._inject_acquired_source_integrity()
 
         rule_results = self.rule_runner.run_all(self)
+        if any(r.rule_id == "SR-008" and r.status == "failed" for r in rule_results):
+            self.dependency_scan["status"] = "failed"
         self.rule_execution["succeeded"] = sum(r.status == "succeeded" for r in rule_results)
         self.rule_execution["failed"] = sum(r.status == "failed" for r in rule_results)
         self.rule_execution["results"] = [r.as_dict() for r in rule_results]
@@ -226,7 +234,11 @@ class RiskScanner:
         self._record_source_integrity_changes()
         self._sync_acquisition_integrity_completeness()
         self._record_structured_analysis_errors()
-        if self.dependency_scan.get("status") == "partial" and "dependency_scan_partial" not in self.inventory.limit_violations:
+        if (
+            self.dependency_scan.get("status")
+            in {"partial", "failed", "unavailable", "unsupported", "not_queried"}
+            and "dependency_scan_partial" not in self.inventory.limit_violations
+        ):
             self.inventory.limit_violations.append("dependency_scan_partial")
 
         self._downgrade_documentation_findings()
@@ -673,6 +685,8 @@ class RiskScanner:
         preconditions: list[str] | None = None,
         requires_manual_review: bool = False,
         llm_review_exempt: bool = False,
+        root_cause_id: str | None = None,
+        occurrences: dict[str, Any] | None = None,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -722,6 +736,10 @@ class RiskScanner:
             finding["requires_manual_review"] = True
         if llm_review_exempt:
             finding["llm_review_exempt"] = True
+        if root_cause_id:
+            finding["root_cause_id"] = root_cause_id
+        if occurrences is not None:
+            finding["occurrences"] = deepcopy(occurrences)
 
         self.findings.append(finding)
 
@@ -918,6 +936,7 @@ class RiskScanner:
         dependency_check: dict[str, Any] = {
             "total_dependencies": 0,
             "known_vulnerabilities": 0,
+            "vulnerability_status": "assessed",
             "unlocked_versions": 0,
             "suspicious_packages": [],
         }
@@ -927,9 +946,30 @@ class RiskScanner:
                 for deps_list in deps.values():
                     if isinstance(deps_list, list):
                         dependency_check["total_dependencies"] += len(deps_list)
-        cve_findings = [f for f in report_findings if "CVE" in f.get("title", "")]
-        dependency_check["known_vulnerabilities"] = len(cve_findings)
-        dependency_check["total_dependencies"] = int(self.dependency_scan.get("dependencies_found", dependency_check["total_dependencies"]))
+        dependency_check["known_vulnerabilities"] = int(
+            self.dependency_scan.get("known_vulnerabilities", 0)
+        )
+        if self.dependency_scan.get("status") != "complete":
+            # A zero produced by an incomplete provider query is unknown, not
+            # evidence that the dependency set is clean.
+            dependency_check["known_vulnerabilities"] = None
+            dependency_check["vulnerability_status"] = "not_assessed"
+        non_osv_manifest = self.dependency_scan.get(
+            "non_osv_manifest_dependencies", {}
+        )
+        non_osv_total = (
+            int(non_osv_manifest.get("total", 0))
+            if isinstance(non_osv_manifest, dict)
+            else 0
+        )
+        dependency_check["total_dependencies"] = (
+            int(
+                self.dependency_scan.get(
+                    "total_unique_dependencies",
+                    dependency_check["total_dependencies"],
+                )
+            ) + non_osv_total
+        )
         dependency_check["unlocked_versions"] = sum(
             1 for finding in self.findings if finding.get("rule_id") == "SR-008" and "版本未锁定" in finding.get("title", "")
         )

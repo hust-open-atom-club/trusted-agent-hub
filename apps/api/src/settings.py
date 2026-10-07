@@ -144,8 +144,13 @@ def _base_url(name: str, *, allow_insecure_http: bool = False) -> str | None:
     if value is None:
         return None
     parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError(f"{name} must be an absolute HTTP(S) URL")
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(f"{name} must be a credential-free absolute HTTP(S) URL")
     if (
         parsed.scheme == "http"
         and parsed.hostname not in _LOCAL_HTTP_HOSTS
@@ -196,6 +201,17 @@ class Settings:
     dependency_artifact_max_bytes: int = 20 * 1024 * 1024
     dependency_artifact_max_total_bytes: int = 100 * 1024 * 1024
     dependency_artifact_timeout_seconds: int = 10
+    osv_enabled: bool = True
+    osv_base_url: str = "https://api.osv.dev"
+    osv_allow_private_coordinates: bool = False
+    osv_max_queries: int = 5000
+    osv_batch_size: int = 100
+    osv_max_concurrency: int = 4
+    osv_timeout_seconds: int = 15
+    osv_max_retries: int = 2
+    osv_retry_backoff_milliseconds: int = 250
+    osv_cache_ttl_seconds: int = 3600
+    osv_cache_path: str | None = None
     initial_admin_email: str | None = None
     initial_admin_password: str | None = None
     initial_admin_display_name: str = "Administrator"
@@ -209,6 +225,9 @@ class Settings:
     @classmethod
     def from_environment(cls) -> "Settings":
         allow_insecure_http = _literal_true("TAH_ALLOW_INSECURE_HTTP")
+        artifacts_root = _optional("ARTIFACTS_ROOT") or str(
+            DEFAULT_ARTIFACTS_ROOT
+        )
         return cls(
             database_url=_database_url_from_environment(),
             allow_insecure_user_header=_literal_true(
@@ -225,9 +244,7 @@ class Settings:
             api_host=_optional("API_HOST") or "127.0.0.1",
             api_port=_integer("API_PORT", 8000),
             api_reload=_boolean("API_RELOAD", True),
-            artifacts_root=(
-                _optional("ARTIFACTS_ROOT") or str(DEFAULT_ARTIFACTS_ROOT)
-            ),
+            artifacts_root=artifacts_root,
             source_snapshot_dir=_optional("SOURCE_SNAPSHOT_DIR"),
             source_snapshot_ttl_seconds=_integer(
                 "SOURCE_SNAPSHOT_TTL_SECONDS", 604800
@@ -265,6 +282,49 @@ class Settings:
             ),
             dependency_artifact_timeout_seconds=_integer(
                 "TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS", 10, maximum=300
+            ),
+            osv_enabled=_strict_boolean("TAH_OSV_ENABLED", True),
+            osv_base_url=(
+                _base_url("TAH_OSV_BASE_URL")
+                or "https://api.osv.dev"
+            ),
+            osv_allow_private_coordinates=_strict_boolean(
+                "TAH_OSV_ALLOW_PRIVATE_COORDINATES", False
+            ),
+            osv_max_queries=_integer(
+                "TAH_OSV_MAX_QUERIES", 5000, maximum=100000
+            ),
+            osv_batch_size=_integer(
+                "TAH_OSV_BATCH_SIZE", 100, maximum=1000
+            ),
+            osv_max_concurrency=_integer(
+                "TAH_OSV_MAX_CONCURRENCY", 4, maximum=32
+            ),
+            osv_timeout_seconds=_integer(
+                "TAH_OSV_TIMEOUT_SECONDS", 15, maximum=300
+            ),
+            osv_max_retries=_integer(
+                "TAH_OSV_MAX_RETRIES", 2, minimum=0, maximum=8
+            ),
+            osv_retry_backoff_milliseconds=_integer(
+                "TAH_OSV_RETRY_BACKOFF_MILLISECONDS",
+                250,
+                minimum=0,
+                maximum=60000,
+            ),
+            osv_cache_ttl_seconds=_integer(
+                "TAH_OSV_CACHE_TTL_SECONDS",
+                3600,
+                minimum=0,
+                maximum=30 * 24 * 60 * 60,
+            ),
+            osv_cache_path=(
+                _optional("TAH_OSV_CACHE_PATH")
+                or str(
+                    Path(artifacts_root)
+                    / "scanner-cache"
+                    / "osv-query-cache.sqlite3"
+                )
             ),
             initial_admin_email=_optional("INITIAL_ADMIN_EMAIL"),
             initial_admin_password=_optional("INITIAL_ADMIN_PASSWORD"),
