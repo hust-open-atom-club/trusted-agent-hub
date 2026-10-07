@@ -707,7 +707,10 @@
     "dependency_check": {
       "type": "object",
       "properties": {
-        "total_dependencies": { "type": "integer", "minimum": 0 },
+        "total_dependencies": {
+          "type": "integer", "minimum": 0,
+          "description": "按生态、包名和版本去重的依赖坐标数，加上非 OSV 清单依赖数"
+        },
         "known_vulnerabilities": {
           "type": ["integer", "null"],
           "minimum": 0,
@@ -757,7 +760,10 @@
           "enum": ["complete", "partial", "failed", "unavailable", "unsupported", "not_queried"]
         },
         "data_source": { "type": "string", "enum": ["OSV"] },
-        "dependencies_found": { "type": "integer", "minimum": 0 },
+        "dependencies_found": {
+          "type": "integer", "minimum": 0,
+          "description": "清单和锁文件中的依赖出现次数，同一坐标的多个出现位置分别计数"
+        },
         "dependencies_queried": { "type": "integer", "minimum": 0 },
         "query_failures": {
           "type": "integer",

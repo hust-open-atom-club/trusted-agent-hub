@@ -110,6 +110,7 @@ def _exact_version(value: object) -> str | None:
     if not version or len(version) > 256:
         return None
     lowered = version.casefold()
+    release = lowered.split("+", 1)[0].split("-", 1)[0].removeprefix("v")
     if (
         lowered in {"latest", "stable", "next", "*"}
         or "://" in lowered
@@ -118,9 +119,7 @@ def _exact_version(value: object) -> str | None:
         )
         or version.startswith(("^", "~", ">", "<", "=", "!"))
         or any(token in version for token in ("||", "&&", ",", "*"))
-        or lowered == "x"
-        or lowered.startswith(("x.", "v*"))
-        or lowered.endswith((".x", ".*"))
+        or "x" in release.split(".")
         or any(character.isspace() for character in version)
     ):
         return None
@@ -145,6 +144,16 @@ def _normalized_package_name(value: object, ecosystem: str) -> str:
     return name
 
 
+def _normalized_version(dependency: DependencyRecord) -> str:
+    version = str(dependency.version or "").strip()
+    ecosystem = normalize_osv_ecosystem(dependency.ecosystem)
+    if ecosystem == "PyPI":
+        return version.removeprefix("===").removeprefix("==").strip()
+    if ecosystem in {"npm", "crates.io"} and not version.startswith("=="):
+        return version.removeprefix("=").strip()
+    return version
+
+
 def dependency_coordinate(dependency: DependencyRecord) -> OSVCoordinate:
     ecosystem = normalize_osv_ecosystem(dependency.ecosystem)
     normalized_ecosystem = ecosystem or str(
@@ -153,7 +162,7 @@ def dependency_coordinate(dependency: DependencyRecord) -> OSVCoordinate:
     return (
         normalized_ecosystem,
         _normalized_package_name(dependency.name, normalized_ecosystem),
-        str(dependency.version or "").strip(),
+        _normalized_version(dependency),
     )
 
 
@@ -169,7 +178,7 @@ def dependency_queryability(dependency: DependencyRecord) -> tuple[bool, str | N
         or any(ord(character) < 32 for character in name)
     ):
         return False, "invalid_package_name"
-    raw_version = str(dependency.version or "").strip()
+    raw_version = _normalized_version(dependency)
     if not raw_version:
         return False, "missing_version"
     if _exact_version(raw_version) is None:

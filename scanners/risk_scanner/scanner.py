@@ -686,6 +686,7 @@ class RiskScanner:
         requires_manual_review: bool = False,
         llm_review_exempt: bool = False,
         root_cause_id: str | None = None,
+        occurrences: dict[str, Any] | None = None,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -737,6 +738,8 @@ class RiskScanner:
             finding["llm_review_exempt"] = True
         if root_cause_id:
             finding["root_cause_id"] = root_cause_id
+        if occurrences is not None:
+            finding["occurrences"] = deepcopy(occurrences)
 
         self.findings.append(finding)
 
@@ -959,14 +962,13 @@ class RiskScanner:
             if isinstance(non_osv_manifest, dict)
             else 0
         )
-        dependency_check["total_dependencies"] = max(
-            dependency_check["total_dependencies"],
+        dependency_check["total_dependencies"] = (
             int(
                 self.dependency_scan.get(
-                    "dependencies_found",
+                    "total_unique_dependencies",
                     dependency_check["total_dependencies"],
                 )
-            ) + non_osv_total,
+            ) + non_osv_total
         )
         dependency_check["unlocked_versions"] = sum(
             1 for finding in self.findings if finding.get("rule_id") == "SR-008" and "版本未锁定" in finding.get("title", "")

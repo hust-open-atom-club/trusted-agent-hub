@@ -30,6 +30,25 @@ def test_dependency_parsers_normalize_manifest_and_lockfiles():
     assert any(r.name == "serde" and r.ecosystem == "crates.io" for r in records)
 
 
+@pytest.mark.parametrize("specifier,version,unlocked", [
+    ("==1.0.0", "1.0.0", False),
+    ("===1.0.0", "1.0.0", False),
+    ("==1.0.0+linux.x86", "1.0.0+linux.x86", False),
+    (">=1.0.0", ">=1.0.0", True),
+    ("~=1.0.0", "~=1.0.0", True),
+    ("==1.0.*", "1.0.*", True),
+])
+def test_requirement_versions_preserve_constraints(specifier, version, unlocked):
+    from scanners.risk_scanner.rules.supply_chain import _is_unlocked_version
+    from scanners.risk_scanner.dependency_parsers.osv_client import dependency_queryability
+
+    records = parse_requirements(f"python-box{specifier}\n", "requirements.txt")
+
+    assert records[0].version == version
+    assert _is_unlocked_version(records[0].version, records[0].ecosystem) is unlocked
+    assert dependency_queryability(records[0])[0] is not unlocked
+
+
 @pytest.mark.parametrize(
     ("file_name", "expected_scope"),
     [

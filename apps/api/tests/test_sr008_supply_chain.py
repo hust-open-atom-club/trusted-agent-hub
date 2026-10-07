@@ -370,6 +370,42 @@ class TestSR008SupplyChain:
 
         assert not any("版本未锁定" in finding["title"] for finding in s.findings)
 
+    @pytest.mark.parametrize("declared,locked,matched", [
+        ("^1.0.0", "1.9.0", True),
+        ("^1.0.0", "2.0.0", False),
+        ("~1.2.3", "1.2.9", True),
+        ("~1.2.3", "1.3.0", False),
+        ("^0.1.0", "0.2.0", False),
+        ("^0.0.1", "0.0.2", False),
+        ("^1.0.0", "1.1.0-exp", False),
+    ])
+    def test_lockfile_reconciliation_checks_compatible_versions(self, declared, locked, matched):
+        scanner = MockScanner()
+        scanner._file_contents = {
+            "package.json": json.dumps({"dependencies": {"demo-lib": declared}}),
+            "package-lock.json": json.dumps({"packages": {"node_modules/demo-lib": {"version": locked}}}),
+        }
+
+        supply_chain.run(scanner)
+
+        assert any("版本未锁定" in finding["title"] for finding in scanner.findings) is not matched
+        assert scanner.dependency_scan["total_unique_dependencies"] == (1 if matched else 2)
+        assert scanner.dependency_scan["unsupported"] == (0 if matched else 1)
+
+    @pytest.mark.parametrize("ecosystem,version,unlocked", [
+        ("PyPI", "==1.2.3", False),
+        ("PyPI", "1!1.0rc1+linux.x86", False),
+        ("crates.io", "1.2.3-exp", False),
+        ("crates.io", "=1.2.3-exp.x", False),
+        ("npm", "1.2.3-exp.x", False),
+        ("npm", "1.2.x", True),
+        ("npm", "1.2.*", True),
+        ("npm", "1.2", True),
+        ("crates.io", "0.1.x", True),
+    ])
+    def test_version_locking_is_ecosystem_aware(self, ecosystem, version, unlocked):
+        assert supply_chain._is_unlocked_version(version, ecosystem) is unlocked
+
     def test_unknown_registry_flood_is_one_policy_advisory(self):
         s = MockScanner(files={})
         s._file_contents = {

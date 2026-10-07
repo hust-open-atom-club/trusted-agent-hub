@@ -182,11 +182,13 @@ def parse_requirements(content: str, source_file: str) -> list[DependencyRecord]
             continue
         if line.startswith(("git+", "http:", "https:")):
             continue
-        match = re.match(r"^([A-Za-z0-9_.-]+)\s*(?:(==|===|>=|<=|~=|>|<)\s*([^;\s]+))?", line)
+        match = re.match(r"^([A-Za-z0-9_.-]+)\s*(?:(===|==|>=|<=|~=|>|<)\s*([^;\s]+))?", line)
         if match:
             version = match.group(3)
             if version:
                 version = version.split("#", 1)[0]
+                if match.group(2) not in {"==", "==="}:
+                    version = match.group(2) + version
             result.append(
                 DependencyRecord(
                     match.group(1),

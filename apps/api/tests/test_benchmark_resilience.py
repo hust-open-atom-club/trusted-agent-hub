@@ -303,17 +303,19 @@ def test_sr008_failure_never_claims_dependencies_are_assessed(
     scanner = RiskScanner(tmp_path)
     assert scanner.scan()["dependency_check"]["vulnerability_status"] == "assessed"
     original_run = supply_chain.run
+    observed: list[str] = []
 
     def broken(current_scanner):
-        assert current_scanner.dependency_scan["status"] == "not_queried"
+        observed.append(current_scanner.dependency_scan["status"])
         if fail_after_query:
             original_run(current_scanner)
-            assert current_scanner.dependency_scan["status"] == "complete"
+            observed.append(current_scanner.dependency_scan["status"])
         raise RuntimeError("synthetic SR-008 failure")
 
     monkeypatch.setattr(supply_chain, "run", broken)
     report = scanner.scan()
 
+    assert observed == (["not_queried", "complete"] if fail_after_query else ["not_queried"])
     assert report["dependency_scan"]["status"] == "failed"
     assert report["dependency_check"]["vulnerability_status"] == "not_assessed"
     assert report["dependency_check"]["known_vulnerabilities"] is None

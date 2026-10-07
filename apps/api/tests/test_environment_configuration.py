@@ -24,6 +24,7 @@ from src.settings import (
     REPOSITORY_ROOT,
     Settings,
     _find_repository_root,
+    clear_settings_cache,
 )
 
 
@@ -348,6 +349,30 @@ def test_osv_query_settings_reject_invalid_limits(
 
     with pytest.raises(ValueError, match=name):
         Settings.from_environment()
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [("TAH_OSV_BATCH_SIZE", "1001"), ("TAH_OSV_MAX_RETRIES", "-1")],
+)
+def test_invalid_osv_limits_fail_during_app_creation(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    clear_settings_cache()
+    try:
+        with pytest.raises(ValueError, match=name):
+            main_module.create_app()
+    finally:
+        clear_settings_cache()
+
+
+def test_app_creation_accepts_disabled_osv_retries(monkeypatch):
+    monkeypatch.setenv("TAH_OSV_MAX_RETRIES", "0")
+    clear_settings_cache()
+    try:
+        assert main_module.create_app() is not None
+        assert main_module.get_settings().osv_max_retries == 0
+    finally:
+        clear_settings_cache()
 
 
 @pytest.mark.parametrize(

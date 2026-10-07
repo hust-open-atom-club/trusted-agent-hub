@@ -75,6 +75,9 @@ _LOCKFILE_NAMES = frozenset({
     "npm-shrinkwrap.json",
     "pnpm-lock.yaml",
     "yarn.lock",
+    "poetry.lock",
+    "pipfile.lock",
+    "cargo.lock",
 })
 _MAX_REGISTRY_POLICY_GROUPS = 25
 _MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP = 100
@@ -361,14 +364,57 @@ def _is_lockfile(path: str) -> bool:
     return Path(path).name.lower() in _LOCKFILE_NAMES
 
 
-def _is_unlocked_version(version: str | None) -> bool:
+def _is_unlocked_version(version: str | None, ecosystem: str) -> bool:
     value = (version or "").strip()
-    return (
-        not value
-        or value.startswith(("^", "~", ">", "<", "*"))
-        or "x" in value.lower()
-        or value.lower() in {"latest", "stable", "next"}
+    if len(value) > 256:
+        return True
+    if normalize_ecosystem(ecosystem) == "pypi":
+        value = value.removeprefix("===").removeprefix("==").strip()
+        return re.fullmatch(
+            r"v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
+            r"(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]*)?"
+            r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?"
+            r"(?:[-_.]?dev[-_.]?[0-9]*)?"
+            r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?",
+            value,
+            re.IGNORECASE,
+        ) is None
+    return _exact_npm_version(value) is None
+
+
+def _lockfile_satisfies(record: DependencyRecord, locked: DependencyRecord) -> bool:
+    if not _is_lockfile(locked.source_file) or _is_unlocked_version(locked.version, locked.ecosystem):
+        return False
+    directory = PurePosixPath(record.source_file.replace("\\", "/")).parent
+    lock_directory = PurePosixPath(locked.source_file.replace("\\", "/")).parent
+    if not directory.is_relative_to(lock_directory):
+        return False
+    declared_key = dependency_coordinate(record)
+    locked_key = dependency_coordinate(locked)
+    if declared_key[:2] != locked_key[:2]:
+        return False
+    declared, resolved = declared_key[2], locked_key[2]
+    if declared == resolved:
+        return True
+    if normalize_ecosystem(record.ecosystem) not in {"npm", "cargo"}:
+        return False
+    locked_version = _exact_npm_version(resolved)
+    exact = _exact_npm_version(declared)
+    if exact is not None:
+        return exact == locked_version
+    if not declared.startswith(("^", "~")):
+        return False
+    lower = _exact_npm_version(declared[1:])
+    if lower is None or locked_version is None or lower[3] or locked_version[3]:
+        return False
+    major, minor, patch = lower[:3]
+    upper = (
+        (major, minor + 1, 0) if declared.startswith("~")
+        else (major + 1, 0, 0) if major
+        else (0, minor + 1, 0) if minor
+        else (0, 0, patch + 1)
     )
+    return lower[:3] <= locked_version[:3] < upper
 
 
 def _levenshtein(s1: str, s2: str) -> int:
@@ -808,31 +854,28 @@ def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
 def _dependency_query_groups(
     records: list[DependencyRecord],
 ) -> dict[tuple[str, str, str], list[DependencyRecord]]:
-    """Group occurrences by normalized query coordinate.
-
-    Manifest ranges are attached to every exact lockfile coordinate for the
-    same package. This keeps source-file provenance without querying both a
-    range and the concrete version resolved by the lockfile.
-    """
+    """Attach manifest ranges only to compatible lockfile coordinates."""
     groups: dict[tuple[str, str, str], list[DependencyRecord]] = {}
-    exact_by_package: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    exact_by_package: dict[tuple[str, str], list[DependencyRecord]] = {}
     deferred: list[DependencyRecord] = []
     for record in records:
         key = dependency_coordinate(record)
         queryable, _reason = dependency_queryability(record)
         if queryable:
             groups.setdefault(key, []).append(record)
-            exact_by_package.setdefault(key[:2], []).append(key)
+            if _is_lockfile(record.source_file):
+                exact_by_package.setdefault(key[:2], []).append(record)
         else:
             deferred.append(record)
-
-    for package_key, coordinates in exact_by_package.items():
-        exact_by_package[package_key] = sorted(set(coordinates))
 
     for record in deferred:
         key = dependency_coordinate(record)
         queryable, reason = dependency_queryability(record)
-        resolved = exact_by_package.get(key[:2], [])
+        resolved = sorted({
+            dependency_coordinate(locked)
+            for locked in exact_by_package.get(key[:2], [])
+            if _lockfile_satisfies(record, locked)
+        })
         if not queryable and reason in {"missing_version", "non_exact_version"} and resolved:
             for resolved_key in resolved:
                 groups.setdefault(resolved_key, []).append(record)
@@ -922,7 +965,16 @@ def _coordinate_requires_private_opt_in(
                 )
             elif name in {"pyproject.toml", "pipfile.lock"} or _is_requirement_index(source):
                 public_directories.add(path.parent)
-    return not directories.issubset(public_directories)
+    if directories.issubset(public_directories):
+        return False
+    default_registry = {
+        "npm": "https://registry.npmjs.org/",
+        "pypi": "https://pypi.org/simple/",
+        "cargo": "https://index.crates.io/",
+    }.get(normalize_ecosystem(coordinate[0]))
+    return default_registry is None or not is_public(
+        coordinate[0], default_registry, DependencySourceUsage.REGISTRY_API
+    )
 
 
 def _osv_source_index(
@@ -1050,17 +1102,19 @@ def _check_dependency_records(
         )
         scanner.dependency_scan = empty_dependency_scan(configured_limit, status="complete")
         return
-    locked_keys = {
-        (record.ecosystem.lower(), record.name.lower())
-        for record in records
-        if _is_lockfile(record.source_file) and record.version and not _is_unlocked_version(record.version)
-    }
+    locked_by_package: dict[tuple[str, str], list[DependencyRecord]] = {}
+    for record in records:
+        if _is_lockfile(record.source_file):
+            locked_by_package.setdefault(dependency_coordinate(record)[:2], []).append(record)
     for record in records:
         reconciled_with_lockfile = (
             not _is_lockfile(record.source_file)
-            and (record.ecosystem.lower(), record.name.lower()) in locked_keys
+            and any(
+                _lockfile_satisfies(record, locked)
+                for locked in locked_by_package.get(dependency_coordinate(record)[:2], [])
+            )
         )
-        if _is_unlocked_version(record.version) and not reconciled_with_lockfile:
+        if _is_unlocked_version(record.version, record.ecosystem) and not reconciled_with_lockfile:
             scanner._add_finding(
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title=f"依赖版本未锁定: {record.name}",
@@ -1193,47 +1247,53 @@ def _check_dependency_records(
         else:
             query_results_truncated = True
 
-        for vulnerability_id in result.vulnerability_ids:
+        if not result.vulnerability_ids:
+            continue
+        locations = {
+            (record.source_file, max(0, int(record.line or 0)))
+            for record in occurrences
+        }
+        occurrence_items = [
+            {"file": file, **({"line": line} if line else {})}
+            for file, line in sorted(locations)[:_MAX_OSV_OCCURRENCES_PER_COORDINATE]
+        ]
+        for vulnerability_id in sorted(set(result.vulnerability_ids)):
             known_vulnerability_roots.add((*key, vulnerability_id))
             root_digest = hashlib.sha256(
                 "|".join((*key, vulnerability_id)).encode("utf-8")
             ).hexdigest()[:20]
             root_cause_id = f"root-{root_digest}"
-            for record in occurrences:
-                location: dict[str, Any] = {"file": record.source_file}
-                if record.line is not None:
-                    location["line"] = max(1, int(record.line))
-                evidence = f"OSV: {vulnerability_id}"
-                if record.source_ref:
-                    evidence += f"; source_ref={_evidence_sample(record.source_ref, 256)}"
-                scanner._add_finding(
-                    rule_id="SR-008",
-                    severity="high",
-                    category="supply_chain",
-                    title=(
-                        "供应链风险 — 已知 OSV 漏洞: "
-                        f"{vulnerability_id} in {record.name}@{key[2] or '*'}"
-                    ),
-                    description=(
-                        f"依赖 {record.name}@{key[2] or '*'} "
-                        f"存在 OSV 已知漏洞或安全公告 {vulnerability_id}。"
-                    ),
-                    location=location,
-                    evidence=evidence,
-                    remediation=(
-                        f"升级 {record.name} 到修复版本，或替换为安全替代包。"
-                    ),
-                    kind="vulnerability",
-                    disposition="confirmed_vulnerability",
-                    sink_kind="dependency_resolution",
-                    source_kind="osv_advisory",
-                    source_control="remote_publisher",
-                    reachability="dependency_installation",
-                    activation="direct" if record.direct else "transitive",
-                    trust_boundary_crossed=True,
-                    llm_review_exempt=True,
-                    root_cause_id=root_cause_id,
-                )
+            scanner._add_finding(
+                rule_id="SR-008",
+                severity="high",
+                category="supply_chain",
+                title=(
+                    "供应链风险 — 已知 OSV 漏洞: "
+                    f"{vulnerability_id} in {key[1]}@{key[2] or '*'}"
+                ),
+                description=(
+                    f"依赖 {key[1]}@{key[2] or '*'} "
+                    f"存在 OSV 已知漏洞或安全公告 {vulnerability_id}。"
+                ),
+                location=occurrence_items[0],
+                evidence=f"OSV: {vulnerability_id}; coordinate={key[0]}/{key[1]}@{key[2]}",
+                remediation=f"升级 {key[1]} 到修复版本，或替换为安全替代包。",
+                kind="vulnerability",
+                disposition="confirmed_vulnerability",
+                sink_kind="dependency_resolution",
+                source_kind="osv_advisory",
+                source_control="remote_publisher",
+                reachability="dependency_installation",
+                activation="direct" if any(record.direct for record in occurrences) else "transitive",
+                trust_boundary_crossed=True,
+                llm_review_exempt=True,
+                root_cause_id=root_cause_id,
+                occurrences={
+                    "count": len(locations),
+                    "items": occurrence_items,
+                    "truncated": len(locations) > len(occurrence_items),
+                },
+            )
 
     succeeded = status_counts["succeeded"]
     failed = status_counts["failed"]

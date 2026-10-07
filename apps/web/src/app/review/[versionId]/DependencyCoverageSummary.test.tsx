@@ -3,10 +3,30 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
 import type { DependencyQueryResult, DependencyScan } from '@/types';
+import en from '@/i18n/locales/en/common.json';
+import zh from '@/i18n/locales/zh/common.json';
 
 import DependencyCoverageSummary from './DependencyCoverageSummary';
 
 describe('DependencyCoverageSummary', () => {
+  it('keeps dependency coverage keys and OSV reasons available in both languages', () => {
+    const prefix = 'dependency_coverage_';
+    const enKeys = Object.keys(en.review.detail).filter((key) => key.startsWith(prefix)).sort();
+    const zhKeys = Object.keys(zh.review.detail).filter((key) => key.startsWith(prefix)).sort();
+    expect(enKeys).toEqual(zhKeys);
+    for (const reason of [
+      'osv_timeout', 'response_parse_error', 'provider_client_error', 'provider_query_error',
+      'response_too_large', 'missing_client_result', 'invalid_client_response',
+      'unsupported_ecosystem', 'non_exact_version',
+    ]) {
+      for (const locale of [en, zh]) {
+        expect(locale.review.detail).toHaveProperty(`${prefix}reason_${reason}`, expect.any(String));
+      }
+    }
+    expect(en.review.detail.dependency_coverage_reason_osv_timeout).not.toEqual(en.review.detail.dependency_coverage_reason_timeout);
+    expect(zh.review.detail.dependency_coverage_reason_osv_timeout).not.toEqual(zh.review.detail.dependency_coverage_reason_timeout);
+  });
+
   it('shows acquisition, integrity, and manifest coverage with readable reason codes', () => {
     const dependencyScan: DependencyScan = {
       status: 'complete',

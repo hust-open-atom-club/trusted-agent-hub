@@ -194,25 +194,33 @@ def _detector_hit(finding: dict[str, Any]) -> dict[str, Any]:
 
 def _occurrences(hits: list[dict[str, Any]], max_items: int) -> dict[str, Any]:
     unique: dict[tuple[str, int], dict[str, Any]] = {}
+    omitted = 0
     for hit in hits:
-        location = hit.get("location") or {}
-        file_name = str(location.get("file") or "(unknown)")
-        try:
-            line = max(0, int(location.get("line") or 0))
-        except (TypeError, ValueError):
-            line = 0
-        key = (file_name, line)
-        if key in unique:
-            continue
-        item: dict[str, Any] = {"file": file_name}
-        if line:
-            item["line"] = line
-        unique[key] = item
+        supplied = hit.get("occurrences")
+        locations = (
+            supplied["items"] if isinstance(supplied, dict)
+            else [hit.get("location") or {}]
+        )
+        if isinstance(supplied, dict):
+            omitted += max(0, int(supplied["count"]) - len(locations))
+        for location in locations:
+            file_name = str(location.get("file") or "(unknown)")
+            try:
+                line = max(0, int(location.get("line") or 0))
+            except (TypeError, ValueError):
+                line = 0
+            key = (file_name, line)
+            if key in unique:
+                continue
+            item: dict[str, Any] = {"file": file_name}
+            if line:
+                item["line"] = line
+            unique[key] = item
     items = list(unique.values())
     return {
-        "count": len(items),
+        "count": len(items) + omitted,
         "items": items[:max_items],
-        "truncated": len(items) > max_items,
+        "truncated": omitted > 0 or len(items) > max_items,
     }
 
 
@@ -262,7 +270,7 @@ def reconcile_findings(
         primary["severity"] = effective_severity  # v1 compatibility projection
         primary["kind"] = str(primary.get("kind") or "unclassified")
         primary["disposition"] = str(primary.get("disposition") or "pending")
-        primary["occurrences"] = _occurrences(hits, max_occurrence_items)
+        primary["occurrences"] = _occurrences(members, max_occurrence_items)
         if all(member.get("llm_review_exempt") is True for member in members):
             primary["llm_review_exempt"] = True
         else:

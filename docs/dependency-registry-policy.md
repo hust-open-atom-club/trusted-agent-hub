@@ -96,6 +96,10 @@ OSV 批量响应中的空行或带 `error` 的行按坐标记录为 `failed` / `
 
 `TAH_OSV_ENABLED=false` 可在离线或合规受限环境中禁止 OSV 查询，此时报告以 `not_queried` 明示未评估状态。`TAH_OSV_BASE_URL` 只接受 HTTPS 服务端根地址（回环开发地址可使用 HTTP），可用于组织内部镜像；缓存按该地址隔离。SQLite 缓存启用 WAL，进程内写入会串行执行；初始化时会清理过期项并仅保留最新 20 万行，读写失败后当前客户端会停用持久缓存。
 
-默认 `TAH_OSV_ALLOW_PRIVATE_COORDINATES=false`。外发判定同时检查包级来源与 `.npmrc`（含 npm scope）、requirements 索引及额外索引、Poetry/Cargo 配置和安装命令中的来源观察；私有、未知、歧义或无法确认公开来源的可查询坐标均以 `not_queried` / `non_public_registry_not_queried` 记录，不发起 OSV 请求。缺失 registry 不会被推定为默认公共仓库；同目录同一坐标的公开 lockfile 来源或适用的公开 registry 配置可以提供来源证据。无法精确绑定到包的非公开全局来源会保守限制同生态坐标，生态本身不明时限制所有坐标。自定义客户端缺失该开关或扫描器缺失来源策略时同样默认拦截；只有显式设置 `allow_private_coordinates=True`（运维配置为 `TAH_OSV_ALLOW_PRIVATE_COORDINATES=true`）才能放开此限制，启用前需评估数据出站政策。非精确版本等不支持的坐标仍记为 `unsupported`。`system`、`docker`、`mcp_servers` 等非 OSV 包生态不会伪装成查询坐标，而是在 `non_osv_manifest_dependencies` 中单独列出。
+默认 `TAH_OSV_ALLOW_PRIVATE_COORDINATES=false`。外发判定同时检查包级来源与 `.npmrc`（含 npm scope）、requirements 索引及额外索引、Poetry/Cargo 配置和安装命令中的来源观察。显式私有、未知、歧义或无法确认公开的来源仍使坐标记为 `not_queried` / `non_public_registry_not_queried`，不发起 OSV 请求；默认值不会覆盖这些声明。无法精确绑定到包的非公开全局来源保守限制同生态坐标，生态本身不明时限制所有坐标。仅缺失来源声明时，按生态采用 `https://registry.npmjs.org/`、`https://pypi.org/simple/` 或 `https://index.crates.io/`，且仍须通过 registry 策略校验。这是兼容性默认值，不是实际来源已验证的证据；仓库之外的私源配置无法由静态扫描推断，应把相关配置纳入扫描范围，或关闭 OSV 查询。
+
+扫描器缺失来源策略时继续拦截。自定义客户端只有显式设置 `allow_private_coordinates=True`（运维配置为 `TAH_OSV_ALLOW_PRIVATE_COORDINATES=true`）才能放开显式非公开来源限制，缺失开关不授予该权限。非精确版本等不支持的坐标仍记为 `unsupported`。`system`、`docker`、`mcp_servers` 等非 OSV 包生态在 `non_osv_manifest_dependencies` 中单独列出。`dependency_check.total_dependencies` 按唯一坐标加非 OSV 清单依赖计数；`dependencies_found` 和 `dependency_scan.total_dependencies` 保留出现次数口径。
+
+`TAH_OSV_MAX_QUERIES` 限制发往 OSV 的未命中缓存坐标，缓存命中不消耗该预算；HTTP 重试另计入 `provider_requests`。API 每次扫描创建独立客户端，跨扫描续用 SQLite 缓存；显式复用同一客户端时，未命中缓存的查询累计消耗该客户端的预算。已知漏洞按坐标与公告 ID 生成一条 finding，并保留最多 100 个位置及完整位置计数，避免在报告聚合前因重复位置耗尽 `max_findings`。
 
 `dependency_scan.manifest_lock` 对同目录的 `package.json` 和 npm lockfile v2/v3 的根声明进行保守比对：相同字符串与等价的精确版本可判为一致；缺失声明或不同的精确版本产生独立的 SR-008 finding；其他范围、`file:`、`workspace:` 等无法在静态扫描中证明等价的写法计入 `unchecked_count`，状态为 `partial`，不会误报为不一致。没有可比对的根声明时为 `not_checked`。确定性的 registry、已知漏洞、HTTP 传输、版本、typosquatting、完整性和清单差异结果不送入语义 LLM 审核；只有显式标记为需要语义判断、且具有真实扫描文件和有效行号的源码 finding 才能进入候选集合。

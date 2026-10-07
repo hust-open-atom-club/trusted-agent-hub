@@ -652,9 +652,7 @@ def test_legacy_single_review_is_not_reused_across_a_batch() -> None:
 def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -> None:
     root = PROJECT_ROOT / "examples" / "real-world" / "skills" / "mcp-builder"
     scanner = RiskScanner(root, source_commit_hash="a" * 40)
-    # Keep this regression focused on semantic false positives. Real OSV
-    # results are independently covered by supply-chain tests and can change
-    # as new advisories are published.
+    # Keep live advisories out of this semantic false-positive regression.
     scanner.osv_client.query = lambda _dependency: OSVQueryResult([])
     report = scanner.scan()
     metadata = extract_single_skill(
@@ -668,7 +666,14 @@ def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -
     )
     contexts, _ = build_finding_context_bundle(report["findings"], scanner._file_contents)
     assert contexts == {}
-    assert report["summary"]["effective_total"] == 0
+    assert {
+        (finding["rule_id"], finding["title"], finding["llm_review_exempt"])
+        for finding in report["findings"]
+    } == {
+        ("SR-008", "依赖版本未锁定: anthropic", True),
+        ("SR-008", "依赖版本未锁定: mcp", True),
+    }
+    assert report["summary"]["effective_total"] == 2
 
     acquisition_facts = {
         "source": {

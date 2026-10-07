@@ -26,6 +26,7 @@ from scanners.risk_scanner.registry_policy import (
     RegistryPolicy,
 )
 from scanners.risk_scanner.scanner import RiskScanner
+from scanners.risk_scanner.policy import ScanPolicy
 
 
 _REPORT_SCHEMA = json.loads(
@@ -141,6 +142,23 @@ def test_rate_limit_retries_with_backoff_then_succeeds() -> None:
     assert result.attempts == 2
     assert calls == 2
     assert delays == [0.2]
+
+
+@pytest.mark.parametrize("ecosystem,version,expected", [
+    ("PyPI", "==1.2.3+linux.x86", "1.2.3+linux.x86"),
+    ("crates.io", "=1.2.3-exp.x", "1.2.3-exp.x"),
+    ("npm", "1.2.3-exp.x", "1.2.3-exp.x"),
+])
+def test_exact_ecosystem_versions_are_queryable(ecosystem, version, expected):
+    dependency = _dependency("demo", version, ecosystem=ecosystem)
+    sent = []
+
+    def requester(payload, timeout):
+        sent.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    assert OSVClient(requester=requester).query(dependency).status == "succeeded"
+    assert sent[0]["version"] == expected
 
 
 @pytest.mark.parametrize(
@@ -480,7 +498,6 @@ def test_non_public_registry_coordinates_require_explicit_opt_in(
 
 @pytest.mark.parametrize("allow_private", [False, True])
 @pytest.mark.parametrize("files", [
-    {"package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}'},
     {
         "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
         ".npmrc": "registry=https://npm.corp.example/\n",
@@ -496,14 +513,6 @@ def test_non_public_registry_coordinates_require_explicit_opt_in(
     {
         "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
         ".npmrc": "registry=http://registry.npmjs.org/\n",
-    },
-    {
-        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
-        ".npmrc": "@other:registry=https://registry.npmjs.org/\n",
-    },
-    {
-        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
-        "other/.npmrc": "registry=https://registry.npmjs.org/\n",
     },
     {
         "requirements.txt": "--index-url https://pypi.org/simple/\n--extra-index-url https://python.corp.example/simple/\ninternal==1.0.0\n",
@@ -573,6 +582,7 @@ def test_injected_client_requires_boolean_private_opt_in(
     (tmp_path / "package.json").write_text(
         '{"dependencies":{"internal":"1.0.0"}}', encoding="utf-8"
     )
+    (tmp_path / ".npmrc").write_text("registry=https://npm.corp.example/\n", encoding="utf-8")
     queried = []
     client = SimpleNamespace(query=lambda record: queried.append(record))
     if permission is not None:
@@ -581,6 +591,52 @@ def test_injected_client_requires_boolean_private_opt_in(
     report = RiskScanner(tmp_path, osv_client=client).scan()
 
     assert queried == []
+    assert report["dependency_scan"]["status"] == "not_queried"
+
+
+@pytest.mark.parametrize("files", [
+    {"requirements.txt": "requests==2.31.0\n"},
+    {"Cargo.lock": '[[package]]\nname = "serde"\nversion = "1.0.0"\n'},
+    {"poetry.lock": '[[package]]\nname = "requests"\nversion = "2.31.0"\n'},
+    {"package-lock.json": '{"packages":{"node_modules/public-package":{"version":"1.0.0"}}}'},
+    {"manifest.json": '{"dependencies":{"npm":[{"name":"public-package","version":"1.0.0"}]}}'},
+    {"package.json": '{"dependencies":{"public-package":"1.0.0"}}'},
+    {
+        "package.json": '{"dependencies":{"public-package":"1.0.0"}}',
+        ".npmrc": "@other:registry=https://npm.corp.example/\n",
+    },
+    {
+        "package.json": '{"dependencies":{"public-package":"1.0.0"}}',
+        "other/.npmrc": "registry=https://registry.npmjs.org/\n",
+    },
+])
+def test_undeclared_registry_uses_ecosystem_public_default(tmp_path, files):
+    for name, content in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    queries = []
+
+    def requester(payload, timeout):
+        queries.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    report = RiskScanner(tmp_path, osv_client=OSVClient(requester=requester)).scan()
+
+    assert len(queries) == 1
+    assert report["dependency_scan"]["status"] == "complete"
+    assert report["dependency_check"]["known_vulnerabilities"] == 0
+
+
+def test_missing_registry_policy_remains_fail_closed(tmp_path):
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n", encoding="utf-8")
+    client = OSVClient(requester=_success_response)
+    scanner = RiskScanner(tmp_path, osv_client=client)
+    scanner.registry_policy = None
+
+    report = scanner.scan()
+
+    assert client.request_count == 0
     assert report["dependency_scan"]["status"] == "not_queried"
 
 
@@ -709,6 +765,27 @@ def test_success_cache_is_reused_by_a_new_client(tmp_path: Path) -> None:
     assert resumed_result.cache_source == "persistent"
     assert resumed_result.cache_age_seconds == 1
     assert resumed.request_count == 0
+
+
+def test_cached_coordinates_do_not_bypass_outbound_query_budget(tmp_path):
+    cache_path = tmp_path / "osv.sqlite3"
+    cached = [_dependency(f"cached-{index}") for index in range(3)]
+    OSVClient(cache_path=cache_path, requester=_success_response).query_many(cached)
+    sent = []
+
+    def requester(payload, timeout):
+        sent.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    client = OSVClient(cache_path=cache_path, requester=requester, max_queries=1)
+    fresh = [_dependency("fresh-0"), _dependency("fresh-1")]
+    first = client.query_many([*cached, *fresh])
+    second = client.query_many([*cached, *fresh, _dependency("fresh-2")])
+
+    assert len(sent) == client.queried == client.request_count == 1
+    assert sum(result.status == "succeeded" for result in first.values()) == 4
+    assert first[dependency_coordinate(fresh[1])].failure_reason == "query_limit_exceeded"
+    assert sum(result.status == "not_queried" for result in second.values()) == 2
 
 
 def test_persistent_cache_is_isolated_by_provider_origin(tmp_path: Path) -> None:
@@ -986,6 +1063,54 @@ def test_query_result_maps_duplicate_occurrences_to_sources(tmp_path: Path) -> N
     assert osv_findings[0]["source_kind"] == "osv_advisory"
     assert osv_findings[0]["occurrences"]["count"] >= 2
     assert report["dependency_check"]["known_vulnerabilities"] == 1
+    assert report["dependency_check"]["total_dependencies"] == 1
+    jsonschema.validate(report, _REPORT_SCHEMA)
+
+
+def test_manifest_and_lockfile_share_one_dependency_total(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "dependencies": {
+            "npm": [{"name": "dep-0", "version": "1.0.0"}],
+            "system": ["python"],
+        },
+    }), encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text(
+        '{"packages":{"node_modules/dep-0":{"version":"1.0.0"}}}', encoding="utf-8",
+    )
+
+    report = RiskScanner(tmp_path, osv_client=OSVClient(requester=_success_response)).scan()
+
+    assert report["dependency_scan"]["dependencies_found"] == 2
+    assert report["dependency_scan"]["total_unique_dependencies"] == 1
+    assert report["dependency_check"]["total_dependencies"] == 2
+
+
+def test_osv_occurrences_are_aggregated_before_finding_budget(tmp_path):
+    for index in range(110):
+        directory = tmp_path / f"package-{index:03d}"
+        directory.mkdir()
+        (directory / "package-lock.json").write_text(
+            '{"packages":{"node_modules/dep-0":{"version":"1.0.0"}}}', encoding="utf-8",
+        )
+
+    def vulnerable(_payload, _timeout):
+        return OSVHTTPResponse(200, b'{"results":[{"vulns":[{"id":"OSV-1"},{"id":"OSV-2"}]}]}', {})
+
+    scanner = RiskScanner(
+        tmp_path, policy=ScanPolicy(max_findings=3),
+        osv_client=OSVClient(requester=vulnerable),
+    )
+    report = scanner.scan()
+    raw = [finding for finding in scanner.findings if finding.get("source_kind") == "osv_advisory"]
+    findings = [finding for finding in report["findings"] if finding.get("source_kind") == "osv_advisory"]
+
+    assert len(raw) == len(findings) == 2
+    assert "findings_limit_exceeded" not in report["scan_limits"]["exceeded"]
+    assert report["dependency_check"]["total_dependencies"] == 1
+    assert report["dependency_check"]["known_vulnerabilities"] == 2
+    assert all(finding["occurrences"]["count"] == 110 for finding in findings)
+    assert all(len(finding["occurrences"]["items"]) == 100 for finding in findings)
+    assert all(finding["occurrences"]["truncated"] is True for finding in findings)
     jsonschema.validate(report, _REPORT_SCHEMA)
 
 

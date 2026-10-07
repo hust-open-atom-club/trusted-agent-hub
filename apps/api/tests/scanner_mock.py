@@ -55,6 +55,7 @@ class MockScanner:
         requires_manual_review: bool = False,
         llm_review_exempt: bool = False,
         root_cause_id: str | None = None,
+        occurrences: dict[str, Any] | None = None,
     ) -> None:
         finding = {
             "rule_id": rule_id,
@@ -94,6 +95,8 @@ class MockScanner:
             finding["llm_review_exempt"] = True
         if root_cause_id:
             finding["root_cause_id"] = root_cause_id
+        if occurrences is not None:
+            finding["occurrences"] = occurrences
         self.findings.append(finding)
 
     def _add_advisory(
