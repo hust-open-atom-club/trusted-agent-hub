@@ -265,7 +265,7 @@ class TestShellRegistrySourceBinding:
 
 class _StaticOSVClient:
     max_queries = 5_000
-    allow_private_coordinates = False
+    allow_private_coordinates = True
 
     def __init__(self, vulnerability_ids=()):
         self.vulnerability_ids = list(vulnerability_ids)
@@ -1333,6 +1333,7 @@ class TestSR008SupplyChain:
         class NoVulnerabilityClient:
             max_queries = 500
             queried = 0
+            allow_private_coordinates = True
 
             def query(self, _dependency):
                 self.queried += 1

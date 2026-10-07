@@ -724,6 +724,28 @@
         }
       },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["vulnerability_status"],
+            "properties": { "vulnerability_status": { "const": "not_assessed" } }
+          },
+          "then": {
+            "required": ["known_vulnerabilities"],
+            "properties": { "known_vulnerabilities": { "type": "null" } }
+          }
+        },
+        {
+          "if": {
+            "required": ["vulnerability_status"],
+            "properties": { "vulnerability_status": { "const": "assessed" } }
+          },
+          "then": {
+            "required": ["known_vulnerabilities"],
+            "properties": { "known_vulnerabilities": { "type": "integer" } }
+          }
+        }
+      ],
       "description": "依赖检查结果"
     },
     "dependency_scan": {
@@ -770,7 +792,7 @@
         },
         "failure_reasons": {
           "type": "object",
-          "additionalProperties": { "type": "integer", "minimum": 1 }
+          "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "query_results_truncated": { "type": "boolean" },
         "query_results": {

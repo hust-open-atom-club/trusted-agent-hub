@@ -31,6 +31,7 @@ class _OfflinePartialOSVClient:
     """Exercise partial OSV coverage without making a network request."""
 
     max_queries = 1_000
+    allow_private_coordinates = True
 
     def __init__(self) -> None:
         self.queried = 0

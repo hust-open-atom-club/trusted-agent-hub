@@ -15,7 +15,7 @@ to avoid flagging normal hyperlinks in HTML/MD files.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import re
@@ -841,35 +841,119 @@ def _dependency_query_groups(
     return groups
 
 
+def _is_requirement_index(source: DependencySourceObservation) -> bool:
+    name = PurePosixPath(source.source_file.replace("\\", "/")).name.casefold()
+    return (
+        name.startswith("requirements") and name.endswith(".txt")
+        and source.usage == DependencySourceUsage.REGISTRY_API
+    )
+
+
 def _coordinate_requires_private_opt_in(
     scanner: Any,
     client: Any,
     occurrences: list[DependencyRecord],
+    sources: Sequence[DependencySourceObservation] = (),
 ) -> bool:
-    if bool(getattr(client, "allow_private_coordinates", True)):
+    if getattr(client, "allow_private_coordinates", False) is True:
         return False
     policy = getattr(scanner, "registry_policy", None)
     evaluate = getattr(policy, "evaluate", None)
     if not callable(evaluate):
-        return False
+        return True
     public_classifications = {
         RegistryClassification.OFFICIAL,
         RegistryClassification.AUTHORITATIVE_MIRROR,
     }
-    for record in occurrences:
-        if not record.registry:
-            continue
+
+    def is_public(ecosystem: str, url: str, usage: DependencySourceUsage) -> bool:
         try:
-            decision = evaluate(
+            decision = evaluate(ecosystem, url, usage)
+        except (TypeError, ValueError):
+            return False
+        return decision.allowed and decision.classification in public_classifications
+
+    public_directories: set[PurePosixPath] = set()
+    directories = {
+        PurePosixPath(record.source_file.replace("\\", "/")).parent
+        for record in occurrences
+    }
+    coordinate = dependency_coordinate(occurrences[0])
+    for record in occurrences:
+        if record.registry:
+            if not is_public(
                 record.ecosystem,
                 record.registry,
                 record.registry_usage or DependencySourceUsage.REGISTRY_API,
+            ):
+                return True
+            public_directories.add(
+                PurePosixPath(record.source_file.replace("\\", "/")).parent
             )
-        except (TypeError, ValueError):
+    for source in sources:
+        path = PurePosixPath(source.source_file.replace("\\", "/"))
+        name = path.name.casefold()
+        npm_scope = (source.source_ref or "").casefold().removesuffix(":registry")
+        if name == ".npmrc" and npm_scope.startswith("@"):
+            if not coordinate[1].startswith(npm_scope + "/"):
+                continue
+        if source.ecosystem_ambiguous or normalize_ecosystem(
+            source.ecosystem
+        ) in {"", "unknown"}:
             return True
-        if decision.classification not in public_classifications:
+        if not is_public(source.ecosystem, source.url, source.usage):
             return True
-    return False
+        if source.dependency_name and not _is_requirement_index(source):
+            if source.dependency_version == coordinate[2]:
+                public_directories.add(path.parent)
+        elif source.usage == DependencySourceUsage.REGISTRY_API:
+            if name == ".npmrc":
+                public_directories.update(
+                    directory for directory in directories
+                    if directory.is_relative_to(path.parent)
+                )
+            elif (
+                name in {"config", "config.toml"}
+                and path.parent.name == ".cargo"
+            ):
+                public_directories.update(
+                    directory for directory in directories
+                    if directory.is_relative_to(path.parent.parent)
+                )
+            elif name in {"pyproject.toml", "pipfile.lock"} or _is_requirement_index(source):
+                public_directories.add(path.parent)
+    return not directories.issubset(public_directories)
+
+
+def _osv_source_index(
+    sources: list[DependencySourceObservation],
+) -> dict[tuple[str, str | None], list[DependencySourceObservation]]:
+    indexed: dict[tuple[str, str | None], list[DependencySourceObservation]] = {}
+    seen: set[tuple[object, ...]] = set()
+    for source in sources:
+        coordinate = dependency_coordinate(DependencyRecord(
+            source.dependency_name or "", source.dependency_version,
+            source.ecosystem, False, source.source_file,
+        ))
+        if source.ecosystem_ambiguous:
+            key = ("unknown", None)
+        else:
+            key = (
+                coordinate[0],
+                coordinate[1]
+                if source.dependency_name and not _is_requirement_index(source)
+                else None,
+            )
+        identity = (
+            key, source.source_file, source.url, source.usage,
+            source.dependency_version if key[1] is not None else None,
+            source.source_ref if source.source_file.casefold().endswith(".npmrc") else None,
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        indexed.setdefault(key, []).append(source)
+    return indexed
 
 
 def _sequential_osv_results(
@@ -941,7 +1025,7 @@ def _dependency_scan_status(
         return "not_queried"
     transient_reasons = {
         "network_error",
-        "timeout",
+        "osv_timeout",
         "provider_server_error",
         "rate_limited",
     }
@@ -953,14 +1037,18 @@ def _dependency_scan_status(
     return "failed"
 
 
-def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> None:
+def _check_dependency_records(
+    scanner: Any,
+    records: list[DependencyRecord],
+    sources: list[DependencySourceObservation],
+) -> None:
     if not records:
         configured_limit = getattr(
             getattr(scanner, "osv_client", None),
             "max_queries",
             getattr(getattr(scanner, "policy", None), "max_osv_queries", 5000),
         )
-        scanner.dependency_scan = empty_dependency_scan(configured_limit)
+        scanner.dependency_scan = empty_dependency_scan(configured_limit, status="complete")
         return
     locked_keys = {
         (record.ecosystem.lower(), record.name.lower())
@@ -982,13 +1070,28 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
                 remediation="在清单和锁文件中使用可复现的精确依赖版本。",
                 llm_review_exempt=True,
             )
-    client = getattr(scanner, "osv_client", None) or OSVClient()
+    client = getattr(scanner, "osv_client", None)
     groups = _dependency_query_groups(records)
+    source_index = _osv_source_index(sources)
     representatives: list[DependencyRecord] = []
     precomputed_results: dict[tuple[str, str, str], OSVQueryResult] = {}
     for key in sorted(groups):
         occurrences = groups[key]
-        if _coordinate_requires_private_opt_in(scanner, client, occurrences):
+        queryable, reason = dependency_queryability(occurrences[0])
+        relevant_sources = [
+            *source_index.get(key[:2], []),
+            *source_index.get((key[0], None), []),
+            *source_index.get(("unknown", None), []),
+        ]
+        if client is None:
+            precomputed_results[key] = OSVQueryResult(
+                [],
+                status="not_queried" if queryable else "unsupported",
+                failure_reason="provider_error" if queryable else reason,
+            )
+        elif queryable and _coordinate_requires_private_opt_in(
+            scanner, client, occurrences, relevant_sources
+        ):
             precomputed_results[key] = OSVQueryResult(
                 [],
                 status="not_queried",
@@ -1009,7 +1112,9 @@ def _check_dependency_records(scanner: Any, records: list[DependencyRecord]) -> 
         callable(getattr(client, "query_many", None))
         and _uses_default_osv_query(client)
     )
-    if use_batch_query:
+    if not representatives:
+        results = {}
+    elif use_batch_query:
         results = client.query_many(representatives)
     else:
         results = _sequential_osv_results(
@@ -1727,7 +1832,7 @@ def run(scanner: Any) -> None:
             ]
         }
         _check_typosquatting(scanner, normalized_meta)
-    _check_dependency_records(scanner, records)
+    _check_dependency_records(scanner, records, sources)
     scanner.dependency_scan["non_osv_manifest_dependencies"] = (
         _non_osv_manifest_dependencies(meta) if meta else {
             "total": 0,

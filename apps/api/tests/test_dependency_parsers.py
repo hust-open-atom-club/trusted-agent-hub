@@ -776,6 +776,9 @@ def test_npm_force_is_not_classified_as_pip_find_links():
 def test_dependency_scan_reports_osv_query_failures(tmp_path):
     from scanners.risk_scanner.scanner import RiskScanner
 
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (tmp_path / "package.json").write_text(
         '{"name":"demo","version":"1.0.0","dependencies":{"lodash":"4.17.21"}}',
         encoding="utf-8",
@@ -789,12 +792,12 @@ def test_dependency_scan_reports_osv_query_failures(tmp_path):
         def query(self, dependency):
             from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
             return OSVQueryResult(
-                [], status="failed", failure_reason="TimeoutError"
+                [], status="failed", failure_reason="osv_timeout"
             )
 
     scanner.osv_client = FailedClient()
     report = scanner.scan()
-    assert report["dependency_scan"]["status"] == "failed"
+    assert report["dependency_scan"]["status"] == "unavailable"
     assert report["dependency_scan"]["dependencies_found"] == 1
     assert report["dependency_scan"]["query_failures"] == 1
     assert report["scan_status"]["state"] == "partial"

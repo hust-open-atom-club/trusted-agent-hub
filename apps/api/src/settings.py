@@ -150,7 +150,7 @@ def _base_url(name: str, *, allow_insecure_http: bool = False) -> str | None:
         or parsed.username is not None
         or parsed.password is not None
     ):
-        raise ValueError(f"{name} must be an absolute HTTP(S) URL")
+        raise ValueError(f"{name} must be a credential-free absolute HTTP(S) URL")
     if (
         parsed.scheme == "http"
         and parsed.hostname not in _LOCAL_HTTP_HOSTS

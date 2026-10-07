@@ -5902,6 +5902,7 @@ def _run_scan_task_body(
                     settings.osv_retry_backoff_milliseconds / 1000
                 ),
                 cache_path=settings.osv_cache_path,
+                cancel_event=total_timeout_event,
             ),
         )
         scan_report = scanner.scan()

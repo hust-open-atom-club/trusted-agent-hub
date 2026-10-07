@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 
 DEFAULT_OSV_QUERY_LIMIT = 5_000
@@ -22,10 +22,12 @@ def normalize_query_limit(
 
 def empty_dependency_scan(
     query_limit: object = DEFAULT_OSV_QUERY_LIMIT,
+    *,
+    status: Literal["not_queried", "complete"] = "not_queried",
 ) -> dict[str, Any]:
-    """Return a complete, auditable zero-dependency vulnerability scan."""
+    """Initialize coverage without claiming the dependency rule has run."""
     return {
-        "status": "complete",
+        "status": status,
         "data_source": "OSV",
         "dependencies_found": 0,
         "dependencies_queried": 0,

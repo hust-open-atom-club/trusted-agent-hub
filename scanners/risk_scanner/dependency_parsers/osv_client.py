@@ -215,6 +215,7 @@ class OSVClient:
         requester: OSVRequester | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         if not isinstance(enabled, bool):
             raise ValueError("enabled must be a boolean")
@@ -251,6 +252,9 @@ class OSVClient:
         self._requester = requester or self._default_requester
         self._sleeper = sleeper
         self._clock = clock
+        # The scan deadline stops further requests; in-flight HTTP requests
+        # still run to their own timeout.
+        self._cancel_event = cancel_event
         self._cache: dict[OSVCoordinate, tuple[float, OSVQueryResult]] = {}
         self._cache_lock = threading.Lock()
         self._cache_setup_lock = threading.Lock()
@@ -454,6 +458,10 @@ class OSVClient:
     def _store_successes(
         self, results: Mapping[OSVCoordinate, OSVQueryResult]
     ) -> None:
+        results = {
+            key: result for key, result in results.items()
+            if result.status == "succeeded"
+        }
         if not results or self.cache_ttl == 0:
             return
         cached_at = self._clock()
@@ -567,13 +575,26 @@ class OSVClient:
             for key, _dependency in records
         }
 
+    def _cancelled(self) -> bool:
+        """Return True when the owning scan task requested cancellation."""
+        event = self._cancel_event
+        return event is not None and event.is_set()
+
     def _query_batch(
         self,
         records: Sequence[tuple[OSVCoordinate, DependencyRecord]],
     ) -> dict[OSVCoordinate, OSVQueryResult]:
         payload = self._payload(records)
         attempts = 0
-        while attempts <= self.max_retries:
+        while True:
+            if self._cancelled():
+                return self._failed_batch(
+                    records,
+                    status="failed" if attempts else "not_queried",
+                    reason="cancelled",
+                    response_status=None,
+                    attempts=attempts,
+                )
             attempts += 1
             with self._counter_lock:
                 self.request_count += 1
@@ -626,17 +647,27 @@ class OSVClient:
                     queried_at = _utc_iso(self._clock())
                     results: dict[OSVCoordinate, OSVQueryResult] = {}
                     for (key, _dependency), row in zip(records, result_rows):
-                        vulnerabilities = (
-                            row.get("vulns", []) if isinstance(row, dict) else []
-                        )
-                        if not isinstance(vulnerabilities, list):
-                            return self._failed_batch(
-                                records,
+                        if not isinstance(row, dict) or "error" in row:
+                            results[key] = OSVQueryResult(
+                                [],
                                 status="failed",
-                                reason="response_parse_error",
+                                queried_at=queried_at,
+                                response_status=response_status,
+                                failure_reason="provider_query_error",
+                                attempts=attempts,
+                            )
+                            continue
+                        vulnerabilities = row.get("vulns", [])
+                        if not isinstance(vulnerabilities, list):
+                            results[key] = OSVQueryResult(
+                                [],
+                                status="failed",
+                                queried_at=queried_at,
+                                failure_reason="response_parse_error",
                                 response_status=response_status,
                                 attempts=attempts,
                             )
+                            continue
                         vulnerability_ids: list[str] = []
                         for vulnerability in vulnerabilities:
                             identifier = (
@@ -676,7 +707,7 @@ class OSVClient:
                         attempts=attempts,
                     )
             except TimeoutError:
-                reason = "timeout"
+                reason = "osv_timeout"
                 status = "failed"
             except (urllib.error.URLError, OSError):
                 reason = "network_error"
@@ -705,15 +736,10 @@ class OSVClient:
                 )
             delay = self._retry_delay(attempts, headers)
             if delay:
-                self._sleeper(delay)
-
-        return self._failed_batch(
-            records,
-            status="failed",
-            reason="internal_error",
-            response_status=None,
-            attempts=attempts,
-        )
+                if self._cancel_event is None:
+                    self._sleeper(delay)
+                else:
+                    self._cancel_event.wait(delay)
 
     def query_many(
         self,
@@ -829,6 +855,10 @@ class OSVClient:
         )
         self.failures += failed
         self.rate_limited += rate_limited
+        self.skipped += sum(
+            result.status == "not_queried" and result.failure_reason == "cancelled"
+            for result in results.values()
+        )
         return results
 
     def query(self, dependency: DependencyRecord) -> OSVQueryResult:

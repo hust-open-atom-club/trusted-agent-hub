@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { DependencyCheck, DependencyScan } from '@/types';
 
+import DependencyQueryResults from './DependencyQueryResults';
+
 interface DependencyCoverageSummaryProps {
   dependencyScan: DependencyScan | null | undefined;
   dependencyCheck?: DependencyCheck | null;
@@ -34,6 +36,7 @@ export default function DependencyCoverageSummary({
       dependencyScan.total_unique_dependencies !== undefined
       || dependencyScan.queryable !== undefined
       || (dependencyScan.query_results?.length ?? 0) > 0
+      || dependencyScan.query_results_truncated
       || dependencyCheck?.known_vulnerabilities !== undefined
       || dependencyCheck?.vulnerability_status !== undefined
     ),
@@ -152,6 +155,7 @@ export default function DependencyCoverageSummary({
               {metric(t('review.detail.dependency_coverage_remaining'), dependencyScan.remaining)}
               {metric(t('review.detail.dependency_coverage_cache_hits'), dependencyScan.cache_hits)}
               {metric(t('review.detail.dependency_coverage_query_limit'), dependencyScan.query_limit)}
+              {metric(t('review.detail.dependency_coverage_provider_requests'), dependencyScan.provider_requests)}
             </div>
             {(nonOsvManifest?.total ?? 0) > 0 && (
               <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }} data-testid="dependency-non-osv-manifest">
@@ -177,6 +181,10 @@ export default function DependencyCoverageSummary({
                 </ul>
               </div>
             )}
+            <DependencyQueryResults
+              results={dependencyScan.query_results ?? []}
+              truncated={dependencyScan.query_results_truncated}
+            />
           </div>
         )}
 
@@ -226,7 +234,11 @@ export default function DependencyCoverageSummary({
             <div className="review-meta-grid">
               <div className="review-meta-field">
                 <span className="review-meta-label">{t('review.detail.dependency_coverage_status')}</span>
-                <span className="review-meta-value">{statusLabel(integrity.status)}</span>
+                <span className="review-meta-value">
+                  {integrity.status === 'unsupported'
+                    ? t('review.detail.dependency_coverage_status_integrity_unsupported')
+                    : statusLabel(integrity.status)}
+                </span>
               </div>
               {metric(t('review.detail.dependency_coverage_claimed'), integrity.claimed_count)}
               {metric(t('review.detail.dependency_coverage_verified'), integrity.verified_count)}

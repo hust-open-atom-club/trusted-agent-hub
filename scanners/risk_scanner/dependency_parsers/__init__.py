@@ -76,7 +76,7 @@ def _source_observation(
     line: int | None = None,
 ) -> DependencySourceObservation | None:
     value = str(url or "").strip().strip('"\'')
-    if not value or "://" not in value:
+    if not value:
         return None
     return DependencySourceObservation(
         ecosystem=ecosystem,
@@ -232,11 +232,13 @@ def parse_dependency_sources(
 
         elif name == ".npmrc":
             for match in re.finditer(
-                r"(?im)^\s*(?:@[^:\s]+:)?registry\s*=\s*([^\s;#]+)",
+                r"(?im)^\s*((?:@[^:\s]+:)?registry)\s*=\s*([^\s;#]+)",
                 content,
             ):
                 observation = _source_observation(
-                    "npm", match.group(1), "registry_api", path
+                    "npm", match.group(2), "registry_api", path,
+                    source_ref=match.group(1),
+                    line=content.count("\n", 0, match.start(1)) + 1,
                 )
                 if observation:
                     observations.append(observation)

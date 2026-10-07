@@ -58,6 +58,8 @@ class BenchmarkConfigError(ValueError):
 class _OfflineOSVClient:
     """Deterministic OSV fixture used by every benchmark scan."""
 
+    allow_private_coordinates = True
+
     def __init__(self, *, max_queries: int = 10) -> None:
         self.max_queries = max_queries
         self.queried = 0

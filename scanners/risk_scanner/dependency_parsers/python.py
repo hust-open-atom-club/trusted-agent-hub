@@ -118,7 +118,7 @@ def _source_options_for_line(line: str) -> list[tuple[str, str, int]]:
             # An explicit empty value must not consume the following token.
             if not has_equals:
                 value, offset, end = next(tokens, ("", offset, end))
-            if option in _SOURCE_OPTIONS and "://" in value:
+            if option in _SOURCE_OPTIONS and value not in {"", "="}:
                 # Dequoting may change the raw spelling. Never search a later
                 # argument with the same URL when locating this occurrence.
                 value_offset = line.find(value, offset, end)

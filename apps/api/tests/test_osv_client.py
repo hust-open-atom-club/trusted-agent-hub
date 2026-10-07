@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import urllib.error
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import jsonschema
+import pytest
 
 from scanners.risk_scanner.dependency_parsers import osv_client as osv_client_module
 from scanners.risk_scanner.dependency_parsers.models import DependencyRecord
@@ -140,6 +143,67 @@ def test_rate_limit_retries_with_backoff_then_succeeds() -> None:
     assert delays == [0.2]
 
 
+@pytest.mark.parametrize(
+    ("invalid_row", "reason"),
+    [
+        (None, "provider_query_error"),
+        ({"error": "provider failure"}, "provider_query_error"),
+        ({"error": None, "vulns": []}, "provider_query_error"),
+        ({"vulns": None}, "response_parse_error"),
+    ],
+)
+def test_invalid_batch_rows_fail_individually_and_are_never_cached(
+    tmp_path: Path, invalid_row: object, reason: str,
+) -> None:
+    dependencies = [_dependency("broken"), _dependency("healthy")]
+    cache_path = tmp_path / "osv.sqlite3"
+
+    def requester(payload: bytes, _timeout: float) -> OSVHTTPResponse:
+        rows = [
+            invalid_row if query["package"]["name"] == "broken" else {}
+            for query in json.loads(payload)["queries"]
+        ]
+        return OSVHTTPResponse(200, json.dumps({"results": rows}).encode(), {})
+
+    client = OSVClient(requester=requester, cache_path=cache_path)
+    results = client.query_many(dependencies)
+    broken_key, healthy_key = map(dependency_coordinate, dependencies)
+    assert results[broken_key].status == "failed"
+    assert results[broken_key].failure_reason == reason
+    assert results[broken_key].response_status == 200
+    assert results[healthy_key].status == "succeeded"
+    assert client.failures == 1
+    assert client._cached(broken_key) is None
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT package_name FROM osv_query_cache_v2"
+        ).fetchall() == [("healthy",)]
+
+    resumed = OSVClient(requester=requester, cache_path=cache_path)
+    resumed_results = resumed.query_many(dependencies)
+    assert resumed_results[broken_key].status == "failed"
+    assert resumed_results[broken_key].from_cache is False
+    assert resumed_results[healthy_key].cache_source == "persistent"
+    assert resumed.queried == 1
+
+
+def test_all_failed_batch_rows_leave_both_caches_empty(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    client = OSVClient(
+        cache_path=cache_path,
+        requester=lambda _payload, _timeout: OSVHTTPResponse(
+            200, b'{"results": [null, {"error": "unavailable"}]}', {}
+        ),
+    )
+
+    results = client.query_many([_dependency("alpha"), _dependency("beta")])
+
+    assert {result.status for result in results.values()} == {"failed"}
+    assert client._cache == {}
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM osv_query_cache_v2").fetchone() == (0,)
+
+
 def test_exhausted_rate_limit_and_query_budget_are_explicit() -> None:
     def rate_limited(_payload: bytes, _timeout: float) -> OSVHTTPResponse:
         return OSVHTTPResponse(429, b"{}", {})
@@ -159,6 +223,40 @@ def test_exhausted_rate_limit_and_query_budget_are_explicit() -> None:
     assert client.queried == 2
     assert client.skipped == 1
     assert client.limit_reached is True
+
+
+@pytest.mark.parametrize("cancel_at", ["before_query", "between_batches", "before_retry"])
+def test_scan_cancellation_stops_new_batches_and_retries(cancel_at: str) -> None:
+    cancelled = threading.Event()
+    if cancel_at == "before_query":
+        cancelled.set()
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        cancelled.set()
+        if cancel_at == "before_retry":
+            return OSVHTTPResponse(429, b"{}", {"Retry-After": "5"})
+        return _success_response(payload, timeout)
+
+    client = OSVClient(
+        requester=requester,
+        cancel_event=cancelled,
+        batch_size=1,
+        max_concurrency=1,
+    )
+    results = client.query_many([_dependency("alpha"), _dependency("beta")])
+    alpha, beta = results.values()
+    assert client.request_count == (0 if cancel_at == "before_query" else 1)
+    assert beta.status == "not_queried"
+    assert beta.failure_reason == "cancelled"
+    assert beta.attempts == 0
+    assert client.skipped == (2 if cancel_at == "before_query" else 1)
+    if cancel_at == "before_retry":
+        assert alpha.status == "failed"
+        assert alpha.failure_reason == "cancelled"
+        assert alpha.attempts == 1
+        assert client._cache == {}
+    elif cancel_at == "between_batches":
+        assert alpha.status == "succeeded"
 
 
 def test_non_exact_and_vcs_dependencies_are_unsupported_not_queried(
@@ -228,7 +326,10 @@ def test_agent_manifest_queries_pip_and_separates_non_osv_categories(
                 "author": "tester",
                 "license": "Apache-2.0",
                 "dependencies": {
-                    "pip": [{"name": "requests", "version": "2.32.0"}],
+                    "pip": [{
+                        "name": "requests", "version": "2.32.0",
+                        "registry": "https://pypi.org/simple/",
+                    }],
                     "system": ["python"],
                     "docker": [{"image": "postgres", "tag": "16"}],
                     "mcp_servers": [{"name": "local-server", "command": "python"}],
@@ -283,7 +384,7 @@ def test_manifest_osv_dependencies_are_kept_when_dependency_files_exist(
         encoding="utf-8",
     )
     (tmp_path / "requirements.txt").write_text(
-        "requirements-only==4.5.6\n",
+        "--index-url https://pypi.org/simple/\nrequirements-only==4.5.6\n",
         encoding="utf-8",
     )
     queries: list[dict[str, Any]] = []
@@ -308,8 +409,10 @@ def test_manifest_osv_dependencies_are_kept_when_dependency_files_exist(
     assert report["dependency_scan"]["status"] == "complete"
 
 
+@pytest.mark.parametrize("allow_private", [False, True])
 def test_non_public_registry_coordinates_require_explicit_opt_in(
     tmp_path: Path,
+    allow_private: bool,
 ) -> None:
     (tmp_path / "manifest.json").write_text(
         json.dumps(
@@ -343,15 +446,29 @@ def test_non_public_registry_coordinates_require_explicit_opt_in(
         ]
     )
 
-    def unexpected_request(_payload: bytes, _timeout: float) -> OSVHTTPResponse:
-        raise AssertionError("private coordinates must not reach public OSV")
+    queries = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        queries.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
 
     report = RiskScanner(
         tmp_path,
         registry_policy=policy,
-        osv_client=OSVClient(requester=unexpected_request),
+        osv_client=OSVClient(
+            requester=requester, allow_private_coordinates=allow_private
+        ),
     ).scan()
 
+    if allow_private:
+        assert queries == [{
+            "package": {"name": "internal-package", "ecosystem": "npm"},
+            "version": "1.0.0",
+        }]
+        assert report["dependency_scan"]["status"] == "complete"
+        return
+
+    assert queries == []
     assert report["dependency_scan"]["status"] == "not_queried"
     assert report["dependency_scan"]["failure_reasons"] == {
         "non_public_registry_not_queried": 1
@@ -361,9 +478,141 @@ def test_non_public_registry_coordinates_require_explicit_opt_in(
     assert report["dependency_check"]["known_vulnerabilities"] is None
 
 
+@pytest.mark.parametrize("allow_private", [False, True])
+@pytest.mark.parametrize("files", [
+    {"package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}'},
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "registry=https://npm.corp.example/\n",
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "registry=https://registry.npmjs.org/\n@corp:REGISTRY=https://npm.corp.example/\n",
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "registry=https://registry.npmjs.org/\n@corp:registry=${PRIVATE_REGISTRY}\n",
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "registry=http://registry.npmjs.org/\n",
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "@other:registry=https://registry.npmjs.org/\n",
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        "other/.npmrc": "registry=https://registry.npmjs.org/\n",
+    },
+    {
+        "requirements.txt": "--index-url https://pypi.org/simple/\n--extra-index-url https://python.corp.example/simple/\ninternal==1.0.0\n",
+    },
+    {
+        "requirements.txt": "--index-url https://pypi.org/simple/\n--extra-index-url ${PRIVATE_REGISTRY}\ninternal==1.0.0\n",
+    },
+    {
+        "requirements.txt": "--index-url https://pypi.org/simple/\ninternal==1.0.0\n--index-url https://python.corp.example/simple/\nother==2.0.0\n",
+    },
+    {
+        "poetry.lock": '[[package]]\nname = "internal"\nversion = "1.0.0"\n',
+        "pyproject.toml": '[[tool.poetry.source]]\nname = "corp"\nurl = "https://python.corp.example/simple/"\n',
+    },
+    {
+        "Cargo.lock": '[[package]]\nname = "internal"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+        ".cargo/config.toml": '[source.corp]\nregistry = "sparse+https://cargo.corp.example/"\n',
+    },
+    {
+        "package.json": '{"dependencies":{"@corp/internal":"1.0.0"}}',
+        ".npmrc": "registry=https://registry.npmjs.org/\n",
+        "setup.sh": "npm install --registry https://npm.corp.example/ @corp/internal\n",
+    },
+])
+def test_source_privacy_boundary_requires_explicit_opt_in(
+    tmp_path: Path, files: dict[str, str], allow_private: bool,
+) -> None:
+    for name, content in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    queries = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        queries.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    client = OSVClient(
+        requester=requester, allow_private_coordinates=allow_private
+    )
+    report = RiskScanner(tmp_path, osv_client=client).scan()
+    scan = report["dependency_scan"]
+
+    if allow_private:
+        assert len(queries) == scan["total_unique_dependencies"] > 0
+        assert scan["status"] == "complete"
+        assert scan["skipped"] == 0
+        return
+
+    assert queries == []
+    assert client.request_count == 0
+    assert scan["status"] == "not_queried"
+    assert scan["skipped"] == scan["total_unique_dependencies"] > 0
+    assert scan["query_failures"] == 0
+    assert scan["failure_reasons"] == {
+        "non_public_registry_not_queried": scan["skipped"]
+    }
+    assert report["dependency_check"]["known_vulnerabilities"] is None
+    assert report["scan_status"]["state"] == "partial"
+    jsonschema.validate(report, _REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize("permission", [None, False, "true", 1])
+def test_injected_client_requires_boolean_private_opt_in(
+    tmp_path: Path, permission: object,
+) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"dependencies":{"internal":"1.0.0"}}', encoding="utf-8"
+    )
+    queried = []
+    client = SimpleNamespace(query=lambda record: queried.append(record))
+    if permission is not None:
+        client.allow_private_coordinates = permission
+
+    report = RiskScanner(tmp_path, osv_client=client).scan()
+
+    assert queried == []
+    assert report["dependency_scan"]["status"] == "not_queried"
+
+
+def test_public_registry_scope_does_not_disclose_private_packages(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text(
+        '{"dependencies":{"public-package":"1.0.0","@corp/internal":"1.0.0"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n@corp:registry=https://npm.corp.example/\n",
+        encoding="utf-8",
+    )
+    queries = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        queries.extend(json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    report = RiskScanner(tmp_path, osv_client=OSVClient(requester=requester)).scan()
+
+    assert [query["package"]["name"] for query in queries] == ["public-package"]
+    assert report["dependency_scan"]["status"] == "partial"
+    assert report["dependency_scan"]["succeeded"] == 1
+    assert report["dependency_scan"]["skipped"] == 1
+
+
 def test_instance_query_override_uses_sequential_path_without_network(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
@@ -401,6 +650,9 @@ def test_instance_query_override_uses_sequential_path_without_network(
 def test_class_query_override_uses_sequential_path_without_network(
     tmp_path: Path,
 ) -> None:
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
@@ -624,7 +876,16 @@ def test_persistent_cache_is_prefetched_with_bounded_selects(
     assert {result.cache_source for result in results.values()} == {"persistent"}
 
 
-def test_api_unavailable_never_becomes_a_clean_report(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [(urllib.error.URLError("offline"), "network_error"), (TimeoutError(), "osv_timeout")],
+)
+def test_api_unavailable_never_becomes_a_clean_report(
+    tmp_path: Path, error: Exception, reason: str,
+) -> None:
+    (tmp_path / ".npmrc").write_text(
+        "registry=https://registry.npmjs.org/\n", encoding="utf-8"
+    )
     (tmp_path / "package.json").write_text(
         json.dumps(
             {
@@ -637,7 +898,7 @@ def test_api_unavailable_never_becomes_a_clean_report(tmp_path: Path) -> None:
     )
 
     def unavailable(_payload: bytes, _timeout: float) -> OSVHTTPResponse:
-        raise urllib.error.URLError("offline")
+        raise error
 
     client = OSVClient(
         requester=unavailable,
@@ -651,7 +912,7 @@ def test_api_unavailable_never_becomes_a_clean_report(tmp_path: Path) -> None:
     assert report["dependency_scan"]["succeeded"] == 0
     assert report["dependency_scan"]["failed"] == 1
     assert report["dependency_scan"]["remaining"] == 1
-    assert report["dependency_scan"]["failure_reasons"] == {"network_error": 1}
+    assert report["dependency_scan"]["failure_reasons"] == {reason: 1}
     assert report["dependency_check"]["known_vulnerabilities"] is None
     assert report["dependency_check"]["vulnerability_status"] == "not_assessed"
     assert report["scan_status"]["state"] == "partial"
@@ -733,7 +994,7 @@ def test_query_results_are_bounded_without_losing_summary_counts(
 ) -> None:
     dependencies = [f"bounded-package-{index}==1.0.0" for index in range(501)]
     (tmp_path / "requirements.txt").write_text(
-        "\n".join(dependencies) + "\n",
+        "--index-url https://pypi.org/simple/\n" + "\n".join(dependencies) + "\n",
         encoding="utf-8",
     )
     client = OSVClient(

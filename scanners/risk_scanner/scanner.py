@@ -164,8 +164,9 @@ class RiskScanner:
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
         self.mcp_semantic_model_loader = mcp_semantic_model_loader
-        self.osv_client = osv_client or OSVClient(
-            max_queries=self.policy.max_osv_queries
+        self.osv_client = (
+            osv_client if osv_client is not None
+            else OSVClient(max_queries=self.policy.max_osv_queries)
         )
         self.rule_execution: dict[str, Any] = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors: list[dict[str, Any]] = []
@@ -206,9 +207,6 @@ class RiskScanner:
         self.analyzed_files = [r.relative_path for r in self._inventory.files if r.read_status == "analyzed"]
         self.scanned_files = [r.relative_path for r in self._inventory.files
                               if r.read_status == "analyzed" and r.skip_reason != "general_rule_excluded"]
-        self.dependency_scan = empty_dependency_scan(
-            getattr(self.osv_client, "max_queries", self.policy.max_osv_queries)
-        )
         self._load_metadata()
         # Keep the package-authored metadata available for audit/explanation,
         # but never use it as the source of acquisition provenance.
@@ -223,6 +221,8 @@ class RiskScanner:
         self._inject_acquired_source_integrity()
 
         rule_results = self.rule_runner.run_all(self)
+        if any(r.rule_id == "SR-008" and r.status == "failed" for r in rule_results):
+            self.dependency_scan["status"] = "failed"
         self.rule_execution["succeeded"] = sum(r.status == "succeeded" for r in rule_results)
         self.rule_execution["failed"] = sum(r.status == "failed" for r in rule_results)
         self.rule_execution["results"] = [r.as_dict() for r in rule_results]
