@@ -27,6 +27,11 @@ from scanners.risk_scanner.registry_policy import (
 )
 from scanners.risk_scanner.scanner import RiskScanner
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.dependency_coverage import (
+    MAX_OSV_QUERY_RESULTS,
+    MAX_OSV_QUERY_RESULT_OCCURRENCES,
+    MAX_OSV_QUERY_RESULTS_BYTES,
+)
 
 
 _REPORT_SCHEMA = json.loads(
@@ -236,11 +241,15 @@ def test_repeated_scans_reset_osv_limit_state_and_reuse_cache(tmp_path: Path) ->
     ("response_status", "counter", "reason"),
     [(503, "failed", "provider_server_error"), (429, "rate_limited", "rate_limited")],
 )
+@pytest.mark.parametrize("restart_client", [False, True])
 def test_repeated_scans_resume_386_failed_osv_queries(
     tmp_path: Path, response_status: int, counter: str, reason: str,
+    restart_client: bool,
 ) -> None:
     names = [f"package-{index:03d}" for index in range(396)]
-    (tmp_path / "requirements.txt").write_text(
+    target = tmp_path / "package"
+    target.mkdir()
+    (target / "requirements.txt").write_text(
         "--index-url https://pypi.org/simple/\n"
         + "\n".join(f"{name}==1.0.0" for name in names)
         + "\n",
@@ -258,11 +267,13 @@ def test_repeated_scans_resume_386_failed_osv_queries(
             return OSVHTTPResponse(response_status, b"{}", {})
         return _success_response(payload, timeout)
 
-    client = OSVClient(
+    cache_path = tmp_path / "osv.sqlite3"
+    client_options = dict(
         requester=requester, max_queries=396, batch_size=10,
-        max_concurrency=1, max_retries=0,
+        max_concurrency=1, max_retries=0, cache_path=cache_path,
     )
-    scanner = RiskScanner(tmp_path, osv_client=client)
+    client = OSVClient(**client_options)
+    scanner = RiskScanner(target, osv_client=client)
 
     first = scanner.scan()
 
@@ -276,6 +287,8 @@ def test_repeated_scans_resume_386_failed_osv_queries(
     assert first["dependency_scan"]["remaining"] == 386
     assert first["dependency_scan"]["provider_requests"] == 40
     assert first["dependency_scan"]["failure_reasons"] == {reason: 386}
+    assert first["dependency_scan"]["known_vulnerabilities"] is None
+    assert first["dependency_scan"]["vulnerability_status"] == "not_assessed"
     assert first["dependency_check"]["known_vulnerabilities"] is None
     assert first["dependency_check"]["vulnerability_status"] == "not_assessed"
     assert first["scan_status"]["state"] == "partial"
@@ -283,9 +296,22 @@ def test_repeated_scans_resume_386_failed_osv_queries(
         advisory["code"] == "dependency_vulnerability_coverage"
         for advisory in first["review_advisories"]
     )
+    with sqlite3.connect(cache_path) as connection:
+        assert dict(connection.execute(
+            "SELECT status, COUNT(*) FROM osv_query_state GROUP BY status"
+        )) == {"succeeded": 10, counter: 386}
+        assert connection.execute(
+            "SELECT COUNT(*) FROM osv_query_state "
+            "WHERE failure_reason = ? AND response_status = ? "
+            "AND queried_at IS NOT NULL AND attempts = 1",
+            (reason, response_status),
+        ).fetchone() == (386,)
 
     provider_available = True
     sent.clear()
+    if restart_client:
+        client = OSVClient(**client_options)
+        scanner = RiskScanner(target, osv_client=client)
     second = scanner.scan()
 
     assert sent == names[10:]
@@ -295,8 +321,11 @@ def test_repeated_scans_resume_386_failed_osv_queries(
     assert second["dependency_scan"]["remaining"] == 0
     assert second["dependency_scan"]["query_failures"] == 0
     assert second["dependency_scan"]["provider_requests"] == 39
+    assert second["dependency_scan"]["resumed_queries"] == 386
     assert second["dependency_scan"]["cache_hits"] == 10
     assert second["dependency_scan"]["failure_reasons"] == {}
+    assert second["dependency_scan"]["known_vulnerabilities"] == 0
+    assert second["dependency_scan"]["vulnerability_status"] == "assessed"
     assert second["dependency_check"]["known_vulnerabilities"] == 0
     assert not any(
         advisory["code"] == "dependency_vulnerability_coverage"
@@ -307,6 +336,14 @@ def test_repeated_scans_resume_386_failed_osv_queries(
     assert client.cache_hits == 10
     assert client.failures == client.rate_limited == client.skipped == 0
     assert client.limit_reached is False
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM osv_query_state "
+            "WHERE status = 'succeeded' AND failure_reason IS NULL"
+        ).fetchone() == (396,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM osv_query_state WHERE from_cache = 1"
+        ).fetchone() == (10,)
     for report in (first, second):
         jsonschema.validate(report, _REPORT_SCHEMA)
 
@@ -314,7 +351,7 @@ def test_repeated_scans_resume_386_failed_osv_queries(
 def test_scan_without_dependencies_resets_all_osv_counters(tmp_path: Path) -> None:
     client = OSVClient(requester=_success_response)
     counters = (
-        "queried", "failures", "rate_limited", "skipped", "cache_hits", "request_count",
+        "queried", "failures", "rate_limited", "skipped", "cache_hits", "request_count", "resumed_queries",
     )
     for counter in counters:
         setattr(client, counter, 7)
@@ -504,7 +541,7 @@ def test_exhausted_rate_limit_and_query_budget_are_explicit() -> None:
 
 
 @pytest.mark.parametrize("cancel_at", ["before_query", "between_batches", "before_retry"])
-def test_scan_cancellation_stops_new_batches_and_retries(cancel_at: str) -> None:
+def test_scan_cancellation_stops_new_batches_and_retries(tmp_path: Path, cancel_at: str) -> None:
     cancelled = threading.Event()
     if cancel_at == "before_query":
         cancelled.set()
@@ -515,11 +552,13 @@ def test_scan_cancellation_stops_new_batches_and_retries(cancel_at: str) -> None
             return OSVHTTPResponse(429, b"{}", {"Retry-After": "5"})
         return _success_response(payload, timeout)
 
+    cache_path = tmp_path / "osv.sqlite3"
     client = OSVClient(
         requester=requester,
         cancel_event=cancelled,
         batch_size=1,
         max_concurrency=1,
+        cache_path=cache_path,
     )
     results = client.query_many([_dependency("alpha"), _dependency("beta")])
     alpha, beta = results.values()
@@ -535,6 +574,15 @@ def test_scan_cancellation_stops_new_batches_and_retries(cancel_at: str) -> None
         assert client._cache == {}
     elif cancel_at == "between_batches":
         assert alpha.status == "succeeded"
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT status, failure_reason, queried_at, attempts "
+            "FROM osv_query_state WHERE package_name = 'beta'"
+        ).fetchone() == ("not_queried", "cancelled", None, 0)
+        assert connection.execute(
+            "SELECT status, failure_reason, queried_at, attempts "
+            "FROM osv_query_state WHERE package_name = 'alpha'"
+        ).fetchone() == (alpha.status, alpha.failure_reason, alpha.queried_at, alpha.attempts)
 
 
 def test_non_exact_and_vcs_dependencies_are_unsupported_not_queried(
@@ -577,11 +625,12 @@ def test_non_exact_and_vcs_dependencies_are_unsupported_not_queried(
     )
 
 
-def test_disabled_provider_never_sends_queryable_coordinates() -> None:
+def test_disabled_provider_never_sends_queryable_coordinates(tmp_path: Path) -> None:
     def unexpected_request(_payload: bytes, _timeout: float) -> OSVHTTPResponse:
         raise AssertionError("disabled OSV lookup must not perform a request")
 
-    client = OSVClient(enabled=False, requester=unexpected_request)
+    cache_path = tmp_path / "osv.sqlite3"
+    client = OSVClient(enabled=False, requester=unexpected_request, cache_path=cache_path)
 
     result = client.query(_dependency("private-by-policy"))
 
@@ -589,6 +638,10 @@ def test_disabled_provider_never_sends_queryable_coordinates() -> None:
     assert result.failure_reason == "provider_disabled"
     assert client.queried == 0
     assert client.request_count == 0
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT status, failure_reason, queried_at FROM osv_query_state"
+        ).fetchall() == [("not_queried", "provider_disabled", None)]
 
 
 def test_agent_manifest_queries_pip_and_separates_non_osv_categories(
@@ -918,12 +971,19 @@ def test_public_registry_scope_does_not_disclose_private_packages(tmp_path: Path
         queries.extend(json.loads(payload)["queries"])
         return _success_response(payload, timeout)
 
-    report = RiskScanner(tmp_path, osv_client=OSVClient(requester=requester)).scan()
+    cache_path = tmp_path / "osv.sqlite3"
+    client = OSVClient(requester=requester, cache_path=cache_path)
+    report = RiskScanner(tmp_path, osv_client=client).scan()
 
     assert [query["package"]["name"] for query in queries] == ["public-package"]
     assert report["dependency_scan"]["status"] == "partial"
     assert report["dependency_scan"]["succeeded"] == 1
     assert report["dependency_scan"]["skipped"] == 1
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT status, queried_at, failure_reason FROM osv_query_state "
+            "WHERE package_name = '@corp/internal'"
+        ).fetchone() == ("not_queried", None, "non_public_registry_not_queried")
 
 
 def test_instance_query_override_uses_sequential_path_without_network(
@@ -1012,6 +1072,10 @@ def test_success_cache_is_reused_by_a_new_client(tmp_path: Path) -> None:
 
     first_result = first.query(dependency)
 
+    # Simulate the success-only database created before query-state persistence.
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute("DROP TABLE osv_query_state")
+
     def unexpected_request(_payload: bytes, _timeout: float) -> OSVHTTPResponse:
         raise AssertionError("persistent cache should avoid a provider request")
 
@@ -1028,6 +1092,357 @@ def test_success_cache_is_reused_by_a_new_client(tmp_path: Path) -> None:
     assert resumed_result.cache_source == "persistent"
     assert resumed_result.cache_age_seconds == 1
     assert resumed.request_count == 0
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT status, from_cache, cache_source, cache_age_seconds "
+            "FROM osv_query_state"
+        ).fetchall() == [("succeeded", 1, "persistent", 1)]
+
+
+def test_recording_cache_hits_does_not_refresh_success_ttl(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    now = 1000.0
+    requests = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        requests.append(payload)
+        return _success_response(payload, timeout)
+
+    options = dict(
+        requester=requester, cache_path=cache_path, cache_ttl=10, clock=lambda: now,
+    )
+    dependency = _dependency("cached-package")
+    first = OSVClient(**options)
+    first.query(dependency)
+    now = 1009.0
+    assert first.query(dependency).cache_source == "memory"
+    resumed = OSVClient(**options)
+    assert resumed.query(dependency).cache_source == "persistent"
+    now = 1011.0
+    result = resumed.query(dependency)
+
+    assert len(requests) == 2
+    assert result.from_cache is False
+    assert result.queried_at == "1970-01-01T00:16:51+00:00"
+
+
+@pytest.mark.parametrize("cache_ttl", [0, 3600])
+def test_all_query_states_are_durable_but_only_successes_are_reused(
+    tmp_path: Path, cache_ttl: int,
+) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    dependencies = [
+        _dependency("a-success"), _dependency("b-timeout"),
+        _dependency("c-limited"), _dependency("d-skipped"),
+        _dependency("e-unsupported", "^1.0.0"),
+    ]
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        name = json.loads(payload)["queries"][0]["package"]["name"]
+        if name == "b-timeout":
+            raise TimeoutError()
+        if name == "c-limited":
+            return OSVHTTPResponse(429, b"{}", {})
+        return _success_response(payload, timeout)
+
+    client = OSVClient(
+        requester=requester, cache_path=cache_path, max_queries=3,
+        batch_size=1, max_concurrency=1, max_retries=0,
+        cache_ttl=cache_ttl, clock=lambda: 1000.0,
+    )
+    results = client.query_many(dependencies)
+
+    expected = {
+        "a-success": ("succeeded", None, 200, 1),
+        "b-timeout": ("failed", "osv_timeout", None, 1),
+        "c-limited": ("rate_limited", "rate_limited", 429, 1),
+        "d-skipped": ("not_queried", "query_limit_exceeded", None, 0),
+        "e-unsupported": ("unsupported", "non_exact_version", None, 0),
+    }
+    with sqlite3.connect(cache_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute("SELECT * FROM osv_query_state").fetchall()
+        assert len(rows) == len(dependencies)
+        for row in rows:
+            name = row["package_name"]
+            assert (row["status"], row["failure_reason"], row["response_status"], row["attempts"]) == expected[name]
+            assert row["provider"] == "https://api.osv.dev"
+            assert row["data_source"] == "OSV"
+            assert row["recorded_at"] == 1000.0
+            assert (row["queried_at"] is not None) == (row["attempts"] > 0)
+            assert row["queried_at"] == results[("npm", name, row["version"])].queried_at
+        assert connection.execute("SELECT COUNT(*) FROM osv_query_cache_v2").fetchone()[0] == int(cache_ttl > 0)
+
+    sent: list[str] = []
+
+    def recovered(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        sent.extend(query["package"]["name"] for query in json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    resumed = OSVClient(
+        requester=recovered, cache_path=cache_path,
+        cache_ttl=cache_ttl, clock=lambda: 1001.0,
+    )
+    resumed.query_many(dependencies)
+
+    assert sent == [
+        "b-timeout", "c-limited", "d-skipped",
+    ] + (["a-success"] if cache_ttl == 0 else [])
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM osv_query_state "
+            "WHERE status = 'succeeded' AND failure_reason IS NULL"
+        ).fetchone() == (4,)
+        assert connection.execute(
+            "SELECT from_cache, cache_source, cache_age_seconds, queried_at "
+            "FROM osv_query_state WHERE package_name = 'a-success'"
+        ).fetchone() == (
+            (1, "persistent", 1, "1970-01-01T00:16:40+00:00") if cache_ttl else
+            (0, None, None, "1970-01-01T00:16:41+00:00")
+        )
+
+
+def test_query_plan_and_completed_batches_survive_interruption(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    dependencies = [_dependency(name) for name in ("alpha", "beta", "gamma")]
+
+    def interrupted(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        if json.loads(payload)["queries"][0]["package"]["name"] == "beta":
+            with sqlite3.connect(cache_path) as connection:
+                assert connection.execute(
+                    "SELECT package_name, status, failure_reason FROM osv_query_state "
+                    "ORDER BY package_name"
+                ).fetchall() == [
+                    ("alpha", "succeeded", None),
+                    ("beta", "not_queried", "query_pending"),
+                    ("gamma", "not_queried", "query_pending"),
+                ]
+            raise KeyboardInterrupt()
+        return _success_response(payload, timeout)
+
+    client = OSVClient(
+        requester=interrupted, cache_path=cache_path,
+        batch_size=1, max_concurrency=1,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        client.query_many(dependencies)
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT package_name, failure_reason, run_id, lease_expires_at "
+            "FROM osv_query_state WHERE status = 'not_queried' ORDER BY package_name"
+        ).fetchall() == [
+            ("beta", "query_interrupted", None, None),
+            ("gamma", "query_interrupted", None, None),
+        ]
+
+    sent: list[str] = []
+
+    def recovered(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        sent.extend(query["package"]["name"] for query in json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    results = OSVClient(
+        requester=recovered, cache_path=cache_path, max_queries=2,
+    ).query_many(dependencies)
+
+    assert sent == ["beta", "gamma"]
+    assert all(result.status == "succeeded" for result in results.values())
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM osv_query_state WHERE status = 'succeeded'"
+        ).fetchone() == (3,)
+
+
+def test_query_state_retention_is_bounded_independently_of_success_ttl(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    monkeypatch.setattr(osv_client_module, "_PERSISTENT_CACHE_MAX_ROWS", 3)
+    client = OSVClient(
+        requester=lambda _payload, _timeout: OSVHTTPResponse(503, b"{}", {}),
+        cache_path=cache_path, cache_ttl=1, max_retries=0, clock=lambda: 1000.0,
+    )
+    client.query_many([_dependency(f"package-{index}") for index in range(5)])
+    OSVClient(cache_path=cache_path, cache_ttl=1, clock=lambda: 2000.0)._ensure_cache()
+
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT status, failure_reason FROM osv_query_state"
+        ).fetchall() == [("failed", "provider_server_error")] * 3
+
+
+def test_zero_ttl_query_does_not_modify_shared_success_cache(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    dependency = _dependency("shared-success")
+    for provider in ("https://api.osv.dev", "https://osv.example.test"):
+        OSVClient(
+            requester=_success_response, cache_path=cache_path,
+            cache_ttl=3600, base_url=provider, clock=lambda: 1000.0,
+        ).query(dependency)
+    with sqlite3.connect(cache_path) as connection:
+        original = connection.execute("SELECT * FROM osv_query_cache_v2 ORDER BY provider").fetchall()
+    fresh = OSVClient(
+        requester=_success_response, cache_path=cache_path,
+        cache_ttl=0, clock=lambda: 1001.0,
+    )
+
+    assert fresh.query(dependency).from_cache is False
+    assert fresh.request_count == 1
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute("SELECT * FROM osv_query_cache_v2 ORDER BY provider").fetchall() == original
+        assert connection.execute("SELECT COUNT(*) FROM osv_query_state").fetchone() == (2,)
+    resumed = OSVClient(
+        requester=_success_response, cache_path=cache_path,
+        cache_ttl=3600, clock=lambda: 1002.0,
+    )
+    assert resumed.query(dependency).cache_source == "persistent"
+    assert resumed.request_count == 0
+
+
+def test_active_dispatch_renews_its_query_plan_lease(tmp_path: Path, monkeypatch) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    now = 1000.0
+    wait_calls = 0
+    real_wait = osv_client_module.wait
+
+    def controlled_wait(futures, *, timeout, return_when):
+        nonlocal now, wait_calls
+        assert timeout <= 30
+        now += 110
+        wait_calls += 1
+        observer = OSVClient(cache_path=cache_path, clock=lambda: now)
+        assert observer._load_incomplete_states([("npm", "active", "1.0.0")]) == set()
+        with sqlite3.connect(cache_path) as connection:
+            assert connection.execute(
+                "SELECT failure_reason FROM osv_query_state WHERE package_name = 'active'"
+            ).fetchone() == ("query_pending",)
+        if wait_calls == 1:
+            return set(), set(futures)
+        return real_wait(futures, timeout=timeout, return_when=return_when)
+
+    monkeypatch.setattr(osv_client_module, "wait", controlled_wait)
+    client = OSVClient(cache_path=cache_path, requester=_success_response, clock=lambda: now)
+    assert client.query(_dependency("active")).status == "succeeded"
+    assert wait_calls == 2
+
+
+def test_legacy_query_state_is_migrated_before_recovery(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute("""
+            CREATE TABLE osv_query_state (
+                provider TEXT NOT NULL, ecosystem TEXT NOT NULL,
+                package_name TEXT NOT NULL, version TEXT NOT NULL,
+                data_source TEXT NOT NULL, status TEXT NOT NULL, recorded_at REAL NOT NULL,
+                queried_at TEXT, response_status INTEGER, failure_reason TEXT,
+                attempts INTEGER NOT NULL, vulnerability_ids TEXT NOT NULL,
+                from_cache INTEGER NOT NULL, cache_source TEXT, cache_age_seconds INTEGER,
+                PRIMARY KEY (provider, ecosystem, package_name, version)
+            )
+        """)
+        connection.execute("""
+            INSERT INTO osv_query_state VALUES (
+                'https://api.osv.dev', 'npm', 'legacy', '1.0.0', 'OSV', 'not_queried',
+                1000, NULL, NULL, 'query_pending', 0, '[]', 0, NULL, NULL
+            )
+        """)
+    client = OSVClient(cache_path=cache_path, clock=lambda: 1001.0)
+
+    assert client._load_incomplete_states([("npm", "legacy", "1.0.0")]) == {("npm", "legacy", "1.0.0")}
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT failure_reason, run_id, lease_expires_at FROM osv_query_state"
+        ).fetchall() == [("query_interrupted", None, None)]
+
+
+def test_durable_failures_are_prioritized_over_new_coordinates(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    retry = _dependency("z-retry")
+    OSVClient(
+        requester=lambda _p, _t: OSVHTTPResponse(503, b"{}", {}),
+        max_retries=0, cache_path=cache_path,
+    ).query(retry)
+    sent = []
+
+    def requester(payload, timeout):
+        sent.extend(query["package"]["name"] for query in json.loads(payload)["queries"])
+        return _success_response(payload, timeout)
+
+    resumed = OSVClient(requester=requester, cache_path=cache_path, max_queries=1)
+    results = resumed.query_many([_dependency("a-new"), retry])
+
+    assert sent == ["z-retry"]
+    assert resumed.resumed_queries == 1
+    assert results[dependency_coordinate(retry)].status == "succeeded"
+    assert results[dependency_coordinate(_dependency("a-new"))].failure_reason == "query_limit_exceeded"
+
+
+def test_expired_and_legacy_plans_converge_without_requerying_their_coordinates(tmp_path: Path) -> None:
+    cache_path = tmp_path / "osv.sqlite3"
+    pending = OSVQueryResult([], status="not_queried", failure_reason="query_pending")
+    abandoned = OSVClient(cache_path=cache_path, clock=lambda: 1000.0)
+    abandoned.record_results({("npm", "orphan", "1.0.0"): pending}, run_id="abandoned")
+    abandoned.record_results({("npm", "legacy", "1.0.0"): pending})
+    now = 1100.0
+    live = OSVClient(cache_path=cache_path, clock=lambda: now)
+    live.record_results({("npm", "live", "1.0.0"): pending}, run_id="active")
+    now = 1200.0
+    live._update_query_lease("active")
+    observer = OSVClient(
+        cache_path=cache_path, requester=_success_response, clock=lambda: now,
+    )
+    observer.query(_dependency("unrelated"))
+
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT package_name, failure_reason FROM osv_query_state "
+            "WHERE status = 'not_queried' ORDER BY package_name"
+        ).fetchall() == [
+            ("legacy", "query_interrupted"), ("live", "query_pending"),
+            ("orphan", "query_interrupted"),
+        ]
+    # Reconcile on an existing reader too; renewing one owner preserves its
+    # live lease, and completing a different owner cannot close it.
+    observer._update_query_lease("abandoned", finished=True)
+    now = 1240.0
+    assert observer._load_incomplete_states([("npm", "live", "1.0.0")]) == set()
+    now = 1321.0
+    assert observer._load_incomplete_states([("npm", "live", "1.0.0")]) == {("npm", "live", "1.0.0")}
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute(
+            "SELECT failure_reason, run_id, lease_expires_at FROM osv_query_state "
+            "WHERE package_name = 'live'"
+        ).fetchone() == ("query_interrupted", None, None)
+
+
+@pytest.mark.parametrize("long_paths", [False, True])
+def test_report_details_bound_aggregate_occurrences_and_serialized_bytes(long_paths):
+    from dataclasses import replace
+    from scanners.risk_scanner.rules.supply_chain import _bounded_osv_query_results
+
+    groups = {}
+    results = {}
+    # Enough unique coordinates to exceed the result cap, each with 100 sources.
+    for index in range(1200):
+        record = _dependency(f"package-{index:04d}")
+        key = dependency_coordinate(record)
+        groups[key] = [replace(
+            record, source_file=("依" * 950 if long_paths else "nested") + f"/{source}/package-lock.json",
+        ) for source in range(100)]
+        results[key] = OSVQueryResult([])
+    last = ("npm", "package-1199", "1.0.0")
+    results[last] = OSVQueryResult(["OSV-CONFIRMED-1"])
+
+    details = _bounded_osv_query_results(groups, results)
+
+    assert details[0]["package_name"] == "package-1199"
+    assert 0 < len(details) <= MAX_OSV_QUERY_RESULTS
+    assert sum(len(row["occurrences"]) for row in details) <= MAX_OSV_QUERY_RESULT_OCCURRENCES
+    assert len(json.dumps(details).encode("utf-8")) <= MAX_OSV_QUERY_RESULTS_BYTES
+    assert all(row["occurrence_count"] == 100 and row["occurrences_truncated"] for row in details)
+    if long_paths:
+        assert len(details) < MAX_OSV_QUERY_RESULTS  # Byte limit, not just the row cap.
+    jsonschema.validate(details, _REPORT_SCHEMA["properties"]["dependency_scan"]["properties"]["query_results"])
 
 
 def test_cached_coordinates_do_not_bypass_outbound_query_budget(tmp_path):
@@ -1159,7 +1574,7 @@ def test_persistent_cache_write_failure_disables_cache(
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(sqlite3, "connect", locked_connect)
-    client._store_successes({
+    client.record_results({
         ("npm", "locked-package", "1.0.0"): OSVQueryResult([]),
     })
 
@@ -1209,7 +1624,8 @@ def test_persistent_cache_is_prefetched_with_bounded_selects(
     results = resumed.query_many(dependencies)
 
     assert len(results) == 700
-    assert connect_calls == 2  # schema/expiry setup, then one bulk read connection
+    # Schema/expiry setup, one bulk read, and one bulk state update for cache hits.
+    assert connect_calls == 3
     assert len(select_statements) == 3  # 300 + 300 + 100 coordinates
     assert resumed.cache_hits == 700
     assert resumed.request_count == 0
@@ -1377,26 +1793,86 @@ def test_osv_occurrences_are_aggregated_before_finding_budget(tmp_path):
     jsonschema.validate(report, _REPORT_SCHEMA)
 
 
-def test_query_results_are_bounded_without_losing_summary_counts(
+@pytest.mark.parametrize(("dependency_count", "fail_last", "query_budget"), [
+    (501, False, 1000), (501, True, 1000), (5001, False, 1000), (1200, False, 2000),
+])
+def test_query_results_have_explicit_bounds_without_losing_coverage(
     tmp_path: Path,
+    dependency_count: int,
+    fail_last: bool,
+    query_budget: int,
 ) -> None:
-    dependencies = [f"bounded-package-{index}==1.0.0" for index in range(501)]
+    dependencies = [f"package-{index:05d}==1.0.0" for index in range(dependency_count)]
     (tmp_path / "requirements.txt").write_text(
         "--index-url https://pypi.org/simple/\n" + "\n".join(dependencies) + "\n",
         encoding="utf-8",
     )
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        rows = [
+            {"error": "provider failure"}
+            if fail_last and query["package"]["name"] == f"package-{dependency_count - 1:05d}"
+            else {}
+            for query in json.loads(payload)["queries"]
+        ]
+        return OSVHTTPResponse(200, json.dumps({"results": rows}).encode(), {})
+
     client = OSVClient(
-        requester=_success_response,
-        max_queries=1000,
+        requester=requester,
+        max_queries=query_budget,
         batch_size=100,
     )
 
     report = RiskScanner(tmp_path, osv_client=client).scan()
     dependency_scan = report["dependency_scan"]
 
-    assert dependency_scan["status"] == "complete"
-    assert dependency_scan["total_unique_dependencies"] == 501
-    assert dependency_scan["succeeded"] == 501
-    assert len(dependency_scan["query_results"]) == 500
-    assert dependency_scan["query_results_truncated"] is True
+    succeeded = min(dependency_count, query_budget) - int(fail_last)
+    assert dependency_scan["status"] == ("complete" if succeeded == dependency_count else "partial")
+    assert dependency_scan["total_unique_dependencies"] == dependency_count
+    assert dependency_scan["succeeded"] == succeeded
+    assert dependency_scan["remaining"] == dependency_count - succeeded
+    details = dependency_scan["query_results"]
+    assert len(details) == min(dependency_count, MAX_OSV_QUERY_RESULTS)
+    assert dependency_scan["query_results_truncated"] is (dependency_count > len(details))
+    assert dependency_scan["query_results_omitted"] == dependency_count - len(details)
+    assert len(json.dumps(details).encode("utf-8")) <= MAX_OSV_QUERY_RESULTS_BYTES
+    assert sum(len(result["occurrences"]) for result in details) <= MAX_OSV_QUERY_RESULT_OCCURRENCES
+    if fail_last:
+        assert details[0]["package_name"] == f"package-{dependency_count - 1:05d}"
+    if dependency_count > query_budget:
+        assert all(result["status"] == "not_queried" for result in details)
+    for result in details:
+        index = int(result["package_name"].split("-")[-1])
+        expected_status, expected_reason = "succeeded", None
+        if index >= query_budget:
+            expected_status, expected_reason = "not_queried", "query_limit_exceeded"
+        elif fail_last and index == dependency_count - 1:
+            expected_status, expected_reason = "failed", "provider_query_error"
+        assert result["status"] == expected_status
+        assert result["failure_reason"] == expected_reason
+        assert result["occurrences"][0]["source_file"] == "requirements.txt"
+    jsonschema.validate(report, _REPORT_SCHEMA)
+
+
+def test_partial_scan_retains_confirmed_vulnerabilities_without_claiming_full_assessment(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "alpha==1.0.0\nbeta==1.0.0\n", encoding="utf-8",
+    )
+    client = OSVClient(requester=lambda _payload, _timeout: OSVHTTPResponse(
+        200, b'{"results":[{"vulns":[{"id":"OSV-CONFIRMED-1"}]},{"error":"unavailable"}]}', {},
+    ))
+
+    report = RiskScanner(tmp_path, osv_client=client).scan()
+
+    assert report["dependency_scan"]["status"] == "partial"
+    for field in ("dependency_scan", "dependency_check"):
+        assert report[field]["known_vulnerabilities"] is None
+        assert report[field]["vulnerability_status"] == "not_assessed"
+    assert report["dependency_scan"]["query_results"][0]["vulnerability_count"] == 1
+    assert any(
+        finding.get("source_kind") == "osv_advisory"
+        and "OSV-CONFIRMED-1" in finding["title"]
+        for finding in report["findings"]
+    )
     jsonschema.validate(report, _REPORT_SCHEMA)

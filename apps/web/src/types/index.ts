@@ -556,11 +556,14 @@ export interface DependencyScan {
   remaining?: number;
   cache_hits?: number;
   provider_requests?: number;
-  known_vulnerabilities?: number;
+  resumed_queries?: number;
+  known_vulnerabilities?: number | null;
+  vulnerability_status?: 'assessed' | 'not_assessed';
   non_osv_manifest_dependencies?: NonOSVManifestDependencySummary;
   failure_reasons?: Record<string, number>;
   query_results?: DependencyQueryResult[];
   query_results_truncated?: boolean;
+  query_results_omitted?: number;
   artifact_acquisition?: DependencyArtifactAcquisitionSummary;
   integrity?: DependencyIntegritySummary;
   manifest_lock?: DependencyManifestLockSummary;

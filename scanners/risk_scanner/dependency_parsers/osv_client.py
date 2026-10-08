@@ -9,11 +9,13 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import KW_ONLY, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from .models import DependencyRecord
 
@@ -47,6 +49,7 @@ _PERSISTENT_CACHE_MAX_ROWS = 200_000
 # Keep each cache lookup below SQLite's commonly configured 999-parameter limit.
 _PERSISTENT_CACHE_READ_BATCH_SIZE = 300
 _PERSISTENT_CACHE_WRITE_LOCK = threading.Lock()
+_QUERY_STATE_LEASE_SECONDS = 120.0
 
 
 def _validated_base_url(value: object) -> str:
@@ -216,7 +219,7 @@ def _header_value(headers: Mapping[str, str] | object, name: str) -> str | None:
 
 
 class OSVClient:
-    """Bounded, batched OSV client with optional durable success caching."""
+    """Bounded OSV queries with durable state and a separate success cache."""
 
     def __init__(
         self,
@@ -299,6 +302,7 @@ class OSVClient:
             self.skipped = 0
             self.cache_hits = 0
             self.request_count = 0
+            self.resumed_queries = 0
             self.limit_reached = False
 
     def _default_requester(self, payload: bytes, timeout: float) -> OSVHTTPResponse:
@@ -351,28 +355,144 @@ class OSVClient:
                             """
                         )
                         connection.execute(
-                            "DELETE FROM osv_query_cache_v2 WHERE queried_at < ?",
-                            (self._clock() - self.cache_ttl,),
+                            """
+                            CREATE TABLE IF NOT EXISTS osv_query_state (
+                                provider TEXT NOT NULL,
+                                ecosystem TEXT NOT NULL,
+                                package_name TEXT NOT NULL,
+                                version TEXT NOT NULL,
+                                data_source TEXT NOT NULL,
+                                status TEXT NOT NULL,
+                                recorded_at REAL NOT NULL,
+                                queried_at TEXT,
+                                response_status INTEGER,
+                                failure_reason TEXT,
+                                attempts INTEGER NOT NULL,
+                                vulnerability_ids TEXT NOT NULL,
+                                from_cache INTEGER NOT NULL,
+                                cache_source TEXT,
+                                cache_age_seconds INTEGER,
+                                run_id TEXT,
+                                lease_expires_at REAL,
+                                PRIMARY KEY (provider, ecosystem, package_name, version)
+                            )
+                            """
                         )
                         connection.execute(
                             """
-                            DELETE FROM osv_query_cache_v2
-                            WHERE rowid IN (
-                                SELECT rowid
-                                FROM osv_query_cache_v2
-                                ORDER BY queried_at DESC
-                                LIMIT -1 OFFSET ?
-                            )
-                            """,
-                            (_PERSISTENT_CACHE_MAX_ROWS,),
+                            CREATE INDEX IF NOT EXISTS osv_query_state_recorded_at_idx
+                            ON osv_query_state (recorded_at DESC)
+                            """
                         )
-                        connection.execute("DROP TABLE IF EXISTS osv_query_cache")
+                        columns = {
+                            row[1] for row in connection.execute("PRAGMA table_info(osv_query_state)")
+                        }
+                        for name, sql_type in (("run_id", "TEXT"), ("lease_expires_at", "REAL")):
+                            if name not in columns:
+                                connection.execute(f"ALTER TABLE osv_query_state ADD COLUMN {name} {sql_type}")
+                        connection.execute(
+                            "CREATE INDEX IF NOT EXISTS osv_query_state_lease_idx "
+                            "ON osv_query_state (failure_reason, lease_expires_at)"
+                        )
+                        self._expire_query_plans(connection)
+                        # TTL=0 disables reuse for this client. It must not
+                        # evict successes belonging to other workers/providers.
+                        if self.cache_ttl > 0:
+                            connection.execute(
+                                "DELETE FROM osv_query_cache_v2 WHERE queried_at < ?",
+                                (self._clock() - self.cache_ttl,),
+                            )
+                            connection.execute(
+                                """
+                                DELETE FROM osv_query_cache_v2
+                                WHERE rowid IN (
+                                    SELECT rowid FROM osv_query_cache_v2
+                                    ORDER BY queried_at DESC
+                                    LIMIT -1 OFFSET ?
+                                )
+                                """,
+                                (_PERSISTENT_CACHE_MAX_ROWS,),
+                            )
+                            connection.execute("DROP TABLE IF EXISTS osv_query_cache")
                 self._cache_ready = True
             except (OSError, sqlite3.Error) as exc:
                 self._cache_ready = False
                 logger.warning("OSV persistent cache is unavailable: %s", exc)
             finally:
                 self._cache_checked = True
+
+    def _expire_query_plans(self, connection: sqlite3.Connection) -> None:
+        """Reconcile abandoned plans, including legacy entries without a lease."""
+        connection.execute(
+            """
+            UPDATE osv_query_state
+            SET failure_reason = 'query_interrupted', run_id = NULL,
+                lease_expires_at = NULL
+            WHERE status = 'not_queried' AND failure_reason = 'query_pending'
+              AND (run_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ?)
+            """,
+            (self._clock(),),
+        )
+
+    def _load_incomplete_states(self, keys: Sequence[OSVCoordinate]) -> set[OSVCoordinate]:
+        """Read durable unfinished work to prioritize recovery within the budget."""
+        if not keys or self.cache_path is None:
+            return set()
+        self._ensure_cache()
+        if not self._cache_ready:
+            return set()
+        incomplete: set[OSVCoordinate] = set()
+        try:
+            with _PERSISTENT_CACHE_WRITE_LOCK:
+                with sqlite3.connect(self.cache_path, timeout=5) as connection:
+                    self._expire_query_plans(connection)
+                    for index in range(0, len(keys), _PERSISTENT_CACHE_READ_BATCH_SIZE):
+                        batch = keys[index:index + _PERSISTENT_CACHE_READ_BATCH_SIZE]
+                        placeholders = ",".join("(?, ?, ?)" for _key in batch)
+                        incomplete.update(connection.execute(
+                            f"""
+                            SELECT ecosystem, package_name, version FROM osv_query_state
+                            WHERE provider = ? AND status != 'succeeded'
+                              AND COALESCE(failure_reason, '') != 'query_pending'
+                              AND (ecosystem, package_name, version) IN ({placeholders})
+                            """,
+                            (self.base_url, *(value for key in batch for value in key)),
+                        ).fetchall())
+        except sqlite3.Error as exc:
+            self._cache_ready = False
+            logger.warning("OSV query-state read failed: %s", exc)
+            return set()
+        return incomplete
+
+    def _update_query_lease(self, run_id: str, *, finished: bool = False) -> None:
+        if not self._cache_ready or self.cache_path is None:
+            return
+        try:
+            with _PERSISTENT_CACHE_WRITE_LOCK:
+                with sqlite3.connect(self.cache_path, timeout=5) as connection:
+                    if finished:
+                        connection.execute(
+                            "UPDATE osv_query_state SET failure_reason = 'query_interrupted', "
+                            "run_id = NULL, lease_expires_at = NULL "
+                            "WHERE run_id = ? AND failure_reason = 'query_pending'",
+                            (run_id,),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE osv_query_state SET lease_expires_at = ? "
+                            "WHERE run_id = ? AND failure_reason = 'query_pending'",
+                            (self._clock() + _QUERY_STATE_LEASE_SECONDS, run_id),
+                        )
+        except sqlite3.Error as exc:
+            self._cache_ready = False
+            logger.warning("OSV query-state lease update failed: %s", exc)
+
+    @contextmanager
+    def _query_plan_lease(self, run_id: str):
+        try:
+            yield
+        finally:
+            self._update_query_lease(run_id, finished=True)
 
     def _cached(self, key: OSVCoordinate) -> OSVQueryResult | None:
         """Return a valid in-memory result without performing persistent I/O."""
@@ -484,15 +604,21 @@ class OSVClient:
         self.cache_hits += len(loaded)
         return loaded
 
-    def _store_successes(
-        self, results: Mapping[OSVCoordinate, OSVQueryResult]
+    def record_results(
+        self, results: Mapping[OSVCoordinate, OSVQueryResult], *, run_id: str | None = None,
     ) -> None:
-        results = {
-            key: result for key, result in results.items()
-            if result.status == "succeeded"
-        }
-        if not results or self.cache_ttl == 0:
+        """Persist every outcome; only fresh successes enter the reusable cache.
+
+        Scan-policy decisions can be recorded here without sending coordinates
+        to OSV. State retention is independent of the success-cache TTL.
+        """
+        if not results:
             return
+        successes = {
+            key: result for key, result in results.items()
+            if result.status == "succeeded" and not result.from_cache
+            and self.cache_ttl > 0
+        }
         cached_at = self._clock()
         memory_entries = {
             key: (
@@ -504,7 +630,7 @@ class OSVClient:
                     cache_age_seconds=None,
                 ),
             )
-            for key, result in results.items()
+            for key, result in successes.items()
         }
         with self._cache_lock:
             self._cache.update(memory_entries)
@@ -518,6 +644,43 @@ class OSVClient:
                 if not self._cache_ready:
                     return
                 with sqlite3.connect(self.cache_path, timeout=5) as connection:
+                    connection.executemany(
+                        """
+                        INSERT INTO osv_query_state (
+                            provider, ecosystem, package_name, version, data_source,
+                            status, recorded_at, queried_at, response_status,
+                            failure_reason, attempts, vulnerability_ids,
+                            from_cache, cache_source, cache_age_seconds, run_id, lease_expires_at
+                        ) VALUES (?, ?, ?, ?, 'OSV', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(provider, ecosystem, package_name, version) DO UPDATE SET
+                            status = excluded.status,
+                            recorded_at = excluded.recorded_at,
+                            queried_at = excluded.queried_at,
+                            response_status = excluded.response_status,
+                            failure_reason = excluded.failure_reason,
+                            attempts = excluded.attempts,
+                            vulnerability_ids = excluded.vulnerability_ids,
+                            from_cache = excluded.from_cache,
+                            cache_source = excluded.cache_source,
+                            cache_age_seconds = excluded.cache_age_seconds,
+                            run_id = excluded.run_id,
+                            lease_expires_at = excluded.lease_expires_at
+                        """,
+                        [
+                            (
+                                self.base_url, *key, result.status, cached_at,
+                                result.queried_at, result.response_status,
+                                result.failure_reason, result.attempts,
+                                json.dumps(result.vulnerability_ids, separators=(",", ":")),
+                                int(result.from_cache), result.cache_source,
+                                result.cache_age_seconds,
+                                run_id if result.failure_reason == "query_pending" else None,
+                                cached_at + _QUERY_STATE_LEASE_SECONDS
+                                if run_id and result.failure_reason == "query_pending" else None,
+                            )
+                            for key, result in results.items()
+                        ],
+                    )
                     connection.executemany(
                         """
                         INSERT INTO osv_query_cache_v2 (
@@ -540,8 +703,19 @@ class OSVClient:
                                     separators=(",", ":"),
                                 ),
                             )
-                            for key, result in results.items()
+                            for key, result in successes.items()
                         ],
+                    )
+                    connection.execute(
+                        """
+                        DELETE FROM osv_query_state
+                        WHERE rowid IN (
+                            SELECT rowid FROM osv_query_state
+                            ORDER BY recorded_at DESC, rowid DESC
+                            LIMIT -1 OFFSET ?
+                        )
+                        """,
+                        (_PERSISTENT_CACHE_MAX_ROWS,),
                     )
         except sqlite3.Error as exc:
             self._cache_ready = False
@@ -591,7 +765,7 @@ class OSVClient:
         response_status: int | None,
         attempts: int,
     ) -> dict[OSVCoordinate, OSVQueryResult]:
-        queried_at = _utc_iso(self._clock())
+        queried_at = _utc_iso(self._clock()) if attempts else None
         return {
             key: OSVQueryResult(
                 [],
@@ -716,7 +890,6 @@ class OSVClient:
                             attempts=attempts,
                         )
                         results[key] = result
-                    self._store_successes(results)
                     return results
             except urllib.error.HTTPError as exc:
                 response_status = int(exc.code)
@@ -815,8 +988,11 @@ class OSVClient:
             else:
                 misses.append((key, dependency))
 
+        incomplete = self._load_incomplete_states([key for key, _record in misses])
+        misses.sort(key=lambda item: (item[0] not in incomplete, item[0]))
         available = max(self.max_queries - self.queried, 0)
         selected = misses[:available]
+        self.resumed_queries += sum(key in incomplete for key, _record in selected)
         omitted = misses[available:]
         if omitted:
             self.limit_reached = True
@@ -828,6 +1004,18 @@ class OSVClient:
                     failure_reason="query_limit_exceeded",
                 )
 
+        # Save the plan before dispatch so an interruption leaves explicit
+        # not_queried entries alongside any previously completed batches.
+        run_id = uuid4().hex
+        self.record_results({
+            **results,
+            **{
+                key: OSVQueryResult(
+                    [], status="not_queried", failure_reason="query_pending"
+                )
+                for key, _dependency in selected
+            },
+        }, run_id=run_id)
         if not selected:
             return results
 
@@ -837,7 +1025,7 @@ class OSVClient:
             for index in range(0, len(selected), self.batch_size)
         ]
         workers = min(self.max_concurrency, len(batches))
-        with ThreadPoolExecutor(
+        with self._query_plan_lease(run_id), ThreadPoolExecutor(
             max_workers=max(workers, 1),
             thread_name_prefix="osv-query",
         ) as executor:
@@ -860,8 +1048,10 @@ class OSVClient:
             while pending:
                 completed, _still_pending = wait(
                     pending,
+                    timeout=_QUERY_STATE_LEASE_SECONDS / 4,
                     return_when=FIRST_COMPLETED,
                 )
+                self._update_query_lease(run_id)
                 for future in completed:
                     batch = pending.pop(future)
                     try:
@@ -875,6 +1065,7 @@ class OSVClient:
                             response_status=None,
                             attempts=0,
                         )
+                    self.record_results(batch_results)
                     results.update(batch_results)
                     submit_next()
 

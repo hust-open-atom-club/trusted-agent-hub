@@ -212,6 +212,55 @@ describe('DependencyCoverageSummary', () => {
     expect(cachedRow).toHaveTextContent('报告中已省略其余来源位置。');
   });
 
+  it('paginates large reports, renders sources lazily and clamps the page after replacement', async () => {
+    const user = userEvent.setup();
+    const results: DependencyQueryResult[] = Array.from({ length: 120 }, (_, index) => ({
+      ecosystem: 'npm', package_name: `package-${index}`, version: '1.0.0',
+      status: 'not_queried', data_source: 'OSV', queried_at: null, response_status: null,
+      failure_reason: 'query_limit_exceeded', from_cache: false, attempts: 0,
+      vulnerability_count: 0, occurrence_count: 1, occurrences_truncated: false,
+      occurrences: [{ source_file: `source-${index}/package-lock.json`, scope: 'runtime', direct: true }],
+    }));
+    const { rerender } = render(<DependencyCoverageSummary dependencyScan={{
+      status: 'partial', query_results: results, query_results_truncated: true,
+      query_results_omitted: 4881, resumed_queries: 3,
+    }} />);
+    expect(screen.getByTestId('dependency-vulnerability-coverage')).toHaveTextContent('本次恢复查询数3');
+    expect(screen.getByRole('note')).toHaveTextContent('已省略 4881 个坐标的明细');
+    await user.click(screen.getByText('坐标查询明细（120）'));
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(51);
+    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('第 1 / 3 页');
+    expect(screen.queryByText('package-50@1.0.0')).not.toBeInTheDocument();
+    expect(screen.queryByText('source-0/package-lock.json')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '下一页' }));
+    expect(screen.getByText('package-50@1.0.0')).toBeVisible();
+    expect(screen.queryByText('package-0@1.0.0')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '下一页' }));
+    expect(within(table).getAllByRole('row')).toHaveLength(21);
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+    rerender(<DependencyCoverageSummary dependencyScan={{ status: 'partial', query_results: results.slice(0, 1) }} />);
+    expect(await screen.findByText('package-0@1.0.0')).toBeVisible();
+    expect(screen.queryByRole('navigation', { name: '查询明细分页' })).not.toBeInTheDocument();
+  });
+
+  it('bounds rendered rows even when reading an older oversized report', async () => {
+    const user = userEvent.setup();
+    const results: DependencyQueryResult[] = Array.from({ length: 5001 }, (_, index) => ({
+      ecosystem: 'npm', package_name: `package-${index}`, version: '1.0.0', status: 'succeeded',
+      data_source: 'OSV', queried_at: null, response_status: 200, failure_reason: null,
+      from_cache: false, attempts: 1, vulnerability_count: 0, occurrence_count: 1,
+      occurrences: [{ source_file: 'package-lock.json', scope: 'runtime', direct: true }],
+      occurrences_truncated: false,
+    }));
+    render(<DependencyCoverageSummary dependencyScan={{ status: 'complete', query_results: results }} />);
+    await user.click(screen.getByText('坐标查询明细（5001）'));
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(51);
+    expect(screen.getByRole('status')).toHaveTextContent('第 1 / 101 页');
+  });
+
   it('uses separate OSV timeout and integrity-unsupported labels', () => {
     render(<DependencyCoverageSummary dependencyScan={{
       status: 'unavailable',

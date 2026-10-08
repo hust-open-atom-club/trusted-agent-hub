@@ -114,6 +114,9 @@ def test_dependency_acquisition_coverage_is_schema_valid(tmp_path):
 
     assert report["dependency_scan"]["status"] == "partial"
     assert report["dependency_scan"]["artifact_acquisition"] == acquisition
+    for field in ("dependency_scan", "dependency_check"):
+        assert report[field]["known_vulnerabilities"] is None
+        assert report[field]["vulnerability_status"] == "not_assessed"
     jsonschema.validate(report, SCHEMA)
     ScanReport.model_validate(report)
 
@@ -134,6 +137,50 @@ def test_dependency_acquisition_coverage_is_schema_valid(tmp_path):
 def test_dependency_assessment_status_matches_vulnerability_count(check, valid):
     validator = jsonschema.Draft202012Validator(SCHEMA["properties"]["dependency_check"])
     assert validator.is_valid(check) is valid
+
+
+@pytest.mark.parametrize("status", [
+    "complete", "partial", "failed", "unavailable", "unsupported", "not_queried",
+])
+@pytest.mark.parametrize("known", [0, 2, None])
+@pytest.mark.parametrize("assessment", ["assessed", "not_assessed"])
+def test_dependency_scan_assessment_matches_status_and_count(status, known, assessment):
+    scan = {
+        "status": status, "dependencies_found": 1, "dependencies_queried": 0,
+        "query_failures": 0, "known_vulnerabilities": known,
+        "vulnerability_status": assessment,
+    }
+    validator = jsonschema.Draft202012Validator(SCHEMA["properties"]["dependency_scan"])
+    valid = (
+        status == "complete" and assessment == "assessed" and known is not None
+    ) or (
+        status != "complete" and assessment == "not_assessed" and known is None
+    )
+    assert validator.is_valid(scan) is valid
+
+
+@pytest.mark.parametrize("after_query", [False, True])
+def test_dependency_rule_failure_clears_both_vulnerability_summaries(
+    tmp_path, monkeypatch, after_query,
+):
+    from scanners.risk_scanner.rules import supply_chain
+
+    original = supply_chain._check_dependency_records
+
+    def fail(scanner, records, sources):
+        if after_query:
+            original(scanner, records, sources)
+            assert scanner.dependency_scan["known_vulnerabilities"] == 0
+        raise RuntimeError("dependency analysis failed")
+
+    monkeypatch.setattr(supply_chain, "_check_dependency_records", fail)
+    report = _scan(tmp_path, {"SKILL.md": CLEAN_SKILL})
+
+    assert report["dependency_scan"]["status"] == "failed"
+    for field in ("dependency_scan", "dependency_check"):
+        assert report[field]["known_vulnerabilities"] is None
+        assert report[field]["vulnerability_status"] == "not_assessed"
+    jsonschema.validate(report, SCHEMA)
 
 
 def test_dependency_failure_reason_counts_allow_zero():

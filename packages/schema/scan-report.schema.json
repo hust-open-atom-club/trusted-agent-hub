@@ -783,7 +783,15 @@
         "remaining": { "type": "integer", "minimum": 0 },
         "cache_hits": { "type": "integer", "minimum": 0 },
         "provider_requests": { "type": "integer", "minimum": 0 },
-        "known_vulnerabilities": { "type": "integer", "minimum": 0 },
+        "resumed_queries": { "type": "integer", "minimum": 0 },
+        "known_vulnerabilities": {
+          "type": ["integer", "null"], "minimum": 0,
+          "description": "完整查询后的已知漏洞数；查询不完整时为 null，与 dependency_check 一致"
+        },
+        "vulnerability_status": {
+          "type": "string",
+          "enum": ["assessed", "not_assessed"]
+        },
         "non_osv_manifest_dependencies": {
           "type": "object",
           "required": ["total", "categories"],
@@ -801,9 +809,11 @@
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "query_results_truncated": { "type": "boolean" },
+        "query_results_omitted": { "type": "integer", "minimum": 0 },
         "query_results": {
           "type": "array",
-          "maxItems": 500,
+          "maxItems": 1000,
+          "description": "明细最多 1000 个坐标、共 1000 个来源位置，默认 JSON 序列化不超过 1 MiB；优先保留已知漏洞与未完成项，汇总统计覆盖全部坐标",
           "items": {
             "type": "object",
             "required": [
@@ -916,6 +926,34 @@
         }
       },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["vulnerability_status"],
+            "properties": { "vulnerability_status": { "const": "not_assessed" } }
+          },
+          "then": {
+            "required": ["known_vulnerabilities"],
+            "properties": {
+              "known_vulnerabilities": { "type": "null" },
+              "status": { "not": { "const": "complete" } }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["vulnerability_status"],
+            "properties": { "vulnerability_status": { "const": "assessed" } }
+          },
+          "then": {
+            "required": ["known_vulnerabilities"],
+            "properties": {
+              "known_vulnerabilities": { "type": "integer" },
+              "status": { "const": "complete" }
+            }
+          }
+        }
+      ],
       "description": "依赖解析和 OSV 查询覆盖率"
     },
     "structural_analysis": {

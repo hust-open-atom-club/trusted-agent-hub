@@ -156,6 +156,9 @@ export default function DependencyCoverageSummary({
               {metric(t('review.detail.dependency_coverage_cache_hits'), dependencyScan.cache_hits)}
               {metric(t('review.detail.dependency_coverage_query_limit'), dependencyScan.query_limit)}
               {metric(t('review.detail.dependency_coverage_provider_requests'), dependencyScan.provider_requests)}
+              {dependencyScan.resumed_queries !== undefined && metric(
+                t('review.detail.dependency_coverage_resumed_queries'), dependencyScan.resumed_queries,
+              )}
             </div>
             {(nonOsvManifest?.total ?? 0) > 0 && (
               <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }} data-testid="dependency-non-osv-manifest">
@@ -184,6 +187,7 @@ export default function DependencyCoverageSummary({
             <DependencyQueryResults
               results={dependencyScan.query_results ?? []}
               truncated={dependencyScan.query_results_truncated}
+              omitted={dependencyScan.query_results_omitted}
             />
           </div>
         )}

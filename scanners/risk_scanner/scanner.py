@@ -234,6 +234,8 @@ class RiskScanner:
         rule_results = self.rule_runner.run_all(self)
         if any(r.rule_id == "SR-008" and r.status == "failed" for r in rule_results):
             self.dependency_scan["status"] = "failed"
+            self.dependency_scan["known_vulnerabilities"] = None
+            self.dependency_scan["vulnerability_status"] = "not_assessed"
         self.rule_execution["succeeded"] = sum(r.status == "succeeded" for r in rule_results)
         self.rule_execution["failed"] = sum(r.status == "failed" for r in rule_results)
         self.rule_execution["results"] = [r.as_dict() for r in rule_results]
@@ -957,10 +959,11 @@ class RiskScanner:
                 for deps_list in deps.values():
                     if isinstance(deps_list, list):
                         dependency_check["total_dependencies"] += len(deps_list)
-        dependency_check["known_vulnerabilities"] = int(
-            self.dependency_scan.get("known_vulnerabilities", 0)
-        )
-        if self.dependency_scan.get("status") != "complete":
+        if self.dependency_scan.get("status") == "complete":
+            dependency_check["known_vulnerabilities"] = int(
+                self.dependency_scan.get("known_vulnerabilities", 0)
+            )
+        else:
             # A zero produced by an incomplete provider query is unknown, not
             # evidence that the dependency set is clean.
             dependency_check["known_vulnerabilities"] = None

@@ -6,6 +6,9 @@ from typing import Any, Literal
 
 
 DEFAULT_OSV_QUERY_LIMIT = 5_000
+MAX_OSV_QUERY_RESULTS = 1_000
+MAX_OSV_QUERY_RESULT_OCCURRENCES = 1_000
+MAX_OSV_QUERY_RESULTS_BYTES = 1024 * 1024
 
 
 def normalize_query_limit(
@@ -45,12 +48,15 @@ def empty_dependency_scan(
         "remaining": 0,
         "cache_hits": 0,
         "provider_requests": 0,
-        "known_vulnerabilities": 0,
+        "resumed_queries": 0,
+        "known_vulnerabilities": 0 if status == "complete" else None,
+        "vulnerability_status": "assessed" if status == "complete" else "not_assessed",
         "non_osv_manifest_dependencies": {
             "total": 0,
             "categories": {},
         },
         "query_results": [],
         "query_results_truncated": False,
+        "query_results_omitted": 0,
         "failure_reasons": {},
     }

@@ -52,6 +52,9 @@ from scanners.risk_scanner.dependency_parsers.osv_client import (
     dependency_queryability,
 )
 from scanners.risk_scanner.dependency_coverage import (
+    MAX_OSV_QUERY_RESULTS,
+    MAX_OSV_QUERY_RESULT_OCCURRENCES,
+    MAX_OSV_QUERY_RESULTS_BYTES,
     empty_dependency_scan,
     normalize_query_limit,
 )
@@ -83,7 +86,6 @@ _MAX_REGISTRY_POLICY_GROUPS = 25
 _MAX_REGISTRY_POLICY_OCCURRENCES_PER_GROUP = 100
 _MAX_REGISTRY_POLICY_OCCURRENCES_TOTAL = 500
 _MAX_OSV_OCCURRENCES_PER_COORDINATE = 100
-_MAX_OSV_QUERY_RESULTS = 500
 _MANIFEST_OSV_ECOSYSTEMS = {
     "npm": "npm",
     "pip": "PyPI",
@@ -1089,6 +1091,77 @@ def _dependency_scan_status(
     return "failed"
 
 
+def _bounded_osv_query_results(
+    groups: Mapping[tuple[str, str, str], list[DependencyRecord]],
+    results: Mapping[tuple[str, str, str], OSVQueryResult],
+) -> list[dict[str, Any]]:
+    """Bound the report independently of the outbound query budget.
+
+    Keep confirmed vulnerabilities and unfinished coordinates first. Counts
+    and durable state still cover every coordinate, including omitted details.
+    """
+    def priority(key: tuple[str, str, str]) -> tuple[int, tuple[str, str, str]]:
+        result = results.get(key)
+        if result and result.vulnerability_ids:
+            return 0, key
+        return (1 if result is None or result.status != "succeeded" else 2), key
+
+    keys = sorted(groups, key=priority)[:MAX_OSV_QUERY_RESULTS]
+    details: list[dict[str, Any]] = []
+    remaining_occurrences = MAX_OSV_QUERY_RESULT_OCCURRENCES
+    serialized_bytes = 2  # JSON array brackets.
+    for index, key in enumerate(keys):
+        occurrences = groups[key]
+        result = results.get(key) or OSVQueryResult(
+            [], status="failed", failure_reason="missing_client_result",
+        )
+        # Reserve one source for every remaining candidate coordinate.
+        occurrence_limit = min(
+            _MAX_OSV_OCCURRENCES_PER_COORDINATE,
+            remaining_occurrences - (len(keys) - index - 1),
+        )
+        response_status = result.response_status
+        if not isinstance(response_status, int) or not 100 <= response_status <= 599:
+            response_status = None
+        item: dict[str, Any] = {
+            "ecosystem": key[0][:64] or "unknown",
+            "package_name": (key[1] or str(occurrences[0].name or "").strip())[:256] or "<invalid>",
+            "version": key[2][:256] or None,
+            "status": result.status,
+            "data_source": "OSV",
+            "queried_at": result.queried_at,
+            "response_status": response_status,
+            "failure_reason": str(result.failure_reason)[:128] if result.failure_reason else None,
+            "from_cache": result.from_cache,
+            "attempts": max(0, int(result.attempts)),
+            "vulnerability_count": len(result.vulnerability_ids),
+            "occurrence_count": len(occurrences),
+            "occurrences": [
+                _dependency_occurrence(record) for record in occurrences[:occurrence_limit]
+            ],
+            "occurrences_truncated": len(occurrences) > occurrence_limit,
+        }
+        if result.cache_source:
+            item["cache_source"] = result.cache_source
+        if result.cache_age_seconds is not None:
+            item["cache_age_seconds"] = result.cache_age_seconds
+        while True:
+            # Default JSON separators and ASCII escaping also bound Unicode
+            # paths under serializers that escape non-ASCII characters.
+            item_bytes = len(json.dumps(item, ensure_ascii=True).encode("utf-8"))
+            addition = item_bytes + (2 if details else 0)
+            if serialized_bytes + addition <= MAX_OSV_QUERY_RESULTS_BYTES:
+                details.append(item)
+                serialized_bytes += addition
+                remaining_occurrences -= len(item["occurrences"])
+                break
+            if len(item["occurrences"]) <= 1:
+                break
+            item["occurrences"] = item["occurrences"][:len(item["occurrences"]) // 2]
+            item["occurrences_truncated"] = True
+    return details
+
+
 def _check_dependency_records(
     scanner: Any,
     records: list[DependencyRecord],
@@ -1166,6 +1239,10 @@ def _check_dependency_records(
         callable(getattr(client, "query_many", None))
         and _uses_default_osv_query(client)
     )
+    if isinstance(client, OSVClient):
+        # Privacy-policy decisions are durable without disclosing coordinates
+        # to the provider, even if the subsequent query phase is interrupted.
+        client.record_results(precomputed_results)
     if not representatives:
         results = {}
     elif use_batch_query:
@@ -1176,10 +1253,11 @@ def _check_dependency_records(
             representatives,
             query_limit=query_limit,
         )
+        if isinstance(client, OSVClient):
+            client.record_results(results)
     results.update(precomputed_results)
 
-    query_results: list[dict[str, Any]] = []
-    query_results_truncated = False
+    query_results = _bounded_osv_query_results(groups, results)
     cache_hits = 0
     failure_reasons: Counter[str] = Counter()
     query_failure_reasons: Counter[str] = Counter()
@@ -1187,7 +1265,6 @@ def _check_dependency_records(
     known_vulnerability_roots: set[tuple[str, str, str, str]] = set()
     for key in sorted(groups):
         occurrences = groups[key]
-        representative = occurrences[0]
         result = results.get(key) or OSVQueryResult(
             [],
             status="failed",
@@ -1199,53 +1276,6 @@ def _check_dependency_records(
             if result.status in {"failed", "rate_limited"}:
                 query_failure_reasons[result.failure_reason] += 1
         cache_hits += int(result.from_cache)
-
-        if len(query_results) < _MAX_OSV_QUERY_RESULTS:
-            all_occurrences = [
-                _dependency_occurrence(record) for record in occurrences
-            ]
-            package_name = key[1][:256]
-            if not package_name:
-                package_name = str(representative.name or "").strip()[:256]
-            if not package_name:
-                package_name = "<invalid>"
-            response_status = result.response_status
-            if (
-                not isinstance(response_status, int)
-                or not 100 <= response_status <= 599
-            ):
-                response_status = None
-            query_result: dict[str, Any] = {
-                "ecosystem": key[0][:64] or "unknown",
-                "package_name": package_name,
-                "version": key[2][:256] or None,
-                "status": result.status,
-                "data_source": "OSV",
-                "queried_at": result.queried_at,
-                "response_status": response_status,
-                "failure_reason": (
-                    str(result.failure_reason)[:128]
-                    if result.failure_reason
-                    else None
-                ),
-                "from_cache": result.from_cache,
-                "attempts": max(0, int(result.attempts)),
-                "vulnerability_count": len(result.vulnerability_ids),
-                "occurrence_count": len(all_occurrences),
-                "occurrences": all_occurrences[
-                    :_MAX_OSV_OCCURRENCES_PER_COORDINATE
-                ],
-                "occurrences_truncated": (
-                    len(all_occurrences) > _MAX_OSV_OCCURRENCES_PER_COORDINATE
-                ),
-            }
-            if result.cache_source:
-                query_result["cache_source"] = result.cache_source
-            if result.cache_age_seconds is not None:
-                query_result["cache_age_seconds"] = result.cache_age_seconds
-            query_results.append(query_result)
-        else:
-            query_results_truncated = True
 
         if not result.vulnerability_ids:
             continue
@@ -1348,10 +1378,15 @@ def _check_dependency_records(
         "remaining": remaining,
         "cache_hits": cache_hits,
         "provider_requests": int(getattr(client, "request_count", queried)),
-        "known_vulnerabilities": len(known_vulnerability_roots),
+        "resumed_queries": int(getattr(client, "resumed_queries", 0)),
+        "known_vulnerabilities": (
+            len(known_vulnerability_roots) if status == "complete" else None
+        ),
+        "vulnerability_status": "assessed" if status == "complete" else "not_assessed",
         "failure_reasons": dict(sorted(failure_reasons.items())),
         "query_results": query_results,
-        "query_results_truncated": query_results_truncated,
+        "query_results_truncated": len(query_results) < len(groups),
+        "query_results_omitted": len(groups) - len(query_results),
     }
     if status != "complete":
         add_advisory = getattr(scanner, "_add_advisory", None)
@@ -1400,6 +1435,8 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
         # in the artifact coverage summary and its reviewer advisory below.
         if collection_errors:
             scanner.dependency_scan["status"] = "partial"
+            scanner.dependency_scan["known_vulnerabilities"] = None
+            scanner.dependency_scan["vulnerability_status"] = "not_assessed"
     claims = [
         record for record in records
         if _is_lockfile(record.source_file)

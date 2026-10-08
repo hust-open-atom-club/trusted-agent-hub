@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { DependencyQueryResult } from '@/types';
 
+const QUERY_PAGE_SIZE = 50;
+
 function QueryOccurrences({ result }: { result: DependencyQueryResult }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -39,12 +41,18 @@ function QueryOccurrences({ result }: { result: DependencyQueryResult }) {
 export default function DependencyQueryResults({
   results,
   truncated,
+  omitted,
 }: {
   results: DependencyQueryResult[];
   truncated?: boolean;
+  omitted?: number;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const pageCount = Math.ceil(results.length / QUERY_PAGE_SIZE);
+  const page = Math.min(pageIndex, Math.max(0, pageCount - 1));
+  const visibleResults = results.slice(page * QUERY_PAGE_SIZE, (page + 1) * QUERY_PAGE_SIZE);
   const label = (name: string) => t(`review.detail.dependency_coverage_${name}`);
 
   if (results.length === 0 && !truncated) return null;
@@ -54,6 +62,7 @@ export default function DependencyQueryResults({
       {truncated && (
         <p role="note">
           {t('review.detail.dependency_coverage_queries_truncated', { count: results.length })}
+          {omitted !== undefined && <> {t('review.detail.dependency_coverage_queries_omitted', { count: omitted })}</>}
         </p>
       )}
       <details onToggle={(event) => setOpen(event.currentTarget.open)}>
@@ -62,6 +71,17 @@ export default function DependencyQueryResults({
         </summary>
         {open && (
           <div className="review-table-wrapper" style={{ marginTop: '0.6rem', overflowX: 'auto' }}>
+            {pageCount > 1 && (
+              <nav aria-label={label('query_pagination')} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+                <button type="button" disabled={page === 0} onClick={() => setPageIndex(page - 1)}>
+                  {label('query_previous')}
+                </button>
+                <span role="status">{t('review.detail.dependency_coverage_query_page', { page: page + 1, total: pageCount })}</span>
+                <button type="button" disabled={page + 1 >= pageCount} onClick={() => setPageIndex(page + 1)}>
+                  {label('query_next')}
+                </button>
+              </nav>
+            )}
             <table className="review-table">
               <thead>
                 <tr>
@@ -71,7 +91,7 @@ export default function DependencyQueryResults({
                 </tr>
               </thead>
               <tbody>
-                {results.map((result) => (
+                {visibleResults.map((result) => (
                   <tr
                     key={JSON.stringify([result.ecosystem, result.package_name, result.version])}
                     className="review-row"
