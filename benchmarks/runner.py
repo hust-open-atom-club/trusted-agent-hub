@@ -62,6 +62,9 @@ class _OfflineOSVClient:
 
     def __init__(self, *, max_queries: int = 10) -> None:
         self.max_queries = max_queries
+        _OfflineOSVClient.reset_scan_state(self)
+
+    def reset_scan_state(self) -> None:
         self.queried = 0
         self.failures = 0
         self.limit_reached = False

@@ -61,6 +61,43 @@ def _success_response(payload: bytes, _timeout: float) -> OSVHTTPResponse:
     return OSVHTTPResponse(200, json.dumps({"results": [{} for _ in queries]}).encode(), {})
 
 
+def test_constructor_initializes_counters_without_dispatching_reset_override(
+    tmp_path: Path,
+) -> None:
+    reset_calls: list[str] = []
+
+    class CustomResetClient(OSVClient):
+        def reset_scan_state(self) -> None:
+            super().reset_scan_state()
+            reset_calls.append("reset")
+
+    client = CustomResetClient(requester=_success_response, max_queries=1)
+
+    result = client.query(_dependency("example"))
+
+    assert result.status == "succeeded"
+    assert client.queried == client.request_count == 1
+    assert client.failures == client.rate_limited == client.skipped == 0
+    assert client.cache_hits == 0
+    assert client.limit_reached is False
+    assert reset_calls == []
+
+    limited = client.query(_dependency("another-package"))
+    assert limited.status == "not_queried"
+    assert client.limit_reached is True
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    for scan_number in range(1, 3):
+        report = scanner.scan()
+
+        assert report["dependency_scan"]["status"] == "complete"
+        assert client.queried == client.request_count == 0
+        assert client.failures == client.rate_limited == client.skipped == 0
+        assert client.cache_hits == 0
+        assert client.limit_reached is False
+        assert reset_calls == ["reset"] * scan_number
+
+
 def test_queries_all_396_unique_dependencies_in_bounded_batches() -> None:
     batch_sizes: list[int] = []
 
@@ -90,6 +127,229 @@ def test_queries_all_396_unique_dependencies_in_bounded_batches() -> None:
     assert client.queried == 396
     assert client.request_count == 4
     assert sorted(batch_sizes) == [96, 100, 100, 100]
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+def test_repeated_scans_get_independent_results_with_cache_disabled(
+    tmp_path: Path, batch_size: int,
+) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "--index-url https://pypi.org/simple/\n"
+        "control-package==1.0.0\nrepeat-package==1.0.0\n",
+        encoding="utf-8",
+    )
+    vulnerable = True
+
+    def requester(payload: bytes, _timeout: float) -> OSVHTTPResponse:
+        results = [
+            {"vulns": [{"id": "OSV-REPEAT-1"}]}
+            if vulnerable and query["package"]["name"] == "repeat-package"
+            else {}
+            for query in json.loads(payload)["queries"]
+        ]
+        return OSVHTTPResponse(200, json.dumps({"results": results}).encode(), {})
+
+    client = OSVClient(
+        requester=requester, max_queries=2, cache_ttl=0, batch_size=batch_size,
+    )
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    first = scanner.scan()
+    vulnerable = False
+    second = scanner.scan()
+
+    assert first["dependency_check"]["known_vulnerabilities"] == 1
+    assert {
+        result["package_name"]: result["vulnerability_count"]
+        for result in first["dependency_scan"]["query_results"]
+    } == {"control-package": 0, "repeat-package": 1}
+    assert second["dependency_check"]["known_vulnerabilities"] == 0
+    assert not any(
+        finding.get("source_kind") == "osv_advisory"
+        for finding in second["findings"]
+    )
+    for report in (first, second):
+        assert report["dependency_scan"]["status"] == "complete"
+        assert report["dependency_scan"]["queried"] == 2
+        assert report["dependency_scan"]["provider_requests"] == 2 // batch_size
+        assert report["dependency_scan"]["cache_hits"] == 0
+        jsonschema.validate(report, _REPORT_SCHEMA)
+    assert client.queried == 2
+    assert client.request_count == 2 // batch_size
+    assert client.failures == client.rate_limited == client.skipped == 0
+    assert client.limit_reached is False
+
+
+def test_repeated_scans_reset_osv_limit_state_and_reuse_cache(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "--index-url https://pypi.org/simple/\nalpha==1.0.0\nbeta==1.0.0\n",
+        encoding="utf-8",
+    )
+    sent: list[str] = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        sent.extend(
+            query["package"]["name"] for query in json.loads(payload)["queries"]
+        )
+        return _success_response(payload, timeout)
+
+    client = OSVClient(requester=requester, max_queries=1)
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    first = scanner.scan()
+
+    assert first["dependency_scan"]["status"] == "partial"
+    assert first["dependency_scan"]["succeeded"] == 1
+    assert first["dependency_scan"]["skipped"] == 1
+    assert first["dependency_scan"]["remaining"] == 1
+    assert first["dependency_check"]["known_vulnerabilities"] is None
+    assert client.skipped == 1
+    assert client.limit_reached is True
+
+    cached = client.query(_dependency("alpha", ecosystem="PyPI"))
+    assert cached.from_cache is True
+    assert client.cache_hits == 1
+
+    second = scanner.scan()
+
+    assert sent == ["alpha", "beta"]
+    assert second["dependency_scan"]["status"] == "complete"
+    assert second["dependency_scan"]["succeeded"] == 2
+    assert second["dependency_scan"]["skipped"] == 0
+    assert second["dependency_scan"]["remaining"] == 0
+    assert second["dependency_scan"]["provider_requests"] == 1
+    assert second["dependency_scan"]["cache_hits"] == 1
+    assert second["dependency_scan"]["failure_reasons"] == {}
+    assert second["dependency_check"]["known_vulnerabilities"] == 0
+    cached_result, fresh_result = second["dependency_scan"]["query_results"]
+    assert cached_result["cache_source"] == "memory"
+    assert cached_result["attempts"] == 0
+    assert fresh_result["from_cache"] is False
+    assert client.queried == client.request_count == client.cache_hits == 1
+    assert client.failures == client.rate_limited == client.skipped == 0
+    assert client.limit_reached is False
+    for report in (first, second):
+        jsonschema.validate(report, _REPORT_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    ("response_status", "counter", "reason"),
+    [(503, "failed", "provider_server_error"), (429, "rate_limited", "rate_limited")],
+)
+def test_repeated_scans_resume_386_failed_osv_queries(
+    tmp_path: Path, response_status: int, counter: str, reason: str,
+) -> None:
+    names = [f"package-{index:03d}" for index in range(396)]
+    (tmp_path / "requirements.txt").write_text(
+        "--index-url https://pypi.org/simple/\n"
+        + "\n".join(f"{name}==1.0.0" for name in names)
+        + "\n",
+        encoding="utf-8",
+    )
+    provider_available = False
+    sent: list[str] = []
+
+    def requester(payload: bytes, timeout: float) -> OSVHTTPResponse:
+        batch_names = [
+            query["package"]["name"] for query in json.loads(payload)["queries"]
+        ]
+        sent.extend(batch_names)
+        if not provider_available and batch_names[0] >= names[10]:
+            return OSVHTTPResponse(response_status, b"{}", {})
+        return _success_response(payload, timeout)
+
+    client = OSVClient(
+        requester=requester, max_queries=396, batch_size=10,
+        max_concurrency=1, max_retries=0,
+    )
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    first = scanner.scan()
+
+    assert sent == names
+    assert first["dependency_scan"]["status"] == "partial"
+    assert first["dependency_scan"]["total_unique_dependencies"] == 396
+    assert first["dependency_scan"]["queried"] == 396
+    assert first["dependency_scan"]["succeeded"] == 10
+    assert first["dependency_scan"][counter] == 386
+    assert first["dependency_scan"]["query_failures"] == 386
+    assert first["dependency_scan"]["remaining"] == 386
+    assert first["dependency_scan"]["provider_requests"] == 40
+    assert first["dependency_scan"]["failure_reasons"] == {reason: 386}
+    assert first["dependency_check"]["known_vulnerabilities"] is None
+    assert first["dependency_check"]["vulnerability_status"] == "not_assessed"
+    assert first["scan_status"]["state"] == "partial"
+    assert any(
+        advisory["code"] == "dependency_vulnerability_coverage"
+        for advisory in first["review_advisories"]
+    )
+
+    provider_available = True
+    sent.clear()
+    second = scanner.scan()
+
+    assert sent == names[10:]
+    assert second["dependency_scan"]["status"] == "complete"
+    assert second["dependency_scan"]["queried"] == 396
+    assert second["dependency_scan"]["succeeded"] == 396
+    assert second["dependency_scan"]["remaining"] == 0
+    assert second["dependency_scan"]["query_failures"] == 0
+    assert second["dependency_scan"]["provider_requests"] == 39
+    assert second["dependency_scan"]["cache_hits"] == 10
+    assert second["dependency_scan"]["failure_reasons"] == {}
+    assert second["dependency_check"]["known_vulnerabilities"] == 0
+    assert not any(
+        advisory["code"] == "dependency_vulnerability_coverage"
+        for advisory in second["review_advisories"]
+    )
+    assert client.queried == 386
+    assert client.request_count == 39
+    assert client.cache_hits == 10
+    assert client.failures == client.rate_limited == client.skipped == 0
+    assert client.limit_reached is False
+    for report in (first, second):
+        jsonschema.validate(report, _REPORT_SCHEMA)
+
+
+def test_scan_without_dependencies_resets_all_osv_counters(tmp_path: Path) -> None:
+    client = OSVClient(requester=_success_response)
+    counters = (
+        "queried", "failures", "rate_limited", "skipped", "cache_hits", "request_count",
+    )
+    for counter in counters:
+        setattr(client, counter, 7)
+    client.limit_reached = True
+
+    report = RiskScanner(tmp_path, osv_client=client).scan()
+
+    assert report["dependency_scan"]["status"] == "complete"
+    assert report["dependency_scan"]["provider_requests"] == 0
+    assert {counter: getattr(client, counter) for counter in counters} == dict.fromkeys(
+        counters, 0,
+    )
+    assert client.limit_reached is False
+
+
+@pytest.mark.parametrize(
+    "attributes", [{}, {"reset_scan_state": None}, {"reset_scan_state": 0}],
+)
+def test_scan_requires_callable_client_reset_hook(tmp_path: Path, attributes) -> None:
+    (tmp_path / "requirements.txt").write_text(
+        "--index-url https://pypi.org/simple/\nexample==1.0.0\n",
+        encoding="utf-8",
+    )
+
+    def unexpected_query(_dependency):
+        pytest.fail("an invalid client must be rejected before querying")
+
+    client = SimpleNamespace(query=unexpected_query, **attributes)
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    with pytest.raises(
+        TypeError, match="osv_client must implement reset_scan_state",
+    ) as error:
+        scanner.scan()
+    assert "add a no-op for stateless clients" in str(error.value)
 
 
 def test_normalized_duplicates_are_queried_once_and_result_order_is_mapped() -> None:
@@ -584,7 +844,10 @@ def test_injected_client_requires_boolean_private_opt_in(
     )
     (tmp_path / ".npmrc").write_text("registry=https://npm.corp.example/\n", encoding="utf-8")
     queried = []
-    client = SimpleNamespace(query=lambda record: queried.append(record))
+    client = SimpleNamespace(
+        query=lambda record: queried.append(record),
+        reset_scan_state=queried.clear,
+    )
     if permission is not None:
         client.allow_private_coordinates = permission
 

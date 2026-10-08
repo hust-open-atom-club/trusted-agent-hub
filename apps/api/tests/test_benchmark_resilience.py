@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from benchmarks.runner import _OfflineOSVClient
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.scanner import RiskScanner
@@ -198,6 +199,9 @@ def test_osv_no_result_is_complete_and_degraded_statuses_are_explicit(
         def __init__(self) -> None:
             self.queried = 0
 
+        def reset_scan_state(self) -> None:
+            self.queried = 0
+
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
             return OSVQueryResult([])
@@ -228,7 +232,10 @@ def test_osv_no_result_is_complete_and_degraded_statuses_are_explicit(
         _write_dependency_fixture(fixture)
         scanner = RiskScanner(fixture, source_commit_hash=SOURCE_COMMIT)
         scanner.osv_client = client
-        reports.append(scanner.scan())
+        for _ in range(3):
+            report = scanner.scan()
+            assert client.queried == min(client.max_queries, 2)
+        reports.append(report)
 
     no_result, failed, limited = reports
     assert no_result["dependency_scan"]["status"] == "complete"
@@ -249,6 +256,9 @@ def test_sequential_osv_client_without_its_own_limit_uses_scan_policy(
         def __init__(self) -> None:
             self.queried = 0
 
+        def reset_scan_state(self) -> None:
+            self.queried = 0
+
         def query(self, _dependency: object) -> OSVQueryResult:
             self.queried += 1
             return OSVQueryResult([])
@@ -262,13 +272,76 @@ def test_sequential_osv_client_without_its_own_limit_uses_scan_policy(
     )
     scanner.osv_client = client
 
-    report = scanner.scan()
+    for _ in range(3):
+        report = scanner.scan()
 
-    assert client.queried == 1
-    assert report["dependency_scan"]["query_limit"] == 1
-    assert report["dependency_scan"]["succeeded"] == 1
-    assert report["dependency_scan"]["skipped"] == 1
-    assert report["dependency_scan"]["status"] == "partial"
+        assert client.queried == 1
+        assert report["dependency_scan"]["query_limit"] == 1
+        assert report["dependency_scan"]["succeeded"] == 1
+        assert report["dependency_scan"]["skipped"] == 1
+        assert report["dependency_scan"]["status"] == "partial"
+
+
+def test_repeated_scans_reset_offline_benchmark_client(tmp_path: Path) -> None:
+    _write_dependency_fixture(tmp_path)
+    client = _OfflineOSVClient(max_queries=2)
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    for _ in range(3):
+        report = scanner.scan()
+
+        assert client.queried == 2
+        assert report["dependency_scan"]["status"] == "complete"
+        assert report["dependency_scan"]["succeeded"] == 2
+        assert report["dependency_scan"]["provider_requests"] == 2
+
+
+def test_repeated_scans_use_client_reset_hook_with_read_only_metrics(
+    tmp_path: Path,
+) -> None:
+    class ResettableClient:
+        __slots__ = ("_queried", "_request_count", "reset_calls")
+        max_queries = 2
+
+        def __init__(self) -> None:
+            self._queried = 0
+            self._request_count = 0
+            self.reset_calls = 0
+
+        @property
+        def queried(self) -> int:
+            return self._queried
+
+        @property
+        def request_count(self) -> int:
+            return self._request_count
+
+        @property
+        def cache_hits(self) -> int:
+            return 0
+
+        def reset_scan_state(self) -> None:
+            self._queried = 0
+            self._request_count = 0
+            self.reset_calls += 1
+
+        def query(self, _dependency: object) -> OSVQueryResult:
+            self._queried += 1
+            self._request_count += 1
+            return OSVQueryResult([])
+
+    _write_dependency_fixture(tmp_path)
+    client = ResettableClient()
+    scanner = RiskScanner(tmp_path, osv_client=client)
+
+    for scan_number in range(1, 4):
+        report = scanner.scan()
+
+        assert client.reset_calls == scan_number
+        assert client.queried == client.request_count == 2
+        assert client.cache_hits == 0
+        assert report["dependency_scan"]["status"] == "complete"
+        assert report["dependency_scan"]["provider_requests"] == 2
 
 
 def test_missing_osv_client_never_constructs_a_network_fallback(tmp_path: Path, monkeypatch) -> None:

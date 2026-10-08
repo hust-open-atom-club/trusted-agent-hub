@@ -70,7 +70,10 @@ from scanners.risk_scanner.reporting import (
     build_findings_summary,
     determine_scan_status,
 )
-from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.dependency_parsers.osv_client import (
+    OSVClient,
+    OSVClientProtocol,
+)
 from scanners.risk_scanner.redaction import redact_report
 from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
 from packages.schema.frontmatter import parse_frontmatter
@@ -130,7 +133,7 @@ class RiskScanner:
         dependency_artifacts: Mapping[str, bytes] | None = None,
         dependency_verifications: Mapping[str, object] | None = None,
         dependency_acquisition: Mapping[str, object] | None = None,
-        osv_client: OSVClient | None = None,
+        osv_client: OSVClientProtocol | None = None,
         mcp_semantic_model_loader: Callable[[], Any] | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
@@ -164,7 +167,7 @@ class RiskScanner:
         self._inventory: ScanInventory | None = None
         self.rule_runner = RuleRunner()
         self.mcp_semantic_model_loader = mcp_semantic_model_loader
-        self.osv_client = (
+        self.osv_client: OSVClientProtocol | None = (
             osv_client if osv_client is not None
             else OSVClient(max_queries=self.policy.max_osv_queries)
         )
@@ -189,6 +192,14 @@ class RiskScanner:
         self.rule_execution = {"total": len(RULE_SPECS), "succeeded": 0, "failed": 0, "skipped": 0, "results": []}
         self.scanner_errors = []
         self.findings_limit_exceeded = False
+        if self.osv_client is not None:
+            reset_osv_state = getattr(self.osv_client, "reset_scan_state", None)
+            if not callable(reset_osv_state):
+                raise TypeError(
+                    "osv_client must implement reset_scan_state() "
+                    "(add a no-op for stateless clients)"
+                )
+            reset_osv_state()
         self.dependency_scan = empty_dependency_scan(
             getattr(self.osv_client, "max_queries", self.policy.max_osv_queries)
         )

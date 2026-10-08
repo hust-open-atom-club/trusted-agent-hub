@@ -12,7 +12,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import KW_ONLY, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
 from .models import DependencyRecord
@@ -89,6 +89,18 @@ class OSVQueryResult:
     cache_source: str | None = None
     cache_age_seconds: int | None = None
     attempts: int = 0
+
+
+class OSVClientProtocol(Protocol):
+    """Required interface for dependency clients injected into RiskScanner.
+
+    Clients may expose max_queries and query_many(); otherwise the scanner
+    uses its ScanPolicy limit and queries dependencies sequentially.
+    """
+
+    def reset_scan_state(self) -> None: ...
+
+    def query(self, dependency: DependencyRecord, /) -> OSVQueryResult: ...
 
 
 @dataclass(frozen=True)
@@ -271,15 +283,23 @@ class OSVClient:
         self._cache_ready = False
         self._cache_checked = False
 
+        OSVClient.reset_scan_state(self)
+
+    def reset_scan_state(self) -> None:
+        """Reset scan metrics and budget; retain caches and the cancellation event.
+
+        Subclasses overriding this method must call super().reset_scan_state().
+        """
         # ``queried`` counts coordinates sent to OSV; ``request_count`` counts
         # HTTP attempts (including retries).
-        self.queried = 0
-        self.failures = 0
-        self.rate_limited = 0
-        self.skipped = 0
-        self.cache_hits = 0
-        self.request_count = 0
-        self.limit_reached = False
+        with self._counter_lock:
+            self.queried = 0
+            self.failures = 0
+            self.rate_limited = 0
+            self.skipped = 0
+            self.cache_hits = 0
+            self.request_count = 0
+            self.limit_reached = False
 
     def _default_requester(self, payload: bytes, timeout: float) -> OSVHTTPResponse:
         request = urllib.request.Request(
@@ -877,6 +897,7 @@ class OSVClient:
 
 __all__ = [
     "OSVClient",
+    "OSVClientProtocol",
     "OSVCoordinate",
     "OSVHTTPResponse",
     "OSVQueryResult",

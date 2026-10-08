@@ -272,6 +272,10 @@ class _StaticOSVClient:
         self.queried = 0
         self.request_count = 0
 
+    def reset_scan_state(self):
+        self.queried = 0
+        self.request_count = 0
+
     def query(self, _dependency):
         self.queried += 1
         return OSVQueryResult(self.vulnerability_ids)
@@ -1371,6 +1375,9 @@ class TestSR008SupplyChain:
             queried = 0
             allow_private_coordinates = True
 
+            def reset_scan_state(self):
+                self.queried = 0
+
             def query(self, _dependency):
                 self.queried += 1
                 return OSVQueryResult([])
@@ -1414,6 +1421,9 @@ class TestSR008SupplyChain:
         class NoVulnerabilityClient:
             max_queries = 10
             queried = 0
+
+            def reset_scan_state(self):
+                self.queried = 0
 
             def query(self, _dependency):
                 self.queried += 1

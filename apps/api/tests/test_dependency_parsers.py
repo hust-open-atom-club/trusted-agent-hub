@@ -806,10 +806,14 @@ def test_dependency_scan_reports_osv_query_failures(tmp_path):
 
     class FailedClient:
         max_queries = 10
-        queried = 1
+        queried = 0
+
+        def reset_scan_state(self):
+            self.queried = 0
 
         def query(self, dependency):
             from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
+            self.queried += 1
             return OSVQueryResult(
                 [], status="failed", failure_reason="osv_timeout"
             )

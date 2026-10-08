@@ -36,6 +36,9 @@ class _OfflinePartialOSVClient:
     def __init__(self) -> None:
         self.queried = 0
 
+    def reset_scan_state(self) -> None:
+        self.queried = 0
+
     def query(self, _dependency: object) -> OSVQueryResult:
         self.queried += 1
         if self.queried == 1:

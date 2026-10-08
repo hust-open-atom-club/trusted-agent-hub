@@ -718,6 +718,9 @@ def test_artifact_coverage_gap_does_not_make_report_inconclusive(
         max_queries = 10
         queried = 0
 
+        def reset_scan_state(self) -> None:
+            self.queried = 0
+
         def query(self, _dependency: DependencyRecord) -> OSVQueryResult:
             self.queried += 1
             return OSVQueryResult([])

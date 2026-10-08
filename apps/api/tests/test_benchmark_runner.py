@@ -366,7 +366,7 @@ def test_osv_fixture_never_uses_the_network(monkeypatch):
     assert client.failures == 0
 
 
-def test_offline_osv_client_enforces_query_limit():
+def test_offline_osv_client_enforces_and_resets_query_limit():
     client = _OfflineOSVClient(max_queries=1)
 
     first = client.query(object())
@@ -378,6 +378,14 @@ def test_offline_osv_client_enforces_query_limit():
     assert limited.failure_reason == "query_limit_exceeded"
     assert client.queried == 1
     assert client.limit_reached is True
+
+    client.failures = 1
+    client.reset_scan_state()
+
+    assert client.queried == client.failures == 0
+    assert client.limit_reached is False
+    assert client.max_queries == 1
+    assert client.query(object()).status == "succeeded"
 
 
 def test_generated_artifacts_are_excluded_from_benchmark_hashes_but_not_scans(tmp_path):

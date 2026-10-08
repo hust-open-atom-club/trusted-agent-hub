@@ -100,6 +100,12 @@ OSV 批量响应中的空行或带 `error` 的行按坐标记录为 `failed` / `
 
 扫描器缺失来源策略时继续拦截。自定义客户端只有显式设置 `allow_private_coordinates=True`（运维配置为 `TAH_OSV_ALLOW_PRIVATE_COORDINATES=true`）才能放开显式非公开来源限制，缺失开关不授予该权限。非精确版本等不支持的坐标仍记为 `unsupported`。`system`、`docker`、`mcp_servers` 等非 OSV 包生态在 `non_osv_manifest_dependencies` 中单独列出。`dependency_check.total_dependencies` 按唯一坐标加非 OSV 清单依赖计数；`dependencies_found` 和 `dependency_scan.total_dependencies` 保留出现次数口径。
 
-`TAH_OSV_MAX_QUERIES` 限制发往 OSV 的未命中缓存坐标，缓存命中不消耗该预算；HTTP 重试另计入 `provider_requests`。API 每次扫描创建独立客户端，跨扫描续用 SQLite 缓存；显式复用同一客户端时，未命中缓存的查询累计消耗该客户端的预算。已知漏洞按坐标与公告 ID 生成一条 finding，并保留最多 100 个位置及完整位置计数，避免在报告聚合前因重复位置耗尽 `max_findings`。
+`TAH_OSV_MAX_QUERIES` 限制发往 OSV 的未命中缓存坐标，缓存命中不消耗该预算；HTTP 重试另计入 `provider_requests`。API 每次扫描创建独立客户端，跨扫描续用 SQLite 缓存。
+
+`RiskScanner.scan()` 开始时重置查询预算与本次扫描的计数（`queried`、`failures`、`rate_limited`、`skipped`、`cache_hits`、`request_count`、`limit_reached`）。因此，通过扫描器复用同一客户端时，每次扫描按客户端或扫描策略配置重新获得完整预算（生产 API 为 `TAH_OSV_MAX_QUERIES`），报告中的 `provider_requests`、`cache_hits` 仅反映该次扫描。成功缓存按原有 TTL 跨扫描保留，失败或未查询的坐标可在下一次扫描重查；取消事件不被清除。扫描和重置只能在上一轮查询全部结束后执行，不能与在途查询并发。
+
+注入参数使用结构化接口 `OSVClientProtocol`，客户端必须提供 `query(dependency)` 与可调用的 `reset_scan_state()`，由客户端负责重置自身的查询预算和本次扫描指标；无状态客户端可实现为空操作。`max_queries` 仍为可选属性，缺失时采用 `ScanPolicy.max_osv_queries`。`OSVClient` 与基准使用的 `_OfflineOSVClient` 均满足该接口。扫描器在每次扫描开始时调用重置方法，不维护客户端内部属性清单，也不直接修改计数器；缺少可调用接口时会在查询前抛出 `TypeError`，并提示无状态客户端可添加空操作实现。继承 `OSVClient` 并覆盖 `reset_scan_state()` 的子类必须先调用 `super().reset_scan_state()`，再重置自身状态，确保基类预算与计数器也被清零。直接调用同一客户端的 `query()` / `query_many()`（不经 `scan()`，也不显式重置）时，未命中缓存的查询仍累计消耗客户端预算。
+
+已知漏洞按坐标与公告 ID 生成一条 finding，并保留最多 100 个位置及完整位置计数，避免在报告聚合前因重复位置耗尽 `max_findings`。
 
 `dependency_scan.manifest_lock` 对同目录的 `package.json` 和 npm lockfile v2/v3 的根声明进行保守比对：相同字符串与等价的精确版本可判为一致；缺失声明或不同的精确版本产生独立的 SR-008 finding；其他范围、`file:`、`workspace:` 等无法在静态扫描中证明等价的写法计入 `unchecked_count`，状态为 `partial`，不会误报为不一致。没有可比对的根声明时为 `not_checked`。确定性的 registry、已知漏洞、HTTP 传输、版本、typosquatting、完整性和清单差异结果不送入语义 LLM 审核；只有显式标记为需要语义判断、且具有真实扫描文件和有效行号的源码 finding 才能进入候选集合。
