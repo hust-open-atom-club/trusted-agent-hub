@@ -81,14 +81,33 @@ export interface ScanTaskPage {
 
 /* ── 扫描发现 ── */
 
-export interface FindingLocation {
-  file?: string;
-  line?: number;
-  end_line?: number;
-  snippet?: string;
+export interface EvidenceReference {
+  source_ref?: string | null;
+  source_ref_sha256?: string;
+  source_ref_length?: number;
+  missing_reason?: string;
 }
 
-export interface FindingOccurrence {
+export interface FindingLocation extends EvidenceReference {
+  file?: string;
+  line?: number | null;
+  end_line?: number;
+  snippet?: string;
+  column?: number;
+  end_column?: number;
+  dependency_name?: string | null;
+  version?: string | null;
+  resolved_url?: string | null;
+  integrity?: string | null;
+  field_locations?: Record<string, EvidenceReference & {
+    line?: number;
+    end_line?: number;
+    column?: number;
+    end_column?: number;
+  }>;
+}
+
+export interface FindingOccurrence extends FindingLocation {
   file: string;
   line?: number;
 }
@@ -116,10 +135,14 @@ export interface DetectorHit {
   source_kind: string;
   location: FindingLocation;
   evidence?: string;
+  evidence_type?: EvidenceType;
+  evidence_missing_reason?: string;
   remediation?: string;
   cwe_id?: string;
   requires_confirmation?: boolean;
 }
+
+export type EvidenceType = 'source' | 'dependency' | 'registry_policy' | 'file' | 'synthetic';
 
 export interface Finding {
   id?: string;
@@ -132,6 +155,8 @@ export interface Finding {
   line?: number;
   location?: FindingLocation;
   evidence?: string;
+  evidence_type?: EvidenceType;
+  evidence_missing_reason?: string;
   suggestion?: string;
   remediation?: string;
   cwe_id?: string;
@@ -168,6 +193,12 @@ export interface Finding {
   llm_missing_context?: string[];
   llm_supporting_evidence?: LLMSupportingEvidence[];
   llm_context_status?: 'complete' | 'partial' | 'missing';
+  llm_context_reasons?: string[];
+  llm_context_audit?: {
+    delivery_status?: 'complete' | 'partial' | 'missing';
+    reasons?: string[];
+    locations?: FindingLocation[];
+  };
   llm_policy_version?: string;
   llm_effective_severity_before?: 'critical' | 'high' | 'medium' | 'low' | 'info';
   llm_adjudication_action?: 'downgraded' | 'escalated' | 'preserved' | 'blocked_confirmed_vulnerability' | 'blocked_insufficient_evidence' | 'not_eligible' | 'manual_review';
@@ -504,9 +535,8 @@ export interface DependencyManifestLockSummary {
   unchecked_count?: number;
 }
 
-export interface DependencyQueryOccurrence {
+export interface DependencyQueryOccurrence extends EvidenceReference {
   source_file: string;
-  source_ref?: string;
   line?: number;
   scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
   direct: boolean;
@@ -665,7 +695,7 @@ export interface PermissionEvidence {
   evidence: string;
 }
 
-export interface RegistryPolicyOccurrence {
+export interface RegistryPolicyOccurrence extends Omit<FindingLocation, 'line' | 'source_ref'> {
   file: string;
   source_ref?: string | null;
   line?: number | null;
@@ -700,7 +730,9 @@ export interface ReviewAdvisory {
   grade_downgrade_steps: number;
   requires_manual_review: boolean;
   evidence?: string | null;
-  location?: { file?: string; line?: number } | null;
+  location?: FindingLocation | null;
+  evidence_type?: EvidenceType;
+  evidence_missing_reason?: string;
   registry_policy?: RegistryPolicyEvidence | null;
 }
 
@@ -733,7 +765,22 @@ export type LLMReviewReasonCode =
   | 'provider_not_configured'
   | 'context_incomplete';
 
+export interface LLMContextCoverage {
+  candidates?: number;
+  complete?: number;
+  partial?: number;
+  missing?: number;
+  source_missing?: number;
+  location_unresolved?: number;
+  evidence_limit?: number;
+  context_budget?: number;
+  delivery_missing?: number;
+  reason_counts?: Record<string, number>;
+  top_finding_files?: Record<string, number>;
+}
+
 export interface LLMReviewSummary {
+  context_coverage?: LLMContextCoverage | null;
   triggered?: boolean;
   status?: 'not_triggered' | 'not_required' | 'not_configured' | 'completed' | 'call_failed' | 'context_incomplete' | 'timeout' | string;
   reason_code?: LLMReviewReasonCode | string | null;
@@ -817,6 +864,7 @@ export interface FileContext {
   total_lines: number;
   content: string;
   truncated: boolean;
+  partial_line?: boolean;
   redacted: boolean;
   expires_at?: number | null;
 }

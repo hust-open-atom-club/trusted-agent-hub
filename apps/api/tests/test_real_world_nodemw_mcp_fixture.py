@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
+from scanners.risk_scanner.llm_candidates import is_llm_candidate
 from scanners.risk_scanner.scanner import RiskScanner
 from src.routers import trust
 
@@ -125,6 +126,14 @@ def test_nodemw_lockfile_is_aggregated_without_hiding_other_checks(
     assert all(item.get("dependency_name") for item in mirror_policy["occurrences"])
     assert all(item.get("version") for item in mirror_policy["occurrences"])
     assert all(item.get("integrity") for item in mirror_policy["occurrences"])
+    assert mirror_advisories[0]["evidence_type"] == "registry_policy"
+    lock_lines = _scanner._file_contents["package-lock.json"].splitlines()
+    for occurrence in mirror_policy["occurrences"]:
+        assert occurrence["source_ref"].startswith("#/packages/")
+        assert occurrence["line"] > 0
+        for field in ("version", "resolved", "integrity"):
+            span = occurrence["field_locations"][field]
+            assert f'"{field}":' in lock_lines[span["line"] - 1]
     assert not any(
         "registry.npmmirror.com" in str(finding)
         for finding in report["findings"]
@@ -157,6 +166,11 @@ def test_nodemw_secret_locations_survive_registry_aggregation(
         ("src/tools/__tests__/fakeNodemwBot.ts", 110),
         ("src/tools/__tests__/smoke.test.ts", 97),
     }
+    for finding in report["findings"]:
+        if finding.get("category") == "hardcoded_secret":
+            assert finding["evidence_type"] == "source"
+            assert finding["location"]["end_line"] >= finding["location"]["line"]
+            assert finding["location"]["column"] > 0
 
 
 def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
@@ -199,7 +213,7 @@ def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
 
     deterministic_inputs = candidate_inputs[:-1]
     assert not any(
-        trust._is_llm_reviewable_finding(
+        is_llm_candidate(
             finding,
             file_contents=scanner._file_contents,
         )

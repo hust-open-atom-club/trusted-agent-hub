@@ -53,6 +53,27 @@ class TestSR006ExcessivePermissions:
         assert len(s.findings) == 1
         assert "自主决策" in s.findings[0]["title"]
 
+    def test_autonomous_match_at_join_separator_starts_on_first_content_line(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            excessive_permissions,
+            "AUTONOMOUS_DECISION_PATTERNS",
+            [(r"\nautomatically decide", "separator boundary", "medium")],
+        )
+        scanner = MockScanner(
+            files={"agent.py": "automatically decide\nsecond\nthird\nfourth"},
+            _package_metadata={"type": "skill", "description": "test skill"},
+            target_dir=tmp_path,
+        )
+
+        excessive_permissions.run(scanner)
+
+        assert len(scanner.findings) == 1
+        assert scanner.findings[0]["location"] == {
+            "file": "agent.py", "line": 1, "end_line": 1,
+        }
+
     def test_scope_creep_description_shell_permission(self, tmp_path):
         """Description claims code review but shell permission declared → finding."""
         s = MockScanner(

@@ -38,8 +38,16 @@ from concurrent.futures import (
 )
 from typing import Any, Callable
 
-from scanners.risk_scanner.llm_candidates import is_llm_candidate
+from scanners.risk_scanner.llm_candidates import is_llm_candidate, is_semantic_candidate
+from scanners.risk_scanner.evidence import (
+    delivered_source_lines,
+    finding_location,
+    finding_locations,
+    normalize_file_path,
+    summarize_context_audits,
+)
 from scanners.risk_scanner.redaction import redact_value
+from packages.schema.constants import LLMContextMessage
 
 
 REVIEW_BATCH_SIZE = 8
@@ -122,7 +130,7 @@ Respond in JSON format only. Include exactly one review for every finding id:
       "evidence_sufficient": true/false,
       "missing_context": ["required context not present"],
       "supporting_evidence": [
-        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line, at most 160 characters"}}
+        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line exactly as delivered"}}
       ],
       "explanation": "Brief explanation in Chinese"
     }}
@@ -162,7 +170,7 @@ the same review schema as below:
       "evidence_sufficient": true/false,
       "missing_context": ["required context not present"],
        "supporting_evidence": [
-        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line, at most 160 characters"}}
+        {{"file": "path supplied in context", "line": 1, "quote": "one complete source line exactly as delivered"}}
        ],
       "explanation": "Brief explanation in Chinese"
     }}
@@ -637,7 +645,7 @@ def _implicit_context_audit(
     finding: dict[str, Any],
     context: str,
 ) -> dict[str, Any]:
-    location = finding.get("location") or {}
+    location = finding_location(finding)
     file_path = str(location.get("file") or "")
     line_numbers = [
         int(value)
@@ -663,45 +671,9 @@ def _implicit_context_audit(
         "context_bytes": len(context.encode("utf-8")),
         "transport_truncated": False,
         "reasons": [] if context else ["context_not_available"],
+        "reason_codes": [] if context else ["delivery_missing"],
+        "locations": finding_locations(finding),
     }
-
-
-def _normalized_source_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def _context_source_lines(
-    context: str,
-    context_audit: dict[str, Any] | None,
-) -> dict[tuple[str, int], str]:
-    ranges = (
-        context_audit.get("line_ranges", [])
-        if isinstance(context_audit, dict)
-        else []
-    )
-    files = {
-        str(item.get("file") or "")
-        for item in ranges
-        if isinstance(item, dict) and item.get("file")
-    }
-    current_file = next(iter(files)) if len(files) == 1 else ""
-    lines: dict[tuple[str, int], str] = {}
-    header_pattern = re.compile(
-        r"^\[SOURCE file=(?P<file>.+) lines=\d+-\d+ total_lines=\d+\]$"
-    )
-    source_pattern = re.compile(r"^(?P<line>\d+):(?: (?P<text>.*))?$")
-    for raw_line in context.splitlines():
-        header = header_pattern.match(raw_line)
-        if header:
-            current_file = header.group("file")
-            continue
-        source_line = source_pattern.match(raw_line)
-        if not source_line or not current_file:
-            continue
-        lines[(current_file, int(source_line.group("line")))] = (
-            source_line.group("text") or ""
-        )
-    return lines
 
 
 def validate_supporting_evidence(
@@ -718,37 +690,30 @@ def validate_supporting_evidence(
     )
     if isinstance(context_audit, dict) and not ranges:
         return []
-    source_lines = _context_source_lines(context, context_audit)
+    source_lines = delivered_source_lines(context, context_audit)
     if not source_lines:
         return []
     normalized: list[dict[str, Any]] = []
     for item in value[:10]:
         if not isinstance(item, dict):
             continue
-        file_path = str(item.get("file") or "")[:500]
+        file_path = normalize_file_path(item.get("file"))
+        if isinstance(item.get("line"), bool):
+            continue
         try:
             line = int(item.get("line") or 0)
         except (TypeError, ValueError):
             continue
         if line < 1:
             continue
-        quote = str(item.get("quote") or "")[:160].strip()
+        quote = str(item.get("quote") or "").strip()
         if not file_path or not quote:
-            continue
-        if ranges and not any(
-            isinstance(line_range, dict)
-            and str(line_range.get("file") or "") == file_path
-            and int(line_range.get("start_line") or 0)
-            <= line
-            <= int(line_range.get("end_line") or 0)
-            for line_range in ranges
-        ):
             continue
         actual_line = source_lines.get((file_path, line))
         if actual_line is None:
             continue
-        normalized_quote = _normalized_source_text(quote)
-        normalized_actual = _normalized_source_text(actual_line)
+        normalized_quote = quote
+        normalized_actual = actual_line.strip()
         if not normalized_quote or normalized_quote != normalized_actual:
             continue
         normalized.append({
@@ -774,7 +739,7 @@ def _normalize_review(
             "intent": "benign",
             "confidence": 0.0,
             "evidence_sufficient": False,
-            "missing_context": ["LLM did not return a usable review"],
+            "missing_context": [LLMContextMessage.PROVIDER_FAILURE],
             "supporting_evidence": [],
             "explanation": "LLM did not return a usable review",
         }
@@ -814,11 +779,11 @@ def _normalize_review(
         and bool(supporting_evidence)
     )
     if not context_delivered:
-        missing_context.append("scanner context delivery was incomplete")
+        missing_context.append(LLMContextMessage.CONTEXT_INCOMPLETE)
     elif review.get("evidence_sufficient") is not True:
-        missing_context.append("reviewer marked evidence insufficient")
+        missing_context.append(LLMContextMessage.EVIDENCE_INSUFFICIENT)
     elif not supporting_evidence:
-        missing_context.append("no exact matching source citation")
+        missing_context.append(LLMContextMessage.CITATION_MISSING)
 
     # Support old/custom reviewers while making the built-in prompt require
     # explicit harm and impact. A malicious legacy verdict is treated as high
@@ -987,7 +952,6 @@ def _unavailable_decision(
     finding: dict[str, Any],
     *,
     explanation: str,
-    missing_context: str,
     rounds: int,
 ) -> dict[str, Any]:
     """Build a fail-closed decision for a candidate without an LLM verdict."""
@@ -998,7 +962,7 @@ def _unavailable_decision(
         "confidence": 0.0,
         "context_role": "unknown",
         "evidence_sufficient": False,
-        "missing_context": [missing_context],
+        "missing_context": [LLMContextMessage.PROVIDER_FAILURE],
         "supporting_evidence": [],
         "explanation": explanation,
         "rounds": rounds,
@@ -1123,13 +1087,7 @@ def run_llm_review(
         finding_audit = provided_audits.get(fid)
         if not isinstance(finding_audit, dict):
             finding_audit = _implicit_context_audit(finding, code_context)
-        # Candidate identity and context delivery are separate decisions. A
-        # semantic candidate whose excerpt was truncated remains pending for
-        # manual review instead of disappearing as "not required".
-        if not is_llm_candidate(
-            finding,
-            record_skip=True,
-        ):
+        if not is_semantic_candidate(finding):
             result["findings_skipped"] += 1
             continue
         context_admitted = is_llm_candidate(
@@ -1139,6 +1097,20 @@ def run_llm_review(
             require_built_context=True,
             record_skip=True,
         )
+        if not context_admitted:
+            finding_audit = {**finding_audit}
+            if finding_audit.get("delivery_status") == "complete":
+                finding_audit["delivery_status"] = "missing"
+            reason_codes = set(finding_audit.get("reason_codes", []))
+            if not reason_codes:
+                reason_codes.update(
+                    finding.get("llm_context_reasons") or ["delivery_missing"]
+                )
+            finding_audit["reason_codes"] = sorted(reason_codes)
+            finding_audit["reasons"] = sorted(
+                set(finding_audit.get("reasons", []))
+                | {"candidate_location_not_delivered"}
+            )
         severity = _reviewable_severity(finding)
         is_adjudication_candidate = (
             finding.get("llm_adjudication_eligible") is True
@@ -1164,7 +1136,7 @@ def run_llm_review(
             "preconditions": finding.get("preconditions", []),
             "description": finding.get("description", finding.get("title", "")),
             "evidence": finding.get("evidence", ""),
-            "code_context": code_context[:8192] or "(finding context not available)",
+            "code_context": code_context or "(finding context not available)",
             "context_audit": finding_audit,
             "context_admitted": context_admitted,
         }))
@@ -1187,23 +1159,12 @@ def run_llm_review(
     result["findings_total"] = len(reviewable)
 
     statuses = [
-        (
-            str(item["context_audit"].get("delivery_status", "missing"))
-            if item.get("context_admitted") is True
-            else "missing"
-        )
+        str(item["context_audit"].get("delivery_status", "missing"))
         for item in reviewable
     ]
-    result["context_coverage"] = {
-        "candidates": len(reviewable),
-        "complete": statuses.count("complete"),
-        "partial": statuses.count("partial"),
-        "missing": statuses.count("missing"),
-        "total_context_bytes": sum(
-            int(item["context_audit"].get("context_bytes", 0) or 0)
-            for item in reviewable
-        ),
-    }
+    result["context_coverage"] = summarize_context_audits({
+        item["id"]: item["context_audit"] for item in reviewable
+    })
     result["findings_context_incomplete"] = sum(
         status != "complete" for status in statuses
     )
@@ -1225,7 +1186,7 @@ def run_llm_review(
             "confidence": 0.0,
             "context_role": "unknown",
             "evidence_sufficient": False,
-            "missing_context": ["finding source context was not available"],
+            "missing_context": [LLMContextMessage.CONTEXT_INCOMPLETE],
             "supporting_evidence": [],
             "explanation": "缺少 finding 对应的源码上下文，不能自动裁决",
             "rounds": 0,
@@ -1247,7 +1208,6 @@ def run_llm_review(
             result["decisions"][finding_id] = _unavailable_decision(
                 finding,
                 explanation="LLM provider is not configured",
-                missing_context="LLM semantic review was not run",
                 rounds=0,
             )
         result["labels_summary"]["unavailable"] = len(reviewable)
@@ -1619,7 +1579,6 @@ def run_llm_review(
         decision = result["decisions"].get(fid) or _unavailable_decision(
             finding,
             explanation="LLM review unavailable",
-            missing_context="LLM review unavailable",
             rounds=result["review_rounds"],
         )
         result["decisions"][fid] = decision

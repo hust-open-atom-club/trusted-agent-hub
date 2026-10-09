@@ -14,6 +14,14 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from scanners.risk_scanner.evidence import (
+    _review_already_adjudicated,
+    finding_location,
+    location_key,
+    normalize_finding_evidence,
+    normalize_location,
+)
+
 
 SEVERITY_RANK = {"info": 1, "low": 2, "medium": 3, "high": 4, "critical": 5}
 
@@ -127,8 +135,8 @@ def _effective_severity(finding: dict[str, Any]) -> str:
 
 
 def _location_parts(finding: dict[str, Any]) -> tuple[str, int, int]:
-    location = finding.get("location") or {}
-    file_name = str(location.get("file") or "(unknown)").replace("\\", "/")
+    location = finding_location(finding)
+    file_name = str(location.get("file") or "")
     try:
         line_start = max(0, int(location.get("line") or 0))
     except (TypeError, ValueError):
@@ -163,6 +171,11 @@ def _root_material(finding: dict[str, Any]) -> str:
             file_name,
             str(line_start),
             str(line_end),
+            str(
+                (finding.get("location") or {}).get("source_ref")
+                or (finding.get("location") or {}).get("source_ref_sha256")
+                or ""
+            ),
             sink_kind,
             source_kind,
             discriminator,
@@ -186,35 +199,41 @@ def _detector_hit(finding: dict[str, Any]) -> dict[str, Any]:
         "source_kind": _infer_source_kind(finding),
         "location": deepcopy(finding.get("location") or {}),
     }
-    for key in ("evidence", "remediation", "cwe_id", "requires_confirmation"):
+    for key in (
+        "evidence", "evidence_type", "evidence_missing_reason", "remediation",
+        "cwe_id", "requires_confirmation",
+    ):
         if finding.get(key) not in (None, "", False):
             hit[key] = deepcopy(finding[key])
     return hit
 
 
 def _occurrences(hits: list[dict[str, Any]], max_items: int) -> dict[str, Any]:
-    unique: dict[tuple[str, int], dict[str, Any]] = {}
+    unique: dict[tuple[object, ...], dict[str, Any]] = {}
     omitted = 0
     for hit in hits:
         supplied = hit.get("occurrences")
         locations = (
-            supplied["items"] if isinstance(supplied, dict)
+            supplied["items"]
+            if isinstance(supplied, dict)
             else [hit.get("location") or {}]
         )
-        if isinstance(supplied, dict):
+        # Only an explicitly truncated list can establish unseen occurrences.
+        # Older reports may claim count=1 for an empty, untruncated list.
+        if isinstance(supplied, dict) and supplied.get("truncated"):
             omitted += max(0, int(supplied["count"]) - len(locations))
         for location in locations:
-            file_name = str(location.get("file") or "(unknown)")
-            try:
-                line = max(0, int(location.get("line") or 0))
-            except (TypeError, ValueError):
-                line = 0
-            key = (file_name, line)
+            location = normalize_location(location)
+            if not location:
+                continue
+            key = location_key(location)
             if key in unique:
                 continue
-            item: dict[str, Any] = {"file": file_name}
-            if line:
-                item["line"] = line
+            item = {
+                key: deepcopy(value)
+                for key, value in location.items()
+                if key != "snippet"
+            }
             unique[key] = item
     items = list(unique.values())
     return {
@@ -231,6 +250,8 @@ def reconcile_findings(
     groups: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for finding in findings:
+        finding = deepcopy(finding)
+        normalize_finding_evidence(finding)
         root_id = str(finding.get("root_cause_id") or _root_cause_id(finding))
         if root_id not in groups:
             groups[root_id] = []
@@ -289,7 +310,11 @@ def reconcile_findings(
             })
             if reasons:
                 primary["llm_adjudication_reason"] = ",".join(reasons)
-            primary["llm_review_state"] = "pending"
+            # Mark a root as awaiting review only while it still awaits one.
+            # An adjudicated root already carries its verdict, and resetting
+            # that here would reopen a settled decision on every re-aggregation.
+            if not _review_already_adjudicated(primary):
+                primary["llm_review_state"] = "pending"
         if any(member.get("requires_manual_review") is True for member in members):
             primary["requires_manual_review"] = True
         roots.append(primary)

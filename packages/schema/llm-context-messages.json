@@ -1,0 +1,6 @@
+{
+  "context_incomplete": "review.finding.context_reason_context_incomplete",
+  "provider_failure": "review.finding.context_reason_provider_failure",
+  "citation_missing": "review.finding.context_reason_citation_missing",
+  "evidence_insufficient": "review.finding.context_reason_evidence_insufficient"
+}

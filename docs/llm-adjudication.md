@@ -36,8 +36,10 @@ only because earlier candidates consumed a run-wide allowance.
 The prompt instructs each judge to trace the source, sink, activation path,
 trust boundary, safeguards, and preconditions using only the supplied text.
 The response must state whether evidence is sufficient and cite one complete
-source line, limited to 160 characters, from a supplied file/line. The server
-matches the complete line against the delivered source and records a
+source line from a supplied file/line, without a separate character limit or
+truncation. The context budget admits only complete lines. The server matches
+the complete quote against the delivered source, allowing leading/trailing
+whitespace differences but requiring exact internal whitespace, and records a
 server-generated SHA-256 for it; a partial or unmatched line is insufficient
 evidence. Package text is treated as untrusted data and is never executed or
 followed as an instruction.
@@ -49,7 +51,12 @@ Reports expose enough metadata to reproduce and audit the review boundary:
 - `review_configuration` records provider, model, batch size, concurrency,
   temperature, and output-token limit; credentials and custom base URLs are
   never reported.
-- `context_coverage` summarizes complete, partial, and missing contexts.
+- `context_coverage` counts every semantic candidate, including candidates
+  without usable source. It distinguishes unavailable source/fields
+  (`source_missing`) from an unresolved line range in an existing file
+  (`location_unresolved`) and omitted oversized references (`evidence_limit`).
+  Complete, partial, and missing delivery counts use the same candidate set as
+  scan progress.
 - each decision carries `context_audit`, `supporting_evidence`, and
   `missing_context`.
 

@@ -235,7 +235,7 @@
         "reference": "benchmarks/README.md#issue-54-rule-coverage",
         "revision": "fixture-v2",
         "license": "Apache-2.0",
-        "annotation": "The scan deliberately omits acquisition commit provenance while retaining a complete content hash."
+        "annotation": "The scan deliberately omits acquisition commit provenance while retaining a complete content hash. Its synthetic finding has no source location, so the evidence contract requires manual review and the existing grade cap applies."
       },
       "content_tree_sha256": "07a5c72b936b9d4647c6926cacd88a64ee2174c52cc9bc09ed4f587db0976d37",
       "expected_target": {
@@ -243,8 +243,8 @@
         "root_issues": [{"id": "sr009-missing-commit", "rule_ids": ["SR-009"], "effective_severity": "medium"}],
         "forbidden_effective_severities": [],
         "capabilities": [],
-        "security_grade": ["B"],
-        "manual_review": "not_required"
+        "security_grade": ["C"],
+        "manual_review": "required"
       },
       "enforcement": "blocking"
     },
@@ -977,7 +977,7 @@
         "reference": "benchmarks/README.md#issue-54-rule-coverage",
         "revision": "fixture-v2",
         "license": "Apache-2.0",
-        "annotation": "A benign package includes a source-matched Python cache to pin the production structural policy."
+        "annotation": "A benign package includes a source-matched Python cache to pin the production structural policy. The cache has no text snapshot, so its source_missing evidence requires manual review and the existing grade cap applies."
       },
       "content_tree_sha256": "537a17e3b243daa548e2ebfa6a7747af19d5f48fc8b87ef473b4403db7bad401",
       "expected_target": {
@@ -985,8 +985,8 @@
         "root_issues": [{"id": "sr010-generated-cache", "rule_ids": ["SR-010"], "effective_severity": "medium"}],
         "forbidden_effective_severities": [],
         "capabilities": [],
-        "security_grade": ["B"],
-        "manual_review": "not_required"
+        "security_grade": ["C"],
+        "manual_review": "required"
       },
       "enforcement": "blocking"
     },

@@ -513,7 +513,7 @@ class TestSR008SupplyChain:
         assert len(sample["integrity"]) == 160
         assert sample["resolved_url"].endswith("…")
 
-    def test_registry_policy_source_file_has_consistent_size_limit(self):
+    def test_registry_policy_keeps_exact_source_identity_and_bounds_display_text(self):
         from src.models.packages import RegistryPolicyEvidence
 
         long_path = "nested/" + "a" * 540 + "/package-lock.json"
@@ -529,10 +529,9 @@ class TestSR008SupplyChain:
 
         advisory = s.review_advisories[0]
         details = advisory["registry_policy"]
-        assert len(details["source_file"]) == 512
+        assert details["source_file"] == long_path
         assert details["source_file"] == advisory["location"]["file"]
         assert details["source_file"] == details["occurrences"][0]["file"]
-        assert details["source_file"].endswith("…")
         assert long_path not in advisory["evidence"]
         RegistryPolicyEvidence.model_validate(details)
 
@@ -1318,9 +1317,9 @@ class TestSR008SupplyChain:
         )
 
     def test_known_dependency_vulnerability_skips_llm_semantic_review(self):
-        from src.routers import trust
+        from scanners.risk_scanner.llm_candidates import is_llm_candidate
         from scanners.risk_scanner import llm_reviewer
-        from scanners.risk_scanner.redaction import build_finding_context_bundle
+        from scanners.risk_scanner.source_context import build_finding_context_bundle
 
         s = MockScanner(files={})
         s.osv_client = _StaticOSVClient(["CVE-2099-0001"])
@@ -1333,7 +1332,7 @@ class TestSR008SupplyChain:
 
         assert cve["severity"] == "high"
         assert cve["llm_review_exempt"] is True
-        assert trust._is_llm_reviewable_finding(cve) is False
+        assert is_llm_candidate(cve) is False
         assert build_finding_context_bundle([cve], s._file_contents)[0] == {}
         result = llm_reviewer.run_llm_review([cve], {}, {})
         assert result["status"] == "not_required"
@@ -1574,9 +1573,13 @@ class TestSR008SupplyChain:
 
         assert s.findings == []
 
-    def test_commented_trigger_does_not_override_manifest_location(self):
+    @pytest.mark.parametrize("metadata_file", ["SKILL.md", "plugin.json", None])
+    def test_commented_trigger_does_not_override_manifest_location(self, metadata_file):
+        files = {"setup.sh": '# triggers = ["*"]\n'}
+        if metadata_file:
+            files[metadata_file] = '{}'
         s = MockScanner(
-            files={"setup.sh": '# triggers = ["*"]\n'},
+            files=files,
             _package_metadata={"triggers": ["*"]},
         )
 
@@ -1586,7 +1589,7 @@ class TestSR008SupplyChain:
             finding for finding in s.findings
             if finding["title"] == "触发器使用通配符"
         )
-        assert wildcard["location"]["file"] == "SKILL.md"
+        assert wildcard["location"].get("file") == metadata_file
 
     def test_manifest_fallback_records_are_passed_to_source_parser_once(
         self, monkeypatch

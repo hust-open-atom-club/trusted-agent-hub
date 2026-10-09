@@ -11,6 +11,7 @@ RUN npm ci
 
 COPY apps/web/ .
 COPY packages/schema/constants.ts /packages/schema/constants.ts
+COPY packages/schema/llm-context-messages.json /packages/schema/llm-context-messages.json
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ARG NEXT_PUBLIC_SUPPORT_EMAIL=support@example.com

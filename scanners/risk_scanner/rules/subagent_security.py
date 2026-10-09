@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from scanners.risk_scanner.evidence import metadata_location
+
 _DANGEROUS_TOOLS = frozenset({
     "Bash", "Write", "Edit",
     "shell", "exec", "subprocess",
@@ -64,7 +66,7 @@ def _check_autonomous(
                 f"Subagent 以 autonomous 模式运行且 max_iterations={max_iterations}。"
                 f"无用户监管的情况下可执行大量操作，存在不可控风险。"
             ),
-            location={"file": "agent.json"},
+            location=metadata_location(scanner, "subagent_config"),
             evidence=f"interaction_mode: {mode}, max_iterations: {max_iterations}",
             remediation="降低 max_iterations 到合理范围，或改为 supervised 模式以保留人工审核环节。",
         )
@@ -77,7 +79,7 @@ def _check_autonomous(
             description=(
                 f"Subagent 以 autonomous 模式运行，无需用户监管即可执行操作。"
             ),
-            location={"file": "agent.json"},
+            location=metadata_location(scanner, ("subagent_config", "interaction_mode")),
             evidence=f"interaction_mode: {mode}, max_iterations: {max_iterations}",
             remediation="在信任度充分之前，建议使用 supervised 模式，保留人工审核。",
         )
@@ -105,7 +107,7 @@ def _check_dangerous_tools(
             f"Subagent 的 tools 列表包含危险工具: {', '.join(dangerous_found)}。"
             f"{'结合 autonomous 模式，Subagent 可在无用户许可的情况下执行 Shell 命令或写入文件。' if mode == 'autonomous' else '建议审查是否需要这些工具权限。'}"
         ),
-        location={"file": "agent.json"},
+        location=metadata_location(scanner, ("subagent_config", "tools")),
         evidence=f"tools: {tools}, interaction_mode: {mode}",
         remediation=(
             "移除不必要的危险工具（Bash/shell/exec/Write）。"
@@ -128,7 +130,7 @@ def _check_global_scope(
                 "Subagent 的 scope 设置为 'global'，可跨项目/跨用户访问资源。"
                 "对不可信包来说此作用域过于宽泛。"
             ),
-            location={"file": "agent.json"},
+            location=metadata_location(scanner, ("subagent_config", "scope")),
             evidence=f"scope: {scope}",
             remediation="将 scope 改为 project 以限制访问范围，仅在受信任的企业级 packages 中使用 global。",
         )
@@ -153,7 +155,7 @@ def _check_system_prompt_path(
                 f"Subagent 的 system_prompt_path '{path}' 含 '..'，"
                 f"可能指向 package 目录外的恶意文件。"
             ),
-            location={"file": "agent.json"},
+            location=metadata_location(scanner, ("subagent_config", "system_prompt_path")),
             evidence=f"system_prompt_path: {path}",
             remediation="将 system_prompt_path 限制在 package 目录内，移除 '../'。",
         )
@@ -168,7 +170,7 @@ def _check_system_prompt_path(
                 f"Subagent 的 system_prompt_path '{path}' 使用了绝对路径，"
                 f"应仅引用 package 目录内的文件。"
             ),
-            location={"file": "agent.json"},
+            location=metadata_location(scanner, ("subagent_config", "system_prompt_path")),
             evidence=f"system_prompt_path: {path}",
             remediation="将路径改为相对路径（如 ./system_prompt.md）。",
         )

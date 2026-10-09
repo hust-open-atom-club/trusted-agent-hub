@@ -25,6 +25,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
+from scanners.risk_scanner.evidence import (
+    metadata_location,
+    source_reference,
+    source_reference_label,
+)
 from scanners.risk_scanner.analyzers.url_context import (
     URL_USAGE_DEPENDENCY,
     URL_USAGE_DOWNLOAD_EXECUTE,
@@ -453,18 +458,16 @@ def _check_typosquatting(scanner: Any, meta: dict[str, Any]) -> None:
     pkg_name = meta.get("name", "").lower()
 
     for dep_name, dep in dep_entries:
-        fallback_manifest = (
-            "manifest.json"
-            if (scanner.target_dir / "manifest.json").is_file()
-            else "SKILL.md"
-        )
-        source_file = str((dep or {}).get("source_file") or fallback_manifest)
+        source_file = (dep or {}).get("source_file")
         source_ref = (dep or {}).get("source_ref")
         source_line = (dep or {}).get("line")
-        location: dict[str, Any] = {"file": source_file}
+        location: dict[str, Any] = {
+            "file": source_file, "source_ref": source_ref,
+            "dependency_name": dep_name, "version": (dep or {}).get("version"),
+        }
         if isinstance(source_line, int) and source_line > 0:
             location["line"] = source_line
-        provenance = f"; source_ref={source_ref}" if source_ref else ""
+        provenance = f"; source_ref={source_reference_label(source_ref)}" if source_ref else ""
         for known in BUILTIN_WELL_KNOWN_PACKAGES:
             if len(dep_name) < 3:
                 continue
@@ -713,16 +716,7 @@ def _check_dependency_sources(
         )
         occurrences = [
             {
-                "file": _evidence_sample(observation.source_file, 512),
-                "source_ref": _evidence_sample(observation.source_ref, 256),
-                "line": observation.line,
-                "dependency_name": _evidence_sample(observation.dependency_name, 128),
-                "version": _evidence_sample(
-                    _dependency_version_evidence(observation.dependency_version),
-                    128,
-                ),
-                "resolved_url": _evidence_sample(_source_evidence_url(observation.url), 512),
-                "integrity": _evidence_sample(observation.integrity, 160),
+                **_dependency_location(observation),
                 "scope": observation.scope,
                 "usage": str(observation.usage),
             }
@@ -754,12 +748,12 @@ def _check_dependency_sources(
                 f"files={source_file_display} ({count}); scope={scope}; "
                 f"samples={', '.join(samples)}{url_samples}"
             ),
-            location={"file": source_file_display},
+            location=_dependency_location(sorted_items[0][0]),
             registry_policy={
                 "ecosystem": ecosystem,
                 "registry_host": host,
                 "policy_reason": reason,
-                "source_file": source_file_display,
+                "source_file": source_file,
                 "scope": scope,
                 "occurrence_count": count,
                 "occurrences": occurrences,
@@ -799,7 +793,7 @@ def _check_dependency_sources(
                 f"hosts={_format_counter(omitted_hosts)}; "
                 f"reasons={_format_counter(omitted_reasons)}"
             ),
-            location={"file": _evidence_sample(omitted_groups[0][0][2], 512)},
+            location={"file": omitted_groups[0][0][2]},
         )
 
     insecure = [
@@ -821,7 +815,12 @@ def _check_dependency_sources(
                 f"检测到 {len(insecure)} 条通过 HTTP 访问依赖来源的记录，"
                 "传输过程可能被篡改。"
             ),
-            location={"file": insecure[0][0].source_file},
+            location=_dependency_location(insecure[0][0]),
+            occurrences={
+                "count": len(insecure),
+                "items": [_dependency_location(item) for item, _ in insecure[:100]],
+                "truncated": len(insecure) > 100,
+            },
             evidence=f"Hosts: {_format_counter(insecure_hosts)}",
             remediation="将依赖源和下载地址改为经策略批准的 HTTPS 端点。",
             kind="vulnerability",
@@ -836,6 +835,22 @@ def _check_dependency_sources(
         )
 
 
+def _dependency_location(record: DependencyRecord | DependencySourceObservation) -> dict[str, Any]:
+    if isinstance(record, DependencyRecord):
+        name, version, resolved = record.name, record.version, record.registry
+    else:
+        name, version, resolved = record.dependency_name, record.dependency_version, record.url
+    return {
+        "file": record.source_file,
+        **({"line": record.line} if record.line else {}),
+        **(source_reference(record.source_ref) if record.source_ref else {}),
+        "dependency_name": _evidence_sample(name, 128),
+        "version": _evidence_sample(_dependency_version_evidence(version), 128),
+        "resolved_url": _evidence_sample(_source_evidence_url(resolved), 512) if resolved else None,
+        "integrity": _evidence_sample(record.integrity, 160),
+    }
+
+
 def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
     occurrence: dict[str, Any] = {
         "source_file": record.source_file,
@@ -843,7 +858,7 @@ def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
         "direct": bool(record.direct),
     }
     if record.source_ref:
-        occurrence["source_ref"] = _evidence_sample(record.source_ref, 512)
+        occurrence.update(source_reference(record.source_ref))
     if record.line is not None:
         occurrence["line"] = max(1, int(record.line))
     if record.registry:
@@ -1192,7 +1207,7 @@ def _check_dependency_records(
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title=f"依赖版本未锁定: {record.name}",
                 description=f"依赖 {record.name} 未使用精确版本（当前: {record.version or '未声明'}）。",
-                location={"file": record.source_file},
+                location=_dependency_location(record),
                 evidence=f"Dependency version: {record.version or 'missing'}",
                 remediation="在清单和锁文件中使用可复现的精确依赖版本。",
                 llm_review_exempt=True,
@@ -1280,13 +1295,10 @@ def _check_dependency_records(
         if not result.vulnerability_ids:
             continue
         locations = {
-            (record.source_file, max(0, int(record.line or 0)))
+            (record.source_file, record.source_ref or "", record.line or 0): _dependency_location(record)
             for record in occurrences
         }
-        occurrence_items = [
-            {"file": file, **({"line": line} if line else {})}
-            for file, line in sorted(locations)[:_MAX_OSV_OCCURRENCES_PER_COORDINATE]
-        ]
+        occurrence_items = [locations[key] for key in sorted(locations)[:_MAX_OSV_OCCURRENCES_PER_COORDINATE]]
         for vulnerability_id in sorted(set(result.vulnerability_ids)):
             known_vulnerability_roots.add((*key, vulnerability_id))
             root_digest = hashlib.sha256(
@@ -1499,14 +1511,20 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
     mismatch_count = sum(len(items) for items in mismatches.values())
     for source_file, items in sorted(mismatches.items()):
         samples = ", ".join(
-            f"{record.name}@{record.version or '?'} ({record.source_ref or '?'})"
+            f"{record.name}@{record.version or '?'} "
+            f"({source_reference_label(record.source_ref) if record.source_ref else '?'})"
             for record in items[:5]
         )
         scanner._add_finding(
             rule_id="SR-008", severity="high", category="supply_chain",
             title="依赖制品与锁文件完整性摘要不一致",
             description=f"已获取的依赖制品有 {len(items)} 条与锁文件声明的摘要不一致。",
-            location={"file": source_file},
+            location=_dependency_location(items[0]),
+            occurrences={
+                "count": len(items),
+                "items": [_dependency_location(record) for record in items[:100]],
+                "truncated": len(items) > 100,
+            },
             evidence=f"mismatches={len(items)}; samples={samples}",
             remediation="核对获取的制品、锁文件摘要与发布来源，重新锁定可信版本。",
             llm_review_exempt=True,
@@ -1679,7 +1697,7 @@ def _check_manifest_lock_consistency(scanner: Any, files: dict[str, str]) -> Non
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title="依赖清单与锁文件根声明不一致",
                 description=f"{manifest_file} 与 {lock_file} 存在 {len(differences)} 项直接依赖声明差异。",
-                location={"file": lock_file},
+                location={"file": lock_file, "source_ref": "#/packages/"},
                 evidence=f"differences={len(differences)}; samples={', '.join(differences[:5])}",
                 remediation="重新生成锁文件并核对差异，再使用锁定的依赖安装。",
                 llm_review_exempt=True,
@@ -1862,21 +1880,19 @@ def run(scanner: Any) -> None:
         triggers = meta.get("triggers", meta.get("trigger", []))
         if isinstance(triggers, list):
             if len(triggers) > 10:
-                manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
                 scanner._add_finding(
                     rule_id=rule_id,
                     severity="low",
                     category="supply_chain",
                     title="过度触发: 声明了超过 10 个触发器",
                     description=f"包声明了 {len(triggers)} 个触发器，可能过度触发。",
-                    location={"file": manifest_file},
+                    location=metadata_location(scanner, "triggers" if "triggers" in meta else "trigger"),
                     evidence=f"Trigger count: {len(triggers)}",
                     remediation="减少触发器数量至 10 个以内，确保仅对必要关键词响应。",
                 )
             if any("*" in str(t) for t in triggers):
-                manifest_file = "manifest.json" if (scanner.target_dir / "manifest.json").is_file() else "SKILL.md"
                 if wildcard_trigger_location is None:
-                    wildcard_trigger_location = {"file": manifest_file}
+                    wildcard_trigger_location = metadata_location(scanner, "triggers" if "triggers" in meta else "trigger")
                     wildcard_trigger_evidence = "Wildcard trigger detected"
 
     if wildcard_trigger_location is not None:
@@ -1894,11 +1910,7 @@ def run(scanner: Any) -> None:
     # Lockfiles/manifests are parsed once into normalized records. Lockfiles are
     # intentionally absent from scanner.scanned_files, so generic regex rules do
     # not inspect their structured contents.
-    metadata_source = next(
-        (path for path in ("manifest.json", "plugin.json", "SKILL.md")
-         if path in getattr(scanner, "_file_contents", {})),
-        "manifest.json",
-    )
+    metadata_source = metadata_location(scanner).get("file", "")
     manifest_records = _manifest_records(meta, metadata_source) if meta else []
     parsed_records = parse_dependencies(getattr(scanner, "_file_contents", {}))
     manifest_osv_records = [

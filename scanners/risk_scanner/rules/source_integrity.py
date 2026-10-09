@@ -85,15 +85,7 @@ def run(scanner: Any) -> None:
     if not commit_ok:
         core_issues.append("来源未锁定 commit hash")
 
-    manifest_file = (
-        "manifest.json"
-        if (scanner.target_dir / "manifest.json").is_file()
-        else "plugin.json"
-        if (scanner.target_dir / "plugin.json").is_file()
-        else "SKILL.md"
-        if (scanner.target_dir / "SKILL.md").is_file()
-        else "."
-    )
+    # Acquisition facts are synthetic scanner evidence, not manifest source.
 
     if core_issues:
         scanner._add_finding(
@@ -102,7 +94,7 @@ def run(scanner: Any) -> None:
             category="source_integrity",
             title="核心来源完整性不足",
             description="; ".join(core_issues),
-            location={"file": manifest_file},
+            location={},
             evidence="scanned-source hash or acquired commit is incomplete",
             remediation="使用采集层计算的完整 SHA256，并将来源锁定到具体 commit。",
         )
@@ -147,7 +139,7 @@ def run(scanner: Any) -> None:
             level="warning",
             title=title,
             description=description,
-            location={"file": manifest_file},
+            location={},
             evidence="independent verification flag is false",
             deduction=2,
             affects_grade=False,
@@ -163,7 +155,7 @@ def run(scanner: Any) -> None:
                 "以下验证能力在本次扫描环境中不可用，因此未将缺少验证结果"
                 f"计为失败或扣分：{', '.join(unavailable)}。"
             ),
-            location={"file": manifest_file},
+            location={},
             evidence="verifier capability is unavailable",
             deduction=0,
             affects_grade=False,

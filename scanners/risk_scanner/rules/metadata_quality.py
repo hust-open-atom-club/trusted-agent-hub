@@ -6,6 +6,7 @@ import os
 import json
 from pathlib import Path
 from typing import Any
+from scanners.risk_scanner.evidence import metadata_location
 
 from scanners.risk_scanner.common import BINARY_EXTENSIONS, REQUIRED_FILES_BY_TYPE
 
@@ -65,15 +66,7 @@ def run(scanner: Any) -> None:
             remediation="修复 metadata JSON 或 frontmatter，使其可被安全、确定性地解析。",
         )
 
-    manifest_file = (
-        "manifest.json"
-        if (scanner.target_dir / "manifest.json").is_file()
-        else "plugin.json"
-        if (scanner.target_dir / "plugin.json").is_file()
-        else "SKILL.md"
-        if (scanner.target_dir / "SKILL.md").is_file()
-        else "."
-    )
+    manifest_file = metadata_location(scanner).get("file")
 
     if meta:
         required_fields = ["name", "version", "description", "author", "license"]
@@ -207,6 +200,6 @@ def _check_structure(scanner: Any) -> None:
                     category="metadata_quality",
                     title=f"缺少必要文件: {req_file}",
                     description=f"类型 '{pkg_type}' 的包缺少必要文件 '{req_file}'。",
-                    location={"file": "."},
+                    location={},
                     remediation=f"添加 {req_file} 文件。",
                 )

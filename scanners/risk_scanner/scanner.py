@@ -1,5 +1,5 @@
 """
-Risk Scanner — 自动风险扫描器 v0.14.0
+Risk Scanner — 自动风险扫描器 v0.15.0
 
 遍历目标目录，运行 20 条静态分析规则，检测 Agent 能力包中的安全风险。
 输出格式严格遵循 scan-report.schema.json。
@@ -74,14 +74,18 @@ from scanners.risk_scanner.dependency_parsers.osv_client import (
     OSVClient,
     OSVClientProtocol,
 )
-from scanners.risk_scanner.redaction import redact_report
+from scanners.risk_scanner.redaction import contains_sensitive_identifier, redact_report
+from scanners.risk_scanner.evidence import (
+    normalize_finding_evidence,
+    normalize_occurrence_evidence,
+)
 from packages.schema.constants import HASH_SCOPE_SCANNED_SOURCE
 from packages.schema.frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
 
-SCANNER_VERSION = "0.14.0"
+SCANNER_VERSION = "0.15.0"
 
 _DOCUMENTATION_BASENAME_PREFIXES = (
     "readme",
@@ -175,9 +179,12 @@ class RiskScanner:
         self.scanner_errors: list[dict[str, Any]] = []
         self.findings_limit_exceeded = False
         self._package_metadata: dict[str, Any] | None = None
+        self._metadata_source_file: str | None = None
+        self._metadata_field_sources: dict[str, str] = {}
         self._package_claims: dict[str, Any] | None = None
         self._acquisition_facts: dict[str, Any] = {}
         self._file_contents: dict[str, str] = {}
+        self._evidence_indexes: dict[str, dict[str, dict[str, int]]] = {}
         self.analysis = None
         self._content_tree_hash: str | None = None
         self._metadata_parse_errors: list[dict[str, str]] = []
@@ -204,10 +211,13 @@ class RiskScanner:
             getattr(self.osv_client, "max_queries", self.policy.max_osv_queries)
         )
         self._file_contents = {}
+        self._evidence_indexes = {}
         self.analysis = None
         self._content_tree_hash = None
         self._metadata_parse_errors = []
         self._package_metadata = None
+        self._metadata_source_file = None
+        self._metadata_field_sources = {}
         self._package_claims = None
         self._acquisition_facts = {}
         start = datetime.now(timezone.utc)
@@ -291,6 +301,7 @@ class RiskScanner:
             metadata = load_json_object(manifest_path)
             if metadata is not None:
                 self._package_metadata = metadata
+                self._metadata_source_file = manifest_path
                 return
 
         plugin_path = "plugin.json"
@@ -298,6 +309,7 @@ class RiskScanner:
             metadata = load_json_object(plugin_path)
             if metadata is not None:
                 self._package_metadata = metadata
+                self._metadata_source_file = plugin_path
                 return
 
         skill_path = "SKILL.md"
@@ -312,6 +324,7 @@ class RiskScanner:
                     })
                 elif result.data:
                     self._package_metadata = result.data
+                    self._metadata_source_file = skill_path
             except UnicodeDecodeError:
                 pass
 
@@ -323,10 +336,12 @@ class RiskScanner:
             if pkg_json is not None:
                 if not self._package_metadata:
                     self._package_metadata = pkg_json
+                    self._metadata_source_file = pkg_json_path
                 else:
                     for key in ("name", "version", "description", "license", "author"):
                         if not self._package_metadata.get(key) and pkg_json.get(key):
                             self._package_metadata[key] = pkg_json[key]
+                            self._metadata_field_sources[key] = pkg_json_path
 
     def _inject_acquired_source_integrity(self) -> None:
         """Record facts established by acquisition without mutating claims.
@@ -751,9 +766,24 @@ class RiskScanner:
             finding["llm_review_exempt"] = True
         if root_cause_id:
             finding["root_cause_id"] = root_cause_id
+        normalize_finding_evidence(finding, self._file_contents, self._evidence_indexes)
         if occurrences is not None:
-            finding["occurrences"] = deepcopy(occurrences)
-
+            supplied = occurrences.get("items", [])
+            items, reason = normalize_occurrence_evidence(
+                supplied, self._file_contents, self._evidence_indexes,
+            )
+            omitted = (
+                max(0, occurrences["count"] - len(supplied))
+                if occurrences.get("truncated") else 0
+            )
+            finding["occurrences"] = {
+                "count": len(items) + omitted,
+                "items": items,
+                "truncated": omitted > 0,
+            }
+            if reason:
+                finding.setdefault("evidence_missing_reason", reason)
+                finding["requires_manual_review"] = True
         self.findings.append(finding)
 
     def _add_advisory(
@@ -790,7 +820,26 @@ class RiskScanner:
         if location:
             advisory["location"] = location
         if registry_policy is not None:
-            advisory["registry_policy"] = registry_policy
+            advisory["evidence_type"] = "registry_policy"
+        normalize_finding_evidence(advisory, self._file_contents, self._evidence_indexes)
+        if registry_policy is not None:
+            policy = deepcopy(registry_policy)
+            policy["occurrences"], reason = normalize_occurrence_evidence(
+                policy.get("occurrences", []), self._file_contents, self._evidence_indexes,
+            )
+            # This total counts observed source-policy records, not valid locations.
+            # An unlocatable record stays in the total but is explicitly omitted.
+            policy["truncated"] = (
+                policy.get("truncated", False)
+                or policy["occurrence_count"] > len(policy["occurrences"])
+            )
+            if contains_sensitive_identifier(policy.get("source_file")):
+                reason = "sensitive_identifier"
+            else:
+                advisory["registry_policy"] = policy
+            if reason:
+                advisory.setdefault("evidence_missing_reason", reason)
+                advisory["requires_manual_review"] = True
         self.review_advisories.append(advisory)
 
     def _deduplicate_findings(self) -> None:
