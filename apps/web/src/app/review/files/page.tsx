@@ -24,6 +24,7 @@ export default function FileViewerPage() {
   const [contextStartLine, setContextStartLine] = useState(1);
   const [totalLines, setTotalLines] = useState(0);
   const [contextTruncated, setContextTruncated] = useState(false);
+  const [partialLine, setPartialLine] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +53,7 @@ export default function FileViewerPage() {
         setContextStartLine(data.start_line);
         setTotalLines(data.total_lines);
         setContextTruncated(data.truncated);
+        setPartialLine(data.partial_line === true);
       })
       .catch((err) => setError(err instanceof Error ? err.message : t('admin.dashboard.load_failed')))
       .finally(() => setLoading(false));
@@ -65,7 +67,7 @@ export default function FileViewerPage() {
     }
   }, [highlightLine, fileContent]);
 
-  const lines = fileContent ? fileContent.split('\n') : [];
+  const lines = fileContent !== null ? fileContent.split('\n') : [];
   const lineNumWidth = String(totalLines || lines.length).length;
 
   if (loading || authLoading) {
@@ -89,6 +91,7 @@ export default function FileViewerPage() {
         <span className="file-viewer-info">{t('review.files.line_count', { count: totalLines || lines.length })}</span>
         <span className="file-viewer-info">{t('review.files.context_redacted')}</span>
         {contextTruncated && <span className="file-viewer-info">{t('review.files.context_truncated')}</span>}
+        {partialLine && <span className="file-viewer-info" role="status">{t('review.files.partial_line')}</span>}
       </nav>
 
       {error && (
@@ -99,7 +102,7 @@ export default function FileViewerPage() {
         </div>
       )}
 
-      {!error && fileContent && (
+      {!error && fileContent !== null && (
         <div className="file-viewer-code">
           <pre><code>
             {lines.map((line, i) => {

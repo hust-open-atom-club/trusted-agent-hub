@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://trusted-agent-hub.dev/schemas/scan-report/0.15.0.schema.json",
+  "$id": "https://trusted-agent-hub.dev/schemas/scan-report.schema.json",
   "title": "Risk Scan Report",
   "description": "自动风险扫描报告 Schema，由扫描器生成，供审核员和评分模型使用",
   "type": "object",
@@ -13,124 +13,6 @@
     "findings",
     "summary"
   ],
-  "$defs": {
-    "evidence_source_ref": {
-      "type": ["string", "null"],
-      "maxLength": 2048
-    },
-    "evidence_file": {
-      "type": "string",
-      "description": "Canonical repository-relative path with slash separators, no traversal, control characters or placeholder names.",
-      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])(?!(?:unknown|\\(unknown\\))$)(?!\\.{1,2}(?:/|$))[^/\\\\:]+(?:/(?!\\.{1,2}(?:/|$))[^/\\\\:]+)*$"
-    },
-    "evidence_location": {
-      "type": "object",
-      "properties": {
-        "file": {
-          "$ref": "#/$defs/evidence_file",
-          "description": "文件路径"
-        },
-        "line": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "起始行号"
-        },
-        "column": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "起始列号"
-        },
-        "end_line": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "end_column": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "snippet": {
-          "type": "string",
-          "description": "匹配到的代码片段（已脱敏）"
-        },
-        "source_ref": {
-          "$ref": "#/$defs/evidence_source_ref",
-          "description": "Exact JSON Pointer fragment or parser field reference."
-        },
-        "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "source_ref_length": { "type": "integer", "minimum": 2049 },
-        "missing_reason": { "type": "string" },
-        "dependency_name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "resolved_url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "integrity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "field_locations": {
-          "$ref": "#/$defs/evidence_fields"
-        }
-      },
-      "additionalProperties": false
-    },
-    "evidence_fields": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "anyOf": [
-          { "required": ["source_ref"] },
-          { "required": ["source_ref_sha256", "source_ref_length", "missing_reason"] },
-          {
-            "required": ["source_ref_sha256", "missing_reason"],
-            "properties": { "missing_reason": { "const": "sensitive_identifier" } }
-          }
-        ],
-        "properties": {
-          "source_ref": {
-            "$ref": "#/$defs/evidence_source_ref"
-          },
-          "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "source_ref_length": { "type": "integer", "minimum": 2049 },
-          "line": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "end_line": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "column": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "end_column": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "missing_reason": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      }
-    }
-  },
   "properties": {
     "review_advisories": {
       "type": "array",
@@ -145,8 +27,6 @@
         "properties": {
           "id": { "type": "string" },
           "code": { "type": "string" },
-          "evidence_type": {"type": "string", "enum": ["source", "dependency", "registry_policy", "file", "synthetic"]},
-          "evidence_missing_reason": {"type": "string"},
           "category": {
             "type": "string",
             "enum": ["metadata_quality", "provenance", "permission_consistency", "registry_policy", "supply_chain"]
@@ -169,7 +49,7 @@
               "ecosystem": { "type": "string" },
               "registry_host": { "type": "string" },
               "policy_reason": { "type": "string" },
-              "source_file": { "$ref": "#/$defs/evidence_file" },
+              "source_file": { "type": "string", "maxLength": 512 },
               "scope": {
                 "type": "string",
                 "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
@@ -180,86 +60,20 @@
                 "maxItems": 100,
                 "items": {
                   "type": "object",
-                  "required": [
-                    "file",
-                    "resolved_url",
-                    "scope",
-                    "usage"
-                  ],
+                  "required": ["file", "resolved_url", "scope", "usage"],
                   "properties": {
-                    "file": {
-                      "$ref": "#/$defs/evidence_file"
-                    },
-                    "source_ref": {
-                      "$ref": "#/$defs/evidence_source_ref"
-                    },
-                    "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                    "source_ref_length": { "type": "integer", "minimum": 2049 },
-                    "missing_reason": { "type": "string" },
-                    "line": {
-                      "type": [
-                        "integer",
-                        "null"
-                      ],
-                      "minimum": 1
-                    },
-                    "dependency_name": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "maxLength": 128
-                    },
-                    "version": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "maxLength": 128
-                    },
-                    "resolved_url": {
-                      "type": "string",
-                      "maxLength": 512
-                    },
-                    "integrity": {
-                      "type": [
-                        "string",
-                        "null"
-                      ],
-                      "maxLength": 160
-                    },
+                    "file": { "type": "string", "maxLength": 512 },
+                    "source_ref": { "type": ["string", "null"], "maxLength": 256 },
+                    "line": { "type": ["integer", "null"], "minimum": 1 },
+                    "dependency_name": { "type": ["string", "null"], "maxLength": 128 },
+                    "version": { "type": ["string", "null"], "maxLength": 128 },
+                    "resolved_url": { "type": "string", "maxLength": 512 },
+                    "integrity": { "type": ["string", "null"], "maxLength": 160 },
                     "scope": {
                       "type": "string",
-                      "enum": [
-                        "runtime",
-                        "dev",
-                        "test",
-                        "optional",
-                        "mixed",
-                        "unknown"
-                      ]
+                      "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
                     },
-                    "usage": {
-                      "type": "string",
-                      "enum": [
-                        "registry_api",
-                        "resolved_download"
-                      ]
-                    },
-                    "column": {
-                      "type": "integer",
-                      "minimum": 1,
-                      "description": "起始列号"
-                    },
-                    "end_line": {
-                      "type": "integer",
-                      "minimum": 1
-                    },
-                    "end_column": {
-                      "type": "integer",
-                      "minimum": 1
-                    },
-                    "field_locations": {"$ref": "#/$defs/evidence_fields"}
+                    "usage": { "type": "string", "enum": ["registry_api", "resolved_download"] }
                   },
                   "additionalProperties": false
                 }
@@ -268,7 +82,14 @@
             },
             "additionalProperties": false
           },
-          "location": {"$ref": "#/$defs/evidence_location"}
+          "location": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "line": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       }
@@ -565,9 +386,7 @@
                 "category": { "type": "string" },
                 "sink_kind": { "type": "string" },
                 "source_kind": { "type": "string" },
-                "location": { "$ref": "#/$defs/evidence_location" },
-                "evidence_type": {"type": "string", "enum": ["source", "dependency", "registry_policy", "file", "synthetic"]},
-                "evidence_missing_reason": {"type": "string"},
+                "location": { "type": "object" },
                 "evidence": { "type": "string" },
                 "remediation": { "type": "string" },
                 "cwe_id": { "type": "string" },
@@ -655,7 +474,19 @@
             "type": "string",
             "description": "详细描述"
           },
-          "location": {"$ref": "#/$defs/evidence_location"},
+          "location": {
+            "type": "object",
+            "required": ["file"],
+            "properties": {
+              "file": { "type": "string", "description": "文件路径" },
+              "line": { "type": "integer", "minimum": 1, "description": "起始行号" },
+              "column": { "type": "integer", "minimum": 1, "description": "起始列号" },
+              "end_line": { "type": "integer", "minimum": 1 },
+              "end_column": { "type": "integer", "minimum": 1 },
+              "snippet": { "type": "string", "description": "匹配到的代码片段（已脱敏）" }
+            },
+            "additionalProperties": false
+          },
           "llm_label": {
             "type": "string",
             "enum": [
@@ -717,10 +548,6 @@
               "additionalProperties": false
             }
           },
-          "evidence_type": {"type": "string", "enum": ["source", "dependency", "registry_policy", "file", "synthetic"]},
-          "evidence_missing_reason": {"type": "string"},
-          "llm_context_reasons": {"type": "array", "items": {"type": "string"}},
-          "llm_context_audit": {"type": "object"},
           "llm_context_status": {
             "type": "string",
             "enum": ["complete", "partial", "missing"]
@@ -767,11 +594,19 @@
             "description": "同一规则和匹配内容在多个位置出现时的报告层聚合",
             "required": ["count", "items", "truncated"],
             "properties": {
-              "count": { "type": "integer", "minimum": 0 },
+              "count": { "type": "integer", "minimum": 1 },
               "items": {
                 "type": "array",
                 "maxItems": 100,
-                "items": {"allOf": [{"$ref": "#/$defs/evidence_location"}, {"required": ["file"]}]}
+                "items": {
+                  "type": "object",
+                  "required": ["file"],
+                  "properties": {
+                    "file": { "type": "string" },
+                    "line": { "type": "integer", "minimum": 1 }
+                  },
+                  "additionalProperties": false
+                }
               },
               "truncated": { "type": "boolean" }
             },
@@ -1024,10 +859,7 @@
                   "required": ["source_file", "scope", "direct"],
                   "properties": {
                     "source_file": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "source_ref": { "$ref": "#/$defs/evidence_source_ref" },
-                    "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                    "source_ref_length": { "type": "integer", "minimum": 2049 },
-                    "missing_reason": { "type": "string" },
+                    "source_ref": { "type": "string", "maxLength": 512 },
                     "line": { "type": "integer", "minimum": 1 },
                     "scope": {
                       "type": "string",

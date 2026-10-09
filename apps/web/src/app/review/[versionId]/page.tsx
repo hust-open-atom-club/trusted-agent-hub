@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
@@ -9,10 +9,15 @@ import TrustScoreDetail from '@/components/TrustScoreDetail';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 import DependencyCoverageSummary from './DependencyCoverageSummary';
 import ProvenanceSummary from './ProvenanceSummary';
+import AdvisoryEvidence from './AdvisoryEvidence';
+import FindingCodeView, { canPreviewFinding } from './FindingCodeView';
+import ContextCoverageSummary from './ContextCoverageSummary';
+import { contextMessage } from './contextMessages';
+import FindingEvidence, { findingLocations, formatEvidenceLocation } from './FindingEvidence';
 import { toast } from 'sonner';
 import type {
-  Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord, FileContext,
-  PackagePermissions, PackageAuthor, PackageDetail, FindingLocation,
+  Finding, ScanSummary, TrustScore, VersionDetail, ReviewRecord,
+  PackagePermissions, PackageAuthor, PackageDetail,
   Installation,
 } from '@/types';
 
@@ -33,32 +38,12 @@ const SEVERITY_ORDER: Record<string, number> = {
   info: 4,
 };
 
-const CODE_CONTEXT_RANGE = 50;
-
 function findingRuleId(finding: Finding): string {
   return finding.rule_id || finding.detector_ids?.[0] || 'UNKNOWN';
 }
 
 function findingLocationCount(finding: Finding): number {
   return findingLocations(finding).count;
-}
-
-function findingLocations(finding: Finding): {
-  count: number;
-  items: FindingLocation[];
-  truncated: boolean;
-} {
-  if (finding.occurrences?.count) {
-    return {
-      count: finding.occurrences.count,
-      items: finding.occurrences.items,
-      truncated: finding.occurrences.truncated,
-    };
-  }
-  if (finding.location?.file) {
-    return { count: 1, items: [finding.location], truncated: false };
-  }
-  return { count: 0, items: [], truncated: false };
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -107,93 +92,6 @@ function flattenDisplayEntries(
 
 function humanizeField(path: string): string {
   return path.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function FindingCodeView({
-  finding,
-  fileContents,
-  versionId,
-  token,
-}: {
-  finding: Finding;
-  fileContents?: Record<string, string>;
-  versionId: string;
-  token: string | null;
-}) {
-  const { t } = useTranslation();
-  const targetRef = useRef<HTMLDivElement>(null);
-  const filePath = finding.location?.file || '';
-  const [remoteContext, setRemoteContext] = useState<FileContext | null>(null);
-
-  useEffect(() => {
-    if (remoteContext || fileContents?.[filePath] || !token || !filePath) return;
-    let cancelled = false;
-    const query = new URLSearchParams({
-      path: filePath,
-      line: String(Math.max(1, finding.location?.line || 1)),
-    });
-    apiFetch<FileContext>(`${API_BASE}/api/v0/producer/versions/${versionId}/file-context?${query.toString()}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((data) => { if (!cancelled) setRemoteContext(data); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [fileContents, filePath, finding.location?.line, remoteContext, token, versionId]);
-
-  const fileContent = fileContents?.[filePath] ?? remoteContext?.content;
-
-  useEffect(() => {
-    if (targetRef.current) {
-      targetRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-  }, [remoteContext]);
-
-  if (!fileContent) {
-    return finding.location?.snippet ? (
-      <div className="finding-snippet">
-        <pre><code>{finding.location.snippet}</code></pre>
-      </div>
-    ) : null;
-  }
-
-  const lines = fileContent.split('\n');
-  const targetLine = finding.location?.line || 1;
-  const displayStart = remoteContext?.start_line ?? Math.max(1, targetLine - CODE_CONTEXT_RANGE);
-  const displayEnd = remoteContext?.end_line ?? Math.min(lines.length, targetLine + CODE_CONTEXT_RANGE);
-  const displayLines = remoteContext ? lines : lines.slice(displayStart - 1, displayEnd);
-  const lineNumWidth = String(remoteContext?.total_lines ?? displayEnd).length;
-
-  return (
-    <div className="finding-snippet finding-snippet-expanded">
-      <div className="finding-snippet-info">
-        <span>{t('review.finding.lines_range', { start: displayStart, end: displayEnd, total: remoteContext?.total_lines ?? lines.length })}</span>
-        <a
-          className="finding-full-file-toggle"
-          href={`/review/files?versionId=${encodeURIComponent(versionId)}&path=${encodeURIComponent(filePath)}&line=${targetLine}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t('review.finding.view_full_file')}
-        </a>
-      </div>
-      <pre><code>
-        {displayLines.map((line, i) => {
-          const lineNum = displayStart + i;
-          const isTarget = lineNum === targetLine;
-          return (
-            <div
-              key={lineNum}
-              ref={isTarget ? targetRef : undefined}
-              className={`code-line ${isTarget ? 'code-line-target' : ''}`}
-            >
-              <span className="code-line-num">{String(lineNum).padStart(lineNumWidth, ' ')}</span>
-              <span className="code-line-content">{line}</span>
-            </div>
-          );
-        })}
-      </code></pre>
-    </div>
-  );
 }
 
 export default function ReviewDetailPage() {
@@ -757,6 +655,8 @@ export default function ReviewDetailPage() {
         </section>
       )}
 
+      <ContextCoverageSummary coverage={llmReview?.context_coverage} />
+
       {scanReport?.review_advisories && scanReport.review_advisories.length > 0 && (
         <section className="review-detail-section" data-testid="review-advisories">
           <div className="review-advisory-heading">
@@ -799,42 +699,11 @@ export default function ReviewDetailPage() {
                   {advisory.requires_manual_review && (
                     <span>{t('review.detail.advisory_manual_required')}</span>
                   )}
-                  {advisory.location?.file && <code>{advisory.location.file}</code>}
                 </div>
                 {advisory.evidence && (
                   <div className="review-advisory-evidence">{advisory.evidence}</div>
                 )}
-                {advisory.registry_policy && (
-                  <details className="review-advisory-occurrences">
-                    <summary>
-                      {t('review.detail.advisory_occurrences', {
-                        count: advisory.registry_policy.occurrence_count,
-                      })}
-                    </summary>
-                    <div className="review-advisory-occurrence-list">
-                      {advisory.registry_policy.occurrences.map((occurrence, index) => (
-                        <div className="review-advisory-occurrence" key={`${occurrence.file}:${occurrence.source_ref ?? occurrence.line ?? index}:${index}`}>
-                          <strong>
-                            {occurrence.dependency_name
-                              ? `${occurrence.dependency_name}@${occurrence.version ?? '?'}`
-                              : t('review.detail.advisory_source_declaration')}
-                          </strong>
-                          <code>{occurrence.file}{occurrence.source_ref ? ` ${occurrence.source_ref}` : occurrence.line ? `:${occurrence.line}` : ''}</code>
-                          <span>{t('review.detail.advisory_scope')}: {occurrence.scope}</span>
-                          <code>{occurrence.resolved_url}</code>
-                          {occurrence.integrity && <code>integrity: {occurrence.integrity}</code>}
-                        </div>
-                      ))}
-                    </div>
-                    {advisory.registry_policy.truncated && (
-                      <p className="review-advisory-truncated">
-                        {t('review.detail.advisory_occurrences_omitted', {
-                          count: advisory.registry_policy.occurrence_count - advisory.registry_policy.occurrences.length,
-                        })}
-                      </p>
-                    )}
-                  </details>
-                )}
+                <AdvisoryEvidence advisory={advisory} versionId={versionId} />
               </article>
             ))}
           </div>
@@ -1143,7 +1012,7 @@ export default function ReviewDetailPage() {
                       .map((finding) => {
                         const findingKey = finding.id
                           || finding.root_cause_id
-                          || `${group.ruleId}-${finding.location?.file || 'unknown'}-${finding.location?.line || 0}`;
+                          || `${group.ruleId}-${finding.location?.file || finding.evidence_type || 'missing-location'}-${finding.location?.source_ref || finding.location?.line || 0}`;
                         const effectiveSeverity = finding.effective_severity || finding.severity;
                         const staticSeverity = finding.static_severity || finding.candidate_severity || finding.severity;
                         const locations = findingLocations(finding);
@@ -1189,6 +1058,7 @@ export default function ReviewDetailPage() {
                               </div>
                             )}
 
+                            <FindingEvidence finding={finding} versionId={versionId} />
                             {finding.evidence && (
                               <div className="finding-evidence-line">{finding.evidence}</div>
                             )}
@@ -1225,7 +1095,7 @@ export default function ReviewDetailPage() {
                                 )}
                                 {finding.llm_explanation && <p>{finding.llm_explanation}</p>}
                                 {finding.llm_missing_context && finding.llm_missing_context.length > 0 && (
-                                  <p>{t('review.finding.missing_context')}: {finding.llm_missing_context.join(', ')}</p>
+                                  <p>{t('review.finding.missing_context')}: {finding.llm_missing_context.map(reason => contextMessage(reason, t)).join('; ')}</p>
                                 )}
                                 {finding.llm_supporting_evidence && finding.llm_supporting_evidence.length > 0 && (
                                   <details>
@@ -1250,7 +1120,7 @@ export default function ReviewDetailPage() {
                                   {finding.detector_hits.map((hit) => (
                                     <li key={hit.id}>
                                       <code>{hit.rule_id}</code> · {hit.static_severity} → {hit.effective_severity}
-                                      {hit.location?.file ? ` · ${hit.location.file}${hit.location.line ? `:${hit.location.line}` : ''}` : ''}
+                                      <FindingEvidence finding={hit} versionId={versionId} />
                                       {hit.evidence ? ` · ${hit.evidence}` : ''}
                                     </li>
                                   ))}
@@ -1264,10 +1134,7 @@ export default function ReviewDetailPage() {
                                 <ul style={{ margin: '0.25rem 0 0 1rem' }}>
                                   {locations.items.map((occurrence, index) => (
                                     <li key={`${occurrence.file}:${occurrence.line || 0}:${index}`}>
-                                      {occurrence.file}{occurrence.line ? `:${occurrence.line}` : ''}
-                                      {occurrence.end_line && occurrence.end_line !== occurrence.line
-                                        ? `-${occurrence.end_line}`
-                                        : ''}
+                                      {formatEvidenceLocation(occurrence)}
                                     </li>
                                   ))}
                                 </ul>
@@ -1278,7 +1145,7 @@ export default function ReviewDetailPage() {
                             )}
 
                             <div className="finding-actions">
-                              {finding.location?.snippet && (
+                              {canPreviewFinding(finding) && (
                                 <button
                                   className="finding-code-toggle"
                                   onClick={() => {

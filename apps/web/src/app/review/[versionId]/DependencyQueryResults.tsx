@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { DependencyQueryResult } from '@/types';
+import { EvidenceReferenceOmission } from './FindingEvidence';
 
 const QUERY_PAGE_SIZE = 50;
 
@@ -25,6 +26,7 @@ function QueryOccurrences({ result }: { result: DependencyQueryResult }) {
                 {' · '}{t(`review.detail.dependency_coverage_scope_${occurrence.scope}`)}
                 {' · '}{t(`review.detail.dependency_coverage_${occurrence.direct ? 'direct' : 'transitive'}`)}
                 {occurrence.source_ref && <div><code>{occurrence.source_ref}</code></div>}
+                <EvidenceReferenceOmission reference={occurrence} />
                 {occurrence.registry && <div><code>{occurrence.registry}</code></div>}
               </li>
             ))}

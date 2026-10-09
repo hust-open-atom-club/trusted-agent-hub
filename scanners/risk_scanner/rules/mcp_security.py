@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from scanners.risk_scanner.evidence import metadata_location
+
 from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
 from scanners.risk_scanner.patterns import (
     MCP_TOOL_DESC_RISK_KEYWORDS,
@@ -86,17 +88,20 @@ def _extract_declared_tools(meta: dict[str, Any], mcp_config: dict[str, Any]) ->
 
 def _extract_tools_with_desc(
     meta: dict[str, Any], mcp_config: dict[str, Any]
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     tools_raw = mcp_config.get("tools")
+    prefix = ("mcp_server_config", "tools")
     if tools_raw is None:
         tools_raw = meta.get("tools", [])
+        prefix = ("tools",)
 
-    result: list[dict[str, str]] = []
-    for tool in tools_raw:
+    result: list[dict[str, Any]] = []
+    for index, tool in enumerate(tools_raw):
         if isinstance(tool, dict) and tool.get("name"):
             result.append({
                 "name": str(tool["name"]),
                 "description": str(tool.get("description", "") or ""),
+                "field": (*prefix, index, "description"),
             })
     return result
 
@@ -170,7 +175,11 @@ def _check_http_transport(
     if "localhost" in lower_endpoint or "127.0.0.1" in lower_endpoint:
         return
 
-    manifest_file = "manifest.json"
+    field = (
+        ("mcp_server_config", "remote_endpoint")
+        if mcp_config.get("remote_endpoint") is not None
+        else ("remote_endpoint",)
+    )
     scanner._add_finding(
         rule_id=rule_id,
         severity="high",
@@ -180,7 +189,7 @@ def _check_http_transport(
             f"MCP Server 的 remote_endpoint 使用明文 HTTP 传输: {remote_endpoint}。"
             f"网络流量可被中间人截获或篡改。"
         ),
-        location={"file": manifest_file},
+        location=metadata_location(scanner, field),
         evidence=f"remote_endpoint: {remote_endpoint}",
         remediation=(
             "将 remote_endpoint 改为 https:// 加密传输，"
@@ -369,6 +378,7 @@ def _check_tool_description_poisoning(
 
         if poisoned or drift:
             evaluated.append({
+                "field": tool["field"],
                 "name": name,
                 "desc": desc,
                 "matched": matched,
@@ -443,7 +453,9 @@ def _check_tool_description_poisoning(
             category="mcp_security",
             title=title,
             description=description,
-            location={"file": "manifest.json"},
+            location=metadata_location(
+                scanner, entry["field"],
+            ),
             evidence=evidence,
             remediation=(
                 "确保工具描述与权限声明一致：要么在 permissions 中声明实际需要的能力，"

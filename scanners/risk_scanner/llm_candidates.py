@@ -12,6 +12,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from scanners.risk_scanner.evidence import delivered_source_lines, finding_location, normalize_file_path
+
+
+def is_semantic_candidate(finding: Mapping[str, Any]) -> bool:
+    """Intent is independent of source availability, so missing evidence counts."""
+    return (
+        finding.get("llm_review_exempt") is not True
+        and bool(finding.get("id"))
+        and (finding.get("requires_llm_validation") is True or finding.get("llm_adjudication_eligible") is True)
+    )
+
 
 @dataclass(frozen=True)
 class LLMCandidateDecision:
@@ -31,6 +42,9 @@ _CONTEXT_SKIP_REASONS = frozenset({
     "source_line_out_of_range",
     "source_context_not_built",
     "source_location_not_in_context",
+    "invalid_source_path",
+    "evidence_limit",
+    "evidence_redacted",
 })
 
 
@@ -49,24 +63,7 @@ def _context_contains_location(
     line: int,
 ) -> bool:
     if context_audit is not None:
-        ranges = context_audit.get("line_ranges")
-        if isinstance(ranges, list):
-            for item in ranges:
-                if not isinstance(item, Mapping):
-                    continue
-                if str(item.get("file") or "") != file_path:
-                    continue
-                start = item.get("start_line")
-                end = item.get("end_line")
-                if (
-                    isinstance(start, int)
-                    and not isinstance(start, bool)
-                    and isinstance(end, int)
-                    and not isinstance(end, bool)
-                    and start <= line <= end
-                ):
-                    return True
-            return False
+        return (file_path, line) in delivered_source_lines(context, context_audit)
 
     return re.search(rf"(?m)^{line}:\s", context) is not None
 
@@ -98,21 +95,32 @@ def evaluate_llm_candidate(
         return LLMCandidateDecision(False, "missing_finding_id")
 
     location = finding.get("location")
+    if finding.get("evidence_missing_reason") == "sensitive_identifier" or (
+        isinstance(location, Mapping) and location.get("missing_reason") == "sensitive_identifier"
+    ):
+        return LLMCandidateDecision(False, "evidence_redacted")
     if not isinstance(location, Mapping):
         return LLMCandidateDecision(False, "missing_source_location")
-    file_path = str(location.get("file") or "").strip()
+    file_path = location.get("file")
     if not file_path:
         return LLMCandidateDecision(False, "missing_source_file")
-    line = _location_line(location)
-    if line is None:
-        return LLMCandidateDecision(False, "invalid_source_line")
-
+    file_path = normalize_file_path(file_path)
+    if file_path is None:
+        return LLMCandidateDecision(False, "invalid_source_path")
+    location = finding_location(finding)
     if file_contents is not None:
         if file_path not in file_contents:
             return LLMCandidateDecision(False, "source_file_not_scanned")
         content = file_contents[file_path]
         if not isinstance(content, str):
             return LLMCandidateDecision(False, "source_file_not_text")
+    if finding.get("evidence_missing_reason") == "source_ref_too_long":
+        return LLMCandidateDecision(False, "evidence_limit")
+    line = _location_line(location)
+    if line is None:
+        return LLMCandidateDecision(False, "invalid_source_line")
+
+    if file_contents is not None:
         lines = content.splitlines()
         if not lines:
             return LLMCandidateDecision(False, "source_context_empty")
@@ -133,8 +141,27 @@ def evaluate_llm_candidate(
                 False,
                 "source_location_not_in_context",
             )
+        end_line = location.get("end_line", line)
+        if isinstance(end_line, bool) or not isinstance(end_line, int) or end_line < line:
+            return LLMCandidateDecision(False, "invalid_source_line")
+        if context_audit is not None:
+            delivered = delivered_source_lines(context, context_audit)
+            if any((file_path, number) not in delivered for number in range(line, end_line + 1)):
+                return LLMCandidateDecision(False, "source_location_not_in_context")
 
     return LLMCandidateDecision(True)
+
+
+def candidate_context_reason(reason: str | None) -> str | None:
+    if reason not in _CONTEXT_SKIP_REASONS:
+        return None
+    if reason in {"source_context_not_built", "source_location_not_in_context"}:
+        return "delivery_missing"
+    if reason in {"invalid_source_line", "source_line_out_of_range", "source_context_empty"}:
+        return "location_unresolved"
+    if reason in {"evidence_limit", "evidence_redacted"}:
+        return reason
+    return "source_missing"
 
 
 def record_llm_candidate_skip(
@@ -157,6 +184,7 @@ def record_llm_candidate_skip(
         missing.append(marker)
     finding["llm_missing_context"] = missing
     finding["llm_context_status"] = "missing"
+    finding["llm_context_reasons"] = [candidate_context_reason(reason)]
     finding["llm_adjudication_action"] = "manual_review"
     finding["requires_manual_review"] = True
 

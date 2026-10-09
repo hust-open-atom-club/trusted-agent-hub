@@ -6,13 +6,18 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
+from concurrent.futures import Future
+from dataclasses import dataclass
 from pathlib import Path
-from pathlib import PurePosixPath
+from threading import Lock
 from typing import Any
 
+from scanners.risk_scanner.evidence import normalize_file_path
 from scanners.risk_scanner.redaction import redact_text
 from src.settings import get_settings
 
@@ -20,6 +25,15 @@ from src.settings import get_settings
 _SNAPSHOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 _DEFAULT_ROOT = Path(__file__).resolve().parents[2] / "data" / "source-snapshots"
+_CONTEXT_CACHE_MAX_BYTES = 16 * 1024 * 1024
+_CONTEXT_CACHE_MAX_ENTRIES = 128
+
+
+@dataclass(frozen=True)
+class _RedactedSource:
+    content_sha256: str
+    lines: tuple[str, ...]
+    size_bytes: int
 
 
 class SourceSnapshotStore:
@@ -38,6 +52,11 @@ class SourceSnapshotStore:
         if ttl_seconds is None:
             ttl_seconds = settings.source_snapshot_ttl_seconds
         self.ttl_seconds = max(int(ttl_seconds), 1)
+        self._context_cache: OrderedDict[tuple[str, str], _RedactedSource] = OrderedDict()
+        self._context_cache_bytes = 0
+        self._context_cache_lock = Lock()
+        self._context_cache_generation = 0
+        self._context_pending: dict[tuple[str, str, str], Future[tuple[str, ...]]] = {}
         self.root.mkdir(parents=True, exist_ok=True)
         try:
             self.root.chmod(0o700)
@@ -73,6 +92,65 @@ class SourceSnapshotStore:
         except (TypeError, ValueError):
             return True
 
+    def _discard_context_cache(self, snapshot_id: str) -> None:
+        with self._context_cache_lock:
+            self._context_cache_generation += 1
+            for key in list(self._context_cache):
+                if key[0] == snapshot_id:
+                    self._context_cache_bytes -= self._context_cache.pop(key).size_bytes
+
+    def _redacted_source_lines(
+        self, snapshot_id: str, relative_path: str, raw_content: str,
+    ) -> tuple[str, ...]:
+        """Cache redacted lines by content digest, including cross-worker changes."""
+        digest = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+        key = (snapshot_id, relative_path)
+        pending_key = (*key, digest)
+        with self._context_cache_lock:
+            cached = self._context_cache.get(key)
+            if cached is not None:
+                if cached.content_sha256 == digest:
+                    self._context_cache.move_to_end(key)
+                    return cached.lines
+                self._context_cache_bytes -= self._context_cache.pop(key).size_bytes
+
+            pending = self._context_pending.get(pending_key)
+            leader = pending is None
+            if pending is None:
+                pending = Future()
+                self._context_pending[pending_key] = pending
+            generation = self._context_cache_generation
+
+        if not leader:
+            return pending.result()
+        try:
+            lines = tuple(redact_text(raw_content).splitlines()) or ("",)
+            size = sys.getsizeof(lines) + sum(sys.getsizeof(line) for line in lines)
+        except BaseException as error:
+            with self._context_cache_lock:
+                self._context_pending.pop(pending_key, None)
+            pending.set_exception(error)
+            raise
+        with self._context_cache_lock:
+            if (
+                generation == self._context_cache_generation
+                and size <= _CONTEXT_CACHE_MAX_BYTES
+            ):
+                replaced = self._context_cache.pop(key, None)
+                if replaced is not None:
+                    self._context_cache_bytes -= replaced.size_bytes
+                while self._context_cache and (
+                    self._context_cache_bytes + size > _CONTEXT_CACHE_MAX_BYTES
+                    or len(self._context_cache) >= _CONTEXT_CACHE_MAX_ENTRIES
+                ):
+                    _, evicted = self._context_cache.popitem(last=False)
+                    self._context_cache_bytes -= evicted.size_bytes
+                self._context_cache[key] = _RedactedSource(digest, lines, size)
+                self._context_cache_bytes += size
+            self._context_pending.pop(pending_key, None)
+        pending.set_result(lines)
+        return lines
+
     def save(self, files: dict[str, str], *, snapshot_id: str | None = None,
              source_hash: str | None = None, ttl_seconds: int | None = None,
              owner_id: str | None = None) -> dict[str, Any]:
@@ -101,6 +179,7 @@ class SourceSnapshotStore:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
             os.replace(temp_name, target)
+            self._discard_context_cache(snapshot_id)
             try:
                 target.chmod(0o600)
             except OSError:
@@ -144,30 +223,46 @@ class SourceSnapshotStore:
         if actual_owner and expected_owner_id and actual_owner != str(expected_owner_id):
             return None
 
-        normalized = str(relative_path).replace("\\", "/")
-        path = PurePosixPath(normalized)
-        if (
-            not normalized
-            or normalized.startswith("/")
-            or any(part in {"", ".", ".."} for part in path.parts)
-        ):
+        normalized = normalize_file_path(relative_path)
+        if normalized is None:
             return None
         files = payload.get("files", {})
         raw_content = files.get(normalized) if isinstance(files, dict) else None
         if not isinstance(raw_content, str):
             return None
 
-        source_lines = raw_content.splitlines() or [""]
+        source_lines = self._redacted_source_lines(snapshot_id, normalized, raw_content)
         requested_line = max(1, int(line or 1))
-        target_line = min(requested_line, len(source_lines))
+        if requested_line > len(source_lines):
+            return None
+        target_line = requested_line
         bounded_lines = max(1, min(int(max_lines), 200))
         start = max(0, target_line - 1 - bounded_lines // 2)
         end = min(len(source_lines), start + bounded_lines)
-        redacted = redact_text("\n".join(source_lines[start:end]))
+        redacted = "\n".join(source_lines[start:end])
         encoded = redacted.encode("utf-8")
         byte_limited = len(encoded) > max(1, int(max_bytes))
+        partial_line = False
         if byte_limited:
-            redacted = encoded[:max(1, int(max_bytes))].decode("utf-8", errors="ignore")
+            delivered: list[str] = []
+            size = 0
+            for source_line in source_lines[start:end]:
+                line_size = len(source_line.encode("utf-8")) + int(bool(delivered))
+                if size + line_size > max(1, int(max_bytes)):
+                    break
+                delivered.append(source_line)
+                size += line_size
+            if not delivered:
+                # Human previews may show a marked prefix of a very long line.
+                # LLM evidence delivery has its own complete-line budget.
+                redacted = source_lines[start].encode("utf-8")[
+                    :max(1, int(max_bytes))
+                ].decode("utf-8", errors="ignore")
+                end = start + 1
+                partial_line = True
+            else:
+                redacted = "\n".join(delivered)
+                end = start + len(delivered)
 
         return {
             "file": normalized,
@@ -176,6 +271,7 @@ class SourceSnapshotStore:
             "total_lines": len(source_lines),
             "content": redacted,
             "truncated": byte_limited or end < len(source_lines),
+            "partial_line": partial_line,
             "redacted": True,
             "expires_at": metadata.get("expires_at"),
         }
@@ -199,6 +295,7 @@ class SourceSnapshotStore:
             if expires_at and expires_at < current:
                 try:
                     path.unlink()
+                    self._discard_context_cache(path.stem)
                     removed += 1
                 except FileNotFoundError:
                     pass
@@ -208,6 +305,7 @@ class SourceSnapshotStore:
         path = self._path_for(snapshot_id)
         if path is None or path.is_symlink():
             return
+        self._discard_context_cache(snapshot_id)
         try:
             path.unlink()
         except FileNotFoundError:

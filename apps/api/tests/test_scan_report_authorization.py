@@ -166,3 +166,22 @@ def test_source_context_is_reviewer_only(monkeypatch) -> None:
     with _client_for_user(CurrentUser(id="submitter-1", role="submitter")) as client:
         response = client.get(f"/api/v0/producer/versions/ver-1/file-context{query}")
     assert response.status_code == 403
+
+
+def test_reviewer_receives_a_partial_long_line_preview_instead_of_404(tmp_path, monkeypatch):
+    from src.services import producer as producer_service
+    from src.services.source_snapshots import SourceSnapshotStore
+
+    store = SourceSnapshotStore(tmp_path)
+    store.save({"bundle.min.js": "var x=1;" * 2000}, snapshot_id="snapshot-1")
+    monkeypatch.setattr(producer_service, "_SOURCE_SNAPSHOT_STORE", store)
+    monkeypatch.setattr(producer_router, "_get_producer_repository", _VersionRepository)
+    with _client_for_user(CurrentUser(id="reviewer-1", role="reviewer")) as client:
+        response = client.get(
+            "/api/v0/producer/versions/ver-1/file-context?path=bundle.min.js&line=1"
+        )
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["partial_line"] and preview["truncated"]
+    assert preview["content"].startswith("var x=1;")
+    assert 0 < len(preview["content"].encode()) <= 8192

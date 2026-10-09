@@ -254,13 +254,45 @@ class TrustScore(StrictContractModel):
         return data
 
 
-class FindingOccurrence(StrictContractModel):
+EVIDENCE_TYPE = Literal["source", "dependency", "registry_policy", "file", "synthetic"]
+# Keep the API wheel independent of the monorepo's scanner packages. Contract
+# tests check this limit against the shared scanner constant and report schema.
+_EVIDENCE_SOURCE_REF_MAX_LENGTH = 2048
+
+
+class EvidenceReference(StrictContractModel):
+    source_ref: str | None = Field(
+        default=None, max_length=_EVIDENCE_SOURCE_REF_MAX_LENGTH,
+    )
+    source_ref_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source_ref_length: int | None = Field(
+        default=None, gt=_EVIDENCE_SOURCE_REF_MAX_LENGTH,
+    )
+    missing_reason: str | None = None
+
+
+class EvidenceFieldLocation(EvidenceReference):
+    line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    end_column: int | None = Field(default=None, ge=1)
+
+
+class FindingOccurrence(EvidenceReference):
     file: str
     line: int | None = Field(default=None, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    column: int | None = Field(default=None, ge=1)
+    end_column: int | None = Field(default=None, ge=1)
+    dependency_name: str | None = None
+    version: str | None = None
+    resolved_url: str | None = None
+    integrity: str | None = None
+    field_locations: dict[str, EvidenceFieldLocation] = Field(default_factory=dict)
 
 
 class FindingOccurrences(StrictContractModel):
-    count: int = Field(ge=1)
+    count: int = Field(ge=0)
     items: list[FindingOccurrence] = Field(default_factory=list)
     truncated: bool = False
 
@@ -275,6 +307,8 @@ class DetectorHit(StrictContractModel):
     source_kind: str
     location: dict[str, object] = Field(default_factory=dict)
     evidence: str | None = None
+    evidence_type: EVIDENCE_TYPE | None = None
+    evidence_missing_reason: str | None = None
     remediation: str | None = None
     cwe_id: str | None = None
     requires_confirmation: bool | None = None
@@ -320,6 +354,8 @@ class ScanFinding(StrictContractModel):
     description: str
     location: dict[str, object] | None = None
     evidence: str | None = None
+    evidence_type: EVIDENCE_TYPE | None = None
+    evidence_missing_reason: str | None = None
     llm_label: LLM_LABEL | None = None
     candidate_severity: str | None = None
     requires_llm_validation: bool | None = None
@@ -344,6 +380,8 @@ class ScanFinding(StrictContractModel):
     llm_missing_context: list[str] = Field(default_factory=list)
     llm_supporting_evidence: list[dict[str, object]] = Field(default_factory=list)
     llm_context_status: Literal["complete", "partial", "missing"] | None = None
+    llm_context_reasons: list[str] = Field(default_factory=list)
+    llm_context_audit: dict[str, object] = Field(default_factory=dict)
     llm_policy_version: str | None = None
     llm_effective_severity_before: Literal[
         "critical", "high", "medium", "low", "info"
@@ -374,9 +412,8 @@ class PermissionEvidence(StrictContractModel):
     evidence: str = Field(max_length=240)
 
 
-class RegistryPolicyOccurrence(StrictContractModel):
-    file: str = Field(max_length=512)
-    source_ref: str | None = Field(default=None, max_length=256)
+class RegistryPolicyOccurrence(FindingOccurrence):
+    file: str
     line: int | None = Field(default=None, ge=1)
     dependency_name: str | None = Field(default=None, max_length=128)
     version: str | None = Field(default=None, max_length=128)
@@ -390,7 +427,7 @@ class RegistryPolicyEvidence(StrictContractModel):
     ecosystem: str
     registry_host: str
     policy_reason: str
-    source_file: str = Field(max_length=512)
+    source_file: str
     scope: Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
     occurrence_count: int = Field(ge=1)
     occurrences: list[RegistryPolicyOccurrence] = Field(max_length=100)
@@ -415,6 +452,8 @@ class ReviewAdvisory(StrictContractModel):
     grade_downgrade_steps: int = Field(default=0, ge=0, le=1)
     requires_manual_review: bool = False
     evidence: str | None = None
+    evidence_type: EVIDENCE_TYPE | None = None
+    evidence_missing_reason: str | None = None
     location: dict[str, object] | None = None
     registry_policy: RegistryPolicyEvidence | None = None
 

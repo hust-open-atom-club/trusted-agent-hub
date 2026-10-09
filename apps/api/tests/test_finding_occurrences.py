@@ -1,3 +1,5 @@
+import pytest
+
 from scanners.risk_scanner.reporting import aggregate_findings, build_findings_summary
 
 
@@ -105,6 +107,32 @@ def test_preaggregated_locations_keep_their_count_and_truncation():
     assert aggregate_findings(roots)[0]["occurrences"] == occurrences
     assert build_findings_summary(roots)["occurrences_total"] == 110
     assert raw[0]["occurrences"] == occurrences
+
+
+@pytest.mark.parametrize("items", [
+    [],
+    [{"file": "(unknown)"}],
+    [{"file": "../outside.py"}, {"file": "/tmp/run.py"}],
+])
+def test_untruncated_invalid_locations_do_not_leave_phantom_counts(items):
+    roots = aggregate_findings([{
+        "id": "missing",
+        "rule_id": "SR-009",
+        "severity": "high",
+        "category": "source_integrity",
+        "location": {},
+        "occurrences": {
+            "count": max(1, len(items)),
+            "items": items,
+            "truncated": False,
+        },
+    }])
+
+    assert roots[0]["occurrences"] == {"count": 0, "items": [], "truncated": False}
+    assert aggregate_findings(roots)[0]["occurrences"] == roots[0]["occurrences"]
+    summary = build_findings_summary(roots)
+    assert summary["occurrences_total"] == 0
+    assert summary["total"] == summary["high"] == 1
 
 
 def test_static_and_effective_severity_are_kept_separate():

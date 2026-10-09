@@ -79,12 +79,24 @@ _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 from scanners.risk_scanner.redaction import (
-    DEFAULT_CONTEXT_BATCH_BYTES,
-    build_finding_context_bundle,
     redact_report,
     redact_value,
 )
-from scanners.risk_scanner.llm_candidates import is_llm_candidate
+from scanners.risk_scanner.llm_candidates import (
+    candidate_context_reason,
+    evaluate_llm_candidate,
+    is_semantic_candidate,
+)
+from scanners.risk_scanner.source_context import (
+    DEFAULT_CONTEXT_BATCH_BYTES,
+    FindingContextSources,
+    build_finding_context_bundle,
+)
+from scanners.risk_scanner.evidence import (
+    evidence_reason_code,
+    finding_locations,
+    summarize_context_audits,
+)
 from scanners.risk_scanner.llm_reviewer import (
     REVIEW_BATCH_SIZE,
     validate_supporting_evidence,
@@ -117,7 +129,7 @@ from scanners.risk_scanner.permission_consistency import (
 )
 from scanners.risk_scanner.reporting import refresh_report_summaries
 from packages.schema.frontmatter import parse_frontmatter
-from schema.constants import HASH_SCOPE_SCANNED_SOURCE, UserRole
+from schema.constants import HASH_SCOPE_SCANNED_SOURCE, LLMContextMessage, UserRole
 
 _REGISTRY_POLICY: RegistryPolicy = DEFAULT_REGISTRY_POLICY
 
@@ -2775,25 +2787,6 @@ _LLM_SEVERITY_RANK = {
 }
 
 
-def _is_llm_reviewable_finding(
-    finding: dict[str, Any],
-    *,
-    file_contents: dict[str, str] | None = None,
-    finding_context: str | None = None,
-    context_audit: dict[str, Any] | None = None,
-    require_built_context: bool = False,
-    record_skip: bool = False,
-) -> bool:
-    return is_llm_candidate(
-        finding,
-        file_contents=file_contents,
-        finding_context=finding_context,
-        context_audit=context_audit,
-        require_built_context=require_built_context,
-        record_skip=record_skip,
-    )
-
-
 def _load_llm_reviewer() -> Any:
     """动态加载 LLM 审查器模块。"""
     llm_reviewer_path = _PROJECT_ROOT / "scanners" / "risk_scanner" / "llm_reviewer.py"
@@ -2837,14 +2830,41 @@ def _mark_llm_review_unavailable(
             skipped_count += 1
             continue
 
-        if not _is_llm_reviewable_finding(
-            finding,
-            file_contents=file_contents,
-            record_skip=True,
-        ):
+        if not is_semantic_candidate(finding):
             skipped_count += 1
             continue
 
+        locations = finding_locations(finding)
+        missing_files = {
+            item["file"]
+            for item in locations
+            if file_contents is not None and item["file"] not in file_contents
+        }
+        reason_codes = ["provider_failure"]
+        if missing_files or (
+            not locations and finding.get("evidence_missing_reason") != "sensitive_identifier"
+        ):
+            reason_codes.append("source_missing")
+        decision = evaluate_llm_candidate(finding, file_contents=file_contents)
+        evidence_reason = finding.get("evidence_missing_reason")
+        context_reason = (
+            evidence_reason_code(evidence_reason)
+            if evidence_reason
+            else candidate_context_reason(decision.reason)
+        )
+        if context_reason and context_reason not in reason_codes:
+            reason_codes.append(context_reason)
+        audit = {
+            "delivery_status": "missing",
+            "locations": locations,
+            "line_ranges": [],
+            "context_bytes": 0,
+            "reason_codes": reason_codes,
+            "reasons": [
+                "provider_failure",
+                *(f"source_missing:{path}" for path in sorted(missing_files)),
+            ],
+        }
         finding["llm_label"] = "llm:unavailable"
         finding["llm_review_state"] = "unavailable"
         finding["llm_impact"] = "unknown"
@@ -2852,9 +2872,11 @@ def _mark_llm_review_unavailable(
         finding["llm_explanation"] = "LLM semantic review unavailable"
         finding["llm_review_rounds"] = 0
         finding["llm_evidence_sufficient"] = False
-        finding["llm_missing_context"] = ["LLM semantic review unavailable"]
+        finding["llm_missing_context"] = [LLMContextMessage.PROVIDER_FAILURE]
         finding["llm_supporting_evidence"] = []
         finding["llm_context_status"] = "missing"
+        finding["llm_context_reasons"] = audit["reason_codes"]
+        finding["llm_context_audit"] = audit
         finding["llm_adjudication_action"] = "manual_review"
         finding["requires_manual_review"] = True
         finding_id = str(finding.get("id", ""))
@@ -2867,10 +2889,11 @@ def _mark_llm_review_unavailable(
                 "confidence": 0.0,
                 "context_role": "unknown",
                 "evidence_sufficient": False,
-                "missing_context": ["LLM semantic review unavailable"],
+                "missing_context": [LLMContextMessage.PROVIDER_FAILURE],
                 "supporting_evidence": [],
                 "explanation": "LLM semantic review unavailable",
                 "rounds": 0,
+                "context_audit": audit,
             }
         reviewed_count += 1
 
@@ -2925,13 +2948,9 @@ def _mark_llm_review_unavailable(
             "temperature": 0.0,
             "max_output_tokens": 1024,
         },
-        "context_coverage": {
-            "candidates": reviewed_count,
-            "complete": 0,
-            "partial": 0,
-            "missing": reviewed_count,
-            "total_context_bytes": 0,
-        },
+        "context_coverage": summarize_context_audits({
+            fid: decision["context_audit"] for fid, decision in decisions.items()
+        }),
         "error": f"{type(error).__name__}: {error}",
         "fallback": (
             "manual_review_for_unresolved"
@@ -3014,14 +3033,18 @@ def _apply_llm_decisions(
         )
         if evidence_sufficient and context_status != "complete":
             evidence_sufficient = False
-            missing_context.append("scanner context delivery was incomplete")
+            missing_context.append(LLMContextMessage.CONTEXT_INCOMPLETE)
         if evidence_sufficient and not supporting_evidence:
             evidence_sufficient = False
-            missing_context.append("no server-verified source citation")
+            missing_context.append(LLMContextMessage.CITATION_MISSING)
         finding["llm_evidence_sufficient"] = evidence_sufficient
         finding["llm_missing_context"] = list(dict.fromkeys(missing_context))
         finding["llm_supporting_evidence"] = supporting_evidence
         finding["llm_context_status"] = context_status
+        finding["llm_context_reasons"] = list(context_audit.get("reason_codes") or [])
+        if verdict == "unavailable":
+            finding["llm_context_reasons"].append("provider_failure")
+        finding["llm_context_audit"] = context_audit
         finding["llm_policy_version"] = str(
             result.get("policy_version") or "unknown"
         )
@@ -3129,7 +3152,7 @@ def _ensure_required_llm_decisions(
             "confidence": 0.0,
             "context_role": "unknown",
             "evidence_sufficient": False,
-            "missing_context": ["LLM semantic review did not return a decision"],
+            "missing_context": [LLMContextMessage.PROVIDER_FAILURE],
             "supporting_evidence": [],
             "explanation": "LLM semantic review unavailable",
             "rounds": 0,
@@ -3165,21 +3188,18 @@ def _build_batched_llm_context_bundle(
         for finding in findings
         if isinstance(finding, dict)
         and finding.get("id")
-        and _is_llm_reviewable_finding(
-            finding,
-            file_contents=file_contents,
-            record_skip=True,
-        )
+        and is_semantic_candidate(finding)
     ]
     contexts: dict[str, str] = {}
     finding_audits: dict[str, dict[str, Any]] = {}
     batch_summaries: list[dict[str, Any]] = []
+    sources = FindingContextSources(file_contents)
     for batch_index, start in enumerate(
         range(0, len(reviewable), REVIEW_BATCH_SIZE)
     ):
         batch_contexts, batch_audit = build_finding_context_bundle(
             reviewable[start : start + REVIEW_BATCH_SIZE],
-            file_contents,
+            sources,
         )
         contexts.update(batch_contexts)
         batch_findings = batch_audit.get("findings", {})
@@ -3192,21 +3212,10 @@ def _build_batched_llm_context_bundle(
                 "batch_index": batch_index,
             })
 
-    statuses = [
-        str(item.get("delivery_status") or "missing")
-        for item in finding_audits.values()
-    ]
     return contexts, {
         "findings": finding_audits,
         "summary": {
-            "candidates": len(finding_audits),
-            "complete": statuses.count("complete"),
-            "partial": statuses.count("partial"),
-            "missing": statuses.count("missing"),
-            "total_context_bytes": sum(
-                _nonnegative_int(item.get("context_bytes"))
-                for item in finding_audits.values()
-            ),
+            **summarize_context_audits(finding_audits),
             "batch_count": len(batch_summaries),
             "max_bytes_per_batch": DEFAULT_CONTEXT_BATCH_BYTES,
             "batches": batch_summaries,
@@ -3242,11 +3251,7 @@ def _run_llm_review_with_fallback(
             for finding in findings
             if isinstance(finding, dict)
             and finding.get("id")
-            and _is_llm_reviewable_finding(
-                finding,
-                file_contents=file_contents,
-                record_skip=True,
-            )
+            and is_semantic_candidate(finding)
         }
         if (
             deadline_monotonic is not None
@@ -3291,6 +3296,11 @@ def _run_llm_review_with_fallback(
             result,
             context_audit,
         )
+        # Review providers cannot promote partial delivery to complete. This
+        # audit belongs to the server that built and sent the source excerpts.
+        for finding_id, decision in result["decisions"].items():
+            if isinstance(decision, dict) and finding_id in context_audit["findings"]:
+                decision["context_audit"] = context_audit["findings"][finding_id]
         _apply_llm_decisions(findings, result, finding_contexts)
 
         labels_summary = result.get("labels_summary")
@@ -5944,11 +5954,7 @@ def _run_scan_task_body(
                 for finding in findings
                 if isinstance(finding, dict)
                 and finding.get("id")
-                and _is_llm_reviewable_finding(
-                    finding,
-                    file_contents=scanner._file_contents,
-                    record_skip=True,
-                )
+                and is_semantic_candidate(finding)
             )
             if isinstance(findings, list)
             else 0

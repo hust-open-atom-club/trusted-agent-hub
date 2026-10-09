@@ -1442,7 +1442,10 @@ def test_report_details_bound_aggregate_occurrences_and_serialized_bytes(long_pa
     assert all(row["occurrence_count"] == 100 and row["occurrences_truncated"] for row in details)
     if long_paths:
         assert len(details) < MAX_OSV_QUERY_RESULTS  # Byte limit, not just the row cap.
-    jsonschema.validate(details, _REPORT_SCHEMA["properties"]["dependency_scan"]["properties"]["query_results"])
+    jsonschema.validate(details, {
+        "$defs": _REPORT_SCHEMA["$defs"],
+        **_REPORT_SCHEMA["properties"]["dependency_scan"]["properties"]["query_results"],
+    })
 
 
 def test_cached_coordinates_do_not_bypass_outbound_query_budget(tmp_path):

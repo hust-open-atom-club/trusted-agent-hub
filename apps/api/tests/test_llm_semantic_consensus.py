@@ -9,7 +9,7 @@ from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
 from scanners.risk_scanner.permission_consistency import (
     reconcile_permission_advisories,
 )
-from scanners.risk_scanner.redaction import build_finding_context_bundle
+from scanners.risk_scanner.source_context import build_finding_context_bundle
 from scanners.risk_scanner.scanner import RiskScanner
 from src.routers import trust
 
@@ -113,6 +113,13 @@ def test_two_independent_benign_reviews_resolve_without_arbitration(monkeypatch)
         "complete": 1,
         "partial": 0,
         "missing": 0,
+        "source_missing": 0,
+        "location_unresolved": 0,
+        "evidence_limit": 0,
+        "context_budget": 0,
+        "delivery_missing": 0,
+        "reason_counts": {},
+        "top_finding_files": {"SKILL.md": 1},
         "total_context_bytes": len(
             _context("semantic-1")["semantic-1"].encode("utf-8")
         ),
@@ -581,7 +588,7 @@ def test_uncited_benign_reviews_cannot_form_a_benign_consensus(monkeypatch) -> N
     assert decision["verdict"] == "uncertain"
     assert decision["evidence_sufficient"] is False
     assert decision["supporting_evidence"] == []
-    assert "no exact matching source citation" in decision["missing_context"]
+    assert "citation_missing" in decision["missing_context"]
 
 
 def test_fabricated_source_quote_cannot_form_benign_consensus(monkeypatch) -> None:
@@ -874,7 +881,7 @@ def test_router_revalidates_evidence_instead_of_trusting_a_supplied_hash() -> No
     assert finding["effective_severity"] == "critical"
     assert finding["llm_evidence_sufficient"] is False
     assert finding["llm_supporting_evidence"] == []
-    assert "no server-verified source citation" in finding["llm_missing_context"]
+    assert "citation_missing" in finding["llm_missing_context"]
 
 
 def test_context_dependent_code_can_be_downgraded_without_erasing_static_evidence() -> None:

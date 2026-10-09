@@ -11,6 +11,16 @@ API (FastAPI) 和 扫描器 (scanner) 均引用此文件。
 from enum import StrEnum
 from typing import Final
 
+# Evidence identities are never truncated into a different field reference.
+MAX_EVIDENCE_SOURCE_REF_LENGTH: Final[int] = 2048
+
+
+class LLMContextMessage(StrEnum):
+    CONTEXT_INCOMPLETE = "context_incomplete"
+    PROVIDER_FAILURE = "provider_failure"
+    CITATION_MISSING = "citation_missing"
+    EVIDENCE_INSUFFICIENT = "evidence_insufficient"
+
 # Integrity hashes are produced for different byte domains.  Keep the scope
 # explicit so a bounded scan-tree digest cannot be confused with the archive
 # hash used by the installation manifest.

@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from scanners.risk_scanner.evidence import metadata_location
+
 _SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "cmd", "powershell", "pwsh"})
 
 _SHELL_METACHAR_PATTERN = re.compile(r"[|;&`$()[\]<>]")
@@ -56,10 +58,13 @@ def _check_inline_mcp_servers(
     components = plugin_config.get("components", {}) or {}
     mcp_servers = components.get("mcp_servers", []) or []
 
-    for server in mcp_servers:
+    for index, server in enumerate(mcp_servers):
         if not isinstance(server, dict):
             continue
 
+        location = metadata_location(
+            scanner, ("plugin_config", "components", "mcp_servers", index),
+        )
         command = server.get("command", "")
         args = server.get("args", []) or []
 
@@ -74,7 +79,7 @@ def _check_inline_mcp_servers(
                     f"使用 Shell 解释器 '{command}' 作为启动命令，"
                     f"args 可注入任意脚本。"
                 ),
-                location={"file": "plugin.json"},
+                location=location,
                 evidence=f"command: {command}, args: {args}",
                 remediation=(
                     "避免将 Shell 解释器作为 MCP Server 的 command，"
@@ -96,7 +101,7 @@ def _check_inline_mcp_servers(
                         f"Plugin 内联 MCP Server '{server.get('name', '?')}' "
                         f"的 command+args 中含危险命令模式: {desc}"
                     ),
-                    location={"file": "plugin.json"},
+                    location=location,
                     evidence=f"command: {command}, args: {args}",
                     remediation=(
                         "移除危险命令，MCP Server 的 command 应仅为解释器名"
@@ -121,7 +126,7 @@ def _check_inline_mcp_servers(
                     f"的 command+args 中含 Shell 元字符，不应将管道/重定向"
                     f"嵌入启动命令。"
                 ),
-                location={"file": "plugin.json"},
+                location=location,
                 evidence=f"command: {command}, args: {args}",
                 remediation="移除 Shell 元字符。args 数组中每个元素应为独立参数，不应使用管道或重定向。",
             )
@@ -136,7 +141,7 @@ def _check_inline_mcp_servers(
                     f"Plugin 内联 MCP Server '{server.get('name', '?')}' "
                     f"的 command 使用了路径遍历或绝对路径。"
                 ),
-                location={"file": "plugin.json"},
+                location=location,
                 evidence=f"command: {command}",
                 remediation="command 应为解释器名称（如 python/node），不应包含路径遍历。",
             )
@@ -147,10 +152,11 @@ def _check_hooks(
 ) -> None:
     hooks = plugin_config.get("hooks", []) or []
 
-    for hook in hooks:
+    for index, hook in enumerate(hooks):
         if not isinstance(hook, str):
             continue
 
+        location = metadata_location(scanner, ("plugin_config", "hooks", index))
         for pattern, desc in _DANGEROUS_COMMAND_PATTERNS:
             if re.search(pattern, hook, re.IGNORECASE):
                 scanner._add_finding(
@@ -164,7 +170,7 @@ def _check_hooks(
                         f"Hooks 应为生命周期事件名（如 pre-install），"
                         f"不应包含可执行命令。"
                     ),
-                    location={"file": "plugin.json"},
+                    location=location,
                     evidence=f"hook: {hook}",
                     remediation="将 hook 改为事件名声明（如 pre-install、post-install），可执行逻辑放入组件代码中。",
                 )
@@ -181,7 +187,7 @@ def _check_hooks(
                     f"含 Shell 元字符。Hooks 应为生命周期事件名"
                     f"（如 pre-install），不应包含管道/重定向等 Shell 语法。"
                 ),
-                location={"file": "plugin.json"},
+                location=location,
                 evidence=f"hook: {hook}",
                 remediation="将 hook 改为事件名声明。可执行逻辑放入组件代码中。",
             )
@@ -199,9 +205,12 @@ def _check_component_paths(
     ]
 
     for field, label in path_fields:
-        for path in components.get(field, []) or []:
+        for index, path in enumerate(components.get(field, []) or []):
             if not isinstance(path, str):
                 continue
+            location = metadata_location(
+                scanner, ("plugin_config", "components", field, index),
+            )
             if ".." in path:
                 scanner._add_finding(
                     rule_id=rule_id,
@@ -212,7 +221,7 @@ def _check_component_paths(
                         f"Plugin components.{field} 中的路径 '{path}' "
                         f"含 '..'，可能指向 Plugin 目录外的文件。"
                     ),
-                    location={"file": "plugin.json"},
+                    location=location,
                     evidence=f"path: {path}",
                     remediation=f"将 components.{field} 路径限制在 Plugin 目录内，移除 '../'。",
                 )
@@ -226,7 +235,7 @@ def _check_component_paths(
                         f"Plugin components.{field} 中的路径 '{path}' "
                         f"使用了绝对路径，Plugin 应仅引用自身目录内的组件。"
                     ),
-                    location={"file": "plugin.json"},
+                    location=location,
                     evidence=f"path: {path}",
                     remediation="将路径改为相对路径（如 ./skills/code-review）。",
                 )

@@ -13,10 +13,13 @@ from typing import get_args
 import jsonschema
 import pytest
 
-from src.models.packages import LLMReview, ReviewAdvisory, ScanReport
+from src.models.packages import EvidenceReference, LLMReview, ReviewAdvisory, ScanReport
 from src.routers import trust
 from packages.schema.constants import FINDING_CATEGORY_POLICY, FindingCategory
 from scanners.risk_scanner import llm_reviewer
+from scanners.risk_scanner.evidence import normalize_file_path
+from packages.schema.constants import MAX_EVIDENCE_SOURCE_REF_LENGTH
+from packages.schema.constants import LLMContextMessage
 from scanners.risk_scanner.scanner import RiskScanner
 
 
@@ -33,6 +36,15 @@ def _find_scan_report_schema() -> Path:
 
 SCHEMA_PATH = _find_scan_report_schema()
 SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+FINDING_PROPERTIES = SCHEMA["properties"]["findings"]["items"]["properties"]
+ADVISORY_PROPERTIES = SCHEMA["properties"]["review_advisories"]["items"]["properties"]
+REGISTRY_PROPERTIES = ADVISORY_PROPERTIES["registry_policy"]["properties"]
+EVIDENCE_LOCATION_SCHEMAS = [
+    FINDING_PROPERTIES["location"],
+    FINDING_PROPERTIES["detector_hits"]["items"]["properties"]["location"],
+    FINDING_PROPERTIES["occurrences"]["properties"]["items"]["items"],
+    ADVISORY_PROPERTIES["location"],
+]
 REPOSITORY_ROOT = next(
     (
         parent
@@ -71,6 +83,101 @@ def _scan(tmp_path, files: dict[str, str]) -> dict:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
     return RiskScanner(str(tmp_path)).scan()
+
+
+@pytest.mark.parametrize("path", [
+    "/tmp/file.py", "C:/repo/file.py", "C:file.py", r"\\host\share",
+    "../file.py", "src/../file.py", "src/../../file.py", r"src\file.py",
+    "src/file.py:stream", "src\nfile.py", "src/file.py\n", "src/\x00file.py",
+    "src/\x7ffile.py", "", ".", "./file.py", "src/./file.py", "src//file.py",
+    "src/", "unknown", "(unknown)",
+])
+def test_evidence_paths_are_machine_validated_at_every_location(path):
+    for location_schema in EVIDENCE_LOCATION_SCHEMAS:
+        validator = jsonschema.Draft202012Validator({
+            "$defs": SCHEMA["$defs"],
+            **location_schema,
+        })
+        assert not validator.is_valid({"file": path})
+    for field_schema in (
+        REGISTRY_PROPERTIES["source_file"],
+        REGISTRY_PROPERTIES["occurrences"]["items"]["properties"]["file"],
+    ):
+        validator = jsonschema.Draft202012Validator({
+            "$defs": SCHEMA["$defs"],
+            **field_schema,
+        })
+        assert not validator.is_valid(path)
+
+
+@pytest.mark.parametrize("path", [
+    "SKILL.md", ".npmrc", "packages/@scope/lock file.json", "测试/agent.py",
+    "unknown/agent.py", "src/.../file.py",
+])
+def test_canonical_evidence_paths_remain_schema_valid(path):
+    assert normalize_file_path(path) == path
+    for location_schema in EVIDENCE_LOCATION_SCHEMAS:
+        jsonschema.validate(
+            {"file": path},
+            {"$defs": SCHEMA["$defs"], **location_schema},
+        )
+
+
+@pytest.mark.parametrize("path", ["./unknown", r".\(unknown)", "unknown/"])
+def test_path_normalization_cannot_produce_placeholder_locations(path):
+    assert normalize_file_path(path) is None
+
+
+def test_occurrence_schema_allows_zero_but_not_negative_counts():
+    schema = {
+        "$defs": SCHEMA["$defs"],
+        **FINDING_PROPERTIES["occurrences"],
+    }
+    empty = {"count": 0, "items": [], "truncated": False}
+    jsonschema.validate(empty, schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**empty, "count": -1}, schema)
+
+
+def test_legacy_reports_use_the_archived_contract_instead_of_new_path_constraints():
+    legacy = json.loads(SCHEMA_PATH.with_name("scan-report.v0.14.schema.json").read_text(encoding="utf-8"))
+    assert legacy["$id"] == "https://trusted-agent-hub.dev/schemas/scan-report.schema.json"
+    assert SCHEMA["$id"] == "https://trusted-agent-hub.dev/schemas/scan-report/0.15.0.schema.json"
+    legacy_location = legacy["properties"]["findings"]["items"]["properties"]["location"]
+    current = {"$defs": SCHEMA["$defs"], **FINDING_PROPERTIES["location"]}
+    for path in (".", "(unknown)", r"src\run.py"):
+        jsonschema.validate({"file": path}, legacy_location)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"file": path}, current)
+
+
+def test_evidence_reference_schema_matches_the_shared_limit_and_omission_contract():
+    assert SCHEMA["$defs"]["evidence_source_ref"]["maxLength"] == MAX_EVIDENCE_SOURCE_REF_LENGTH
+    api_properties = EvidenceReference.model_json_schema()["properties"]
+    api_reference = next(
+        item for item in api_properties["source_ref"]["anyOf"]
+        if item["type"] == "string"
+    )
+    api_length = next(
+        item for item in api_properties["source_ref_length"]["anyOf"]
+        if item["type"] == "integer"
+    )
+    assert api_reference["maxLength"] == MAX_EVIDENCE_SOURCE_REF_LENGTH
+    assert api_length["exclusiveMinimum"] == MAX_EVIDENCE_SOURCE_REF_LENGTH
+    long_ref = "#/" + "x" * MAX_EVIDENCE_SOURCE_REF_LENGTH
+    omitted = {
+        "source_ref_sha256": "a" * 64, "source_ref_length": len(long_ref),
+        "missing_reason": "source_ref_too_long",
+    }
+    for location_schema in EVIDENCE_LOCATION_SCHEMAS:
+        schema = {"$defs": SCHEMA["$defs"], **location_schema}
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"file": "package-lock.json", "source_ref": long_ref}, schema)
+        jsonschema.validate({"file": "package-lock.json", **omitted}, schema)
+    fields_schema = {"$defs": SCHEMA["$defs"], "$ref": "#/$defs/evidence_fields"}
+    jsonschema.validate({"integrity": omitted}, fields_schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"integrity": {"source_ref": long_ref}}, fields_schema)
 
 
 def test_clean_package_output_schema_valid(tmp_path):
@@ -284,6 +391,23 @@ def test_llm_reason_code_contracts_match_schema() -> None:
         "scan_budget_exhausted",
         "context_incomplete",
     }
+
+
+def test_system_context_message_codes_have_shared_web_translations() -> None:
+    messages = json.loads(
+        SCHEMA_PATH.with_name("llm-context-messages.json").read_text(encoding="utf-8"),
+    )
+    assert set(messages) == {message.value for message in LLMContextMessage}
+    if REPOSITORY_ROOT is None:
+        pytest.skip("web source tree is not available in this test artifact")
+    for language in ("en", "zh"):
+        path = REPOSITORY_ROOT / "apps/web/src/i18n/locales" / language / "common.json"
+        translations = json.loads(path.read_text(encoding="utf-8"))
+        for code, key in messages.items():
+            text = translations
+            for segment in key.split("."):
+                text = text[segment]
+            assert isinstance(text, str) and text and text != code
 
 
 def test_web_llm_reason_code_contracts_match_schema() -> None:
