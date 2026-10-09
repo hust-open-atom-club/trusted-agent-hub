@@ -80,6 +80,15 @@ SR-010 的 LICENSE 查找以扫描包目录为默认边界。扫描仓库中的�
 `RiskScanner(package_dir, repository_root=repo_dir)` 允许继承该仓库内的许可证；API 扫描会自动传入获取到的仓库快照根目录。
 查找包含仓库根目录，但不会越过它；`ScanPolicy(allow_parent_license_files=False)` 始终只检查包目录。
 
+子包元数据提取也支持父级 LICENSE 回退：API 从同一受限仓库快照中保留父级许可证文本，
+通过 `extract_single_skill(..., parent_license_files=...)` 传入，按最近父目录到仓库根目录的顺序识别。
+包内 LICENSE、`package.json` 和 `pyproject.toml` 中的许可证声明优先；扫描后的磁盘修改不会改变继承结果。
+超出快照预算、被截断或扫描期间发生变化的父级许可证不会参与回退。
+SR-010 与元数据提取共用不区分大小写的文件名规则，支持 `LICENSE`、`LICENCE`、`COPYING`
+及其 `.md`、`.txt`、`.markdown` 变体，并在快照中保留真实文件名。
+提取时会保存本次生效的 policy；旧快照没有 policy 时使用调用方显式传入的策略，
+两者都未提供则使用 `ScanPolicy()` 默认值（允许从显式传入的父级快照继承）。
+
 另有本地语义检测（`mcp_security.py` + fastembed 嵌入模型）：SR-017 对 MCP 工具描述与权限声明做语义对比，检测"描述投毒"；未安装模型时自动降级为纯规则模式。
 
 扫描结果区分“安全发现”和“审核提示”。签名、供应链证明、SBOM 验证器未配置时会明确标记为 `not_available`，不会伪装成验证失败或固定扣分；验证器已运行但验证失败时，仍会生成对应审核提示。元数据、权限声明一致性等 advisory 只用于审核排队和证据展示，不从安全分扣除。结构化代码证据确认能力未声明时会要求人工复核，但不会仅凭“具备执行能力”把正常包判为漏洞或恶意包。

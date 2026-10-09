@@ -19,10 +19,11 @@ Skills Schema 提取器 (v2.0)
 
 公共 API:
   extract_single_skill(
-      source_dir, repo_url, subdirectory, parent_package_json=None
+      source_dir, repo_url, subdirectory,
+      parent_package_json=None, parent_license_files=None
   ) -> dict
     由 API 扫描管道 (trust.py) 动态加载调用，返回符合 agent-package.schema.json 的元数据字典。
-    父级 package.json 必须由调用方从受限仓库快照中选择并传入；提取器不会
+    父级 package.json 和 LICENSE 必须由调用方从受限仓库快照中选择并传入；提取器不会
     自行读取 source_dir 之外的目录。
 
 Python >= 3.12，仅依赖标准库 + PyYAML。
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from packages.schema.permission_semantics import analyze_delete_operations
+from scanners.risk_scanner.common import LICENSE_FILE_NAMES, license_file_name_key
 from scanners.risk_scanner.inventory import (
     ScanInventory,
     build_inventory,
@@ -322,6 +324,14 @@ class ScanResult:
     permission_evidence: list[dict[str, Any]] = field(default_factory=list)
     file_contents: dict[str, str] = field(default_factory=dict, repr=False)
     inventory: ScanInventory | None = field(default=None, repr=False)
+    policy: ScanPolicy | None = field(default=None, repr=False)
+
+    @property
+    def effective_policy(self) -> ScanPolicy:
+        """Use resolved extraction policy, or inventory/default policy for legacy results."""
+        return self.policy or (
+            self.inventory.policy if self.inventory is not None else None
+        ) or ScanPolicy()
 
     def text(self, relative_path: str | Path) -> str | None:
         """Return text from the bounded scan snapshot, never from disk."""
@@ -387,6 +397,8 @@ def scan_directory(
             if path in inventory_paths
         },
         inventory=inventory,
+        # Preserve an explicit policy even when a legacy inventory has none.
+        policy=effective_policy,
     )
 
     for rel in result.all_files:
@@ -591,9 +603,17 @@ def detect_license(spdx_text: str) -> str:
     return "UNLICENSED"
 
 
-def extract_license(result: ScanResult) -> str:
+def extract_license(
+    result: ScanResult,
+    *,
+    parent_license_files: dict[str, str] | None = None,
+) -> str:
     """从受限快照中的 license 元数据提取 SPDX 标识符。"""
-    for fname in ("LICENSE", "LICENSE.md", "LICENSE.txt"):
+    local_license_paths = sorted(
+        (path for path in result.file_contents if path.lower() in LICENSE_FILE_NAMES),
+        key=license_file_name_key,
+    )
+    for fname in local_license_paths:
         text = result.text(fname)
         if text is not None:
             spdx = detect_license(text)
@@ -609,6 +629,15 @@ def extract_license(result: ScanResult) -> str:
         m = re.search(r'license\s*=\s*"([^"]+)"', text)
         if m:
             return m.group(1)
+
+    # Local declarations retain precedence, including an explicit UNLICENSED.
+    # Parent texts are supplied nearest-first from the acquisition snapshot;
+    # never reopen their paths or discover filesystem ancestors here.
+    if result.effective_policy.allow_parent_license_files:
+        for text in (parent_license_files or {}).values():
+            spdx = detect_license(text)
+            if spdx != "UNLICENSED":
+                return spdx
 
     return "UNLICENSED"
 
@@ -1779,6 +1808,7 @@ def extract_single_skill(
     inventory: ScanInventory | None = None,
     file_contents: dict[str, str] | None = None,
     parent_package_json: dict[str, Any] | None = None,
+    parent_license_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """提取单个 Skill 目录的完整 agent-package 元数据。
 
@@ -1791,6 +1821,8 @@ def extract_single_skill(
         repo_url: GitHub 仓库 HTTPS URL（如已知可传入；否则自动从 .git remote 提取）
         parent_package_json: 调用方从同一受限仓库快照中选出的最近父级
             package.json；None 表示不继承。提取器不会自行遍历父目录。
+        parent_license_files: 同一受限仓库快照中的父级 LICENSE 文本，按最近
+            父目录到仓库根目录的顺序传入；仅在包内没有许可证声明时回退。
 
     Returns:
         符合 agent-package.schema.json 的完整 dict
@@ -1824,6 +1856,7 @@ def extract_single_skill(
         git_root=git_root,
         subdirectory=subdirectory,
         parent_package_json=parent_package_json,
+        parent_license_files=parent_license_files,
     )
     issues = validate_metadata(data, result.directory_name)
     if issues:
@@ -1839,6 +1872,7 @@ def build_metadata_json(
     git_root: Path | None = None,
     subdirectory: str | None = None,
     parent_package_json: dict[str, Any] | None = None,
+    parent_license_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """根据 ScanResult 构建完整的 agent-package JSON 对象。
 
@@ -1848,6 +1882,8 @@ def build_metadata_json(
         git_root: Git 仓库根目录（用于提取 commit_hash/ref）
         parent_package_json: 调用方从受限仓库快照中选择的父级 package.json
             metadata；不会从 source_dir 外部读取文件。
+        parent_license_files: 调用方从受限仓库快照中按最近父目录优先选出的
+            LICENSE 文本；不读取磁盘，也不覆盖包内的许可证声明。
     """
     if subdirectory is not None:
         subdirectory = _require_safe_source_subdirectory(subdirectory)
@@ -1976,7 +2012,7 @@ def build_metadata_json(
         "type": pkg_type,
         "description": description,
         "author": author,
-        "license": extract_license(result),
+        "license": extract_license(result, parent_license_files=parent_license_files),
         "source": source,
         "integrity": extract_integrity(result),
         "compatibility": compatibility,

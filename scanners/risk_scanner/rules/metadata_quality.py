@@ -8,15 +8,9 @@ from pathlib import Path
 from typing import Any
 from scanners.risk_scanner.evidence import metadata_location
 
-from scanners.risk_scanner.common import BINARY_EXTENSIONS, REQUIRED_FILES_BY_TYPE
-
-# 标准许可证文件名（大小写不敏感），与 extract_skills.extract_license 对齐
-_LICENSE_FILE_NAMES: frozenset[str] = frozenset({
-    "license", "licence", "copying",
-    "license.md", "license.txt", "license.markdown",
-    "licence.md", "licence.txt", "licence.markdown",
-    "copying.md", "copying.txt", "copying.markdown",
-})
+from scanners.risk_scanner.common import (
+    BINARY_EXTENSIONS, LICENSE_FILE_NAMES, REQUIRED_FILES_BY_TYPE,
+)
 
 
 def _find_license_file(
@@ -37,7 +31,7 @@ def _find_license_file(
             with os.scandir(current) as entries:
                 for entry in entries:
                     if (
-                        entry.name.lower() in _LICENSE_FILE_NAMES
+                        entry.name.lower() in LICENSE_FILE_NAMES
                         and entry.is_file(follow_symlinks=False)
                     ):
                         return current / entry.name

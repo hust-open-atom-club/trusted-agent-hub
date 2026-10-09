@@ -11,7 +11,12 @@ from src.services.source_snapshots import SourceSnapshotStore
 
 
 @pytest.mark.parametrize("repository_has_license", [False, True])
-def test_scan_task_uses_acquisition_root_for_license(tmp_path, monkeypatch, repository_has_license):
+@pytest.mark.parametrize("license_name", ["LICENSE", "license", "LiCeNcE.markdown", "COPYING.txt"])
+@pytest.mark.parametrize("mutate_after_scan", [False, True])
+@pytest.mark.parametrize("manifest_subdirectory", [False, True])
+def test_scan_task_uses_acquisition_root_for_license(
+    tmp_path, monkeypatch, repository_has_license, license_name, mutate_after_scan, manifest_subdirectory,
+):
     # GitHub ZIP/API snapshots do not have a .git directory. The host workspace
     # may be licensed, but it is not part of the acquired repository.
     (tmp_path / "LICENSE").write_text("MIT License", encoding="utf-8")
@@ -19,7 +24,7 @@ def test_scan_task_uses_acquisition_root_for_license(tmp_path, monkeypatch, repo
     package = repository / "skills" / "demo"
     package.mkdir(parents=True)
     if repository_has_license:
-        (repository / "LICENSE").write_text("MIT License", encoding="utf-8")
+        (repository / license_name).write_text("MIT License", encoding="utf-8")
     (package / "manifest.json").write_text(
         json.dumps({
             "name": "demo", "version": "1.0.0", "type": "skill",
@@ -28,9 +33,22 @@ def test_scan_task_uses_acquisition_root_for_license(tmp_path, monkeypatch, repo
         encoding="utf-8",
     )
     (package / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+    if manifest_subdirectory:
+        (repository / "manifest.json").write_text(
+            '{"source": {"subdirectory": "skills/demo"}}', encoding="utf-8",
+        )
+
+    class FixtureScanner(RiskScanner):
+        def scan(self):
+            report = super().scan()
+            if mutate_after_scan:
+                (repository / license_name).write_text(
+                    "Apache License, Version 2.0", encoding="utf-8",
+                )
+            return report
 
     monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: None)
-    monkeypatch.setattr(trust, "_load_scanner", lambda: RiskScanner)
+    monkeypatch.setattr(trust, "_load_scanner", lambda: FixtureScanner)
     monkeypatch.setattr(
         trust, "_load_scorer",
         lambda: lambda **_kwargs: {"risk_summary": {"grade": "A"}},
@@ -51,13 +69,18 @@ def test_scan_task_uses_acquisition_root_for_license(tmp_path, monkeypatch, repo
         "https://github.com/acme/demo/tree/main/skills/demo",
         resolved_source={
             "owner": "acme", "repo": "demo", "base_url": "https://github.com/acme/demo",
-            "ref": "main", "subdir": "skills/demo", "commit_hash": "a" * 40,
+            "ref": "main", "subdir": None if manifest_subdirectory else "skills/demo",
+            "commit_hash": "a" * 40,
         },
     )
 
     assert trust._scans[scan_id]["status"] == "complete", trust._scans[scan_id].get("error")
-    report = trust._scans[scan_id]["full_report"]["scan_report"]
+    full_report = trust._scans[scan_id]["full_report"]
+    report = full_report["scan_report"]
     assert any(
         item["code"] == "metadata_incomplete" and "license" in item["description"]
         for item in report["review_advisories"]
     ) is (not repository_has_license)
+    assert full_report["package_metadata"]["license"] == (
+        "MIT" if repository_has_license else "UNLICENSED"
+    )

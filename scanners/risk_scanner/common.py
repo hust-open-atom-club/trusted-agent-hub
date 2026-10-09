@@ -7,6 +7,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+# Shared by SR-010, snapshot discovery, and metadata extraction. Keep the
+# established LICENSE / LICENSE.md / LICENSE.txt precedence before aliases.
+LICENSE_FILE_NAME_ORDER = (
+    "LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE.markdown",
+    "LICENCE", "LICENCE.md", "LICENCE.txt", "LICENCE.markdown",
+    "COPYING", "COPYING.md", "COPYING.txt", "COPYING.markdown",
+)
+_LICENSE_FILE_NAME_RANKS = {
+    name.lower(): (index, name) for index, name in enumerate(LICENSE_FILE_NAME_ORDER)
+}
+LICENSE_FILE_NAMES = frozenset(_LICENSE_FILE_NAME_RANKS)
+
+
+def license_file_name_key(name: str) -> tuple[int, bool, str]:
+    """Order recognized names consistently, preferring canonical casing on ties."""
+    rank, canonical = _LICENSE_FILE_NAME_RANKS[name.lower()]
+    return rank, name != canonical, name
+
+
 NON_TEXT_EXTENSIONS = frozenset({
     ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".pyo", ".pyd",
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",

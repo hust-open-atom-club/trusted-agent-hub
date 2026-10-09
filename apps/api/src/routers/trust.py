@@ -30,6 +30,7 @@ import urllib.request
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -118,6 +119,9 @@ from scanners.risk_scanner.inventory import (
     load_text_files,
 )
 from scanners.risk_scanner.policy import ScanPolicy
+from scanners.risk_scanner.common import (
+    LICENSE_FILE_NAME_ORDER, LICENSE_FILE_NAMES, license_file_name_key,
+)
 from scanners.risk_scanner.registry_policy import (
     DEFAULT_REGISTRY_POLICY,
     RegistryPolicy,
@@ -4535,6 +4539,62 @@ def _parent_package_json_candidates(subdirectory: str | None) -> list[str]:
     return candidates
 
 
+def _parent_license_candidates(
+    subdirectory: str | None,
+    available_paths: Iterable[str] | None = None,
+) -> list[str]:
+    """Return nearest-first license paths, preserving available snapshot names.
+
+    Without available paths, return canonical hints for case-insensitive
+    basename discovery in the bounded inventory.
+    """
+    if not subdirectory or subdirectory == ".":
+        return []
+    subdirectory = require_safe_source_subdirectory(subdirectory)
+    parents = [
+        PurePosixPath(path).parent
+        for path in _parent_package_json_candidates(subdirectory)
+    ]
+    if available_paths is None:
+        return [(parent / name).as_posix() for parent in parents for name in LICENSE_FILE_NAME_ORDER]
+    parent_ranks = {parent: rank for rank, parent in enumerate(parents)}
+    return sorted(
+        (
+            path for path in available_paths
+            if PurePosixPath(path).parent in parent_ranks
+            and PurePosixPath(path).name.lower() in LICENSE_FILE_NAMES
+        ),
+        key=lambda path: (
+            parent_ranks[PurePosixPath(path).parent],
+            license_file_name_key(PurePosixPath(path).name),
+        ),
+    )
+
+
+def _select_parent_license_files(
+    subdirectory: str | None,
+    repository_inventory: ScanInventory,
+    repository_file_contents: dict[str, str],
+) -> dict[str, str]:
+    """Keep complete, stable parent LICENSE texts from the bounded snapshot."""
+    policy = repository_inventory.policy
+    if policy is not None and not policy.allow_parent_license_files:
+        return {}
+    readable = {
+        record.relative_path
+        for record in repository_inventory.files
+        if record.read_status == "analyzed"
+        and not record.is_symlink
+        and not record.content_truncated
+        and not record.changed_during_scan
+    }
+    return {
+        path: repository_file_contents[path]
+        for path in _parent_license_candidates(subdirectory, readable)
+        if path in repository_file_contents
+    }
+
+
 _AUTHOR_PLACEHOLDER_NAMES = frozenset({
     "unknown",
     "unknown@unknown.org",
@@ -4676,15 +4736,27 @@ def _build_repository_snapshot(
     only_manifest: bool = False,
 ) -> tuple[ScanInventory, dict[str, str]]:
     priority_order = _parent_package_json_candidates(subdirectory)
-    priority_paths = set(priority_order)
-    priority_paths.add("manifest.json")
     priority_order.append("manifest.json")
+    license_candidates = (
+        _parent_license_candidates(subdirectory) if policy.allow_parent_license_files else []
+    )
+    priority_order.extend(license_candidates)
+    priority_paths = set(priority_order)
     inventory = build_inventory(
         repo_path,
         policy,
         priority_paths=priority_paths,
         priority_order=priority_order,
+        case_insensitive_priority_paths=license_candidates,
     )
+    # Load the discovered spelling, never a synthetic casing that happens to
+    # resolve on Windows but is a different snapshot key on Linux.
+    if license_candidates:
+        priority_order = _parent_package_json_candidates(subdirectory) + ["manifest.json"]
+        priority_order.extend(_parent_license_candidates(
+            subdirectory, (record.relative_path for record in inventory.files),
+        ))
+        priority_paths = set(priority_order)
     contents = load_text_files(
         inventory,
         policy=policy,
@@ -5815,6 +5887,11 @@ def _run_scan_task_body(
             subdir,
             repo_file_contents,
         )
+        parent_license_files = _select_parent_license_files(
+            subdir,
+            repo_inventory,
+            repo_file_contents,
+        )
         if parent_package_path:
             print(
                 "[TAH-trust]     继承 package.json author: "
@@ -5937,6 +6014,7 @@ def _run_scan_task_body(
             inventory=scanner.inventory,
             file_contents=scanner._file_contents,
             parent_package_json=parent_package_json,
+            parent_license_files=parent_license_files,
         )
         permission_evidence = package_metadata.get("permission_evidence", [])
         scan_report["permission_evidence"] = (
@@ -6420,6 +6498,7 @@ def _build_package_metadata(
     inventory: ScanInventory | None = None,
     file_contents: dict[str, str] | None = None,
     parent_package_json: dict[str, Any] | None = None,
+    parent_license_files: dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """从扫描报告和目标目录构建 package_metadata 用于评分引擎。
 
@@ -6448,6 +6527,7 @@ def _build_package_metadata(
             inventory=inventory,
             file_contents=file_contents,
             parent_package_json=parent_package_json,
+            parent_license_files=parent_license_files,
         )
         if data:
             print(f"[TAH-trust]     extract_skills 成功提取: name={data.get('name')}, "

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from heapq import nsmallest
 import os
 from pathlib import Path, PurePosixPath
 
@@ -107,8 +108,14 @@ def build_inventory(
     *,
     priority_paths: Iterable[str] | None = None,
     priority_order: Iterable[str] | None = None,
+    case_insensitive_priority_paths: Iterable[str] | None = None,
 ) -> ScanInventory:
-    """Build a bounded inventory, admitting selected metadata paths first."""
+    """Build a bounded inventory, admitting selected metadata paths first.
+
+    ``case_insensitive_priority_paths`` matches only the final basename without
+    regard to case. Parent directory names remain exact, and records preserve
+    the actual filename returned by directory discovery on every platform.
+    """
     records: list[FileRecord] = []
     violations: list[str] = []
     skipped: dict[str, int] = {}
@@ -122,7 +129,8 @@ def build_inventory(
         return ScanInventory([], 0, 0, ["invalid_root"], 0, {}, [], policy=policy)
 
     raw_priority_paths = list(priority_paths or [])
-    priority_paths = _normalize_relative_paths(raw_priority_paths)
+    case_insensitive_priority_paths = _normalize_relative_paths(case_insensitive_priority_paths)
+    priority_paths = _normalize_relative_paths(raw_priority_paths) | case_insensitive_priority_paths
     priority_path_order = [
         path
         for path in _normalize_relative_path_order(priority_order)
@@ -131,21 +139,44 @@ def build_inventory(
     ordered_paths = set(priority_path_order)
     priority_path_order.extend(sorted(priority_paths - ordered_paths))
 
-    def resolve_priority_candidate(
+    def iter_priority_candidates(
         relative_path: str,
-    ) -> Path | None:
+    ):
         parts = PurePosixPath(relative_path).parts
         if len(parts) - 1 > policy.max_depth or ".git" in parts[:-1]:
-            return None
+            return
 
         current = target_dir
         for part in parts[:-1]:
             current /= part
             try:
                 if current.is_symlink() or not current.is_dir():
-                    return None
+                    return
             except (OSError, ValueError):
-                return None
+                return
+
+        if relative_path in case_insensitive_priority_paths:
+            try:
+                with os.scandir(current) as entries:
+                    matches = (
+                        entry for entry in entries
+                        if entry.name.lower() == parts[-1].lower()
+                        and not entry.is_dir()
+                        and (entry.is_file(follow_symlinks=False) or entry.is_symlink())
+                    )
+                    # Keep memory bounded even if a case-sensitive filesystem
+                    # contains many spellings of one basename. The extra entry
+                    # lets the inventory report its normal max_files violation.
+                    for entry in nsmallest(
+                        max(policy.max_files, 0) + 1,
+                        matches,
+                        key=lambda item: (item.name != parts[-1], item.name),
+                    ):
+                        actual_path = PurePosixPath(relative_path).with_name(entry.name).as_posix()
+                        yield actual_path, Path(entry.path)
+            except OSError:
+                return
+            return
 
         candidate = current / parts[-1]
         try:
@@ -154,16 +185,10 @@ def build_inventory(
             if (is_symlink and candidate.is_dir()) or (
                 not is_symlink and not candidate.is_file()
             ):
-                return None
+                return
         except (OSError, ValueError):
-            return None
-        return candidate
-
-    priority_candidates: dict[str, Path] = {}
-    for relative_path in priority_path_order:
-        candidate = resolve_priority_candidate(relative_path)
-        if candidate is not None:
-            priority_candidates[relative_path] = candidate
+            return
+        yield relative_path, candidate
 
     def add_violation(reason: str) -> None:
         if reason not in violations:
@@ -249,12 +274,11 @@ def build_inventory(
     def iter_inventory_files():
         yielded_priority_candidates: set[str] = set()
         for relative_path in priority_path_order:
-            candidate = priority_candidates.get(relative_path)
-            if candidate is not None:
-                yielded_priority_candidates.add(
-                    os.path.normcase(os.path.abspath(candidate))
-                )
-                yield relative_path, candidate
+            for actual_path, candidate in iter_priority_candidates(relative_path):
+                normalized = os.path.normcase(os.path.abspath(candidate))
+                if normalized not in yielded_priority_candidates:
+                    yielded_priority_candidates.add(normalized)
+                    yield actual_path, candidate
         for relative_path, candidate in iter_files(target_dir, Path(".")):
             if (
                 os.path.normcase(os.path.abspath(candidate))
