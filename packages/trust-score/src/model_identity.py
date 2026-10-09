@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from packages.schema.constants import (
+    AGENT_PACKAGE_REQUIRED_METADATA_FIELDS,
     FINDING_CATEGORY_POLICY,
     GRADE_TO_RECOMMENDATION,
     GRADE_TO_RISK_LEVEL,
@@ -33,6 +34,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parent
 # These are the external values that affect the score or its trust-level
 # projection.  The trust-score source tree is hashed separately below.
 _CONFIG_VALUES: dict[str, Any] = {
+    "agent_package_required_metadata_fields": AGENT_PACKAGE_REQUIRED_METADATA_FIELDS,
     "finding_category_policy": FINDING_CATEGORY_POLICY,
     "grade_to_recommendation": GRADE_TO_RECOMMENDATION,
     "grade_to_risk_level": GRADE_TO_RISK_LEVEL,

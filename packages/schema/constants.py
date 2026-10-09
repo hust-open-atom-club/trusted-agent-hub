@@ -48,6 +48,43 @@ PACKAGE_TYPE_LABELS: Final[dict[str, str]] = {
     "prompt": "Prompt",
 }
 
+# ============================================================
+# agent-package.schema.json 顶层必填字段
+# Single source of truth for the schema's top-level "required" list;
+# keep in sync with packages/schema/agent-package.schema.json.
+# ============================================================
+AGENT_PACKAGE_REQUIRED_FIELDS: Final[tuple[str, ...]] = (
+    "name",
+    "version",
+    "type",
+    "description",
+    "author",
+    "license",
+    "source",
+    "integrity",
+    "compatibility",
+    "permissions",
+    "installation",
+)
+
+# 元数据完整度（metadata_completeness）维度评分的字段划分：
+#   - 描述性必填字段进入缺失检测、评分与明细；
+#   - integrity / compatibility / permissions / installation 属于结构配置，
+#     由 source_trust、signature_verifiability、permission_minimization
+#     等专用维度或扫描器校验，不重复计入元数据完整度；
+#   - keywords 是可选元数据（schema 未将其列入 required），仅在 details
+#     中上报，缺失不扣分。
+AGENT_PACKAGE_REQUIRED_METADATA_FIELDS: Final[tuple[str, ...]] = (
+    "name",
+    "version",
+    "type",
+    "description",
+    "author",
+    "license",
+    "source",
+)
+AGENT_PACKAGE_OPTIONAL_METADATA_FIELDS: Final[tuple[str, ...]] = ("keywords",)
+
 
 # ============================================================
 # 版本状态

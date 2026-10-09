@@ -40,6 +40,7 @@ from .community import assess_manual_review, assess_author_history
 from .derived_score import derive_score, get_recommendation
 from .explainer import generate_explanations, extract_top_risks
 from .model_identity import get_model_fingerprint, get_model_version
+from packages.schema.constants import AGENT_PACKAGE_REQUIRED_METADATA_FIELDS
 from scanners.risk_scanner.weights import SEVERITY_POINTS, LEVEL_TO_GRADE
 
 # Level ordering for upgrade/downgrade (index 0 = best)
@@ -50,6 +51,12 @@ _LEVEL_ORDER: tuple[str, ...] = (
     "high_risk",
     "untrusted",
 )
+
+# metadata_completeness scoring constants.  The required field list itself
+# lives once in packages/schema/constants.py and is kept in sync with
+# agent-package.schema.json; keywords is optional metadata and never deducts.
+_METADATA_COMPLETENESS_FLOOR: int = 30
+_METADATA_MISSING_FIELD_PENALTY: int = 20
 
 
 def _level_index(level: str) -> int:
@@ -327,20 +334,23 @@ def _build_dimensions(
     }
 
     # metadata_completeness
-    missing: list[str] = []
-    if not description:
-        missing.append("description")
-    if not license_val:
-        missing.append("license")
-    if not keywords:
-        missing.append("keywords")
-    missing_required = [f for f in ["name", "version", "type", "description",
-                                     "author", "license", "source"] if f in missing]
+    # Every required descriptive field must be detected, scored and reported;
+    # the list is defined once in packages/schema/constants.py.  keywords is
+    # optional metadata: its presence is reported via has_keywords and its
+    # absence never deducts.
+    missing_required = [
+        field
+        for field in AGENT_PACKAGE_REQUIRED_METADATA_FIELDS
+        if not package_metadata.get(field)
+    ]
     metadata_completeness = {
-        "score": max(30, 100 - len(missing) * 20),
+        "score": max(
+            _METADATA_COMPLETENESS_FLOOR,
+            100 - len(missing_required) * _METADATA_MISSING_FIELD_PENALTY,
+        ),
         "weight": 0.20,
         "details": {
-            "missing_required_fields": missing_required if missing_required else [],
+            "missing_required_fields": missing_required,
             "has_description": bool(description),
             "has_license": bool(license_val),
             "has_keywords": bool(keywords),
