@@ -5889,6 +5889,7 @@ def _run_scan_task_body(
         scan_policy = _effective_source_policy(settings.osv_max_queries)
         scanner = RiskScanner(
             scan_dir,
+            repository_root=repo_path,
             source_commit_hash=commit_hash,
             policy=scan_policy,
             registry_policy=registry_policy,

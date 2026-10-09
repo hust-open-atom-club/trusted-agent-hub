@@ -19,25 +19,33 @@ _LICENSE_FILE_NAMES: frozenset[str] = frozenset({
 })
 
 
-def _find_license_file(target_dir: Path, max_up: int = 5) -> Path | None:
-    """在包目录及其父目录（最多 max_up 层）查找许可证文件。
+def _find_license_file(
+    target_dir: Path,
+    repository_root: Path | None = None,
+) -> Path | None:
+    """Find a regular LICENSE file up to the explicit repository root, inclusive.
 
-    GitHub 仓库常见布局是 LICENSE 在仓库根、skill 在子目录，
-    因此需要像提取器一样向上遍历。
+    Without an acquisition boundary, only the package directory is evidence.
+    An enclosing checkout may belong to the workspace hosting the scan.
     """
-    current = target_dir
-    for _ in range(max_up + 1):
+    current = target_dir.resolve()
+    root = Path(repository_root).resolve() if repository_root is not None else current
+    if not current.is_relative_to(root):
+        return None
+    while True:
         try:
-            names = os.listdir(current)
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if (
+                        entry.name.lower() in _LICENSE_FILE_NAMES
+                        and entry.is_file(follow_symlinks=False)
+                    ):
+                        return current / entry.name
         except OSError:
             return None
-        for name in names:
-            if name.lower() in _LICENSE_FILE_NAMES:
-                return current / name
-        parent = current.parent
-        if parent == current:
+        if current == root:
             break
-        current = parent
+        current = current.parent
     return None
 
 
@@ -77,18 +85,19 @@ def run(scanner: Any) -> None:
             and "license" not in missing
         ):
             missing.append("license")
-        # 与「缺少有效许可证」规则对齐：包内或父目录存在 LICENSE 文件
-        # → license 视为已声明，不再列入缺失字段
+        # 只允许继承调用方明确指定的仓库范围内的 LICENSE。
         policy = getattr(scanner, "policy", None)
         allow_parent_license = (
             True if policy is None else bool(
                 getattr(policy, "allow_parent_license_files", True)
             )
         )
-        max_up = 5 if allow_parent_license else 0
+        license_root = (
+            getattr(scanner, "repository_root", None) if allow_parent_license else None
+        )
         if (
             "license" in missing
-            and _find_license_file(scanner.target_dir, max_up) is not None
+            and _find_license_file(scanner.target_dir, license_root) is not None
         ):
             missing.remove("license")
 

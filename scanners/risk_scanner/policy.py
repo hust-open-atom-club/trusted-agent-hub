@@ -17,9 +17,9 @@ class ScanPolicy:
     # operator-owned ceiling for unusually large or adversarial manifests.
     max_osv_queries: int = 5000
     max_skipped_samples: int = 20
-    # Real repository extraction may intentionally inherit a repository-level
-    # LICENSE. Benchmark fixtures disable this so their labels cannot depend
-    # on files outside the fixture root.
+    # Inherit LICENSE files only within an explicitly supplied repository_root.
+    # Without that boundary, scanning is package-local. False also disables
+    # inheritance when a repository_root is supplied.
     allow_parent_license_files: bool = True
 
     def __post_init__(self) -> None:

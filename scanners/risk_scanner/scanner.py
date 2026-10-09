@@ -131,6 +131,7 @@ class RiskScanner:
         self,
         target_dir: str | Path,
         *,
+        repository_root: str | Path | None = None,
         source_commit_hash: str = "",
         policy: ScanPolicy | None = None,
         registry_policy: RegistryPolicy | None = None,
@@ -141,6 +142,14 @@ class RiskScanner:
         mcp_semantic_model_loader: Callable[[], Any] | None = None,
     ) -> None:
         self.target_dir = Path(target_dir).resolve()
+        # Only the caller knows the acquired repository boundary; an ancestor
+        # .git directory may belong to an unrelated workspace or fixture host.
+        self.repository_root = (
+            Path(repository_root).resolve()
+            if repository_root is not None else self.target_dir
+        )
+        if not self.target_dir.is_relative_to(self.repository_root):
+            raise ValueError("target_dir must be within repository_root")
         self.source_commit_hash = source_commit_hash
         self.policy = policy or ScanPolicy()
         self.registry_policy = registry_policy or DEFAULT_REGISTRY_POLICY

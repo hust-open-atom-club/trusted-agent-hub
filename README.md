@@ -76,6 +76,10 @@ TrustedAgentHub/
 
 SR-008 的官方、私有和未知依赖源采用可审计的分级策略，并将同根因的未批准来源聚合为一次人工复核提示。npm/Python 依赖声明中的 Git 托管直链不会自动视为生态官方源：未获批的 `git+https://...` 通常以 `unknown_host` 拒绝，`git+ssh://...` 会被采集并以 `non_registry_source` 拒绝。采集范围、内置端点、精确匹配规则和服务端私有源配置见 [依赖来源策略](docs/dependency-registry-policy.md)。
 
+SR-010 的 LICENSE 查找以扫描包目录为默认边界。扫描仓库中的子包时，调用方可使用
+`RiskScanner(package_dir, repository_root=repo_dir)` 允许继承该仓库内的许可证；API 扫描会自动传入获取到的仓库快照根目录。
+查找包含仓库根目录，但不会越过它；`ScanPolicy(allow_parent_license_files=False)` 始终只检查包目录。
+
 另有本地语义检测（`mcp_security.py` + fastembed 嵌入模型）：SR-017 对 MCP 工具描述与权限声明做语义对比，检测"描述投毒"；未安装模型时自动降级为纯规则模式。
 
 扫描结果区分“安全发现”和“审核提示”。签名、供应链证明、SBOM 验证器未配置时会明确标记为 `not_available`，不会伪装成验证失败或固定扣分；验证器已运行但验证失败时，仍会生成对应审核提示。元数据、权限声明一致性等 advisory 只用于审核排队和证据展示，不从安全分扣除。结构化代码证据确认能力未声明时会要求人工复核，但不会仅凭“具备执行能力”把正常包判为漏洞或恶意包。

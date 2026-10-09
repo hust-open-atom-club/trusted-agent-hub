@@ -1,8 +1,13 @@
 """SR-010: Metadata quality + structure check rule unit tests."""
 
+import json
+
 import pytest
 
+from scanners.risk_scanner.dependency_parsers.osv_client import OSVClient
+from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.rules import metadata_quality
+from scanners.risk_scanner.scanner import RiskScanner
 from tests.scanner_mock import MockScanner
 
 
@@ -37,11 +42,11 @@ class TestSR010MetadataQuality:
         assert missing["deduction"] == 0
         assert not any("元数据不完整" in f["title"] for f in s.findings)
 
-    def test_missing_license_low(self, tmp_path, monkeypatch):
-        """Empty / NONE license（且无 LICENSE 文件）→ low finding."""
+    @pytest.mark.parametrize("license_value", ["", "NONE", "UNLICENSED"])
+    def test_missing_license_low(self, tmp_path, license_value):
+        """A missing license remains an advisory even inside the project checkout."""
         meta = _full_meta()
-        meta["license"] = "NONE"
-        monkeypatch.setattr(metadata_quality, "_find_license_file", lambda *_args: None)
+        meta["license"] = license_value
         s = MockScanner(
             files={"SKILL.md": "# hi"},
             _package_metadata=meta,
@@ -82,6 +87,7 @@ class TestSR010MetadataQuality:
             _package_metadata=meta,
             target_dir=pkg_dir,
         )
+        s.repository_root = tmp_path
         metadata_quality.run(s)
         assert not any(
             f["code"] == "metadata_incomplete" and "license" in f["description"]
@@ -236,3 +242,95 @@ class TestSR010MetadataQuality:
         assert len(s.findings) == 1
         assert s.findings[0]["rule_id"] == "SR-010"
         assert "manifest.json" in s.findings[0]["title"]
+
+
+class TestSR010LicenseBoundary:
+    @pytest.mark.parametrize(
+        ("license_location", "explicit_root", "allow_parent", "missing"),
+        [
+            ("package", False, True, False),
+            ("repository", False, True, True),
+            ("workspace", False, True, True),
+            ("repository", True, True, False),
+            ("workspace", True, True, True),
+            ("package", True, False, False),
+            ("repository", True, False, True),
+        ],
+    )
+    def test_license_scope(self, tmp_path, license_location, explicit_root, allow_parent, missing):
+        workspace = tmp_path / "workspace"
+        repository = workspace / "acquired"
+        # Snapshots need not contain .git, and packages can be deeper than five levels.
+        package = repository / "packages" / "group" / "tools" / "nested" / "skills" / "demo"
+        package.mkdir(parents=True)
+        (workspace / ".git").mkdir()
+        license_dir = {
+            "workspace": workspace,
+            "repository": repository,
+            "package": package,
+        }[license_location]
+        (license_dir / "LiCeNcE.markdown").write_text("MIT License", encoding="utf-8")
+        meta = {**_full_meta(), "license": ""}
+        (package / "manifest.json").write_text(json.dumps(meta), encoding="utf-8")
+        (package / "SKILL.md").write_text("# Demo\n", encoding="utf-8")
+
+        kwargs = {"repository_root": repository} if explicit_root else {}
+        report = RiskScanner(
+            package,
+            source_commit_hash="a" * 40,
+            policy=ScanPolicy(allow_parent_license_files=allow_parent),
+            osv_client=OSVClient(enabled=False),
+            mcp_semantic_model_loader=lambda: None,
+            **kwargs,
+        ).scan()
+
+        assert report["scan_status"]["state"] == "complete"
+        assert any(
+            item["code"] == "metadata_incomplete" and "license" in item["description"]
+            for item in report["review_advisories"]
+        ) is missing
+
+    @pytest.mark.parametrize("explicit_root", [False, True])
+    def test_scan_at_repository_root_ignores_parent_license(self, tmp_path, explicit_root):
+        (tmp_path / "LICENSE").write_text("MIT License", encoding="utf-8")
+        repository = tmp_path / "repository"
+        repository.mkdir()
+        scanner = MockScanner(
+            target_dir=repository,
+            _package_metadata={**_full_meta(), "license": ""},
+        )
+        if explicit_root:
+            scanner.repository_root = repository
+
+        metadata_quality.run(scanner)
+
+        assert any(
+            item["code"] == "metadata_incomplete" and "license" in item["description"]
+            for item in scanner.review_advisories
+        )
+
+    def test_repository_root_must_contain_target(self, tmp_path):
+        package = tmp_path / "package"
+        package.mkdir()
+        repository = tmp_path / "repository"
+        repository.mkdir()
+
+        with pytest.raises(ValueError, match="repository_root"):
+            RiskScanner(package, repository_root=repository)
+
+    @pytest.mark.parametrize("entry_kind", ["directory", "external_symlink"])
+    def test_license_entry_must_be_a_regular_file(self, tmp_path, entry_kind):
+        package = tmp_path / "package"
+        package.mkdir()
+        license_path = package / "LICENSE"
+        if entry_kind == "directory":
+            license_path.mkdir()
+        else:
+            outside = tmp_path / "external-license"
+            outside.write_text("MIT License", encoding="utf-8")
+            try:
+                license_path.symlink_to(outside)
+            except OSError as exc:
+                pytest.skip(f"Symlinks unavailable: {exc}")
+
+        assert metadata_quality._find_license_file(package) is None
