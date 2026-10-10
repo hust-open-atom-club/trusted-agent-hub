@@ -122,26 +122,8 @@ CREDENTIAL_ACCESS_PATTERNS: list[tuple[str, str, str]] = [
 # SR-004: Hardcoded Secrets
 # =============================================================================
 
-HARDCODED_SECRET_PATTERNS: list[tuple[str, str, str]] = [
-    # --- High: API keys / tokens ---
-    (r'(?:api[_-]?key|apikey)\s*[=:]\s*["\'][\w\-]{20,}', "硬编码 API Key", "high"),
-    (r'(?:secret|password|passwd)\s*[=:]\s*["\'][^"\']{6,}', "硬编码密码/密钥", "high"),
-    (r'(?:token|access_token)\s*[=:]\s*["\'][\w\-\.]{15,}', "硬编码 Token", "high"),
-    (r'(?:private[_-]?key)\s*[=:]\s*["\']-----BEGIN', "硬编码私钥", "high"),
-    (r'sk-[a-zA-Z0-9]{20,}', "OpenAI API Key 格式", "high"),
-    (r'ghp_[a-zA-Z0-9]{36}', "GitHub Personal Access Token (classic)", "high"),
-    (r'gho_[a-zA-Z0-9]{36}', "GitHub OAuth Token", "high"),
-    # --- New: GitHub token formats ---
-    (r'ghu_[a-zA-Z0-9]{36}', "GitHub User-to-Server Token", "high"),
-    (r'ghs_[a-zA-Z0-9]{36}', "GitHub Server-to-Server Token", "high"),
-    (r'ghr_[a-zA-Z0-9]{36}', "GitHub Refresh Token", "high"),
-    # --- New: AWS Key ID ---
-    (r'AKIA[0-9A-Z]{16}', "AWS Access Key ID", "high"),
-    (r'xox[bpras]-[a-zA-Z0-9-]+', "Slack Token", "high"),
-    (r'-----BEGIN\s+(RSA|EC|DSA|OPENSSH)\s+PRIVATE\s+KEY', "PEM 私钥", "high"),
-    # --- Medium: cloud provider tokens ---
-    (r'(?:heroku|digitalocean|do)\w*[_-]?(?:token|key|secret)', "云厂商 API Token", "medium"),
-]
+# SR-004 uses the shared typed recognizers in credentials.py so evidence,
+# classification and redaction cannot drift between independent regex lists.
 
 # =============================================================================
 # SR-005: Remote Code Execution

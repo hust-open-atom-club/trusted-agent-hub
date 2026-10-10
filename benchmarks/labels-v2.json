@@ -92,22 +92,22 @@
     {
       "id": "sr004-hardcoded-key",
       "path": "corpus/malicious-code/sr004-hardcoded-key",
-      "ground_truth": "malicious",
+      "ground_truth": "needs_context",
       "source": {
         "origin": "synthetic",
         "reference": "benchmarks/README.md#issue-54-rule-coverage",
         "revision": "fixture-v2",
         "license": "Apache-2.0",
-        "annotation": "Uses a clearly synthetic hardcoded API key-shaped value for static detection only."
+        "annotation": "A fixed low-entropy API key literal has no provider format or use evidence. SR-004 retains it as unknown with mandatory manual review; it does not prove a live credential or malicious intent."
       },
       "content_tree_sha256": "3467075c1c639c4c138a013f3b76e612b1766df77d8ce2bffe852fe5818b36a6",
       "expected_target": {
         "raw_rules": ["SR-004"],
-        "root_issues": [{"id": "sr004-hardcoded-key", "rule_ids": ["SR-004"], "effective_severity": "high"}],
+        "root_issues": [{"id": "sr004-hardcoded-key", "rule_ids": ["SR-004"], "effective_severity": "medium"}],
         "forbidden_effective_severities": [],
         "capabilities": [],
-        "security_grade": ["D"],
-        "manual_review": "not_required"
+        "security_grade": ["C"],
+        "manual_review": "required"
       },
       "enforcement": "blocking"
     },
@@ -999,16 +999,19 @@
         "reference": "benchmarks/README.md#issue-54-rule-coverage",
         "revision": "fixture-v2",
         "license": "Apache-2.0",
-        "annotation": "Prints a token-shaped runtime value directly to stdout without an escaping boundary."
+        "annotation": "Prints a token literal directly to stdout. SR-011 retains the sensitive-output risk; SR-004 additionally records the literal as unknown requiring manual review."
       },
       "content_tree_sha256": "c6244b996bf0c3bd367c29d4df8007b5a406d12c627abc469f6a0cdd9f7a6ab4",
       "expected_target": {
-        "raw_rules": ["SR-011"],
-        "root_issues": [{"id": "sr011-sensitive-output", "rule_ids": ["SR-011"], "effective_severity": "high"}],
+        "raw_rules": ["SR-004", "SR-011"],
+        "root_issues": [
+          {"id": "sr011-token-literal", "rule_ids": ["SR-004"], "effective_severity": "medium"},
+          {"id": "sr011-sensitive-output", "rule_ids": ["SR-011"], "effective_severity": "high"}
+        ],
         "forbidden_effective_severities": [],
         "capabilities": [],
         "security_grade": ["D"],
-        "manual_review": "not_required"
+        "manual_review": "required"
       },
       "enforcement": "blocking"
     },

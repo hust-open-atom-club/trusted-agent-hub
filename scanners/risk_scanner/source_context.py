@@ -13,7 +13,8 @@ from scanners.risk_scanner.evidence import (
     summarize_context_audits,
 )
 from scanners.risk_scanner.llm_candidates import is_semantic_candidate
-from scanners.risk_scanner.redaction import redact_text
+from scanners.risk_scanner.redaction import credential_redactions, redact_text
+from scanners.risk_scanner.credentials import LiteralRedactions, mask_literals
 
 
 DEFAULT_FINDING_CONTEXT_BYTES = 8192
@@ -23,7 +24,9 @@ DEFAULT_CONTEXT_BATCH_BYTES = 64 * 1024
 class FindingContextSources:
     """One immutable source snapshot with lazy indexes/redaction per review run."""
 
-    def __init__(self, file_cache: dict[str, str]) -> None:
+    def __init__(
+        self, file_cache: dict[str, str], *, literal_redactions: LiteralRedactions | None = None,
+    ) -> None:
         self.files: dict[str, str] = {}
         self.conflicts: set[str] = set()
         self.indexes: dict[str, dict[str, dict[str, int]]] = {}
@@ -36,10 +39,13 @@ class FindingContextSources:
                 self.files[path] = content
         for path in self.conflicts:
             self.files.pop(path, None)
+        self._literal_redactions = (
+            literal_redactions if literal_redactions is not None else credential_redactions(self.files.values())
+        )
 
     def redacted_lines(self, path: str) -> list[str]:
         if path not in self._lines:
-            self._lines[path] = redact_text(self.files[path]).splitlines()
+            self._lines[path] = redact_text(mask_literals(self.files[path], self._literal_redactions)).splitlines()
         return self._lines[path]
 
 

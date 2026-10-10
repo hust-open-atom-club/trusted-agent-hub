@@ -314,6 +314,28 @@ class DetectorHit(StrictContractModel):
     requires_confirmation: bool | None = None
 
 
+class CredentialEvidenceMatch(StrictContractModel):
+    file: str
+    line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    column: int = Field(ge=1)
+    end_column: int = Field(ge=1)
+    field: str
+    usage: list[Literal["network_use", "config_write", "test_assertion", "assignment", "literal"]]
+    snippet: str = Field(max_length=400)
+
+
+class CredentialEvidence(StrictContractModel):
+    types: list[Literal["api_key", "github_token", "cloud_credential", "token", "password", "secret", "private_key", "connection_string"]]
+    rules: list[str]
+    classification: Literal["credential_format", "suspected", "placeholder", "test_fixture", "example", "unknown"]
+    confidence: float = Field(ge=0, le=1)
+    fingerprint: str = Field(pattern=r"^hmac-sha256:[0-9a-f]{32}$")
+    reasons: list[str]
+    matches: list[CredentialEvidenceMatch] = Field(max_length=100)
+    truncated: bool
+
+
 class ScanFinding(StrictContractModel):
     id: str
     rule_id: str | None = None
@@ -401,6 +423,7 @@ class ScanFinding(StrictContractModel):
     cwe_id: str | None = None
     requires_confirmation: bool | None = None
     occurrences: FindingOccurrences | None = None
+    credential_evidence: CredentialEvidence | None = None
 
 
 class PermissionEvidence(StrictContractModel):

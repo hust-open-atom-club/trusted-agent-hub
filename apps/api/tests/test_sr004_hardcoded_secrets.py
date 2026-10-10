@@ -57,8 +57,7 @@ class TestSR004HardcodedSecrets:
     # ── Negative cases ────────────────────────────────────
 
     def test_example_api_key(self):
-        """Example placeholder keys: current scanner flags these (known limitation).
-        Real-world patterns like YOUR_API_KEY are hard to distinguish from real keys."""
+        """Keep explicit placeholders in the report and unknown values for review."""
         s = MockScanner(files={
             "README.md": (
                 'export API_KEY="YOUR_API_KEY_HERE"\n'
@@ -66,19 +65,20 @@ class TestSR004HardcodedSecrets:
             ),
         })
         run(s)
-        # Known: scanner may flag these as false positives.
-        # Verify category is correct even if flagged.
+        assert len(s.findings) == 2
+        assert s.findings[0]["credential_evidence"]["classification"] == "placeholder"
+        assert s.findings[0]["severity"] == "info"
         for f in s.findings:
             assert f["category"] == "hardcoded_secret"
 
     def test_test_secret_placeholder(self):
-        """Test config placeholder values — may trigger as false positives.
-        This documents current scanner behavior; may be improved with context analysis."""
+        """A test filename does not prove that an arbitrary value is harmless."""
         s = MockScanner(files={
             "test_config.py": 'TEST_SECRET = "test_secret_key_12345"',
         })
         run(s)
-        # Accept current behavior — scanner is intentionally conservative
+        assert len(s.findings) == 1
+        assert s.findings[0]["requires_manual_review"] is True
         for f in s.findings:
             assert f["rule_id"] == "SR-004"
 

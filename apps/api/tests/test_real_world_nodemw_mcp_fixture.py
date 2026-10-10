@@ -171,6 +171,14 @@ def test_nodemw_secret_locations_survive_registry_aggregation(
             assert finding["evidence_type"] == "source"
             assert finding["location"]["end_line"] >= finding["location"]["line"]
             assert finding["location"]["column"] > 0
+            assert finding["occurrences"]["count"] == 2
+            assert {item["file"] for item in finding["occurrences"]["items"]} == {
+                finding["location"]["file"], "provenance.json",
+            }
+            assert finding["credential_evidence"]["classification"] == "suspected"
+            assert finding["credential_evidence"]["reasons"] == ["cross_file_reuse"]
+            assert finding["requires_manual_review"] is True
+            assert finding["llm_review_exempt"] is True
 
 
 def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
@@ -178,9 +186,8 @@ def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
 ) -> None:
     scanner, report = nodemw_scan
 
-    # Exercise the positive context path with a real fixture finding.  Secret
-    # findings are deterministic by default; the copied marker models a source
-    # finding that explicitly opted into semantic adjudication.
+    # Exercise source-context delivery with a separate semantic detector at a
+    # real credential location. SR-004 itself cannot opt into LLM downgrading.
     source_finding = deepcopy(
         next(
             finding
@@ -191,6 +198,12 @@ def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
         )
     )
     source_finding["id"] = "real-world-nodemw-source-candidate"
+    source_finding["rule_id"] = "SR-001"
+    source_finding["category"] = "prompt_injection"
+    source_finding["llm_review_exempt"] = False
+    source_finding.pop("credential_evidence", None)
+    source_finding.pop("occurrences", None)
+    source_finding.pop("detector_hits", None)
     source_finding["llm_adjudication_eligible"] = True
     source_finding["requires_llm_validation"] = True
 
@@ -206,6 +219,8 @@ def test_nodemw_llm_candidates_exclude_lock_metadata_and_have_context(
     assert context_audit["summary"]["missing"] == 0
     assert "package-lock.json" not in contexts[source_finding["id"]]
     assert "registry.npmmirror.com" not in contexts[source_finding["id"]]
+    assert "secret123" not in contexts[source_finding["id"]]
+    assert "fake-csrf-token" not in contexts[source_finding["id"]]
     assert source_finding["location"]["file"] in scanner._file_contents
     assert 1 <= source_finding["location"]["line"] <= len(
         scanner._file_contents[source_finding["location"]["file"]].splitlines()

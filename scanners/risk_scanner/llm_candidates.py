@@ -18,7 +18,8 @@ from scanners.risk_scanner.evidence import delivered_source_lines, finding_locat
 def is_semantic_candidate(finding: Mapping[str, Any]) -> bool:
     """Intent is independent of source availability, so missing evidence counts."""
     return (
-        finding.get("llm_review_exempt") is not True
+        finding.get("rule_id") != "SR-004"
+        and finding.get("llm_review_exempt") is not True
         and bool(finding.get("id"))
         and (finding.get("requires_llm_validation") is True or finding.get("llm_adjudication_eligible") is True)
     )
@@ -84,7 +85,7 @@ def evaluate_llm_candidate(
     proves that the admitted location survived context construction.
     """
 
-    if finding.get("llm_review_exempt") is True:
+    if finding.get("rule_id") == "SR-004" or finding.get("llm_review_exempt") is True:
         return LLMCandidateDecision(False, "explicitly_exempt")
     if not (
         finding.get("requires_llm_validation") is True

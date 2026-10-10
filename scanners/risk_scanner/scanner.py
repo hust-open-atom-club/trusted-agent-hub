@@ -74,7 +74,8 @@ from scanners.risk_scanner.dependency_parsers.osv_client import (
     OSVClient,
     OSVClientProtocol,
 )
-from scanners.risk_scanner.redaction import contains_sensitive_identifier, redact_report
+from scanners.risk_scanner.redaction import contains_sensitive_identifier, credential_redactions, redact_report
+from scanners.risk_scanner.credentials import LiteralRedactions
 from scanners.risk_scanner.evidence import (
     normalize_finding_evidence,
     normalize_occurrence_evidence,
@@ -193,6 +194,7 @@ class RiskScanner:
         self._package_claims: dict[str, Any] | None = None
         self._acquisition_facts: dict[str, Any] = {}
         self._file_contents: dict[str, str] = {}
+        self._credential_redactions: LiteralRedactions | None = None
         self._evidence_indexes: dict[str, dict[str, dict[str, int]]] = {}
         self.analysis = None
         self._content_tree_hash: str | None = None
@@ -220,6 +222,7 @@ class RiskScanner:
             getattr(self.osv_client, "max_queries", self.policy.max_osv_queries)
         )
         self._file_contents = {}
+        self._credential_redactions = None
         self._evidence_indexes = {}
         self.analysis = None
         self._content_tree_hash = None
@@ -626,6 +629,9 @@ class RiskScanner:
         这些不是可执行的能力内容，不应直接触发一票否决。
         """
         for finding in self.findings:
+            # Credentials remain exposed in documentation and test examples.
+            if finding.get("rule_id") == "SR-004":
+                continue
             location = finding.get("location") or {}
             file_path = str(location.get("file") or "")
             severity = finding.get("severity", "info")
@@ -724,6 +730,8 @@ class RiskScanner:
         llm_review_exempt: bool = False,
         root_cause_id: str | None = None,
         occurrences: dict[str, Any] | None = None,
+        finding_id: str | None = None,
+        credential_evidence: dict[str, Any] | None = None,
     ) -> None:
         if len(self.findings) >= self.policy.max_findings:
             self.findings_limit_exceeded = True
@@ -731,7 +739,7 @@ class RiskScanner:
                 self._inventory.limit_violations.append("findings_limit_exceeded")
             return
         finding: dict[str, Any] = {
-            "id": f"finding-{uuid.uuid4().hex[:8]}",
+            "id": finding_id or f"finding-{uuid.uuid4().hex[:8]}",
             "rule_id": rule_id,
             "severity": severity,
             "static_severity": severity,
@@ -775,6 +783,8 @@ class RiskScanner:
             finding["llm_review_exempt"] = True
         if root_cause_id:
             finding["root_cause_id"] = root_cause_id
+        if credential_evidence is not None:
+            finding["credential_evidence"] = credential_evidence
         normalize_finding_evidence(finding, self._file_contents, self._evidence_indexes)
         if occurrences is not None:
             supplied = occurrences.get("items", [])
@@ -949,7 +959,18 @@ class RiskScanner:
             new_dup["count"] = int(new_dup.get("count", 0)) + int(old_dup.get("count", 0))
         self._merge_duplicate_into(new_p, old_p)
 
+    def get_credential_redactions(self) -> LiteralRedactions:
+        """One bounded matcher for this scan, shared with rules and LLM review."""
+        if self._credential_redactions is None:
+            self._credential_redactions = credential_redactions(self._file_contents.values())
+        if self._credential_redactions.limited and self._inventory is not None:
+            reason = "credential_literal_limit_exceeded"
+            if reason not in self._inventory.limit_violations:
+                self._inventory.limit_violations.append(reason)
+        return self._credential_redactions
+
     def _build_report(self, start_time: datetime, duration_ms: int) -> dict[str, Any]:
+        literal_redactions = self.get_credential_redactions()
         report_findings = aggregate_findings(self.findings)
         summary = build_findings_summary(report_findings)
         effective_total = int(summary["effective_total"])
@@ -1091,7 +1112,7 @@ class RiskScanner:
             "dependency_check": dependency_check,
             "dependency_scan": self.dependency_scan,
             "structural_analysis": self.analysis.as_report() if self.analysis is not None else {},
-        })
+        }, literal_redactions=literal_redactions)
 
 
 if __name__ == "__main__":

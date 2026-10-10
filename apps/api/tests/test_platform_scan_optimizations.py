@@ -1,7 +1,7 @@
 """平台侧扫描/评分/提取优化测试。
 
 覆盖：
-  1. 文档/README 中的发现降级为 low，SKILL.md 的提示注入不降级；
+  1. 文档示例降级，凭据证据和 SKILL.md 的提示注入不按文档豁免；
   2. 提取器对 mcp_server / plugin / prompt / subagent 的类型推断；
   3. 无任何 .md 但有 manifest.json 的目录允许提取；
   4. 多能力仓库的能力发现。
@@ -30,7 +30,7 @@ EXAMPLES = PROJECT_ROOT / "examples"
 
 
 def test_scanner_separates_documentation_examples_from_executable_findings() -> None:
-    """README 的执行示例不算漏洞；其他文本提示至多为 low。"""
+    """README 执行示例不算漏洞，但凭据暴露仍保留风险与人工复核。"""
     with tempfile.TemporaryDirectory(prefix="tah-doc-") as tmp:
         root = Path(tmp)
         (root / "README.md").write_text(
@@ -54,8 +54,12 @@ def test_scanner_separates_documentation_examples_from_executable_findings() -> 
         readme_findings = by_file.get("README.md", [])
         assert all(
             f["severity"] in ("low", "info")
-            for f in readme_findings
-        ), "README 中的发现不应存在 critical/high"
+            for f in readme_findings if f.get("rule_id") != "SR-004"
+        ), "非凭据文档示例应降级"
+        credential, = [f for f in readme_findings if f.get("rule_id") == "SR-004"]
+        assert credential["severity"] == "high"
+        assert credential["requires_manual_review"] is True
+        assert credential["credential_evidence"]["reasons"] == ["network_use"]
         assert not any(
             f.get("rule_id") in {"SR-002", "SR-005"}
             for f in readme_findings

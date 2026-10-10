@@ -14,6 +14,141 @@
     "summary"
   ],
   "$defs": {
+    "credential_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "types",
+        "rules",
+        "classification",
+        "confidence",
+        "fingerprint",
+        "reasons",
+        "matches",
+        "truncated"
+      ],
+      "properties": {
+        "types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "api_key",
+              "github_token",
+              "cloud_credential",
+              "token",
+              "password",
+              "secret",
+              "private_key",
+              "connection_string"
+            ]
+          }
+        },
+        "rules": {
+          "type": "array",
+          "description": "Scanner-owned recognizer codes; not source text.",
+          "items": {
+            "type": "string",
+            "x-redaction-public-values": [
+              "literal-sensitive-field", "bearer-token", "private-key", "connection-password",
+              "github-token", "openai-key", "aws-access-key", "google-api-key",
+              "digitalocean-token", "slack-token", "jwt"
+            ]
+          }
+        },
+        "classification": {
+          "enum": [
+            "credential_format",
+            "suspected",
+            "placeholder",
+            "test_fixture",
+            "example",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^hmac-sha256:[0-9a-f]{32}$"
+        },
+        "reasons": {
+          "type": "array",
+          "description": "Scanner-owned classification reason codes; not source text.",
+          "items": {
+            "type": "string",
+            "x-redaction-public-values": [
+              "credential_format", "high_entropy", "cross_file_reuse", "network_use",
+              "config_write", "exact_placeholder", "exact_fixture_with_assertion",
+              "exact_example", "insufficient_evidence", "evidence_limit"
+            ]
+          }
+        },
+        "matches": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "file",
+              "line",
+              "end_line",
+              "column",
+              "end_column",
+              "field",
+              "usage",
+              "snippet"
+            ],
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/evidence_file"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end_line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end_column": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "field": {
+                "type": "string"
+              },
+              "usage": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "network_use",
+                    "config_write",
+                    "test_assertion",
+                    "assignment",
+                    "literal"
+                  ]
+                }
+              },
+              "snippet": {
+                "type": "string",
+                "maxLength": 400
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
     "evidence_source_ref": {
       "type": ["string", "null"],
       "maxLength": 2048
@@ -435,7 +570,7 @@
         "state": { "type": "string", "enum": ["complete", "partial", "failed"] },
         "conclusion": { "type": "string", "enum": ["risks_found", "no_risks_found", "inconclusive"] },
         "complete": { "type": "boolean" },
-        "reasons": { "type": "array", "items": { "type": "string" } }
+        "reasons": { "type": "array", "items": { "type": "string", "x-redaction-public-values": ["credential_literal_limit_exceeded"] } }
       },
       "additionalProperties": false
     },
@@ -462,7 +597,7 @@
           },
           "additionalProperties": false
         },
-        "exceeded": { "type": "array", "items": { "type": "string" } },
+        "exceeded": { "type": "array", "items": { "type": "string", "x-redaction-public-values": ["credential_literal_limit_exceeded"] } },
         "skipped": {
           "type": "object",
           "required": ["count", "by_reason", "samples"],
@@ -776,6 +911,9 @@
               "truncated": { "type": "boolean" }
             },
             "additionalProperties": false
+          },
+          "credential_evidence": {
+            "$ref": "#/$defs/credential_evidence"
           }
         },
         "additionalProperties": false

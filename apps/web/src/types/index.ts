@@ -144,6 +144,20 @@ export interface DetectorHit {
 
 export type EvidenceType = 'source' | 'dependency' | 'registry_policy' | 'file' | 'synthetic';
 
+export interface CredentialEvidence {
+  types: string[];
+  rules: string[];
+  classification: 'credential_format' | 'suspected' | 'placeholder' | 'test_fixture' | 'example' | 'unknown';
+  confidence: number;
+  fingerprint: string;
+  reasons: string[];
+  matches: Array<{
+    file: string; line: number; end_line: number; column: number; end_column: number;
+    field: string; usage: string[]; snippet: string;
+  }>;
+  truncated: boolean;
+}
+
 export interface Finding {
   id?: string;
   rule_id: string;
@@ -205,6 +219,7 @@ export interface Finding {
   requires_manual_review?: boolean;
   downgraded?: string;
   occurrences?: FindingOccurrences;
+  credential_evidence?: CredentialEvidence;
 }
 
 /** Least-privilege finding projection returned to the owning submitter. */

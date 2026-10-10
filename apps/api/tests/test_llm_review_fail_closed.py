@@ -88,7 +88,8 @@ def test_unexpected_reviewer_exception_marks_reviewable_findings_unavailable(
     )
 
     assert result["status"] == "call_failed"
-    assert result["error"] == "ValueError: invalid reviewer response"
+    # Provider exception payloads can contain credentials; retain only type.
+    assert result["error"] == "ValueError: LLM semantic review unavailable"
     assert all(
         finding.get("llm_label") == "llm:unavailable"
         for finding in findings[:2]

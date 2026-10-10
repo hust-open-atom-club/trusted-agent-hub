@@ -478,8 +478,8 @@ def test_v2_corpus_is_complete_checkable_and_deterministic():
         "ground_truth_distribution": {
             "benign": 9,
             "benign_capability": 18,
-            "malicious": 19,
-            "needs_context": 13,
+            "malicious": 18,
+            "needs_context": 14,
         },
         "enforcement_distribution": {"blocking": 59, "observe": 0},
     }

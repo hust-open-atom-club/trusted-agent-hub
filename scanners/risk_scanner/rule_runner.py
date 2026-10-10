@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from packages.schema.constants import FINDING_CATEGORY_POLICY
+from scanners.risk_scanner.credentials import LiteralRedactions, mask_literals
+from scanners.risk_scanner.redaction import credential_redactions, redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +79,13 @@ RULE_SPECS: tuple[RuleSpec, ...] = tuple(
 )
 
 
-def _safe_error_message(exc: Exception) -> str:
-    message = str(exc).replace("\r", " ").replace("\n", " ").strip()
+def _safe_error_message(
+    exc: Exception, contents: tuple[str, ...] = (),
+    literal_redactions: LiteralRedactions | None = None,
+) -> str:
+    redactions = literal_redactions if literal_redactions is not None else credential_redactions(contents)
+    message = redact_text(mask_literals(str(exc), redactions))
+    message = message.replace("\r", " ").replace("\n", " ").strip()
     # Never expose local paths or environment-like assignments in the report.
     message = re.sub(r"[A-Za-z]:\\[^ ]+", "<path>", message)
     message = re.sub(r"(?<![A-Za-z0-9_])/(?:[^ ]+/)+[^ ]*", "<path>", message)
@@ -136,10 +143,15 @@ class RuleRunner:
                 ))
             except Exception as exc:
                 # Deliberately catch Exception only: KeyboardInterrupt/SystemExit propagate.
-                logger.exception("Rule %s failed", spec.rule_id)
+                # Traceback messages/source lines may themselves contain raw
+                # credentials. Log only the rule and exception class.
+                logger.error("Rule %s failed (%s)", spec.rule_id, type(exc).__name__)
+                files = getattr(scanner, "_file_contents", {})
                 results.append(RuleExecutionResult(
                     spec.rule_id, "failed", _elapsed_ms(started), len(scanner.findings) - before,
-                    type(exc).__name__, _safe_error_message(exc)
+                    type(exc).__name__, _safe_error_message(
+                        exc, tuple(files.values()), getattr(scanner, "_credential_redactions", None),
+                    )
                 ))
         return results
 

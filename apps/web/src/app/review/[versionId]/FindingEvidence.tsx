@@ -6,7 +6,7 @@ import { contextMessage } from './contextMessages';
 
 type EvidenceRecord = Pick<Finding,
   'evidence_type' | 'evidence_missing_reason' | 'llm_context_reasons' |
-  'llm_review_state' | 'llm_context_audit'
+  'llm_review_state' | 'llm_context_audit' | 'credential_evidence' | 'requires_manual_review'
 > & { location?: FindingLocation | null };
 
 export function EvidenceReferenceOmission({ reference }: { reference: EvidenceReference }) {
@@ -54,6 +54,7 @@ export function formatEvidenceLocation(location: FindingLocation): string {
 export default function FindingEvidence({ finding, versionId }: { finding: EvidenceRecord; versionId: string }) {
   const { t } = useTranslation();
   const location = finding.location;
+  const credential = finding.credential_evidence;
   const missingReason = finding.evidence_missing_reason || location?.missing_reason;
   const sourceAvailable = !!location?.file
     && !['source_missing', 'sensitive_identifier'].includes(missingReason || '');
@@ -80,6 +81,26 @@ export default function FindingEvidence({ finding, versionId }: { finding: Evide
         </span>
       )}
       {location && <EvidenceReferenceOmission reference={location} />}
+      {credential && <section aria-label={t('review.finding.credential.title')}>
+        <div>{t(`review.finding.credential.${credential.classification}`)} · {t('review.finding.credential.confidence', { value: Math.round(credential.confidence * 100) })}</div>
+        <div>{t('review.finding.credential.types')}: {credential.types.map(type => t(`review.finding.credential.type_${type}`)).join(', ')}</div>
+        <div>{t('review.finding.credential.rules')}: <code>{credential.rules.join(', ')}</code></div>
+        <div>{t('review.finding.credential.fingerprint')}: <code>{credential.fingerprint}</code></div>
+        <div>{credential.reasons.map(reason => t(`review.finding.credential.reason_${reason}`)).join(' · ')}</div>
+        {finding.requires_manual_review && <p>{t('review.finding.credential.manual_review')}</p>}
+        <details>
+          <summary>{t('review.finding.credential.locations')}</summary>
+          <ul>{credential.matches.map((match, index) => <li key={index}>
+            <a href={`/review/files?${new URLSearchParams({ versionId, path: match.file, line: String(match.line) })}`} target="_blank" rel="noopener noreferrer">
+              <code>{formatEvidenceLocation(match)}</code>
+            </a>
+            {' · '}{t('review.finding.credential.field')}: <code>{match.field}</code>
+            {' · '}{match.usage.map(usage => t(`review.finding.credential.usage_${usage}`)).join(', ')}
+            <pre>{match.snippet}</pre>
+          </li>)}</ul>
+        </details>
+        {credential.truncated && <p>{t('review.finding.credential.truncated')}</p>}
+      </section>}
       {location?.dependency_name && <div>{location.dependency_name}{location.version ? `@${location.version}` : ''}</div>}
       {location?.field_locations && <details>
         <summary>{t('review.finding.structured_fields')}</summary>

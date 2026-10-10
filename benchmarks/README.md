@@ -7,6 +7,14 @@ without teaching the benchmark that a known false positive or false negative is
 correct. The v2 corpus currently contains 59 cases; the acceptance criterion is
 the coverage map, not a fixed case count.
 
+SR-004's credential-evidence policy (issue #154) retains low-entropy literals
+as unknown with manual review. Accordingly, `sr004-hardcoded-key` (twenty
+repeated `a` characters, no provider format or use evidence) is labeled
+`needs_context`, medium/C, rather than claiming confirmed malicious intent.
+`sr011-sensitive-output` keeps its high/D output risk and additionally records
+its short token literal as an SR-004 medium finding requiring manual review.
+The fixture bytes, integrity checks and quality gates remain unchanged.
+
 ## Running the benchmark
 
 From the repository root:

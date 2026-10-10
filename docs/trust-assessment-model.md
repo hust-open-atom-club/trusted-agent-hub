@@ -16,6 +16,11 @@ The compatibility fields `score`, `risk_summary.level`, and
 `risk_summary.grade` mirror this security assessment. Evidence metadata does not
 silently change them.
 
+SR-004 credential findings use content-based classification, scan-scoped masked
+fingerprints and one penalty per repeated value. See the
+[credential evidence and fixture policy](sr004-credential-evidence.md) for scoring,
+manual review, redaction and LLM protections.
+
 ## Evidence assessment
 
 `evidence_assessment` reports provenance, verified artifact proofs, metadata,

@@ -33,6 +33,32 @@ const finding: Finding = { rule_id: 'SR-008', severity: 'high', title: 'Dependen
 } };
 
 describe('FindingEvidence', () => {
+  it.each(['zh', 'en'])('shows auditable credential classification and only redacted context in %s', async language => {
+    const { container } = await renderEvidence({
+      rule_id: 'SR-004', severity: 'high', title: 'Credential exposure',
+      requires_manual_review: true,
+      credential_evidence: {
+        types: ['password'], rules: ['literal-sensitive-field'], classification: 'suspected',
+        confidence: 0.85, fingerprint: 'hmac-sha256:' + 'a'.repeat(32),
+        reasons: ['cross_file_reuse'], truncated: true,
+        matches: [{ file: 'src/tools/__tests__/fakeNodemwBot.ts', line: 7, end_line: 7, column: 19, end_column: 31,
+          field: 'dbPassword', usage: ['test_assertion'], snippet: 'dbPassword = "[REDACTED]"' }],
+      },
+    }, language);
+    expect(container).toHaveTextContent('85%');
+    expect(container).toHaveTextContent('dbPassword');
+    expect(container).toHaveTextContent('literal-sensitive-field');
+    expect(container).toHaveTextContent('hmac-sha256:' + 'a'.repeat(32));
+    expect(container).toHaveTextContent('[REDACTED]');
+    expect(container).toHaveTextContent(language === 'zh' ? '疑似凭据' : 'Suspected credential');
+    expect(container).toHaveTextContent(language === 'zh' ? '需人工核对' : 'Manually verify');
+    expect(container).toHaveTextContent(language === 'zh' ? '前 100 处' : 'first 100 locations');
+    expect(container).not.toHaveTextContent('review.finding.credential.');
+    const url = new URL(container.querySelector('a')!.href);
+    expect(url.searchParams.get('path')).toBe('src/tools/__tests__/fakeNodemwBot.ts');
+    expect(url.searchParams.get('line')).toBe('7');
+  });
+
   it.each(['zh', 'en'])('shows withheld credentials without a source link in %s', async language => {
     const { container } = await renderEvidence({
       ...finding,

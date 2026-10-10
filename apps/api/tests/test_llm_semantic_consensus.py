@@ -673,14 +673,23 @@ def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -
     )
     contexts, _ = build_finding_context_bundle(report["findings"], scanner._file_contents)
     assert contexts == {}
+    # SR-004 now retains exact placeholders and independently protects token
+    # examples with network-use evidence from semantic downgrading.
+    credentials = [finding for finding in report["findings"] if finding["rule_id"] == "SR-004"]
+    assert len(credentials) == 4
+    assert sorted(finding["credential_evidence"]["classification"] for finding in credentials) == [
+        "placeholder", "placeholder", "suspected", "suspected",
+    ]
+    assert all(finding["llm_review_exempt"] for finding in credentials)
+    assert all(finding["requires_manual_review"] for finding in credentials if finding["severity"] == "high")
     assert {
         (finding["rule_id"], finding["title"], finding["llm_review_exempt"])
-        for finding in report["findings"]
+        for finding in report["findings"] if finding["rule_id"] != "SR-004"
     } == {
         ("SR-008", "依赖版本未锁定: anthropic", True),
         ("SR-008", "依赖版本未锁定: mcp", True),
     }
-    assert report["summary"]["effective_total"] == 2
+    assert report["summary"]["effective_total"] == 4
 
     acquisition_facts = {
         "source": {
@@ -709,7 +718,9 @@ def test_real_world_mcp_builder_lexical_false_positive_is_removed_before_llm() -
         acquisition_facts=acquisition_facts,
     )
 
-    assert score["risk_summary"]["grade"] not in {"D", "E"}
+    # Unverified credentials used in network examples now retain their static
+    # risk, independently of the removed lexical prompt-injection false hit.
+    assert score["risk_summary"]["grade"] == "D"
     assert score["score_breakdown"]["advisory_deduction"] == 0
     assert score["score_breakdown"]["unapplied_advisory_points"] == 0
 

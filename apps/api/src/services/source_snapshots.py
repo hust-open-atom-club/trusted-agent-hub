@@ -12,13 +12,14 @@ import time
 import uuid
 from collections import OrderedDict
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from scanners.risk_scanner.evidence import normalize_file_path
-from scanners.risk_scanner.redaction import redact_text
+from scanners.risk_scanner.redaction import credential_redactions, redact_text
+from scanners.risk_scanner.credentials import LiteralRedactions, mask_literals
 from src.settings import get_settings
 
 
@@ -34,6 +35,7 @@ class _RedactedSource:
     content_sha256: str
     lines: tuple[str, ...]
     size_bytes: int
+    literal_redactions: LiteralRedactions = field(repr=False)
 
 
 class SourceSnapshotStore:
@@ -101,9 +103,19 @@ class SourceSnapshotStore:
 
     def _redacted_source_lines(
         self, snapshot_id: str, relative_path: str, raw_content: str,
+        files: dict[str, str] | None = None,
     ) -> tuple[str, ...]:
         """Cache redacted lines by content digest, including cross-worker changes."""
-        digest = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+        # A credential can be declared in another file. Hash the full scope so
+        # changes there invalidate a previously safe-looking literal preview.
+        scope = files if files is not None else {relative_path: raw_content}
+        scope_hash = hashlib.sha256()
+        for path, content in sorted(scope.items()):
+            if isinstance(content, str):
+                encoded = content.encode("utf-8")
+                scope_hash.update(path.encode("utf-8") + b"\0")
+                scope_hash.update(str(len(encoded)).encode("ascii") + b"\0" + encoded)
+        digest = scope_hash.hexdigest()
         key = (snapshot_id, relative_path)
         pending_key = (*key, digest)
         with self._context_cache_lock:
@@ -120,12 +132,31 @@ class SourceSnapshotStore:
                 pending = Future()
                 self._context_pending[pending_key] = pending
             generation = self._context_cache_generation
+            # Reuse another file's matcher only for the exact same snapshot
+            # bytes. It expires/evicts with the existing bounded preview cache.
+            literal_redactions = next((
+                entry.literal_redactions
+                for (cached_snapshot, _), entry in self._context_cache.items()
+                if cached_snapshot == snapshot_id and entry.content_sha256 == digest
+            ), None)
 
         if not leader:
             return pending.result()
         try:
+            # Recognize and mask only on cache misses; repeated windows share
+            # the same bounded redacted-line cache and concurrent work.
+            if literal_redactions is None:
+                literal_redactions = credential_redactions(
+                    content for content in scope.values() if isinstance(content, str)
+                )
+            raw_content = mask_literals(raw_content, literal_redactions)
             lines = tuple(redact_text(raw_content).splitlines()) or ("",)
             size = sys.getsizeof(lines) + sum(sys.getsizeof(line) for line in lines)
+            # Charge shared matchers per entry conservatively, including both
+            # compiled storage and the retained pattern string.
+            size += sys.getsizeof(literal_redactions) + sys.getsizeof(literal_redactions.pattern)
+            if literal_redactions.pattern is not None:
+                size += sys.getsizeof(literal_redactions.pattern.pattern)
         except BaseException as error:
             with self._context_cache_lock:
                 self._context_pending.pop(pending_key, None)
@@ -145,7 +176,7 @@ class SourceSnapshotStore:
                 ):
                     _, evicted = self._context_cache.popitem(last=False)
                     self._context_cache_bytes -= evicted.size_bytes
-                self._context_cache[key] = _RedactedSource(digest, lines, size)
+                self._context_cache[key] = _RedactedSource(digest, lines, size, literal_redactions)
                 self._context_cache_bytes += size
             self._context_pending.pop(pending_key, None)
         pending.set_result(lines)
@@ -231,7 +262,7 @@ class SourceSnapshotStore:
         if not isinstance(raw_content, str):
             return None
 
-        source_lines = self._redacted_source_lines(snapshot_id, normalized, raw_content)
+        source_lines = self._redacted_source_lines(snapshot_id, normalized, raw_content, files)
         requested_line = max(1, int(line or 1))
         if requested_line > len(source_lines):
             return None

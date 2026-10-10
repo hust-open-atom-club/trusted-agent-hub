@@ -79,7 +79,10 @@ _SCANNER_PATH = _PROJECT_ROOT / "scanners" / "risk_scanner" / "scanner.py"
 _EXTRACTOR_PATH = _PROJECT_ROOT / "packages" / "schema" / "extract_skills.py"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+from scanners.risk_scanner.credentials import CredentialLimitExceeded, LiteralRedactions
 from scanners.risk_scanner.redaction import (
+    credential_redactions,
+    redact_finding,
     redact_report,
     redact_value,
 )
@@ -2955,7 +2958,7 @@ def _mark_llm_review_unavailable(
         "context_coverage": summarize_context_audits({
             fid: decision["context_audit"] for fid, decision in decisions.items()
         }),
-        "error": f"{type(error).__name__}: {error}",
+        "error": f"{type(error).__name__}: LLM semantic review unavailable",
         "fallback": (
             "manual_review_for_unresolved"
             if status == "timeout"
@@ -2996,6 +2999,10 @@ def _apply_llm_decisions(
 
     for finding in findings:
         finding_id = str(finding.get("id", ""))
+        # Credential evidence cannot be dismissed by semantic consensus, even
+        # for old reports that accidentally opted SR-004 into LLM review.
+        if finding.get("rule_id") == "SR-004":
+            continue
         if finding_id in labels:
             finding["llm_label"] = labels[finding_id]
         decision = decisions.get(finding_id)
@@ -3185,6 +3192,8 @@ def _ensure_required_llm_decisions(
 def _build_batched_llm_context_bundle(
     findings: list[dict[str, Any]],
     file_contents: dict[str, str],
+    *,
+    literal_redactions: LiteralRedactions | None = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     """Build one bounded context bundle per provider request batch."""
     reviewable = [
@@ -3197,7 +3206,7 @@ def _build_batched_llm_context_bundle(
     contexts: dict[str, str] = {}
     finding_audits: dict[str, dict[str, Any]] = {}
     batch_summaries: list[dict[str, Any]] = []
-    sources = FindingContextSources(file_contents)
+    sources = FindingContextSources(file_contents, literal_redactions=literal_redactions)
     for batch_index, start in enumerate(
         range(0, len(reviewable), REVIEW_BATCH_SIZE)
     ):
@@ -3246,9 +3255,18 @@ def _run_llm_review_with_fallback(
         ):
             raise TimeoutError("LLM review deadline exceeded")
         reviewer = _load_llm_reviewer()
+        get_redactions = getattr(scanner, "get_credential_redactions", None)
+        literal_redactions = get_redactions() if callable(get_redactions) else credential_redactions(
+            content for content in file_contents.values() if isinstance(content, str)
+        )
+        for finding in findings:
+            finding.update(redact_finding(finding, literal_redactions=literal_redactions))
+        if literal_redactions.limited:
+            raise CredentialLimitExceeded("credential_literal_limit_exceeded")
         finding_contexts, context_audit = _build_batched_llm_context_bundle(
             findings,
             file_contents,
+            literal_redactions=literal_redactions,
         )
         required_decision_ids = {
             str(finding.get("id"))
@@ -3265,10 +3283,11 @@ def _run_llm_review_with_fallback(
         result = reviewer.run_llm_review(
             findings=findings,
             finding_contexts=finding_contexts,
-            manifest=(
+            manifest=redact_value(
                 manifest
                 if manifest is not None
-                else getattr(scanner, "_package_metadata", {})
+                else getattr(scanner, "_package_metadata", {}),
+                literal_redactions=literal_redactions,
             ),
             context_audit=context_audit,
             progress_callback=progress_callback,
@@ -3320,7 +3339,7 @@ def _run_llm_review_with_fallback(
         )
         return result
     except Exception as exc:
-        print(f"[TAH-trust]     LLM 审查跳过（{exc}）")
+        print(f"[TAH-trust]     LLM 审查跳过（{type(exc).__name__}）")
         is_timeout = (
             isinstance(exc, TimeoutError)
             or type(exc).__name__ == "LLMReviewDeadlineExceeded"

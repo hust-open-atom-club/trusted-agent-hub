@@ -56,6 +56,8 @@ class MockScanner:
         llm_review_exempt: bool = False,
         root_cause_id: str | None = None,
         occurrences: dict[str, Any] | None = None,
+        finding_id: str | None = None,
+        credential_evidence: dict[str, Any] | None = None,
     ) -> None:
         finding = {
             "rule_id": rule_id,
@@ -70,6 +72,10 @@ class MockScanner:
             "remediation": remediation,
             "cwe_id": cwe_id,
         }
+        if finding_id:
+            finding["id"] = finding_id
+        if credential_evidence is not None:
+            finding["credential_evidence"] = credential_evidence
         if requires_confirmation:
             finding["requires_confirmation"] = True
         semantic_values = {
