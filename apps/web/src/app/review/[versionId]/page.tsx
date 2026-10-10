@@ -512,7 +512,7 @@ export default function ReviewDetailPage() {
                 ) : <span style={{ color: 'var(--color-muted)' }}>{t('review.detail.auto_grade_label')}</span>}
               </div>
               {version.manual_grade_reason && (
-                <div style={{ marginTop: '0.25rem', fontSize: '0.72rem', color: 'var(--color-muted)', maxWidth: '24rem' }}>
+                <div style={{ marginTop: '0.25rem', fontSize: '0.72rem', color: 'var(--color-muted)', maxWidth: '24rem', overflowWrap: 'anywhere' }}>
                   {t('review.detail.reason')}: {version.manual_grade_reason}
                 </div>
               )}
@@ -738,7 +738,7 @@ export default function ReviewDetailPage() {
                   background: 'var(--color-paper-2)',
                   borderRadius: '0 var(--radius-md) var(--radius-md) 0',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
                     <span style={{
                       display: 'inline-block',
                       padding: '0.1rem 0.5rem',
@@ -748,7 +748,7 @@ export default function ReviewDetailPage() {
                       background: c.color,
                       color: '#fff',
                     }}>{c.label}</span>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--color-muted)', minWidth: 0, overflowWrap: 'anywhere' }}>
                       {record.reviewer_display_name || record.reviewer_name || record.reviewer_id}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)', marginLeft: 'auto' }}>

@@ -168,7 +168,7 @@ export default function ReviewHistoryPage() {
                         {r.version_status}
                       </span>
                     </td>
-                    <td data-label={t('review.history.table.comment')} style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <td data-label={t('review.history.table.comment')} className="admin-ellipsis-cell">
                       {r.comment || '—'}
                     </td>
                     <td data-label={t('review.history.table.time')}>{formatDate(r.created_at)}</td>

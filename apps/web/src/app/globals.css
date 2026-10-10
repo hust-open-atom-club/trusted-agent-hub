@@ -8567,3 +8567,781 @@ h3 {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================================
+   移动端导航菜单 — issue #155 响应式适配
+   ============================================================ */
+
+.nav-pill__burger {
+  display: none;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  cursor: pointer;
+  transition: color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+
+.nav-pill__burger:hover {
+  color: var(--color-ink);
+  border-color: var(--color-rule-2);
+}
+
+.nav-pill__menu {
+  position: fixed;
+  top: 3.55rem;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  max-height: calc(100vh - 3.55rem);
+  max-height: calc(100dvh - 3.55rem);
+  overflow-y: auto;
+  padding: 0.65rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  background: var(--color-paper);
+  border-bottom: 1px solid var(--color-rule);
+  box-shadow: var(--shadow-lg);
+  animation: navMenuIn 200ms var(--ease-out);
+}
+
+@keyframes navMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nav-pill__menu-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0.4rem 0 0.65rem;
+}
+
+.nav-pill__menu-links a {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0.55rem 0.95rem;
+  border-radius: var(--radius-pill);
+  color: var(--color-ink);
+  font-size: 0.96rem;
+  font-weight: 600;
+  transition: background-color 150ms var(--ease-out);
+}
+
+.nav-pill__menu-links a:hover,
+.nav-pill__menu-links a:active {
+  background: var(--color-paper-3);
+}
+
+.nav-pill__menu-section {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--color-rule);
+}
+
+.nav-pill__menu-lang {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 0.55rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  cursor: pointer;
+  transition: color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+
+.nav-pill__menu-lang:hover {
+  color: var(--color-ink);
+  border-color: var(--color-rule-2);
+}
+
+.nav-pill__menu-user {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.nav-pill__menu-username {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-ink-2);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-pill__menu-logout {
+  min-height: 44px;
+  padding: 0.45rem 1.1rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+}
+
+.nav-pill__menu-logout:hover {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.nav-pill__menu-login {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.45rem 1.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+@media (min-width: 769px) {
+  .nav-pill__menu {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-pill__burger {
+    display: inline-flex;
+  }
+
+  .nav-pill__links,
+  .nav-pill__user,
+  .nav-pill__login,
+  .nav-pill__theme-btn--lang {
+    display: none;
+  }
+
+  .nav-pill.is-scrolled {
+    top: 0;
+    left: 0;
+    right: 0;
+    transform: none;
+    width: 100%;
+    max-width: none;
+    padding: 0.5rem 0.425rem;
+    border-radius: 0;
+    background: var(--color-paper);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ============================================================
+   公共页面移动端适配 — issue #155
+   登录 / 注册 / 账号 / 首页
+   ============================================================ */
+
+/* iOS Safari 输入框字体小于 16px 时聚焦会强制放大页面，
+   移动端统一把表单控件字号提升到 16px。 */
+@media (max-width: 768px) {
+  .form-field input,
+  .search-input,
+  .sort-select,
+  .filter-input,
+  .submit-page input,
+  .submit-page select,
+  .submit-page textarea {
+    font-size: 16px !important;
+  }
+
+  .login-page {
+    min-height: calc(100vh - 4rem);
+    padding: 1.25rem 1rem 2.5rem;
+  }
+
+  .login-card {
+    padding: 1.75rem 1.25rem;
+  }
+
+  .login-form .btn,
+  .account-card .login-form .btn {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .account-page {
+    padding: 1.25rem 1rem 3rem;
+  }
+
+  .account-card {
+    padding: 1.75rem 1.25rem;
+  }
+
+  /* 文件查看器（/review/files） */
+  .file-viewer-page {
+    padding: 1rem 0.75rem 3rem;
+  }
+
+  .file-viewer-nav {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .file-viewer-file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-header h1,
+  .account-header h1 {
+    font-size: 1.35rem;
+  }
+  .login-header p {
+    font-size: 0.85rem;
+  }
+
+  .page-container {
+    padding: 0 0.85rem;
+  }
+
+  .hero {
+    padding: 2.5rem 0.85rem 1.75rem;
+  }
+
+  .hero-stats {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.7rem 0.85rem;
+  }
+
+  .hero-stat-num {
+    font-size: 1.3rem;
+  }
+
+  .hero-stat-label {
+    font-size: 0.66rem;
+  }
+
+  .market-hero .hero-title {
+    font-size: 1.75rem;
+  }
+
+  .hero-desc {
+    font-size: 0.95rem;
+  }
+
+  .market-shelves {
+    gap: 0.75rem;
+  }
+
+  .market-shelf {
+    padding: 0.95rem 0.8rem 0.75rem;
+  }
+
+  .market-shelf-item {
+    grid-template-columns: 2rem minmax(0, 1fr) 4rem;
+    gap: 0.5rem;
+  }
+}
+
+/* ============================================================
+   共享移动端组件 — 弹窗底部抽屉 / 代码横向滚动 — issue #155
+   ============================================================ */
+
+@media (max-width: 768px) {
+  /* 触控目标：所有小按钮在移动端 ≥44px */
+  .btn-sm {
+    min-height: 44px;
+    padding: 0.45rem 1.1rem;
+  }
+
+  /* 弹窗 → 底部抽屉 */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0 0.5rem calc(0.5rem + env(safe-area-inset-bottom));
+  }
+
+  .modal-dialog {
+    max-width: 100%;
+    max-height: calc(100vh - 2.5rem);
+    max-height: calc(100dvh - 2.5rem);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+
+  .modal-header {
+    padding: 1rem 1rem 0.6rem;
+  }
+
+  .modal-close {
+    width: 44px;
+    height: 44px;
+    font-size: 1.2rem;
+  }
+
+  .modal-comment {
+    padding: 0 1rem 0.9rem;
+  }
+
+  .modal-comment-textarea {
+    font-size: 16px;
+  }
+
+  .modal-error {
+    margin: 0 1rem 0.9rem;
+  }
+
+  .modal-body {
+    padding: 0.25rem 1rem 1rem;
+  }
+
+  .modal-conclusion-options {
+    padding: 0 1rem 0.9rem;
+  }
+
+  .modal-actions {
+    gap: 0.6rem;
+    padding: 0.75rem 1rem calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  .modal-actions .btn {
+    flex: 1 1 0;
+    min-height: 44px;
+  }
+
+  /* 代码块：移动端允许横向滚动（非 Markdown 语言保持不折行） */
+  .package-file-preview pre,
+  .file-viewer-code,
+  .finding-snippet pre {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .package-file-preview code:not(.language-markdown) .code-line-content {
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  /* 通用防溢出：长链接 / 长命令在容器内可滚动 */
+  .install-block,
+  .install-command-line,
+  .detail-code-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  /* 弹窗内联 maxWidth（publish 500px / GradeOverrideModal 480px）不得撑破视口 */
+  .modal-dialog {
+    max-width: 100% !important;
+  }
+}
+
+/* ============================================================
+   后台管理移动端适配 — issue #155
+   ============================================================ */
+
+/* 桌面端保留单行截断的说明列 */
+.admin-ellipsis-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  /* admin 表格卡片化，对齐 .review-table 移动模式 */
+  .admin-table thead {
+    display: none;
+  }
+
+  .admin-table tbody tr {
+    display: block;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .admin-table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .admin-table td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+    border-bottom: none;
+    text-align: right;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .admin-table td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    color: var(--color-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  /* 详情展开行（无 data-label、colSpan） */
+  .admin-table td:not([data-label]) {
+    display: block;
+  }
+
+  .admin-table td:not([data-label])::before {
+    display: none;
+  }
+
+  /* 卡片模式下放开单行截断 */
+  .admin-ellipsis-cell,
+  .admin-detail-cell {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  /* 操作列按钮组靠右换行 */
+  .admin-table td > div {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+
+  /* 触控目标统一 ≥44px */
+  .admin-table .btn-sm,
+  .admin-table .link-btn,
+  .user-toggle-btn,
+  .pagination .btn-sm {
+    min-height: 44px;
+  }
+
+  .user-toggle-btn {
+    min-width: 44px;
+  }
+
+  .admin-table .admin-select {
+    min-height: 44px !important;
+  }
+
+  /* 筛选区纵向堆叠 */
+  .admin-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-filter-item {
+    width: 100%;
+  }
+
+  .admin-filter-row .admin-select,
+  .admin-filter-input,
+  .admin-filter-date {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .admin-filter-input {
+    width: 100% !important;
+  }
+
+  .admin-search-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  /* 分页 */
+  .pagination {
+    justify-content: center;
+  }
+
+  .pagination-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .pagination .admin-select {
+    width: auto;
+  }
+
+  /* 弹窗 */
+  .modal-form-field label {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  /* 页面级横向滚动兜底 */
+  .admin-page {
+    overflow-x: clip;
+  }
+
+  .admin-stat-card {
+    padding: 1.5rem 1.25rem;
+  }
+
+  .admin-stat-grid {
+    gap: 1rem;
+  }
+
+  /* GradeOverrideModal 自动/手动评级对比行换行 */
+  .grade-compare-row {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.9rem;
+  }
+
+  .grade-compare-cell {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .grade-compare-arrow {
+    align-self: flex-start !important;
+  }
+}
+
+/* ============================================================
+   Diff 页 / 文件查看器 — issue #155
+   ============================================================ */
+
+/* 粘性顶栏避开固定导航（桌面同样受益） */
+.diff-top-bar {
+  top: 3.9rem;
+}
+
+@media (max-width: 768px) {
+  .diff-top-bar {
+    position: static;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    padding: 0.7rem 0.85rem;
+  }
+
+  .diff-summary-text {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .diff-version-label {
+    overflow-wrap: anywhere;
+  }
+
+  .diff-body {
+    flex-direction: column;
+    height: auto;
+    min-height: calc(100vh - 3.9rem);
+    min-height: calc(100dvh - 3.9rem);
+  }
+
+  .diff-sidebar {
+    width: 100%;
+    flex-shrink: 1;
+    max-height: 32vh;
+    border-right: none;
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .diff-file-item {
+    min-height: 44px;
+    padding: 0.55rem 1rem;
+    font-size: 0.78rem;
+  }
+
+  .diff-main {
+    flex: 1 1 auto;
+    min-height: 62vh;
+    overflow: visible;
+  }
+
+  .diff-main-header {
+    flex-wrap: wrap;
+    padding: 0.55rem 0.85rem;
+  }
+
+  .diff-main-path {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .diff-viewport,
+  .file-viewer-code {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .file-viewer-code {
+    max-height: calc(100vh - 12rem);
+    max-height: calc(100dvh - 12rem);
+  }
+
+  .file-viewer-code .code-line {
+    gap: 0.5rem;
+  }
+}
+
+/* ============================================================
+   扫描 / 提交状态页 — issue #155
+   ============================================================ */
+
+@media (max-width: 480px) {
+  .status-page form {
+    flex-wrap: wrap;
+  }
+
+  .status-page form .btn {
+    flex: 1 1 100%;
+  }
+
+  .status-action-bar .btn {
+    flex: 1 1 100%;
+  }
+
+  .status-bottom-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* ============================================================
+   提交页 — issue #155
+   ============================================================ */
+
+@media (max-width: 768px) {
+  .submit-page form button {
+    min-height: 44px;
+  }
+
+  .submit-summary-row {
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+  }
+}
+
+/* ============================================================
+   审核列表 / 详情页补全 — issue #155
+   ============================================================ */
+
+@media (max-width: 768px) {
+  /* 触控目标 */
+  .review-select,
+  .file-tree-item,
+  .finding-code-toggle,
+  .finding-file-header,
+  .finding-full-file-toggle {
+    min-height: 44px;
+  }
+
+  /* 列表页包名换行 */
+  .review-pkg-title {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .review-pkg-title span:last-child {
+    overflow-wrap: anywhere;
+  }
+
+  /* 详情页导航 */
+  .review-detail-nav {
+    flex-wrap: wrap;
+  }
+
+  .review-detail-nav-user {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+
+  /* findings 工具条与统计 chips */
+  .findings-stats {
+    flex-wrap: wrap;
+  }
+
+  .finding-file-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .review-advisory-heading {
+    flex-wrap: wrap;
+  }
+
+  /* 长 URL / 代码路径断词 */
+  .repo-link,
+  .source-subdirectory {
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+
+  .review-detail-section ul code,
+  .review-meta-label code {
+    overflow-wrap: anywhere;
+  }
+
+  .status-header p {
+    overflow-wrap: anywhere;
+  }
+
+  .finding-location {
+    margin-left: 0;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+
+  /* 代码横向滚动：文件查看器与 finding 代码片段 */
+  .file-viewer-code .code-line-content,
+  .finding-snippet .code-line-content {
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+
+  .finding-evidence-line pre {
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* 弹窗内表单控件 16px（压过 inline 字号，防 iOS 聚焦缩放） */
+  .modal-dialog select,
+  .modal-dialog textarea {
+    font-size: 16px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .review-detail-bar {
+    padding: 1rem;
+  }
+}

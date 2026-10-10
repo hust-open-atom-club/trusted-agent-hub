@@ -297,23 +297,22 @@ export default function AdminPublishPage() {
                 border: '1px solid var(--color-rule)',
               }}>
                 <div style={{
-                  display: 'grid', gridTemplateColumns: 'auto 1fr 1fr',
+                  display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)',
                   gap: '0.4rem 0.75rem', fontSize: '0.82rem',
                 }}>
                   <span style={{ color: 'var(--color-muted)' }}>{t('admin.publish.auto_grade')}</span>
-                  <span style={{ fontWeight: 600, color: 'var(--color-ink)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--color-ink)', overflowWrap: 'anywhere' }}>
                     {selectedItem.auto_grade ? `${selectedItem.auto_grade} (${gradeLabelMap[selectedItem.auto_grade] ?? selectedItem.auto_grade})` : '—'}
                   </span>
-                  <span></span>
 
                   <span style={{ color: 'var(--color-muted)' }}>{t('admin.publish.manual_grade')}</span>
                   <span style={{
                     fontWeight: 600,
                     color: selectedItem.manual_grade ? 'var(--color-accent)' : 'var(--color-muted)',
+                    overflowWrap: 'anywhere',
                   }}>
                     {selectedItem.manual_grade ? `${selectedItem.manual_grade} (${gradeLabelMap[selectedItem.manual_grade] ?? selectedItem.manual_grade}) *` : `— (${t('admin.publish.use_auto')})`}
                   </span>
-                  <span></span>
 
                   <span style={{ color: 'var(--color-muted)', borderTop: '1px solid var(--color-rule)', paddingTop: '0.3rem' }}>
                     {t('admin.publish.effective_grade')}
@@ -322,10 +321,10 @@ export default function AdminPublishPage() {
                     fontWeight: 700, fontSize: '0.92rem',
                     color: 'var(--color-ink)',
                     borderTop: '1px solid var(--color-rule)', paddingTop: '0.3rem',
+                    overflowWrap: 'anywhere',
                   }}>
                     {selectedItem.grade ? `${selectedItem.grade} (${gradeLabelMap[selectedItem.grade] ?? selectedItem.grade})` : '—'}
                   </span>
-                  <span></span>
                 </div>
 
                 {selectedItem.manual_grade_reason && (

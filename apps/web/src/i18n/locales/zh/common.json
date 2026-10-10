@@ -8,7 +8,9 @@
     "login": "登录",
     "logout": "退出",
     "theme_light": "切换浅色模式",
-    "theme_dark": "切换深色模式"
+    "theme_dark": "切换深色模式",
+    "menu_open": "打开导航菜单",
+    "menu_close": "关闭导航菜单"
   },
   "home": {
     "chip": "Trusted Agent Hub ",

@@ -8,7 +8,9 @@
     "login": "Login",
     "logout": "Logout",
     "theme_light": "Switch to Light Mode",
-    "theme_dark": "Switch to Dark Mode"
+    "theme_dark": "Switch to Dark Mode",
+    "menu_open": "Open navigation menu",
+    "menu_close": "Close navigation menu"
   },
   "home": {
     "chip": "Trusted Agent Hub",

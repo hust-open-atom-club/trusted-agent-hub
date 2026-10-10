@@ -322,7 +322,7 @@ export default function AdminYankPage() {
                       </span>
                     )}
                   </td>
-                  <td data-label={t('admin.yank.yank_reason')} style={{ fontSize: '0.85rem', color: 'var(--color-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td data-label={t('admin.yank.yank_reason')} className="admin-ellipsis-cell" style={{ fontSize: '0.85rem', color: 'var(--color-muted)' }}>
                     {item.yank_reason || '—'}
                   </td>
                   <td data-label={t('admin.table.actions')}>

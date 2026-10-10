@@ -70,7 +70,7 @@ export default function FindingCodeView({ finding, fileContents, versionId, toke
             : !token ? t('review.files.login_required')
               : t('review.finding.preview_failed')}
       </p>
-      {failed && <button onClick={() => setAttempt(value => value + 1)}>
+      {failed && <button className="btn btn-secondary btn-sm" onClick={() => setAttempt(value => value + 1)}>
         {t('review.finding.preview_retry')}
       </button>}
     </div>;

@@ -162,7 +162,7 @@ export default function AdminUsersPage() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="邮箱或昵称..."
             className="admin-filter-input"
-            style={{ width: '320px' }}
+            style={{ width: '100%', maxWidth: '320px' }}
           />
         </div>
 
@@ -228,7 +228,7 @@ export default function AdminUsersPage() {
                         disabled={updating === item.id}
                         onChange={(e) => handleRoleChange(item.id, e.target.value)}
                         className="admin-select"
-                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', minHeight: 'auto' }}
+                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>{ROLE_LABELS[r] || r}</option>

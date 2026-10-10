@@ -74,12 +74,12 @@ export default function DependencyQueryResults({
         {open && (
           <div className="review-table-wrapper" style={{ marginTop: '0.6rem', overflowX: 'auto' }}>
             {pageCount > 1 && (
-              <nav aria-label={label('query_pagination')} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
-                <button type="button" disabled={page === 0} onClick={() => setPageIndex(page - 1)}>
+              <nav aria-label={label('query_pagination')} style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={page === 0} onClick={() => setPageIndex(page - 1)}>
                   {label('query_previous')}
                 </button>
                 <span role="status">{t('review.detail.dependency_coverage_query_page', { page: page + 1, total: pageCount })}</span>
-                <button type="button" disabled={page + 1 >= pageCount} onClick={() => setPageIndex(page + 1)}>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={page + 1 >= pageCount} onClick={() => setPageIndex(page + 1)}>
                   {label('query_next')}
                 </button>
               </nav>

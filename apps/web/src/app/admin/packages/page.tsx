@@ -96,7 +96,7 @@ export default function AdminPackagesPage() {
 
       <div className="admin-section-header">
         <h1>{t('admin.packages.title')}</h1>
-        <p>{t('admin.packages.subtitle')} · {t('admin.packages.subtitle')} / {items.length}</p>
+        <p>{t('admin.packages.subtitle')} / {items.length}</p>
       </div>
 
       {error && (
@@ -149,7 +149,7 @@ export default function AdminPackagesPage() {
                   <td data-label={t('admin.table.latest_version')}>
                     <code>v{item.latest_version}</code>
                   </td>
-                  <td data-label={t('admin.table.description')} style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <td data-label={t('admin.table.description')} className="admin-ellipsis-cell">
                     {item.description || '—'}
                   </td>
                   <td data-label={t('admin.table.created_at')}>{formatDate(item.created_at)}</td>

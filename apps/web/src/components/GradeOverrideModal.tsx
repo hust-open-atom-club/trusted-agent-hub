@@ -105,19 +105,19 @@ export default function GradeOverrideModal({
         </div>
 
         <div style={{ padding: '1.25rem' }}>
-          <div style={{
+          <div className="grade-compare-row" style={{
             display: 'flex', gap: '1.5rem', marginBottom: '1rem',
             padding: '0.75rem 1rem',
             background: 'var(--color-paper-2)',
             borderRadius: 'var(--radius-md)',
             fontSize: '0.85rem',
           }}>
-            <div>
+            <div className="grade-compare-cell">
               <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>{t('grade_modal.auto_grade_label')}</span>
               <div style={{ fontWeight: 600, color: 'var(--color-ink)' }}>{autoLabel}</div>
             </div>
-            <div style={{ color: 'var(--color-muted)', alignSelf: 'center' }}>→</div>
-            <div>
+            <div className="grade-compare-arrow" style={{ color: 'var(--color-muted)', alignSelf: 'center' }}>→</div>
+            <div className="grade-compare-cell">
               <span style={{ color: 'var(--color-muted)', fontSize: '0.72rem' }}>{t('grade_modal.manual_grade_label')}</span>
               <div style={{ fontWeight: 600, color: hasChanges ? 'var(--color-accent)' : 'var(--color-muted)' }}>
                 {newLabel}

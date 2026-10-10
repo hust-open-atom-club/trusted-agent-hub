@@ -1411,7 +1411,7 @@ function SubmitForm() {
                   )}
                 </div>
                 {scanResult.summary && (
-                  <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.83rem', color: 'var(--color-neutral)' }}>
+                  <div className="submit-summary-row" style={{ display: 'flex', gap: '1.25rem', fontSize: '0.83rem', color: 'var(--color-neutral)' }}>
                     <span>发现问题: <strong>{scanResult.summary.total}</strong></span>
                     <span>
                       Critical: <strong style={{ color: scanResult.summary.critical > 0 ? 'var(--color-danger)' : 'inherit' }}>{scanResult.summary.critical}</strong>
