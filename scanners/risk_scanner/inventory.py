@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import insort
 from collections.abc import Iterable
 from dataclasses import dataclass
 from heapq import nsmallest
@@ -115,6 +116,10 @@ def build_inventory(
     ``case_insensitive_priority_paths`` matches only the final basename without
     regard to case. Parent directory names remain exact, and records preserve
     the actual filename returned by directory discovery on every platform.
+
+    Remaining slots use global read priority and relative path, independent of
+    filesystem order. Discovery visits entries within ``max_depth``, retaining
+    only the remaining file budget plus one candidate to detect truncation.
     """
     records: list[FileRecord] = []
     violations: list[str] = []
@@ -194,8 +199,12 @@ def build_inventory(
 
     def add_skipped(reason: str, relative_path: str | None = None) -> None:
         skipped[reason] = skipped.get(reason, 0) + 1
-        if relative_path is not None and len(samples) < policy.max_skipped_samples:
-            samples.append(relative_path)
+        if relative_path is not None and policy.max_skipped_samples > 0:
+            # Depth-limited directories arrive in filesystem order too. Keep
+            # only the lexically first samples, regardless of discovery order.
+            insort(samples, relative_path)
+            if len(samples) > policy.max_skipped_samples:
+                samples.pop()
 
     max_files = max(policy.max_files, 0)
 
@@ -203,67 +212,25 @@ def build_inventory(
         """Yield files and symlinks without following links or materializing lists."""
         root_depth = 0 if relative_root == Path(".") else len(relative_root.parts)
 
-        # Scan one priority bucket at a time.  Each scandir iterator is bounded
-        # by the OS directory handle rather than by the number of entries.
-        for priority in range(5):
-            try:
-                with os.scandir(current_dir) as entries:
-                    for entry in entries:
-                        try:
-                            is_symlink = entry.is_symlink()
-                            # Directory links are inventory entries too. Only
-                            # real directories belong to the recursion below.
-                            if not is_symlink and entry.is_dir(follow_symlinks=False):
-                                continue
-                            relative_path = (
-                                relative_root / entry.name
-                            ).as_posix() if relative_root != Path(".") else entry.name
-                            if _read_priority(relative_path)[0] == priority:
-                                yield relative_path, Path(entry.path)
-                        except OSError:
-                            continue
-            except OSError:
-                return
-
-        if root_depth >= policy.max_depth:
-            try:
-                with os.scandir(current_dir) as entries:
-                    for entry in entries:
-                        try:
-                            relative_path = (
-                                relative_root / entry.name
-                            ).as_posix() if relative_root != Path(".") else entry.name
-                            if (
-                                entry.name == ".git"
-                                or entry.is_symlink()
-                            ):
-                                continue
-                            if entry.is_dir(follow_symlinks=False):
-                                add_violation("max_depth")
-                                add_skipped("max_depth_exceeded", relative_path)
-                        except OSError:
-                            continue
-            except OSError:
-                pass
-            return
-
+        # Stream a single pass per directory. Sorting is deferred to the
+        # bounded global selection below, so wide directories stay bounded.
         try:
             with os.scandir(current_dir) as entries:
                 for entry in entries:
                     try:
-                        relative_path = (
-                            relative_root / entry.name
-                        ).as_posix() if relative_root != Path(".") else entry.name
-                        if (
-                            entry.name == ".git"
-                            or entry.is_symlink()
-                        ):
-                            continue
-                        if entry.is_dir(follow_symlinks=False):
-                            child_root = (
-                                relative_root / entry.name
-                            ) if relative_root != Path(".") else Path(entry.name)
-                            yield from iter_files(Path(entry.path), child_root)
+                        relative_path = relative_root / entry.name
+                        # Directory links remain candidates, but only real
+                        # directories may be traversed (issue #50).
+                        if not entry.is_symlink() and entry.is_dir(follow_symlinks=False):
+                            if entry.name == ".git":
+                                continue
+                            if root_depth >= policy.max_depth:
+                                add_violation("max_depth")
+                                add_skipped("max_depth_exceeded", relative_path.as_posix())
+                            else:
+                                yield from iter_files(Path(entry.path), relative_path)
+                        else:
+                            yield relative_path.as_posix(), Path(entry.path)
                     except OSError:
                         continue
         except OSError:
@@ -277,12 +244,22 @@ def build_inventory(
                 if normalized not in yielded_priority_candidates:
                     yielded_priority_candidates.add(normalized)
                     yield actual_path, candidate
-        for relative_path, candidate in iter_files(target_dir, Path(".")):
+        candidates = (
+            (relative_path, candidate)
+            for relative_path, candidate in iter_files(target_dir, Path("."))
             if (
                 os.path.normcase(os.path.abspath(candidate))
                 not in yielded_priority_candidates
-            ):
-                yield relative_path, candidate
+            )
+        )
+        # Explicit metadata paths already consumed slots. A capped heap picks
+        # the same remaining paths from any enumeration order, without keeping
+        # the whole tree in memory. The extra candidate is never statted/read.
+        yield from nsmallest(
+            max_files - len(yielded_priority_candidates) + 1,
+            candidates,
+            key=lambda item: _read_priority(item[0]),
+        )
 
     for rel, path in iter_inventory_files():
         # The limit is exclusive: reaching max_files is valid.  Only a
