@@ -44,15 +44,21 @@ def capture_source_state(target_dir: Path, inventory: Any) -> SourceIntegritySna
     for record in inventory.files:
         try:
             stat = record.absolute_path.lstat()
-            resolved = str(record.absolute_path.resolve())
-            snapshot.states[record.relative_path] = SourceState(
-                size=int(stat.st_size),
-                mtime_ns=int(stat.st_mtime_ns),
-                is_symlink=record.is_symlink,
-                resolved=resolved,
-            )
         except OSError:
             snapshot.states[record.relative_path] = SourceState(0, 0, record.is_symlink, "")
+            continue
+        try:
+            resolved = str(record.absolute_path.resolve())
+        except (OSError, RuntimeError):
+            # A looping/unreadable target must not discard the link's own
+            # lstat: otherwise the re-check would invent a source mutation.
+            resolved = ""
+        snapshot.states[record.relative_path] = SourceState(
+            size=int(stat.st_size),
+            mtime_ns=int(stat.st_mtime_ns),
+            is_symlink=record.is_symlink,
+            resolved=resolved,
+        )
     return snapshot
 
 
@@ -68,7 +74,7 @@ def verify_source_state(target_dir: Path, snapshot: SourceIntegritySnapshot | No
                 resolved = path.resolve()
                 if root not in resolved.parents and resolved != root:
                     issues.append({"kind": "symlink_outside_root", "file": relative_path})
-            except OSError:
+            except (OSError, RuntimeError):
                 issues.append({"kind": "symlink_unreadable", "file": relative_path})
         try:
             stat = path.lstat()

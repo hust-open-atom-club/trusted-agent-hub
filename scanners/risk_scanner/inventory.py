@@ -127,6 +127,7 @@ def build_inventory(
     total_budget = 0
     if not target_dir.is_dir():
         return ScanInventory([], 0, 0, ["invalid_root"], 0, {}, [], policy=policy)
+    resolved_root = target_dir.resolve()
 
     raw_priority_paths = list(priority_paths or [])
     case_insensitive_priority_paths = _normalize_relative_paths(case_insensitive_priority_paths)
@@ -161,8 +162,7 @@ def build_inventory(
                     matches = (
                         entry for entry in entries
                         if entry.name.lower() == parts[-1].lower()
-                        and not entry.is_dir()
-                        and (entry.is_file(follow_symlinks=False) or entry.is_symlink())
+                        and (entry.is_symlink() or entry.is_file(follow_symlinks=False))
                     )
                     # Keep memory bounded even if a case-sensitive filesystem
                     # contains many spellings of one basename. The extra entry
@@ -182,9 +182,7 @@ def build_inventory(
         try:
             candidate.lstat()
             is_symlink = candidate.is_symlink()
-            if (is_symlink and candidate.is_dir()) or (
-                not is_symlink and not candidate.is_file()
-            ):
+            if not is_symlink and not candidate.is_file():
                 return
         except (OSError, ValueError):
             return
@@ -202,7 +200,7 @@ def build_inventory(
     max_files = max(policy.max_files, 0)
 
     def iter_files(current_dir: Path, relative_root: Path):
-        """Yield files without materializing a directory's full file list."""
+        """Yield files and symlinks without following links or materializing lists."""
         root_depth = 0 if relative_root == Path(".") else len(relative_root.parts)
 
         # Scan one priority bucket at a time.  Each scandir iterator is bounded
@@ -213,9 +211,9 @@ def build_inventory(
                     for entry in entries:
                         try:
                             is_symlink = entry.is_symlink()
-                            if entry.is_dir(follow_symlinks=True) and is_symlink:
-                                continue
-                            if entry.is_dir(follow_symlinks=False):
+                            # Directory links are inventory entries too. Only
+                            # real directories belong to the recursion below.
+                            if not is_symlink and entry.is_dir(follow_symlinks=False):
                                 continue
                             relative_path = (
                                 relative_root / entry.name
@@ -326,12 +324,15 @@ def build_inventory(
         reason: str | None = None
         if is_symlink:
             try:
-                if target_dir not in path.resolve().parents:
+                if not path.resolve().is_relative_to(resolved_root):
                     reason = "symlink_outside_root"
                 else:
                     reason = "symlink"
-            except OSError:
+            except (OSError, RuntimeError):
                 reason = "symlink_unreadable"
+            # Linked content is deliberately omitted, so coverage must remain
+            # partial even when the target is inside (or equal to) the root.
+            add_violation(reason)
         elif size > policy.max_file_bytes:
             reason = "file_too_large"
             add_violation("max_file_bytes")
