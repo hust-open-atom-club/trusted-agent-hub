@@ -532,6 +532,7 @@ export interface DependencyArtifactAcquisitionSummary {
   status?: 'not_applicable' | 'complete' | 'partial';
   requested_count?: number;
   fetched_count?: number;
+  skipped_public_count?: number;
   unavailable_count?: number;
   bytes_downloaded?: number;
   unavailable_reasons?: Record<string, number>;
@@ -542,6 +543,7 @@ export interface DependencyIntegritySummary {
   status?: 'not_applicable' | 'not_checked' | 'verified' | 'mismatch' | 'unsupported' | 'partial';
   claimed_count?: number;
   verified_count?: number;
+  skipped_public_count?: number;
   mismatch_count?: number;
   unavailable_count?: number;
   unsupported_count?: number;

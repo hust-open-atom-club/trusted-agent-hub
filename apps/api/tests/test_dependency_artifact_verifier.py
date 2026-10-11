@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import jsonschema
 
 from scanners.risk_scanner import dependency_artifact_verifier
 from scanners.risk_scanner.dependency_artifact_verifier import (
@@ -22,13 +24,37 @@ from scanners.risk_scanner.dependency_artifact_verifier import (
 )
 from scanners.risk_scanner.dependency_parsers.models import DependencyRecord
 from scanners.risk_scanner.dependency_parsers.osv_client import OSVQueryResult
-from scanners.risk_scanner.registry_policy import DEFAULT_REGISTRY_POLICY
+from scanners.risk_scanner.registry_policy import (
+    DEFAULT_REGISTRY_POLICY,
+    RegistryClassification,
+    RegistryEntry,
+    RegistryPolicy,
+    build_registry_policy,
+)
 from scanners.risk_scanner.rules import supply_chain
 from scanners.risk_scanner.scanner import RiskScanner
 from src.routers import trust
 
 
 _PUBLIC_IP = "93.184.216.34"
+
+
+def _private_policy(*, allow_download: bool = True) -> RegistryPolicy:
+    return build_registry_policy(tuple(
+        RegistryEntry(
+            ecosystem="npm",
+            exact_host=host,
+            classification=RegistryClassification.APPROVED_PRIVATE,
+            allow_as_resolved_download=allow_download,
+            evidence_url="https://security.corp.example/registries",
+            note="Test-only approved private registry.",
+            reviewed_at=date(2026, 10, 11),
+        )
+        for host in ("npm.corp.example", "cdn.corp.example", "z-private.corp.example")
+    ))
+
+
+_PRIVATE_REGISTRY_POLICY = _private_policy()
 
 
 class _FakeResponse:
@@ -125,7 +151,7 @@ def _public_resolver(_host: str, _port: int) -> tuple[str, ...]:
 
 
 def test_acquisition_streams_digest_without_retaining_artifact_bytes(tmp_path: Path) -> None:
-    url = "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"
+    url = "https://npm.corp.example/demo/-/demo-1.0.0.tgz"
     content = b"trusted dependency archive"
     _write_package_lock(tmp_path, [("demo", url, _integrity(content))])
     response = _FakeResponse(200, content, {"Content-Length": str(len(content))})
@@ -133,7 +159,7 @@ def test_acquisition_streams_digest_without_retaining_artifact_bytes(tmp_path: P
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=_public_resolver,
@@ -159,15 +185,163 @@ def test_acquisition_streams_digest_without_retaining_artifact_bytes(tmp_path: P
     assert response.timeouts
 
 
+@pytest.mark.parametrize(("ecosystem", "url"), [
+    ("npm", "https://registry.npmjs.org/demo.tgz"),
+    ("npm", "https://registry.yarnpkg.com/demo.tgz"),
+    ("PyPI", "https://files.pythonhosted.org/packages/demo.whl"),
+])
+@pytest.mark.parametrize("claim", [_integrity(b"archive"), "md5-deadbeef"])
+def test_public_artifacts_are_skipped_before_dns_and_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ecosystem: str, url: str, claim: str,
+) -> None:
+    record = DependencyRecord(
+        "demo", "1.0.0", ecosystem, False, "package-lock.json",
+        registry=url, integrity=claim, registry_usage="resolved_download",
+    )
+    monkeypatch.setattr(
+        dependency_artifact_verifier, "parse_dependencies_with_errors",
+        lambda _files: ([record], []),
+    )
+    transport = _FakeTransport({})
+    acquisition = acquire_dependency_verifications(
+        tmp_path, DEFAULT_REGISTRY_POLICY, transport=transport,
+        resolver=lambda *_args: pytest.fail("public artifact triggered DNS"),
+        manifest_files={"package-lock.json": "{}"},
+    )
+    assert acquisition.status == "not_applicable"
+    assert acquisition.requested_count == acquisition.fetched_count == 0
+    assert acquisition.unavailable_count == acquisition.bytes_downloaded == 0
+    assert acquisition.skipped_public_count == 1
+    assert acquisition.verifications[url].status == "skipped"
+    assert transport.calls == []
+    scanner = _IntegrityScanner(acquisition.verifications)
+    scanner.dependency_acquisition = acquisition.as_dict()
+    supply_chain._check_dependency_integrity(scanner, [record])
+    assert scanner.dependency_scan["integrity"] == {
+        "status": "not_checked", "claimed_count": 1, "verified_count": 0,
+        "mismatch_count": 0, "unavailable_count": 0, "unsupported_count": 0,
+        "skipped_public_count": 1,
+    }
+    assert scanner.review_advisories == []
+
+
+def test_private_registry_requires_explicit_download_permission(tmp_path: Path) -> None:
+    url = "https://npm.corp.example/demo.tgz"
+    _write_package_lock(tmp_path, [("demo", url, _integrity(b"archive"))])
+    transport = _FakeTransport({})
+    acquisition = acquire_dependency_verifications(
+        tmp_path, _private_policy(allow_download=False), transport=transport,
+        resolver=lambda *_args: pytest.fail("unapproved download triggered DNS"),
+    )
+    assert acquisition.status == "partial"
+    assert acquisition.unavailable_reasons == {"registry_not_allowed": 1}
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("target", [
+    "https://registry.npmjs.org/demo.tgz",
+    "https://registry.yarnpkg.com/demo.tgz",
+])
+def test_private_redirect_to_public_source_is_blocked_before_dns(
+    tmp_path: Path, target: str,
+) -> None:
+    source = "https://npm.corp.example/demo.tgz"
+    _write_package_lock(tmp_path, [("demo", source, _integrity(b"archive"))])
+    response = _FakeResponse(302, headers={"Location": target})
+    transport = _FakeTransport({source: response})
+    resolved_hosts: list[str] = []
+
+    def resolver(host: str, _port: int) -> tuple[str, ...]:
+        resolved_hosts.append(host)
+        return (_PUBLIC_IP,)
+
+    acquisition = acquire_dependency_verifications(
+        tmp_path, _PRIVATE_REGISTRY_POLICY, transport=transport, resolver=resolver,
+    )
+    assert acquisition.status == "partial"
+    assert acquisition.unavailable_reasons == {"public_registry_redirect_blocked": 1}
+    assert acquisition.skipped_public_count == 0
+    assert acquisition.bytes_downloaded == 0
+    assert resolved_hosts == ["npm.corp.example"]
+    assert [call["url"] for call in transport.calls] == [source]
+    assert response.closed
+
+
+@pytest.mark.parametrize("include_private", [False, True])
+def test_public_osv_checks_continue_without_public_artifact_downloads(
+    tmp_path: Path, include_private: bool,
+) -> None:
+    public_urls = [
+        "https://registry.npmjs.org/official.tgz",
+        "https://registry.yarnpkg.com/mirror.tgz",
+    ]
+    private_url = "https://z-private.corp.example/private.tgz"
+    content = b"private archive"
+    artifacts = [
+        ("official", public_urls[0], _integrity(b"public")),
+        ("mirror", public_urls[1], _integrity(b"public")),
+    ]
+    if include_private:
+        artifacts.append(("private", private_url, _integrity(content)))
+    _write_package_lock(tmp_path, artifacts)
+    transport = _FakeTransport({private_url: _FakeResponse(200, content)})
+    acquisition = acquire_dependency_verifications(
+        tmp_path, _PRIVATE_REGISTRY_POLICY, config=_config(max_artifacts=1),
+        transport=transport, resolver=_public_resolver,
+    )
+    assert acquisition.fetched_count == acquisition.requested_count == int(include_private)
+    assert acquisition.skipped_public_count == 2
+    assert acquisition.unavailable_count == 0
+    assert [call["url"] for call in transport.calls] == ([private_url] if include_private else [])
+    scanner = RiskScanner(
+        tmp_path, registry_policy=_PRIVATE_REGISTRY_POLICY,
+        dependency_verifications=acquisition.verifications,
+        dependency_acquisition=acquisition.as_dict(),
+    )
+
+    class NoVulnerabilityClient:
+        max_queries = 10
+        queried = 0
+        # Keep the existing private-coordinate disclosure policy in force.
+        allow_private_coordinates = False
+
+        def __init__(self) -> None:
+            self.names: list[str] = []
+
+        def reset_scan_state(self) -> None:
+            self.names.clear()
+            self.queried = 0
+
+        def query(self, dependency: DependencyRecord) -> OSVQueryResult:
+            self.names.append(dependency.name)
+            self.queried += 1
+            return OSVQueryResult([])
+
+    client = NoVulnerabilityClient()
+    scanner.osv_client = client
+    report = scanner.scan()
+    assert sorted(client.names) == ["mirror", "official"]
+    integrity = report["dependency_scan"]["integrity"]
+    assert integrity["verified_count"] == int(include_private)
+    assert integrity["skipped_public_count"] == 2
+    assert integrity["unavailable_count"] == 0
+    assert integrity["status"] == ("partial" if include_private else "not_checked")
+    assert not any(advisory["code"] == "dependency_artifact_coverage"
+                   for advisory in report["review_advisories"])
+    schema_path = Path(__file__).resolve().parents[3] / "packages/schema/scan-report.schema.json"
+    jsonschema.validate(report, json.loads(schema_path.read_text(encoding="utf-8")))
+
+
 def test_unknown_length_body_may_exactly_fill_total_budget(tmp_path: Path) -> None:
-    url = "https://registry.npmjs.org/exact.tgz"
+    url = "https://npm.corp.example/exact.tgz"
     content = b"exact"
     _write_package_lock(tmp_path, [("exact", url, _integrity(content))])
     transport = _FakeTransport({url: _FakeResponse(200, content)})
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(max_total_bytes=len(content), chunk_size=3),
         transport=transport,
         resolver=_public_resolver,
@@ -179,8 +353,8 @@ def test_unknown_length_body_may_exactly_fill_total_budget(tmp_path: Path) -> No
 
 
 def test_concurrent_exact_fit_is_not_scheduling_dependent(tmp_path: Path) -> None:
-    first_url = "https://registry.npmjs.org/a-exact.tgz"
-    second_url = "https://registry.npmjs.org/b-exact.tgz"
+    first_url = "https://npm.corp.example/a-exact.tgz"
+    second_url = "https://npm.corp.example/b-exact.tgz"
     first = b"abc"
     second = b"de"
     _write_package_lock(
@@ -197,7 +371,7 @@ def test_concurrent_exact_fit_is_not_scheduling_dependent(tmp_path: Path) -> Non
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(
             max_concurrency=2,
             max_total_bytes=len(first) + len(second),
@@ -215,7 +389,7 @@ def test_concurrent_exact_fit_is_not_scheduling_dependent(tmp_path: Path) -> Non
 def test_ambiguous_transfer_encoding_and_content_length_is_rejected(
     tmp_path: Path,
 ) -> None:
-    url = "https://registry.npmjs.org/ambiguous.tgz"
+    url = "https://npm.corp.example/ambiguous.tgz"
     body = b"prefix-evil-suffix"
     _write_package_lock(tmp_path, [("ambiguous", url, _integrity(b"prefix"))])
     response = _FakeResponse(
@@ -226,7 +400,7 @@ def test_ambiguous_transfer_encoding_and_content_length_is_rejected(
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=_FakeTransport({url: response}),
         resolver=_public_resolver,
@@ -252,7 +426,7 @@ def test_dependency_parser_recursion_failure_is_structured_partial(
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=_FakeTransport({}),
         resolver=_public_resolver,
@@ -271,7 +445,7 @@ def test_dependency_parser_recursion_failure_is_structured_partial(
 ])
 def test_structured_lock_parse_gap_reaches_artifact_acquisition(tmp_path, content):
     acquisition = acquire_dependency_verifications(
-        tmp_path, DEFAULT_REGISTRY_POLICY, config=_config(),
+        tmp_path, _PRIVATE_REGISTRY_POLICY, config=_config(),
         transport=_FakeTransport({}), resolver=_public_resolver,
         manifest_files={"package-lock.json": content},
     )
@@ -281,10 +455,10 @@ def test_structured_lock_parse_gap_reaches_artifact_acquisition(tmp_path, conten
 
 
 def test_artifact_entry_parse_gap_keeps_valid_sibling_request(tmp_path):
-    url = "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"
+    url = "https://npm.corp.example/demo/-/demo-1.0.0.tgz"
     body = b"valid archive"
     acquisition = acquire_dependency_verifications(
-        tmp_path, DEFAULT_REGISTRY_POLICY, config=_config(),
+        tmp_path, _PRIVATE_REGISTRY_POLICY, config=_config(),
         transport=_FakeTransport({url: _FakeResponse(200, body)}), resolver=_public_resolver,
         manifest_files={"package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
             "node_modules/broken": [],
@@ -299,9 +473,9 @@ def test_artifact_entry_parse_gap_keeps_valid_sibling_request(tmp_path):
 @pytest.mark.parametrize(
     ("url", "reason"),
     [
-        ("http://registry.npmjs.org/demo.tgz", "insecure_scheme"),
+        ("http://npm.corp.example/demo.tgz", "insecure_scheme"),
         (
-            "https://user:secret@registry.npmjs.org/demo.tgz",
+            "https://user:secret@npm.corp.example/demo.tgz",
             "credentials_in_url",
         ),
         ("https://unapproved.example/demo.tgz", "registry_not_allowed"),
@@ -317,7 +491,7 @@ def test_untrusted_urls_are_structured_partial_without_network(
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=_public_resolver,
@@ -333,7 +507,7 @@ def test_unapproved_flood_does_not_consume_approved_artifact_budget(
     tmp_path: Path,
 ) -> None:
     blocked_url = "https://aaa-unapproved.example/blocked.tgz"
-    approved_url = "https://registry.npmjs.org/approved.tgz"
+    approved_url = "https://npm.corp.example/approved.tgz"
     content = b"approved archive"
     _write_package_lock(
         tmp_path,
@@ -346,7 +520,7 @@ def test_unapproved_flood_does_not_consume_approved_artifact_budget(
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(max_artifacts=1),
         transport=transport,
         resolver=_public_resolver,
@@ -360,13 +534,13 @@ def test_unapproved_flood_does_not_consume_approved_artifact_budget(
 def test_unsupported_integrity_uses_no_network_and_is_reported(
     tmp_path: Path,
 ) -> None:
-    url = "https://registry.npmjs.org/demo.tgz"
+    url = "https://npm.corp.example/demo.tgz"
     _write_package_lock(tmp_path, [("demo", url, "md5-deadbeef")])
     transport = _FakeTransport({})
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=_public_resolver,
@@ -406,13 +580,13 @@ def test_every_dns_answer_must_be_public_before_connect(
     tmp_path: Path,
     addresses: tuple[str, ...],
 ) -> None:
-    url = "https://registry.npmjs.org/demo.tgz"
+    url = "https://npm.corp.example/demo.tgz"
     _write_package_lock(tmp_path, [("demo", url, _integrity(b"archive"))])
     transport = _FakeTransport({})
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=lambda _host, _port: addresses,
@@ -424,7 +598,7 @@ def test_every_dns_answer_must_be_public_before_connect(
 
 
 def test_dns_resolution_is_bounded_by_batch_deadline(tmp_path: Path) -> None:
-    url = "https://registry.npmjs.org/slow-dns.tgz"
+    url = "https://npm.corp.example/slow-dns.tgz"
     _write_package_lock(tmp_path, [("slow-dns", url, _integrity(b"archive"))])
     transport = _FakeTransport({})
 
@@ -434,7 +608,7 @@ def test_dns_resolution_is_bounded_by_batch_deadline(tmp_path: Path) -> None:
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(timeout_seconds=0.01),
         transport=transport,
         resolver=slow_resolver,
@@ -448,7 +622,7 @@ def test_dns_resolution_is_bounded_by_batch_deadline(tmp_path: Path) -> None:
 def test_next_public_dns_address_is_tried_after_connect_failure(
     tmp_path: Path,
 ) -> None:
-    url = "https://registry.npmjs.org/multi-address.tgz"
+    url = "https://npm.corp.example/multi-address.tgz"
     content = b"archive"
     _write_package_lock(tmp_path, [("multi", url, _integrity(content))])
 
@@ -467,7 +641,7 @@ def test_next_public_dns_address_is_tried_after_connect_failure(
     second_ip = "8.8.8.8"
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=lambda _host, _port: (_PUBLIC_IP, second_ip),
@@ -478,8 +652,8 @@ def test_next_public_dns_address_is_tried_after_connect_failure(
 
 
 def test_redirect_target_repeats_registry_and_dns_checks(tmp_path: Path) -> None:
-    source = "https://registry.npmjs.org/demo.tgz"
-    target = "https://registry.yarnpkg.com/demo.tgz"
+    source = "https://npm.corp.example/demo.tgz"
+    target = "https://cdn.corp.example/demo.tgz"
     content = b"redirected archive"
     _write_package_lock(tmp_path, [("demo", source, _integrity(content))])
     first = _FakeResponse(302, headers={"Location": target})
@@ -493,7 +667,7 @@ def test_redirect_target_repeats_registry_and_dns_checks(tmp_path: Path) -> None
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=resolver,
@@ -501,13 +675,13 @@ def test_redirect_target_repeats_registry_and_dns_checks(tmp_path: Path) -> None
 
     assert acquisition.status == "complete"
     assert acquisition.verifications[source].redirect_count == 1
-    assert resolved_hosts == ["registry.npmjs.org", "registry.yarnpkg.com"]
+    assert resolved_hosts == ["npm.corp.example", "cdn.corp.example"]
     assert [call["url"] for call in transport.calls] == [source, target]
     assert first.closed and second.closed
 
 
 def test_redirect_to_unapproved_registry_is_not_requested(tmp_path: Path) -> None:
-    source = "https://registry.npmjs.org/demo.tgz"
+    source = "https://npm.corp.example/demo.tgz"
     target = "https://unapproved.example/demo.tgz"
     _write_package_lock(tmp_path, [("demo", source, _integrity(b"archive"))])
     response = _FakeResponse(302, headers={"Location": target})
@@ -515,7 +689,7 @@ def test_redirect_to_unapproved_registry_is_not_requested(tmp_path: Path) -> Non
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(),
         transport=transport,
         resolver=_public_resolver,
@@ -527,8 +701,8 @@ def test_redirect_to_unapproved_registry_is_not_requested(tmp_path: Path) -> Non
 
 
 def test_per_artifact_and_total_download_limits_fail_closed(tmp_path: Path) -> None:
-    first_url = "https://registry.npmjs.org/a.tgz"
-    second_url = "https://registry.npmjs.org/b.tgz"
+    first_url = "https://npm.corp.example/a.tgz"
+    second_url = "https://npm.corp.example/b.tgz"
     first_body = b"aaaa"
     second_body = b"bbbb"
     _write_package_lock(
@@ -545,7 +719,7 @@ def test_per_artifact_and_total_download_limits_fail_closed(tmp_path: Path) -> N
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(max_artifact_bytes=4, max_total_bytes=5),
         transport=transport,
         resolver=_public_resolver,
@@ -561,7 +735,7 @@ def test_per_artifact_and_total_download_limits_fail_closed(tmp_path: Path) -> N
     transport = _FakeTransport({first_url: declared_large, second_url: _FakeResponse(200)})
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(max_artifact_bytes=4),
         transport=transport,
         resolver=_public_resolver,
@@ -571,8 +745,8 @@ def test_per_artifact_and_total_download_limits_fail_closed(tmp_path: Path) -> N
 
 
 def test_timeout_and_artifact_count_limit_are_structured(tmp_path: Path) -> None:
-    first_url = "https://registry.npmjs.org/a.tgz"
-    second_url = "https://registry.npmjs.org/b.tgz"
+    first_url = "https://npm.corp.example/a.tgz"
+    second_url = "https://npm.corp.example/b.tgz"
     _write_package_lock(
         tmp_path,
         [
@@ -584,7 +758,7 @@ def test_timeout_and_artifact_count_limit_are_structured(tmp_path: Path) -> None
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(max_artifacts=1),
         transport=transport,
         resolver=_public_resolver,
@@ -597,8 +771,8 @@ def test_timeout_and_artifact_count_limit_are_structured(tmp_path: Path) -> None
 
 
 def test_timeout_is_shared_by_the_whole_acquisition_batch(tmp_path: Path) -> None:
-    first_url = "https://registry.npmjs.org/a-timeout.tgz"
-    second_url = "https://registry.npmjs.org/b-timeout.tgz"
+    first_url = "https://npm.corp.example/a-timeout.tgz"
+    second_url = "https://npm.corp.example/b-timeout.tgz"
     _write_package_lock(
         tmp_path,
         [
@@ -613,7 +787,7 @@ def test_timeout_is_shared_by_the_whole_acquisition_batch(tmp_path: Path) -> Non
 
     acquisition = acquire_dependency_verifications(
         tmp_path,
-        DEFAULT_REGISTRY_POLICY,
+        _PRIVATE_REGISTRY_POLICY,
         config=_config(timeout_seconds=0.01, max_concurrency=1),
         transport=transport,
         resolver=_public_resolver,

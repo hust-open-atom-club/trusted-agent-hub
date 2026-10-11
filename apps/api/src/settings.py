@@ -193,13 +193,13 @@ class Settings:
     # Server-controlled approvals only. Scan submitters cannot inject registry
     # trust decisions into an individual request.
     approved_private_registries_json: str | None = None
-    # Dependency artifacts are acquired by a separate, SSRF-resistant stage.
+    # Only approved private artifacts are acquired by the SSRF-resistant stage.
     # These limits are operator-owned because lockfiles are untrusted input.
     dependency_artifact_verification_enabled: bool = True
-    dependency_artifact_max_artifacts: int = 100
-    dependency_artifact_max_concurrency: int = 4
-    dependency_artifact_max_bytes: int = 20 * 1024 * 1024
-    dependency_artifact_max_total_bytes: int = 100 * 1024 * 1024
+    dependency_artifact_max_artifacts: int = 30
+    dependency_artifact_max_concurrency: int = 3
+    dependency_artifact_max_bytes: int = 1024 * 1024
+    dependency_artifact_max_total_bytes: int = 3 * 1024 * 1024
     dependency_artifact_timeout_seconds: int = 10
     osv_enabled: bool = True
     osv_base_url: str = "https://api.osv.dev"
@@ -265,19 +265,19 @@ class Settings:
                 "TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED", True
             ),
             dependency_artifact_max_artifacts=_integer(
-                "TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS", 100, maximum=1000
+                "TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS", 30, maximum=1000
             ),
             dependency_artifact_max_concurrency=_integer(
-                "TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY", 4, maximum=16
+                "TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY", 3, maximum=16
             ),
             dependency_artifact_max_bytes=_integer(
                 "TAH_DEPENDENCY_ARTIFACT_MAX_BYTES",
-                20 * 1024 * 1024,
+                1024 * 1024,
                 maximum=1024 * 1024 * 1024,
             ),
             dependency_artifact_max_total_bytes=_integer(
                 "TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES",
-                100 * 1024 * 1024,
+                3 * 1024 * 1024,
                 maximum=4 * 1024 * 1024 * 1024,
             ),
             dependency_artifact_timeout_seconds=_integer(

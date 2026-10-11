@@ -212,10 +212,10 @@ def test_dependency_artifact_verification_defaults_and_parses(
 
     defaults = Settings.from_environment()
     assert defaults.dependency_artifact_verification_enabled is True
-    assert defaults.dependency_artifact_max_artifacts == 100
-    assert defaults.dependency_artifact_max_concurrency == 4
-    assert defaults.dependency_artifact_max_bytes == 20 * 1024 * 1024
-    assert defaults.dependency_artifact_max_total_bytes == 100 * 1024 * 1024
+    assert defaults.dependency_artifact_max_artifacts == 30
+    assert defaults.dependency_artifact_max_concurrency == 3
+    assert defaults.dependency_artifact_max_bytes == 1024 * 1024
+    assert defaults.dependency_artifact_max_total_bytes == 3 * 1024 * 1024
     assert defaults.dependency_artifact_timeout_seconds == 10
 
     monkeypatch.setenv("TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED", "false")

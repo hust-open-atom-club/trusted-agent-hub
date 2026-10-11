@@ -1299,6 +1299,7 @@
             "status": { "type": "string", "enum": ["not_applicable", "complete", "partial"] },
             "requested_count": { "type": "integer", "minimum": 0 },
             "fetched_count": { "type": "integer", "minimum": 0 },
+            "skipped_public_count": { "type": "integer", "minimum": 0 },
             "unavailable_count": { "type": "integer", "minimum": 0 },
             "bytes_downloaded": { "type": "integer", "minimum": 0 },
             "unavailable_reasons": {
@@ -1320,6 +1321,7 @@
             "status": { "type": "string", "enum": ["not_applicable", "not_checked", "unsupported", "partial", "verified", "mismatch"] },
             "claimed_count": { "type": "integer", "minimum": 0 },
             "verified_count": { "type": "integer", "minimum": 0 },
+            "skipped_public_count": { "type": "integer", "minimum": 0 },
             "mismatch_count": { "type": "integer", "minimum": 0 },
             "unavailable_count": { "type": "integer", "minimum": 0 },
             "unsupported_count": { "type": "integer", "minimum": 0 },

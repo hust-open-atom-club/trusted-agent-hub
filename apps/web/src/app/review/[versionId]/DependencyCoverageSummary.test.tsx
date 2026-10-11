@@ -9,6 +9,55 @@ import zh from '@/i18n/locales/zh/common.json';
 import DependencyCoverageSummary from './DependencyCoverageSummary';
 
 describe('DependencyCoverageSummary', () => {
+  it.each([0, 1])('shows public skips without treating them as fetch failures (%i private verified)', (verified) => {
+    render(<DependencyCoverageSummary dependencyScan={{
+      status: 'complete',
+      artifact_acquisition: {
+        status: verified ? 'complete' : 'not_applicable',
+        requested_count: verified,
+        fetched_count: verified,
+        skipped_public_count: 2,
+        unavailable_count: 0,
+        bytes_downloaded: verified * 100,
+      },
+      integrity: {
+        status: verified ? 'partial' : 'not_checked',
+        claimed_count: verified + 2,
+        verified_count: verified,
+        skipped_public_count: 2,
+        mismatch_count: 0,
+        unavailable_count: 0,
+        unsupported_count: 0,
+      },
+    }} />);
+
+    expect(screen.getByTestId('dependency-artifact-acquisition'))
+      .toHaveTextContent('按策略跳过的公共制品2');
+    expect(screen.getByTestId('dependency-integrity-coverage'))
+      .toHaveTextContent(`已验证${verified}按策略跳过的公共制品2`);
+    expect(screen.getByTestId('dependency-public-artifacts-skipped'))
+      .toHaveTextContent('不计为已验证');
+    expect(screen.getByTestId('dependency-integrity-coverage').closest('details'))
+      .not.toHaveAttribute('open');
+  });
+
+  it('keeps private fetch failures visible alongside public policy skips', () => {
+    render(<DependencyCoverageSummary dependencyScan={{
+      status: 'complete',
+      artifact_acquisition: { status: 'partial', unavailable_count: 1, skipped_public_count: 2 },
+      integrity: {
+        status: 'partial', claimed_count: 3, verified_count: 0,
+        skipped_public_count: 2, unavailable_count: 1,
+        unavailable_reasons: { public_registry_redirect_blocked: 1 },
+      },
+    }} />);
+
+    expect(screen.getByTestId('dependency-integrity-coverage'))
+      .toHaveTextContent('私有制品重定向到公共源，已阻止下载');
+    expect(screen.getByTestId('dependency-integrity-coverage').closest('details'))
+      .toHaveAttribute('open');
+  });
+
   it('keeps unresolved peer inventory visibly unassessed after a completed scan', () => {
     render(<DependencyCoverageSummary dependencyScan={{
       status: 'complete',

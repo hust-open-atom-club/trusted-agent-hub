@@ -54,6 +54,7 @@ export default function DependencyCoverageSummary({
     && (
       acquisition.status !== 'not_applicable'
       || (acquisition.requested_count ?? 0) > 0
+      || (acquisition.skipped_public_count ?? 0) > 0
       || collectionErrors.length > 0
     ),
   );
@@ -79,6 +80,14 @@ export default function DependencyCoverageSummary({
     return null;
   }
 
+  const onlyPublicIntegritySkipped = Boolean(
+    (integrity?.skipped_public_count ?? 0) > 0
+    && (integrity?.verified_count ?? 0) + (integrity?.skipped_public_count ?? 0)
+      === integrity?.claimed_count
+    && (integrity?.mismatch_count ?? 0) === 0
+    && (integrity?.unavailable_count ?? 0) === 0
+    && (integrity?.unsupported_count ?? 0) === 0,
+  );
   const hasGap = Boolean(
     (showVulnerability && dependencyScan.status !== 'complete')
     || dependencyScan.vulnerability_status === 'not_assessed'
@@ -87,7 +96,8 @@ export default function DependencyCoverageSummary({
     || (acquisition?.unavailable_count ?? 0) > 0
     || collectionErrors.length > 0
     || parseErrors.length > 0
-    || ['partial', 'unsupported', 'mismatch', 'not_checked'].includes(integrity?.status || '')
+    || (!onlyPublicIntegritySkipped
+      && ['partial', 'unsupported', 'mismatch', 'not_checked'].includes(integrity?.status || ''))
     || (integrity?.unavailable_count ?? 0) > 0
     || (integrity?.unsupported_count ?? 0) > 0
     || ['partial', 'mismatch'].includes(manifestLock?.status || ''),
@@ -258,6 +268,9 @@ export default function DependencyCoverageSummary({
               </div>
               {metric(t('review.detail.dependency_coverage_requested'), acquisition.requested_count)}
               {metric(t('review.detail.dependency_coverage_fetched'), acquisition.fetched_count)}
+              {(acquisition.skipped_public_count ?? 0) > 0 && metric(
+                t('review.detail.dependency_coverage_public_skipped'), acquisition.skipped_public_count,
+              )}
               {metric(t('review.detail.dependency_coverage_unavailable'), acquisition.unavailable_count)}
               {metric(t('review.detail.dependency_coverage_bytes'), acquisition.bytes_downloaded)}
             </div>
@@ -300,10 +313,18 @@ export default function DependencyCoverageSummary({
               </div>
               {metric(t('review.detail.dependency_coverage_claimed'), integrity.claimed_count)}
               {metric(t('review.detail.dependency_coverage_verified'), integrity.verified_count)}
+              {(integrity.skipped_public_count ?? 0) > 0 && metric(
+                t('review.detail.dependency_coverage_public_skipped'), integrity.skipped_public_count,
+              )}
               {metric(t('review.detail.dependency_coverage_mismatched'), integrity.mismatch_count)}
               {metric(t('review.detail.dependency_coverage_unavailable'), integrity.unavailable_count)}
               {metric(t('review.detail.dependency_coverage_unsupported'), integrity.unsupported_count)}
             </div>
+            {(integrity.skipped_public_count ?? 0) > 0 && (
+              <p data-testid="dependency-public-artifacts-skipped">
+                {t('review.detail.dependency_coverage_public_skip_note')}
+              </p>
+            )}
             {integrityReasons.length > 0 && (
               <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }}>
                 <strong>{t('review.detail.dependency_coverage_unavailable_reasons')}</strong>

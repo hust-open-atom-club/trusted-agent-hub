@@ -1709,19 +1709,34 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
     verified = 0
     unavailable = 0
     unsupported = 0
+    skipped_public = 0
     unavailable_reasons: Counter[str] = Counter()
     mismatches: dict[str, list[DependencyRecord]] = {}
     for record in claims:
-        # Unsupported claims cannot be verified, so the acquisition stage
-        # deliberately does not spend network or artifact budget on them.
-        if not integrity_claim_supported(record.integrity):
-            unsupported += 1
-            continue
         verification = (
             verifications.get(record.registry)
             if isinstance(verifications, dict)
             else None
         )
+        verification_status = (
+            verification.status
+            if isinstance(verification, DependencyArtifactVerification)
+            else verification.get("status") if isinstance(verification, Mapping)
+            else None
+        )
+        verification_reason = (
+            verification.reason
+            if isinstance(verification, DependencyArtifactVerification)
+            else verification.get("reason") if isinstance(verification, Mapping)
+            else None
+        )
+        if verification_status == "skipped" and verification_reason == "public_registry_skipped":
+            skipped_public += 1
+            continue
+        # Unsupported private claims spend no network or artifact budget.
+        if not integrity_claim_supported(record.integrity):
+            unsupported += 1
+            continue
         matches: bool | None
         if isinstance(verification, DependencyArtifactVerification):
             if verification.status != "fetched":
@@ -1779,6 +1794,8 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
         status = "partial"
     elif not claims:
         status = "not_applicable"
+    elif skipped_public == len(claims):
+        status = "not_checked"
     elif verified == len(claims):
         status = "verified"
     elif unsupported and not verified and not unavailable:
@@ -1801,6 +1818,8 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
         integrity_summary["unavailable_reasons"] = dict(
             sorted(unavailable_reasons.items())
         )
+    if skipped_public:
+        integrity_summary["skipped_public_count"] = skipped_public
     scanner.dependency_scan["integrity"] = integrity_summary
 
     coverage_reasons = Counter(unavailable_reasons)

@@ -58,6 +58,8 @@ requirements 的源配置只从逻辑行前导选项序列采集，支持同一�
 
 NuGet 条目用于完整表达策略目录；当前依赖解析器尚未解析 NuGet 项目或锁文件，因此不会据此声称完成了 NuGet 依赖覆盖。
 
+表中的“下载用途”表示来源策略认可锁文件中的下载地址，不表示扫描器会下载该制品。制品获取层只下载 `approved_private` 来源；公共官方源和权威镜像仍参与正常依赖分析及 OSV 核对，但不下载制品。
+
 ## 批准组织私有源
 
 私有源只能由 API 服务进程或本地 Python 扫描器进程的环境变量 `TAH_APPROVED_PRIVATE_REGISTRIES_JSON` 注入，单个扫描请求不能自行扩大信任范围。值是 JSON 数组，每项必须包含：
@@ -86,9 +88,11 @@ NuGet 条目用于完整表达策略目录；当前依赖解析器尚未解析 N
 
 ## 当前解析覆盖
 
-来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中。`dependency_scan.integrity` 单独报告声明数、实际验证数和不匹配数。生产 API 在扫描器运行前通过独立的受信任获取层处理 lockfile：只读取扫描策略允许的 lockfile，只访问 registry policy 已批准的 HTTPS 下载地址，逐跳复核重定向和 DNS/IP，拒绝歧义 HTTP 分帧，并限制并发、单件大小、总流量与整个获取批次的共用超时；制品采用流式摘要，不保存正文。摘要结果通过 `RiskScanner(dependency_verifications=...)` 传入；测试和其他受信任调用方仍可使用兼容的 `dependency_artifacts={resolved_url: bytes}` 接口。
+来源观察来自 npm `package-lock.json` / `npm-shrinkwrap.json` / `yarn.lock` / `pnpm-lock.yaml` / `.npmrc`、Python requirements / `Pipfile.lock` / `poetry.lock` / Poetry source 配置，以及 Cargo lock/source 配置。依赖文件中的 integrity/checksum 会保留在规范化记录中。`dependency_scan.integrity` 单独报告声明数、实际验证数和不匹配数。生产 API 在扫描器运行前通过独立的受信任获取层处理 lockfile：只读取扫描策略允许的 lockfile，只访问分类为 `approved_private` 且设置 `allow_as_resolved_download=true` 的 HTTPS 下载地址。公共官方源和权威镜像在 DNS 解析前跳过，不占用私有制品数量或流量预算。每次重定向都重新检查来源分类、下载权限和 DNS/IP；私有源重定向到公共源时，以 `public_registry_redirect_blocked` 记录未完成核验，不请求公共地址。获取层拒绝歧义 HTTP 分帧，默认每次扫描最多获取 30 个制品、并发 3、单件 1 MiB、总流量 3 MiB，整个获取批次共享 10 秒超时。制品采用流式摘要，不保存正文，不安装、执行或部署依赖。摘要结果通过 `RiskScanner(dependency_verifications=...)` 传入；测试和其他受信任调用方仍可使用兼容的 `dependency_artifacts={resolved_url: bytes}` 接口。
 
-`not_checked` 表示获取阶段未启用；`unsupported` 表示摘要算法或格式均不受支持；获取被策略阻止、超时、达到制品预算或只完成一部分时，`dependency_scan.integrity` / `artifact_acquisition` 的覆盖状态为 `partial`，并通过 `unavailable_count`、`unsupported_count` 与 `unavailable_reasons` 说明原因，不能把未取得的制品当作已验证。这类获取覆盖缺口会生成零扣分的 `dependency_artifact_coverage` provenance advisory，供审核页展示和人工复核；它本身不会改变自动安全评级。lockfile 读取/解析错误和漏洞查询覆盖缺口会传播为非完整的报告级状态。`dependency_scan.artifact_acquisition` 保留 URL-free 的获取覆盖摘要和 `collection_errors`，使没有产生依赖记录的解析失败也保持可审计。运维可用 `TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED` 禁用获取，或通过 `TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS`、`TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY`、`TAH_DEPENDENCY_ARTIFACT_MAX_BYTES`、`TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES` 和 `TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS` 调整边界。扫描器本身不会请求不可信锁文件 URL。
+`not_checked` 表示获取阶段未启用，或全部完整性声明均属于按策略跳过的公共制品。`artifact_acquisition.skipped_public_count` 按制品 URL 去重计数，`integrity.skipped_public_count` 按完整性声明计数；跳过项不计入 `requested_count`、`unavailable_count` 或 `verified_count`。只有公共制品时，获取状态为 `not_applicable`；公共跳过项与已验证私有项混合时，完整性状态为 `partial`，以保留并未核验全部声明这一事实。按策略跳过公共制品本身不产生覆盖 advisory，审核页单独显示跳过数量及原因。
+
+`unsupported` 表示需核验的摘要算法或格式均不受支持；私有制品获取被策略阻止、超时、达到制品预算或只完成一部分时，`dependency_scan.integrity` / `artifact_acquisition` 的覆盖状态为 `partial`，并通过 `unavailable_count`、`unsupported_count` 与 `unavailable_reasons` 说明原因，不能把未取得的制品当作已验证。这类获取覆盖缺口会生成零扣分的 `dependency_artifact_coverage` provenance advisory，供审核页展示和人工复核；它本身不会改变自动安全评级。lockfile 读取/解析错误和漏洞查询覆盖缺口会传播为非完整的报告级状态。`dependency_scan.artifact_acquisition` 保留 URL-free 的获取覆盖摘要和 `collection_errors`，使没有产生依赖记录的解析失败也保持可审计。运维可用 `TAH_DEPENDENCY_ARTIFACT_VERIFICATION_ENABLED` 禁用获取，或通过 `TAH_DEPENDENCY_ARTIFACT_MAX_ARTIFACTS`、`TAH_DEPENDENCY_ARTIFACT_MAX_CONCURRENCY`、`TAH_DEPENDENCY_ARTIFACT_MAX_BYTES`、`TAH_DEPENDENCY_ARTIFACT_MAX_TOTAL_BYTES` 和 `TAH_DEPENDENCY_ARTIFACT_TIMEOUT_SECONDS` 调整边界。来源分类筛选固定为仅获取批准私有源，不可由扫描请求扩大；私有坐标是否发送给 OSV 仍由 `TAH_OSV_ALLOW_PRIVATE_COORDINATES` 独立控制。扫描器本身不会请求不可信锁文件 URL。
 
 漏洞查询先按生态、规范化包名和精确版本去重，并把清单范围声明映射到对应的 lockfile 坐标；随后通过 OSV `querybatch` 在有界并发、批大小、单次超时和指数退避重试下查询。生产 API 默认每次扫描最多查询 5000 个未命中缓存的坐标，而不是静默截断到 10 个。相关边界由 `TAH_OSV_MAX_QUERIES`、`TAH_OSV_BATCH_SIZE`、`TAH_OSV_MAX_CONCURRENCY`、`TAH_OSV_TIMEOUT_SECONDS`、`TAH_OSV_MAX_RETRIES`、`TAH_OSV_RETRY_BACKOFF_MILLISECONDS`、`TAH_OSV_CACHE_TTL_SECONDS` 和 `TAH_OSV_CACHE_PATH` 配置。
 

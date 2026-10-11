@@ -33,7 +33,7 @@ from scanners.risk_scanner.dependency_parsers.models import (
     DependencyRecord,
     DependencySourceUsage,
 )
-from scanners.risk_scanner.registry_policy import RegistryPolicy
+from scanners.risk_scanner.registry_policy import RegistryClassification, RegistryPolicy
 
 
 _DIGEST_PRIORITIES = {"sha512": 4, "sha384": 3, "sha256": 2, "sha1": 1}
@@ -53,10 +53,10 @@ _ARTIFACT_MANIFEST_NAMES = frozenset({
 class ArtifactFetchConfig:
     """Operator-owned resource limits for dependency artifact acquisition."""
 
-    max_artifacts: int = 100
-    max_concurrency: int = 4
-    max_artifact_bytes: int = 20 * 1024 * 1024
-    max_total_bytes: int = 100 * 1024 * 1024
+    max_artifacts: int = 30
+    max_concurrency: int = 3
+    max_artifact_bytes: int = 1024 * 1024
+    max_total_bytes: int = 3 * 1024 * 1024
     timeout_seconds: float = 10.0
     max_redirects: int = 3
     chunk_size: int = 64 * 1024
@@ -95,7 +95,7 @@ class ArtifactFetchConfig:
 class DependencyArtifactVerification:
     """Digest-only result for one resolved dependency URL."""
 
-    status: Literal["fetched", "unavailable"]
+    status: Literal["fetched", "unavailable", "skipped"]
     digests: Mapping[str, str] = field(default_factory=dict)
     size_bytes: int | None = None
     reason: str | None = None
@@ -108,7 +108,7 @@ class DependencyArtifactVerification:
             if set(self.digests) != set(_DIGEST_PRIORITIES):
                 raise ValueError("fetched verification requires all supported digests")
         elif self.reason is None or self.digests or self.size_bytes is not None:
-            raise ValueError("unavailable verification requires only a reason")
+            raise ValueError("unavailable or skipped verification requires only a reason")
         if self.redirect_count < 0:
             raise ValueError("redirect_count must not be negative")
 
@@ -125,10 +125,11 @@ class DependencyArtifactAcquisition:
     bytes_downloaded: int
     unavailable_reasons: Mapping[str, int]
     collection_errors: tuple[str, ...] = ()
+    skipped_public_count: int = 0
 
     def as_dict(self) -> dict[str, object]:
         """Return a URL-free operational summary safe for persistence."""
-        return {
+        summary: dict[str, object] = {
             "status": self.status,
             "requested_count": self.requested_count,
             "fetched_count": self.fetched_count,
@@ -137,6 +138,9 @@ class DependencyArtifactAcquisition:
             "unavailable_reasons": dict(self.unavailable_reasons),
             "collection_errors": list(self.collection_errors),
         }
+        if self.skipped_public_count:
+            summary["skipped_public_count"] = self.skipped_public_count
+        return summary
 
 
 class ArtifactHTTPResponse(Protocol):
@@ -263,6 +267,7 @@ class StdlibArtifactTransport:
 class _ArtifactRequest:
     url: str
     ecosystems: tuple[str, ...]
+    integrity_supported: bool
 
 
 class _SharedByteBudget:
@@ -396,17 +401,21 @@ def _artifact_requests(
         except (RecursionError, TypeError, ValueError):
             errors.add("dependency_parse_error")
     grouped: dict[str, set[str]] = {}
+    supported: dict[str, set[str]] = {}
     for record in records:
         if (
             record.registry
             and record.integrity
-            and integrity_claim_supported(record.integrity)
             and record.registry_usage == DependencySourceUsage.RESOLVED_DOWNLOAD
         ):
             grouped.setdefault(record.registry, set()).add(record.ecosystem)
+            if integrity_claim_supported(record.integrity):
+                supported.setdefault(record.registry, set()).add(record.ecosystem)
     return (
         [
-            _ArtifactRequest(url, tuple(sorted(ecosystems)))
+            _ArtifactRequest(
+                url, tuple(sorted(supported.get(url, ecosystems))), url in supported,
+            )
             for url, ecosystems in sorted(grouped.items())
         ],
         tuple(sorted(errors)),
@@ -509,16 +518,28 @@ def _allowed_url(
     if not host or "\\" in parsed.netloc:
         return None, (), "invalid_url"
     normalized = urlunsplit(("https", parsed.netloc, parsed.path or "/", parsed.query, ""))
-    allowed_ecosystems = tuple(
-        ecosystem
-        for ecosystem in ecosystems
-        if registry_policy.evaluate(
+    decisions = {
+        ecosystem: registry_policy.evaluate(
             ecosystem,
             normalized,
             DependencySourceUsage.RESOLVED_DOWNLOAD,
-        ).allowed
+        )
+        for ecosystem in ecosystems
+    }
+    allowed_ecosystems = tuple(
+        ecosystem for ecosystem, decision in decisions.items()
+        if decision.allowed
+        and decision.classification is RegistryClassification.APPROVED_PRIVATE
     )
     if not allowed_ecosystems:
+        if any(
+            decision.allowed and decision.classification in {
+                RegistryClassification.OFFICIAL,
+                RegistryClassification.AUTHORITATIVE_MIRROR,
+            }
+            for decision in decisions.values()
+        ):
+            return None, (), "public_registry_skipped"
         return None, (), "registry_not_allowed"
     if port is not None and not (1 <= port <= 65535):
         return None, (), "invalid_url"
@@ -556,7 +577,14 @@ def _fetch_one(
             registry_policy,
         )
         if rejection or normalized is None:
-            return _unavailable(rejection or "invalid_url", redirects)
+            # A private artifact redirected to a public source remains
+            # unverified; unlike a public lockfile entry, this is a fetch gap.
+            reason = (
+                "public_registry_redirect_blocked"
+                if rejection == "public_registry_skipped"
+                else rejection or "invalid_url"
+            )
+            return _unavailable(reason, redirects)
         if normalized in visited:
             return _unavailable("redirect_loop", redirects)
         visited.add(normalized)
@@ -701,7 +729,7 @@ def acquire_dependency_verifications(
     manifest_files: Mapping[str, str] | None = None,
     manifest_collection_errors: Iterable[str] = (),
 ) -> DependencyArtifactAcquisition:
-    """Acquire bounded digest evidence for lockfile dependency artifacts.
+    """Acquire bounded digest evidence only from approved private sources.
 
     The function is synchronous because the production scan pipeline runs in a
     worker thread.  Downloads within the call use a bounded thread pool.
@@ -757,7 +785,13 @@ def acquire_dependency_verifications(
             request.ecosystems,
             registry_policy,
         )
-        if rejection:
+        if rejection == "public_registry_skipped":
+            verifications[request.url] = DependencyArtifactVerification(
+                status="skipped", reason=rejection,
+            )
+        elif not request.integrity_supported:
+            continue
+        elif rejection:
             verifications[request.url] = _unavailable(rejection)
         else:
             eligible_requests.append(request)
@@ -798,8 +832,10 @@ def acquire_dependency_verifications(
         if result.status == "unavailable" and result.reason is not None
     )
     fetched = sum(result.status == "fetched" for result in verifications.values())
-    unavailable = len(verifications) - fetched
-    if not requests and not collection_errors:
+    skipped = sum(result.status == "skipped" for result in verifications.values())
+    unavailable = len(verifications) - fetched - skipped
+    requested = fetched + unavailable
+    if not requested and not collection_errors:
         status: Literal["not_applicable", "complete", "partial"] = "not_applicable"
     elif unavailable or collection_errors:
         status = "partial"
@@ -808,12 +844,13 @@ def acquire_dependency_verifications(
     return DependencyArtifactAcquisition(
         status=status,
         verifications=verifications,
-        requested_count=len(requests),
+        requested_count=requested,
         fetched_count=fetched,
         unavailable_count=unavailable,
         bytes_downloaded=budget.used,
         unavailable_reasons=dict(sorted(reasons.items())),
         collection_errors=collection_errors,
+        skipped_public_count=skipped,
     )
 
 
