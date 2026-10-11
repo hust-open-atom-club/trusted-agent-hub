@@ -51,13 +51,149 @@ def _is_veto_eligible_finding(finding: dict[str, Any]) -> bool:
     return severity in FINDING_CATEGORY_POLICY.get(category, frozenset())
 
 
+_DEPENDENCY_SCOPES = (
+    "runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown",
+)
+
+# Development-only findings remain visible and still enter the I2 signal, but
+# their impact is lower than a runtime path.  Unknown and mixed paths are
+# conservative: an incomplete scope must never make a package look clean.
+_DEPENDENCY_SCOPE_FACTORS: dict[str, float] = {
+    "runtime": 1.0,
+    "dev": 0.5,
+    "test": 0.35,
+    "optional": 0.75,
+    "peer": 0.75,
+    "bundled": 0.9,
+    "mixed": 1.0,
+    "unknown": 1.0,
+}
+
+
+def _finding_dependency_scopes(finding: dict[str, Any]) -> set[str]:
+    """Read dependency scopes from the finding and all retained occurrences."""
+    scopes: set[str] = set()
+    location = finding.get("location")
+    locations: list[dict[str, Any]] = []
+    if isinstance(location, dict):
+        locations.append(location)
+    occurrences = finding.get("occurrences")
+    if isinstance(occurrences, dict):
+        locations.extend(
+            item for item in occurrences.get("items", [])
+            if isinstance(item, dict)
+        )
+    for item in locations:
+        value = item.get("scopes")
+        if isinstance(value, list):
+            scopes.update(
+                str(scope) for scope in value if str(scope) in _DEPENDENCY_SCOPES
+            )
+        value = item.get("scope")
+        if str(value) in _DEPENDENCY_SCOPES:
+            scopes.add(str(value))
+    return scopes
+
+
+def _finding_identity(finding: dict[str, Any]) -> tuple[object, ...]:
+    """Deduplicate occurrences of one risk entity before applying a penalty."""
+    root_cause_id = finding.get("root_cause_id")
+    if root_cause_id:
+        return ("root", str(root_cause_id))
+    location = finding.get("location")
+    if isinstance(location, dict) and location.get("dependency_name"):
+        return (
+            "dependency",
+            str(finding.get("rule_id", "")),
+            str(finding.get("category", "")),
+            str(location.get("ecosystem", "unknown")),
+            str(location.get("dependency_name")),
+            str(location.get("version", "")),
+            str(finding.get("title", "")),
+        )
+    return (
+        "finding",
+        str(finding.get("id", "")),
+        str(finding.get("rule_id", "")),
+        str(finding.get("category", "")),
+        str(location.get("file", "")) if isinstance(location, dict) else "",
+        str(location.get("line", "")) if isinstance(location, dict) else "",
+    )
+
+
+def _dependency_scope_impact(findings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the explainable scope split used by the I2 score."""
+    grouped: dict[tuple[object, ...], list[dict[str, Any]]] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        scopes = _finding_dependency_scopes(finding)
+        if scopes:
+            grouped.setdefault(_finding_identity(finding), []).append(finding)
+
+    finding_counts = {scope: 0 for scope in _DEPENDENCY_SCOPES}
+    penalty_points = {scope: 0.0 for scope in _DEPENDENCY_SCOPES}
+    area_penalty = {"runtime": 0.0, "development": 0.0, "supply_chain": 0.0, "unknown": 0.0}
+    for items in grouped.values():
+        scopes = set().union(*(_finding_dependency_scopes(item) for item in items))
+        if not scopes:
+            continue
+        severity_points = max(
+            SEVERITY_POINTS.get(str(item.get("severity", "info")), 0)
+            for item in items
+        )
+        factor_scope = max(
+            scopes,
+            key=lambda scope: _DEPENDENCY_SCOPE_FACTORS.get(scope, 1.0),
+        )
+        penalty = severity_points * _DEPENDENCY_SCOPE_FACTORS.get(factor_scope, 1.0)
+        report_scope = "mixed" if len(scopes) > 1 else next(iter(scopes))
+        finding_counts[report_scope] += 1
+        penalty_points[report_scope] += penalty
+        if scopes <= {"dev", "test"}:
+            area_penalty["development"] += penalty
+        elif scopes == {"unknown"}:
+            area_penalty["unknown"] += penalty
+        else:
+            area_penalty["runtime"] += penalty
+        area_penalty["supply_chain"] += penalty
+
+    return {
+        "risk_entities": len(grouped),
+        "finding_counts": finding_counts,
+        "penalty_points": {
+            scope: round(value, 2) for scope, value in penalty_points.items()
+        },
+        "area_penalty_points": {
+            area: round(value, 2) for area, value in area_penalty.items()
+        },
+        "scope_factors": dict(_DEPENDENCY_SCOPE_FACTORS),
+    }
+
+
 def _compute_i2_score(findings: list[dict[str, Any]]) -> int:
-    """Score immutable static findings; LLM labels are a separate review signal."""
-    total_penalty = 0
-    for f in findings:
-        sev = f.get("severity", "info")
-        total_penalty += SEVERITY_POINTS.get(sev, 0)
-    return max(0, 100 - total_penalty)
+    """Score static findings, deduplicating risk entities and weighting scope."""
+    grouped: dict[tuple[object, ...], list[dict[str, Any]]] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        grouped.setdefault(_finding_identity(finding), []).append(finding)
+
+    total_penalty = 0.0
+    for items in grouped.values():
+        severity_points = max(
+            SEVERITY_POINTS.get(str(item.get("severity", "info")), 0)
+            for item in items
+        )
+        scopes = set().union(*(_finding_dependency_scopes(item) for item in items))
+        if not scopes:
+            total_penalty += severity_points
+            continue
+        factor = max(
+            _DEPENDENCY_SCOPE_FACTORS.get(scope, 1.0) for scope in scopes
+        )
+        total_penalty += severity_points * factor
+    return max(0, round(100 - total_penalty))
 
 
 def _is_broad_path(path: str) -> bool:
@@ -319,10 +455,12 @@ def assess_prompt_safety(
             "scan_available": False,
             "scan_complete": False,
             "confirmed_malicious": False,
+            "dependency_scope_impact": _dependency_scope_impact([]),
         }
 
     summary: dict[str, Any] = scan_report.get("summary", {}) or {}
     findings: list[dict[str, Any]] = scan_report.get("findings", []) or []
+    dependency_scope_impact = _dependency_scope_impact(findings)
 
     critical_count: int = summary.get("critical", 0)
     high_count: int = summary.get("high", 0)
@@ -387,6 +525,7 @@ def assess_prompt_safety(
             "confirmed_malicious": confirmed_malicious,
             "llm_unavailable": llm_unavailable,
             "scan_complete": scan_complete,
+            "dependency_scope_impact": dependency_scope_impact,
         }
     elif not scan_complete:
         evidence.extend(completeness_evidence)
@@ -401,6 +540,7 @@ def assess_prompt_safety(
             "scan_available": True,
             "scan_complete": False,
             "confirmed_malicious": False,
+            "dependency_scope_impact": dependency_scope_impact,
         }
     elif critical_count > 0 or high_count > 0:
         level = "suspicious"
@@ -420,6 +560,7 @@ def assess_prompt_safety(
             "scan_available": True,
             "confirmed_malicious": False,
             "scan_complete": scan_complete,
+            "dependency_scope_impact": dependency_scope_impact,
         }
     elif medium_count > 2 or low_count > 2:
         level = "suspicious"
@@ -436,6 +577,7 @@ def assess_prompt_safety(
             "scan_available": True,
             "confirmed_malicious": False,
             "scan_complete": scan_complete,
+            "dependency_scope_impact": dependency_scope_impact,
         }
     else:
         level = "safe"
@@ -459,6 +601,7 @@ def assess_prompt_safety(
             "scan_available": True,
             "confirmed_malicious": False,
             "scan_complete": scan_complete,
+            "dependency_scope_impact": dependency_scope_impact,
         }
 
 

@@ -374,6 +374,53 @@ class TestSR008SupplyChain:
 
         assert not any("版本未锁定" in finding["title"] for finding in s.findings)
 
+    def test_dependency_vulnerability_retains_scope_paths_and_summary(self):
+        scanner = MockScanner()
+        scanner.osv_client = _StaticOSVClient(["CVE-2099-0001"])
+        scanner._file_contents = {
+            "package.json": json.dumps({
+                "dependencies": {"shared": "1.0.0"},
+                "devDependencies": {"shared": "1.0.0"},
+            })
+        }
+
+        supply_chain.run(scanner)
+
+        finding = next(item for item in scanner.findings if "CVE-2099-0001" in item["title"])
+        assert finding["location"]["scope"] == "mixed"
+        assert set(finding["location"]["scopes"]) == {"runtime", "dev"}
+        assert {item["scope"] for item in finding["occurrences"]["items"]} == {
+            "runtime", "dev",
+        }
+        assert all(item["reachability"] == ["direct"] for item in finding["occurrences"]["items"])
+        summary = scanner.dependency_scan["scope_summary"]
+        assert summary["occurrence_counts"]["runtime"] == 1
+        assert summary["occurrence_counts"]["dev"] == 1
+        assert summary["vulnerability_counts"]["runtime"] == 1
+        assert summary["vulnerability_counts"]["dev"] == 1
+
+    def test_dependency_parse_gap_keeps_partial_status_with_valid_records(self):
+        scanner = MockScanner()
+        scanner._file_contents = {
+            "package.json": json.dumps({"dependencies": {"demo-lib": "1.0.0"}}),
+            "package-lock.json": "{not-json",
+        }
+
+        supply_chain.run(scanner)
+
+        assert scanner.dependency_scan["status"] == "partial"
+        assert scanner.dependency_scan["known_vulnerabilities"] is None
+        assert scanner.dependency_scan["vulnerability_status"] == "not_assessed"
+        assert scanner.dependency_scan["parse_errors"] == [{
+            "file": "package-lock.json",
+            "parser": "npm_lockfile",
+            "reason": "dependency_parse_error",
+        }]
+        assert any(
+            advisory["code"] == "dependency_parse_error"
+            for advisory in scanner.review_advisories
+        )
+
     @pytest.mark.parametrize("declared,locked,matched", [
         ("^1.0.0", "1.9.0", True),
         ("^1.0.0", "2.0.0", False),

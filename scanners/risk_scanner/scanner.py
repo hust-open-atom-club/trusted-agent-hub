@@ -55,6 +55,7 @@ from scanners.risk_scanner.common import (
 from scanners.risk_scanner.analyzers import analyze_snapshot
 from scanners.risk_scanner.analyzers.source_integrity import verify_source_state
 from scanners.risk_scanner.dependency_coverage import empty_dependency_scan
+from scanners.risk_scanner.dependency_parsers.validation import validate_structure_depth
 from scanners.risk_scanner.inventory import ScanInventory, build_inventory, load_text_files
 from scanners.risk_scanner.policy import ScanPolicy
 from scanners.risk_scanner.registry_policy import (
@@ -294,10 +295,17 @@ class RiskScanner:
         def load_json_object(path: str) -> dict[str, Any] | None:
             try:
                 value = json.loads(self._file_contents[path])
+                validate_structure_depth(value)
             except json.JSONDecodeError as exc:
                 self._metadata_parse_errors.append({
                     "file": path,
                     "message": f"invalid JSON: {exc.msg}",
+                })
+                return None
+            except (ValueError, RecursionError):
+                self._metadata_parse_errors.append({
+                    "file": path,
+                    "message": "JSON structure exceeds supported parser limits",
                 })
                 return None
             if not isinstance(value, dict):
@@ -1038,7 +1046,10 @@ class RiskScanner:
                 for deps_list in deps.values():
                     if isinstance(deps_list, list):
                         dependency_check["total_dependencies"] += len(deps_list)
-        if self.dependency_scan.get("status") == "complete":
+        if (
+            self.dependency_scan.get("status") == "complete"
+            and self.dependency_scan.get("vulnerability_status") == "assessed"
+        ):
             dependency_check["known_vulnerabilities"] = int(
                 self.dependency_scan.get("known_vulnerabilities", 0)
             )

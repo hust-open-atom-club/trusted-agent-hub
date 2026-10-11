@@ -13,6 +13,7 @@ from typing import Final
 
 # Evidence identities are never truncated into a different field reference.
 MAX_EVIDENCE_SOURCE_REF_LENGTH: Final[int] = 2048
+MAX_DEPENDENCY_REACHABILITY_LENGTH: Final[int] = 256
 
 
 class LLMContextMessage(StrEnum):

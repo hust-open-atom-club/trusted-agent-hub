@@ -241,12 +241,12 @@ def test_dependency_parser_recursion_failure_is_structured_partial(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fail_to_parse(_files: Mapping[str, str]) -> list[DependencyRecord]:
+    def fail_to_parse(_files: Mapping[str, str]):
         raise RecursionError("deterministic parser recursion failure")
 
     monkeypatch.setattr(
         dependency_artifact_verifier,
-        "parse_dependencies",
+        "parse_dependencies_with_errors",
         fail_to_parse,
     )
 
@@ -262,6 +262,38 @@ def test_dependency_parser_recursion_failure_is_structured_partial(
     assert acquisition.status == "partial"
     assert acquisition.requested_count == 0
     assert acquisition.collection_errors == ("dependency_parse_error",)
+
+
+@pytest.mark.parametrize("content", [
+    '{"lockfileVersion":999,"packages":{}}',
+    '{"packages":[]}',
+    '{invalid json',
+])
+def test_structured_lock_parse_gap_reaches_artifact_acquisition(tmp_path, content):
+    acquisition = acquire_dependency_verifications(
+        tmp_path, DEFAULT_REGISTRY_POLICY, config=_config(),
+        transport=_FakeTransport({}), resolver=_public_resolver,
+        manifest_files={"package-lock.json": content},
+    )
+    assert acquisition.status == "partial"
+    assert acquisition.collection_errors == ("dependency_parse_error",)
+    assert acquisition.requested_count == 0
+
+
+def test_artifact_entry_parse_gap_keeps_valid_sibling_request(tmp_path):
+    url = "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"
+    body = b"valid archive"
+    acquisition = acquire_dependency_verifications(
+        tmp_path, DEFAULT_REGISTRY_POLICY, config=_config(),
+        transport=_FakeTransport({url: _FakeResponse(200, body)}), resolver=_public_resolver,
+        manifest_files={"package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
+            "node_modules/broken": [],
+            "node_modules/demo": {"version": "1.0.0", "resolved": url, "integrity": _integrity(body)},
+        }})},
+    )
+    assert acquisition.status == "partial"
+    assert acquisition.collection_errors == ("dependency_parse_error",)
+    assert acquisition.requested_count == acquisition.fetched_count == 1
 
 
 @pytest.mark.parametrize(
@@ -792,7 +824,7 @@ def test_collection_failure_is_preserved_even_without_integrity_claims() -> None
     supply_chain._check_dependency_integrity(scanner, [])
 
     assert scanner.dependency_scan["status"] == "partial"
-    assert scanner.dependency_scan["integrity"]["status"] == "not_applicable"
+    assert scanner.dependency_scan["integrity"]["status"] == "partial"
     assert scanner.dependency_scan["artifact_acquisition"] == (
         scanner.dependency_acquisition
     )

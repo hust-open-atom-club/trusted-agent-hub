@@ -11,12 +11,26 @@ import json
 import re
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
-from packages.schema.constants import MAX_EVIDENCE_SOURCE_REF_LENGTH
+from packages.schema.constants import (
+    MAX_DEPENDENCY_REACHABILITY_LENGTH,
+    MAX_EVIDENCE_SOURCE_REF_LENGTH,
+)
 from scanners.risk_scanner.redaction import contains_sensitive_identifier
+
+
+def bounded_dependency_reachability(values: Iterable[str]) -> list[str]:
+    """Bound display labels without collapsing distinct long parent names."""
+    labels: list[str] = []
+    for value in values:
+        if len(value) > MAX_DEPENDENCY_REACHABILITY_LENGTH:
+            suffix = f"…[sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}]"
+            value = value[:MAX_DEPENDENCY_REACHABILITY_LENGTH - len(suffix)] + suffix
+        labels.append(value)
+    return list(dict.fromkeys(labels))
 
 
 def source_reference(value: str) -> dict[str, Any]:

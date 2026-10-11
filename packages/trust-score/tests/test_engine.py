@@ -25,6 +25,7 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 from src.engine import rate as _engine_rate
+from src.intent import _compute_i2_score, assess_prompt_safety
 from src.model_identity import get_model_fingerprint, get_model_version
 
 
@@ -82,6 +83,57 @@ def _load_fixture(name: str) -> dict[str, Any]:
     path = FIXTURES_DIR / f"{name}.json"
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def test_dependency_scope_scoring_keeps_dev_risk_visible_without_runtime_penalty():
+    runtime = {
+        "id": "runtime-cve",
+        "root_cause_id": "root-aaaaaaaaaaaaaaaaaaaa",
+        "rule_id": "SR-008",
+        "severity": "high",
+        "category": "supply_chain",
+        "title": "runtime dependency vulnerability",
+        "location": {"file": "package-lock.json", "scope": "runtime"},
+    }
+    development = {
+        **runtime,
+        "id": "dev-cve",
+        "root_cause_id": "root-bbbbbbbbbbbbbbbbbbbb",
+        "location": {"file": "package-lock.json", "scope": "dev"},
+    }
+
+    assert _compute_i2_score([runtime]) == 85
+    assert _compute_i2_score([development]) == 92
+
+    assessment = assess_prompt_safety({}, {
+        "summary": {"critical": 0, "high": 1, "medium": 0, "low": 0},
+        "findings": [development],
+        "scan_status": {"state": "complete", "complete": True},
+    })
+    impact = assessment["dependency_scope_impact"]
+    assert impact["finding_counts"]["dev"] == 1
+    assert impact["area_penalty_points"]["development"] == 7.5
+
+
+def test_dependency_scope_scoring_deduplicates_one_root_with_multiple_occurrences():
+    finding = {
+        "id": "shared-cve",
+        "root_cause_id": "root-cccccccccccccccccccc",
+        "rule_id": "SR-008",
+        "severity": "high",
+        "category": "supply_chain",
+        "title": "shared dependency vulnerability",
+        "location": {"file": "package.json", "scope": "mixed"},
+        "occurrences": {
+            "count": 2,
+            "truncated": False,
+            "items": [
+                {"file": "package.json", "scope": "runtime"},
+                {"file": "package.json", "scope": "dev"},
+            ],
+        },
+    }
+    assert _compute_i2_score([finding, dict(finding, id="duplicate")]) == 85
 
 
 # ---------------------------------------------------------------------------

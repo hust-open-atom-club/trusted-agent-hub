@@ -137,8 +137,15 @@ def iter_requirement_options(content: str) -> Iterator[tuple[str, str, int]]:
 
 def requirement_scope(source_file: str) -> DependencyScope:
     """Infer a requirements file's dependency scope from filename tokens."""
-    basename = PurePosixPath(source_file.replace("\\", "/")).stem.casefold()
-    tokens = set(re.split(r"[-_.]", basename))
+    path = PurePosixPath(source_file.replace("\\", "/"))
+    # Directory names are part of the declaration's context.  In particular,
+    # ``tests/requirements.txt`` must not silently become a runtime dependency.
+    tokens = {
+        token
+        for part in path.parts
+        for token in re.split(r"[-_.]", PurePosixPath(part).stem.casefold())
+        if token
+    }
     return (
         "test" if tokens & {"test", "tests", "spec", "specs"}
         else "dev" if tokens & {"dev", "development"}
@@ -296,7 +303,7 @@ def parse_pipfile_lock(content: str, source_file: str) -> list[DependencyRecord]
             if isinstance(source, dict) and source.get("name") and source.get("url"):
                 source_urls[str(source["name"])] = str(source["url"])
     default_registry = next(iter(source_urls.values()), None)
-    for section, direct in (("default", True), ("develop", False)):
+    for section, direct in (("default", True), ("develop", True)):
         values = data.get(section, {})
         if isinstance(values, dict):
             for name, info in values.items():

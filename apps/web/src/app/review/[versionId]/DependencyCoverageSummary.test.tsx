@@ -9,6 +9,23 @@ import zh from '@/i18n/locales/zh/common.json';
 import DependencyCoverageSummary from './DependencyCoverageSummary';
 
 describe('DependencyCoverageSummary', () => {
+  it('keeps unresolved peer inventory visibly unassessed after a completed scan', () => {
+    render(<DependencyCoverageSummary dependencyScan={{
+      status: 'complete',
+      inventory_only: 1,
+      total_unique_dependencies: 1,
+      vulnerability_status: 'not_assessed',
+      known_vulnerabilities: null,
+      queryable: 0,
+      unsupported: 0,
+    }} />);
+
+    expect(screen.getByTestId('dependency-inventory-only')).toHaveTextContent('保留为未评估库存');
+    expect(screen.getByText(zh.review.detail.dependency_coverage_known_vulnerabilities).parentElement)
+      .toHaveTextContent(zh.review.detail.dependency_coverage_not_assessed);
+    expect(screen.getByTestId('dependency-inventory-only').closest('details')).toHaveAttribute('open');
+  });
+
   it('keeps dependency coverage keys and OSV reasons available in both languages', () => {
     const prefix = 'dependency_coverage_';
     const enKeys = Object.keys(en.review.detail).filter((key) => key.startsWith(prefix)).sort();

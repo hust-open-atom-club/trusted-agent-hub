@@ -2,7 +2,7 @@
 
 import { useTranslation } from 'react-i18next';
 
-import type { DependencyCheck, DependencyScan } from '@/types';
+import type { DependencyCheck, DependencyScan, DependencyScope } from '@/types';
 
 import DependencyQueryResults from './DependencyQueryResults';
 
@@ -26,9 +26,14 @@ export default function DependencyCoverageSummary({
   const acquisitionReasons = Object.entries(acquisition?.unavailable_reasons || {});
   const integrityReasons = Object.entries(integrity?.unavailable_reasons || {});
   const vulnerabilityReasons = Object.entries(dependencyScan?.failure_reasons || {});
+  const parseErrors = dependencyScan?.parse_errors || [];
   const nonOsvManifest = dependencyScan?.non_osv_manifest_dependencies;
   const nonOsvCategories = Object.entries(nonOsvManifest?.categories || {});
   const collectionErrors = acquisition?.collection_errors || [];
+  const scopeSummary = dependencyScan?.scope_summary;
+  const scopeCounts = Object.entries(scopeSummary?.occurrence_counts || {})
+    .filter(([, count]) => (count ?? 0) > 0) as Array<[DependencyScope, number]>;
+  const scopeVulnerabilityCounts = scopeSummary?.vulnerability_counts || {};
 
   const showVulnerability = Boolean(
     dependencyScan
@@ -37,6 +42,8 @@ export default function DependencyCoverageSummary({
       || dependencyScan.queryable !== undefined
       || (dependencyScan.query_results?.length ?? 0) > 0
       || dependencyScan.query_results_truncated
+      || scopeSummary !== undefined
+      || parseErrors.length > 0
       || dependencyCheck?.known_vulnerabilities !== undefined
       || dependencyCheck?.vulnerability_status !== undefined
     ),
@@ -74,10 +81,12 @@ export default function DependencyCoverageSummary({
 
   const hasGap = Boolean(
     (showVulnerability && dependencyScan.status !== 'complete')
+    || dependencyScan.vulnerability_status === 'not_assessed'
     || dependencyCheck?.vulnerability_status === 'not_assessed'
     || acquisition?.status === 'partial'
     || (acquisition?.unavailable_count ?? 0) > 0
     || collectionErrors.length > 0
+    || parseErrors.length > 0
     || ['partial', 'unsupported', 'mismatch', 'not_checked'].includes(integrity?.status || '')
     || (integrity?.unavailable_count ?? 0) > 0
     || (integrity?.unsupported_count ?? 0) > 0
@@ -109,9 +118,11 @@ export default function DependencyCoverageSummary({
   const knownVulnerabilities = (
     dependencyCheck?.vulnerability_status === 'not_assessed'
     || dependencyCheck?.known_vulnerabilities === null
+    || dependencyScan.vulnerability_status === 'not_assessed'
+    || dependencyScan.known_vulnerabilities === null
   )
     ? t('review.detail.dependency_coverage_not_assessed')
-    : dependencyCheck?.known_vulnerabilities;
+    : dependencyCheck?.known_vulnerabilities ?? dependencyScan.known_vulnerabilities;
 
   return (
     <section className="review-detail-section" data-testid="dependency-coverage">
@@ -134,6 +145,11 @@ export default function DependencyCoverageSummary({
             {dependencyScan.status !== 'complete' && (
               <p style={{ color: 'var(--color-warning)', fontSize: '0.82rem', lineHeight: 1.5 }}>
                 {t('review.detail.dependency_coverage_vulnerability_incomplete')}
+              </p>
+            )}
+            {(dependencyScan.inventory_only ?? 0) > 0 && (
+              <p data-testid="dependency-inventory-only">
+                {t('review.detail.dependency_coverage_inventory_only', { count: dependencyScan.inventory_only })}
               </p>
             )}
             <div className="review-meta-grid">
@@ -160,6 +176,32 @@ export default function DependencyCoverageSummary({
                 t('review.detail.dependency_coverage_resumed_queries'), dependencyScan.resumed_queries,
               )}
             </div>
+            {scopeCounts.length > 0 && (
+              <div style={{ marginTop: '0.9rem' }} data-testid="dependency-scope-summary">
+                <h3 className="review-meta-subtitle">
+                  {t('review.detail.dependency_coverage_scope_summary')}
+                </h3>
+                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                  {t('review.detail.dependency_coverage_scope_description')}
+                </p>
+                <div className="review-meta-grid">
+                  {scopeCounts.map(([scope, count]) => metric(
+                    t(`review.detail.dependency_coverage_scope_${scope}`, {
+                      defaultValue: humanize(scope),
+                    }),
+                    [
+                      count,
+                      t('review.detail.dependency_coverage_scope_vulnerabilities', {
+                        count: scopeVulnerabilityCounts[scope] ?? 0,
+                      }),
+                      (scopeSummary?.coverage[scope]?.unassessed_occurrences ?? 0) > 0
+                        ? `${t('review.detail.dependency_coverage_not_assessed')}: ${scopeSummary?.coverage[scope]?.unassessed_occurrences}`
+                        : null,
+                    ].filter((value) => value !== null).join(' · '),
+                  ))}
+                </div>
+              </div>
+            )}
             {(nonOsvManifest?.total ?? 0) > 0 && (
               <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }} data-testid="dependency-non-osv-manifest">
                 <strong>
@@ -180,6 +222,18 @@ export default function DependencyCoverageSummary({
                 <ul data-testid="dependency-vulnerability-reasons">
                   {vulnerabilityReasons.map(([reason, count]) => (
                     <li key={reason}>{reasonLabel(reason)} ({reason}): {count}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {parseErrors.length > 0 && (
+              <div style={{ marginTop: '0.6rem', fontSize: '0.8rem' }} data-testid="dependency-parse-errors">
+                <strong>{t('review.detail.dependency_coverage_parse_errors')}</strong>
+                <ul>
+                  {parseErrors.map((item) => (
+                    <li key={`${item.file}:${item.parser}:${item.source_ref ?? ''}`}>
+                      {item.file}{item.source_ref ? ` · ${item.source_ref}` : ''} · {item.parser} · {item.reason}
+                    </li>
                   ))}
                 </ul>
               </div>

@@ -1,9 +1,9 @@
 """Canonical package and version models for the Consumer API."""
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field, model_serializer
+from pydantic import ConfigDict, Field, field_validator, model_serializer
 
 from .common import Client, Owner, PackageType, Page, SafeSourceSubdirectory, StrictContractModel
 
@@ -270,6 +270,12 @@ class EvidenceReference(StrictContractModel):
     )
     missing_reason: str | None = None
 
+    @model_serializer(mode="wrap")
+    def _serialize_optional_evidence(self, handler):
+        # Evidence schemas encode unknown optional fields by absence. Apply
+        # this to every evidence subtype, including ordinary occurrences.
+        return {key: value for key, value in handler(self).items() if value is not None}
+
 
 class EvidenceFieldLocation(EvidenceReference):
     line: int | None = Field(default=None, ge=1)
@@ -284,11 +290,31 @@ class FindingOccurrence(EvidenceReference):
     end_line: int | None = Field(default=None, ge=1)
     column: int | None = Field(default=None, ge=1)
     end_column: int | None = Field(default=None, ge=1)
+    ecosystem: str | None = Field(default=None, max_length=64)
     dependency_name: str | None = None
     version: str | None = None
     resolved_url: str | None = None
     integrity: str | None = None
+    scope: Literal[
+        "runtime", "dev", "test", "optional", "peer", "bundled",
+        "mixed", "unknown",
+    ] | None = None
+    scopes: list[Literal[
+        "runtime", "dev", "test", "optional", "peer", "bundled",
+        "mixed", "unknown",
+    ]] = Field(default_factory=list, json_schema_extra={"uniqueItems": True})
+    direct: bool | None = None
+    reachability: list[Annotated[str, Field(max_length=256)]] = Field(
+        default_factory=list, json_schema_extra={"uniqueItems": True},
+    )
     field_locations: dict[str, EvidenceFieldLocation] = Field(default_factory=dict)
+
+    @field_validator("scopes", "reachability")
+    @classmethod
+    def _validate_unique_items(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("Items must be unique")
+        return value
 
 
 class FindingOccurrences(StrictContractModel):
@@ -442,7 +468,9 @@ class RegistryPolicyOccurrence(FindingOccurrence):
     version: str | None = Field(default=None, max_length=128)
     resolved_url: str = Field(max_length=512)
     integrity: str | None = Field(default=None, max_length=160)
-    scope: Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
+    scope: Literal[
+        "runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"
+    ]
     usage: Literal["registry_api", "resolved_download"]
 
 
@@ -451,7 +479,9 @@ class RegistryPolicyEvidence(StrictContractModel):
     registry_host: str
     policy_reason: str
     source_file: str
-    scope: Literal["runtime", "dev", "test", "optional", "mixed", "unknown"]
+    scope: Literal[
+        "runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"
+    ]
     occurrence_count: int = Field(ge=1)
     occurrences: list[RegistryPolicyOccurrence] = Field(max_length=100)
     truncated: bool = False

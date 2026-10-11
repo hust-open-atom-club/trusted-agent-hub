@@ -17,7 +17,7 @@ from typing import Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from .models import DependencyRecord
+from .models import DependencyRecord, is_local_npm_reference
 
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,8 @@ def _normalized_package_name(value: object, ecosystem: str) -> str:
 def _normalized_version(dependency: DependencyRecord) -> str:
     version = str(dependency.version or "").strip()
     ecosystem = normalize_osv_ecosystem(dependency.ecosystem)
+    if ecosystem == "npm" and dependency.local_reference:
+        return dependency.local_reference
     if ecosystem == "PyPI":
         return version.removeprefix("===").removeprefix("==").strip()
     if ecosystem in {"npm", "crates.io"} and not version.startswith("=="):
@@ -194,6 +196,8 @@ def dependency_queryability(dependency: DependencyRecord) -> tuple[bool, str | N
     ):
         return False, "invalid_package_name"
     raw_version = _normalized_version(dependency)
+    if ecosystem == "npm" and is_local_npm_reference(raw_version):
+        return False, "local_workspace_dependency"
     if not raw_version:
         return False, "missing_version"
     if _exact_version(raw_version) is None:

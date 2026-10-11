@@ -25,6 +25,11 @@ function QueryOccurrences({ result }: { result: DependencyQueryResult }) {
                 <code>{occurrence.source_file}{occurrence.line ? `:${occurrence.line}` : ''}</code>
                 {' · '}{t(`review.detail.dependency_coverage_scope_${occurrence.scope}`)}
                 {' · '}{t(`review.detail.dependency_coverage_${occurrence.direct ? 'direct' : 'transitive'}`)}
+                {occurrence.reachability && occurrence.reachability.length > 0 && (
+                  <div>
+                    {t('review.detail.dependency_coverage_reachability')}: {occurrence.reachability.join(', ')}
+                  </div>
+                )}
                 {occurrence.source_ref && <div><code>{occurrence.source_ref}</code></div>}
                 <EvidenceReferenceOmission reference={occurrence} />
                 {occurrence.registry && <div><code>{occurrence.registry}</code></div>}

@@ -99,6 +99,11 @@ export interface FindingLocation extends EvidenceReference {
   version?: string | null;
   resolved_url?: string | null;
   integrity?: string | null;
+  ecosystem?: string;
+  scope?: DependencyScope;
+  scopes?: DependencyScope[];
+  direct?: boolean;
+  reachability?: string[];
   field_locations?: Record<string, EvidenceReference & {
     line?: number;
     end_line?: number;
@@ -552,10 +557,48 @@ export interface DependencyManifestLockSummary {
 
 export interface DependencyQueryOccurrence extends EvidenceReference {
   source_file: string;
+  ecosystem?: string;
+  dependency_name?: string;
+  version?: string | null;
   line?: number;
-  scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
+  scope: DependencyScope;
   direct: boolean;
+  reachability?: string[];
   registry?: string;
+}
+
+export type DependencyScope =
+  | 'runtime'
+  | 'dev'
+  | 'test'
+  | 'optional'
+  | 'peer'
+  | 'bundled'
+  | 'mixed'
+  | 'unknown';
+
+export interface DependencyScopeCoverage {
+  occurrences: number;
+  unique_coordinates: number;
+  queried_occurrences: number;
+  assessed_occurrences: number;
+  unassessed_occurrences: number;
+  vulnerable_coordinates: number;
+  vulnerability_count: number;
+}
+
+export interface DependencyScopeSummary {
+  occurrence_counts: Partial<Record<DependencyScope, number>>;
+  unique_coordinate_counts: Partial<Record<DependencyScope, number>>;
+  vulnerability_counts: Partial<Record<DependencyScope, number>>;
+  coverage: Partial<Record<DependencyScope, DependencyScopeCoverage>>;
+}
+
+export interface DependencyParseError {
+  source_ref?: string;
+  file: string;
+  parser: string;
+  reason: string;
 }
 
 export interface DependencyQueryResult {
@@ -606,6 +649,9 @@ export interface DependencyScan {
   vulnerability_status?: 'assessed' | 'not_assessed';
   non_osv_manifest_dependencies?: NonOSVManifestDependencySummary;
   failure_reasons?: Record<string, number>;
+  parse_errors?: DependencyParseError[];
+  scope_summary?: DependencyScopeSummary;
+  inventory_only?: number;
   query_results?: DependencyQueryResult[];
   query_results_truncated?: boolean;
   query_results_omitted?: number;
@@ -718,7 +764,7 @@ export interface RegistryPolicyOccurrence extends Omit<FindingLocation, 'line' |
   version?: string | null;
   resolved_url: string;
   integrity?: string | null;
-  scope: 'runtime' | 'dev' | 'test' | 'optional' | 'mixed' | 'unknown';
+  scope: DependencyScope;
   usage: 'registry_api' | 'resolved_download';
 }
 

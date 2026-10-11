@@ -5,6 +5,7 @@ import pytest
 
 from scanners.risk_scanner.dependency_parsers import (
     parse_dependencies,
+    parse_dependencies_with_errors,
     parse_dependency_sources,
 )
 from scanners.risk_scanner.dependency_parsers.python import (
@@ -54,7 +55,7 @@ def test_requirement_versions_preserve_constraints(specifier, version, unlocked)
     [
         ("requirements-latest.txt", "runtime"),
         ("fastest.txt", "runtime"),
-        ("tests/requirements.txt", "runtime"),
+        ("tests/requirements.txt", "test"),
         ("requirements-dev.txt", "dev"),
         ("requirements-tests.txt", "test"),
     ],
@@ -98,6 +99,78 @@ def test_npm_lock_scope_distinguishes_dev_optional_from_dev_optional_subtree():
     assert {record.name: record.scope for record in records} == {
         "shared": "mixed", "dev-subtree": "dev",
     }
+
+
+def test_npm_manifest_and_lock_preserve_peer_scope_and_reachability():
+    records = parse_dependencies({
+        "package.json": json.dumps({
+            "dependencies": {"shared": "1.0.0"},
+            "devDependencies": {"shared": "1.0.0"},
+            "peerDependencies": {"peer-helper": "^2.0.0"},
+        }),
+        "package-lock.json": json.dumps({
+            "lockfileVersion": 3,
+            "packages": {
+                "": {
+                    "dependencies": {"shared": "1.0.0"},
+                    "devDependencies": {"shared": "1.0.0"},
+                    "peerDependencies": {"peer-helper": "^2.0.0"},
+                },
+                "node_modules/shared": {"version": "1.0.0"},
+                "node_modules/peer-helper": {"version": "2.0.0", "peer": True},
+                "node_modules/parent/node_modules/shared": {"version": "1.0.0"},
+            },
+        }),
+    })
+
+    manifest_shared = [
+        record for record in records
+        if record.source_file == "package.json" and record.name == "shared"
+    ]
+    assert {record.scope for record in manifest_shared} == {"runtime", "dev"}
+    assert all(record.reachability == ("direct",) for record in manifest_shared)
+
+    lock_by_name = {
+        record.name: record for record in records
+        if record.source_file == "package-lock.json"
+        and record.name == "peer-helper"
+    }
+    assert lock_by_name["peer-helper"].scope == "peer"
+    transitive = next(
+        record for record in records
+        if record.source_file == "package-lock.json"
+        and record.name == "shared"
+        and record.reachability == ("transitive:parent",)
+    )
+    assert transitive.reachability == ("transitive:parent",)
+
+
+def test_structured_dependency_parse_failures_are_explicit():
+    records, errors = parse_dependencies_with_errors({
+        "package-lock.json": "{not-json",
+        "requirements.txt": "requests==2.31.0\n",
+    })
+
+    assert [record.name for record in records] == ["requests"]
+    assert errors == [{
+        "file": "package-lock.json",
+        "parser": "npm_lockfile",
+        "reason": "dependency_parse_error",
+    }]
+
+
+def test_npm_manifest_keeps_bundled_dependencies_explicit():
+    records = parse_dependencies({
+        "package.json": json.dumps({
+            "bundledDependencies": ["embedded-helper"],
+            "dependencies": {"runtime-helper": "1.0.0"},
+        })
+    })
+
+    bundled = next(record for record in records if record.name == "embedded-helper")
+    assert bundled.scope == "bundled"
+    assert bundled.version is None
+    assert bundled.reachability == ("direct",)
 
 
 def test_dependency_parsers_preserve_registry_source_and_usage():

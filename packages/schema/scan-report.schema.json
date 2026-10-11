@@ -194,6 +194,7 @@
         "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "source_ref_length": { "type": "integer", "minimum": 2049 },
         "missing_reason": { "type": "string" },
+        "ecosystem": { "type": "string", "maxLength": 64 },
         "dependency_name": {
           "type": [
             "string",
@@ -217,6 +218,24 @@
             "string",
             "null"
           ]
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"]
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"]
+          },
+          "uniqueItems": true
+        },
+        "direct": { "type": "boolean" },
+        "reachability": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 256 },
+          "uniqueItems": true
         },
         "field_locations": {
           "$ref": "#/$defs/evidence_fields"
@@ -307,7 +326,7 @@
               "source_file": { "$ref": "#/$defs/evidence_file" },
               "scope": {
                 "type": "string",
-                "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
+                "enum": ["runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"]
               },
               "occurrence_count": { "type": "integer", "minimum": 1 },
               "occurrences": {
@@ -325,6 +344,7 @@
                     "file": {
                       "$ref": "#/$defs/evidence_file"
                     },
+                    "ecosystem": { "type": "string", "maxLength": 64 },
                     "source_ref": {
                       "$ref": "#/$defs/evidence_source_ref"
                     },
@@ -370,9 +390,20 @@
                         "dev",
                         "test",
                         "optional",
+                        "peer",
+                        "bundled",
                         "mixed",
                         "unknown"
                       ]
+                    },
+                    "direct": { "type": "boolean" },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"]
+                      },
+                      "uniqueItems": true
                     },
                     "usage": {
                       "type": "string",
@@ -380,6 +411,11 @@
                         "registry_api",
                         "resolved_download"
                       ]
+                    },
+                    "reachability": {
+                      "type": "array",
+                      "items": { "type": "string", "maxLength": 256 },
+                      "uniqueItems": true
                     },
                     "column": {
                       "type": "integer",
@@ -1082,6 +1118,10 @@
         "failed": { "type": "integer", "minimum": 0 },
         "skipped": { "type": "integer", "minimum": 0 },
         "unsupported": { "type": "integer", "minimum": 0 },
+        "inventory_only": {
+          "type": "integer", "minimum": 0,
+          "description": "Unresolved npm peer/bundled or local file/link/workspace coordinates retained as unassessed inventory, excluded from query-failure counts."
+        },
         "rate_limited": { "type": "integer", "minimum": 0 },
         "remaining": { "type": "integer", "minimum": 0 },
         "cache_hits": { "type": "integer", "minimum": 0 },
@@ -1110,6 +1150,69 @@
         "failure_reasons": {
           "type": "object",
           "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "parse_errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["file", "parser", "reason"],
+            "properties": {
+              "file": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "parser": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "source_ref": { "$ref": "#/$defs/evidence_source_ref" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "scope_summary": {
+          "type": "object",
+          "required": [
+            "occurrence_counts",
+            "unique_coordinate_counts",
+            "vulnerability_counts",
+            "coverage"
+          ],
+          "properties": {
+            "occurrence_counts": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "unique_coordinate_counts": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "vulnerability_counts": {
+              "type": "object",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
+            },
+            "coverage": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "occurrences",
+                  "unique_coordinates",
+                  "queried_occurrences",
+                  "assessed_occurrences",
+                  "unassessed_occurrences",
+                  "vulnerable_coordinates",
+                  "vulnerability_count"
+                ],
+                "properties": {
+                  "occurrences": { "type": "integer", "minimum": 0 },
+                  "unique_coordinates": { "type": "integer", "minimum": 0 },
+                  "queried_occurrences": { "type": "integer", "minimum": 0 },
+                  "assessed_occurrences": { "type": "integer", "minimum": 0 },
+                  "unassessed_occurrences": { "type": "integer", "minimum": 0 },
+                  "vulnerable_coordinates": { "type": "integer", "minimum": 0 },
+                  "vulnerability_count": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
         },
         "query_results_truncated": { "type": "boolean" },
         "query_results_omitted": { "type": "integer", "minimum": 0 },
@@ -1162,6 +1265,9 @@
                   "required": ["source_file", "scope", "direct"],
                   "properties": {
                     "source_file": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "ecosystem": { "type": "string", "maxLength": 64 },
+                    "dependency_name": { "type": "string", "maxLength": 128 },
+                    "version": { "type": ["string", "null"], "maxLength": 256 },
                     "source_ref": { "$ref": "#/$defs/evidence_source_ref" },
                     "source_ref_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
                     "source_ref_length": { "type": "integer", "minimum": 2049 },
@@ -1169,9 +1275,14 @@
                     "line": { "type": "integer", "minimum": 1 },
                     "scope": {
                       "type": "string",
-                      "enum": ["runtime", "dev", "test", "optional", "mixed", "unknown"]
+                      "enum": ["runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown"]
                     },
                     "direct": { "type": "boolean" },
+                    "reachability": {
+                      "type": "array",
+                      "items": { "type": "string", "maxLength": 256 },
+                      "uniqueItems": true
+                    },
                     "registry": { "type": "string", "maxLength": 512 }
                   },
                   "additionalProperties": false
@@ -1241,9 +1352,15 @@
           "then": {
             "required": ["known_vulnerabilities"],
             "properties": {
-              "known_vulnerabilities": { "type": "null" },
-              "status": { "not": { "const": "complete" } }
-            }
+              "known_vulnerabilities": { "type": "null" }
+            },
+            "anyOf": [
+              { "properties": { "status": { "not": { "const": "complete" } } } },
+              {
+                "required": ["inventory_only"],
+                "properties": { "inventory_only": { "minimum": 1 } }
+              }
+            ]
           }
         },
         {
@@ -1255,7 +1372,8 @@
             "required": ["known_vulnerabilities"],
             "properties": {
               "known_vulnerabilities": { "type": "integer" },
-              "status": { "const": "complete" }
+              "status": { "const": "complete" },
+              "inventory_only": { "const": 0 }
             }
           }
         }

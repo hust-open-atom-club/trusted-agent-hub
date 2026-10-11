@@ -26,6 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from scanners.risk_scanner.common import CODE_FILE_EXTENSIONS
 from scanners.risk_scanner.evidence import (
+    bounded_dependency_reachability,
     metadata_location,
     source_reference,
     source_reference_label,
@@ -42,13 +43,15 @@ from scanners.risk_scanner.patterns import (
     SUPPLY_CHAIN_PATTERNS,
 )
 from scanners.risk_scanner.dependency_parsers import (
-    parse_dependencies,
+    parse_dependencies_with_errors,
     parse_dependency_sources,
 )
 from scanners.risk_scanner.dependency_parsers.models import (
+    DEPENDENCY_SCOPE_VALUES,
     DependencyRecord,
     DependencySourceObservation,
     DependencySourceUsage,
+    is_local_npm_reference,
 )
 from scanners.risk_scanner.dependency_parsers.osv_client import (
     OSVClient,
@@ -390,6 +393,8 @@ def _is_unlocked_version(version: str | None, ecosystem: str) -> bool:
 
 
 def _lockfile_satisfies(record: DependencyRecord, locked: DependencyRecord) -> bool:
+    if _inventory_reason(locked) == "local_workspace_dependency":
+        return False
     if not _is_lockfile(locked.source_file) or _is_unlocked_version(locked.version, locked.ecosystem):
         return False
     directory = PurePosixPath(record.source_file.replace("\\", "/")).parent
@@ -401,6 +406,8 @@ def _lockfile_satisfies(record: DependencyRecord, locked: DependencyRecord) -> b
     if declared_key[:2] != locked_key[:2]:
         return False
     declared, resolved = declared_key[2], locked_key[2]
+    if not declared and _is_npm_inventory_declaration(record):
+        return True
     if declared == resolved:
         return True
     if normalize_ecosystem(record.ecosystem) not in {"npm", "cargo"}:
@@ -519,6 +526,8 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
             str(ecosystem).strip().casefold(),
             str(ecosystem),
         )
+        # Keep the full identity for policy decisions and grouping. Evidence
+        # projections bound the display label when writing the report.
         # A source_ref is a JSON Pointer into the input manifest, so its token
         # must use the original key rather than the normalized ecosystem label.
         ecosystem_pointer = str(ecosystem).replace("~", "~0").replace("/", "~1")
@@ -526,7 +535,7 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
             if isinstance(value, dict):
                 registry = value.get("registry")
                 scope = value.get("scope", "runtime")
-                if not isinstance(scope, str) or scope not in {"runtime", "dev", "test", "optional", "mixed", "unknown"}:
+                if not isinstance(scope, str) or scope not in set(DEPENDENCY_SCOPE_VALUES):
                     scope = "unknown"
                 records.append(
                     DependencyRecord(
@@ -540,6 +549,7 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
                         registry_usage="registry_api" if registry else None,
                         scope=scope,
                         source_ref=f"#/dependencies/{ecosystem_pointer}/{index}",
+                        reachability=("direct",),
                     )
                 )
             elif value:
@@ -547,6 +557,7 @@ def _manifest_records(meta: dict[str, Any], source_file: str = "manifest.json") 
                     str(value), None, normalized_ecosystem, True, source_file,
                     scope="runtime",
                     source_ref=f"#/dependencies/{ecosystem_pointer}/{index}",
+                    reachability=("direct",),
                 ))
     return [record for record in records if record.name]
 
@@ -750,7 +761,7 @@ def _check_dependency_sources(
             ),
             location=_dependency_location(sorted_items[0][0]),
             registry_policy={
-                "ecosystem": ecosystem,
+                "ecosystem": _evidence_sample(ecosystem, 64),
                 "registry_host": host,
                 "policy_reason": reason,
                 "source_file": source_file,
@@ -838,25 +849,46 @@ def _check_dependency_sources(
 def _dependency_location(record: DependencyRecord | DependencySourceObservation) -> dict[str, Any]:
     if isinstance(record, DependencyRecord):
         name, version, resolved = record.name, record.version, record.registry
+        ecosystem = record.ecosystem
+        scope = record.scope
+        direct = bool(record.direct)
+        reachability = list(record.reachability or (("direct",) if record.direct else ("transitive",)))
     else:
         name, version, resolved = record.dependency_name, record.dependency_version, record.url
-    return {
+        ecosystem = record.ecosystem
+        scope = record.scope
+        direct = record.direct
+        reachability = list(record.reachability)
+    location: dict[str, Any] = {
         "file": record.source_file,
         **({"line": record.line} if record.line else {}),
         **(source_reference(record.source_ref) if record.source_ref else {}),
+        "ecosystem": _evidence_sample(ecosystem, 64),
         "dependency_name": _evidence_sample(name, 128),
         "version": _evidence_sample(_dependency_version_evidence(version), 128),
         "resolved_url": _evidence_sample(_source_evidence_url(resolved), 512) if resolved else None,
         "integrity": _evidence_sample(record.integrity, 160),
+        "scope": scope,
     }
+    if direct is not None:
+        location["direct"] = direct
+    if reachability:
+        location["reachability"] = bounded_dependency_reachability(reachability)
+    return location
 
 
 def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
     occurrence: dict[str, Any] = {
         "source_file": record.source_file,
+        "ecosystem": _evidence_sample(record.ecosystem, 64),
+        "dependency_name": _evidence_sample(record.name, 128),
+        "version": _evidence_sample(_dependency_version_evidence(record.version), 128),
         "scope": record.scope,
         "direct": bool(record.direct),
     }
+    reachability = record.reachability or (("direct",) if record.direct else ("transitive",))
+    if reachability:
+        occurrence["reachability"] = bounded_dependency_reachability(reachability)
     if record.source_ref:
         occurrence.update(source_reference(record.source_ref))
     if record.line is not None:
@@ -866,6 +898,109 @@ def _dependency_occurrence(record: DependencyRecord) -> dict[str, Any]:
             _source_evidence_url(record.registry), 512
         )
     return occurrence
+
+
+def _dependency_scope_for_records(records: Sequence[DependencyRecord]) -> tuple[str, list[str]]:
+    scopes = sorted({
+        record.scope if record.scope in DEPENDENCY_SCOPE_VALUES else "unknown"
+        for record in records
+    })
+    if not scopes:
+        return "unknown", ["unknown"]
+    return (scopes[0] if len(scopes) == 1 else "mixed"), scopes
+
+
+def _dependency_finding_location(
+    records: Sequence[DependencyRecord],
+    locations: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Annotate the primary evidence with the aggregate dependency context."""
+    if locations:
+        location = dict(locations[0])
+    else:
+        location = _dependency_location(records[0])
+    scope, scopes = _dependency_scope_for_records(records)
+    location["scope"] = scope
+    location["scopes"] = scopes
+    location["direct"] = any(record.direct for record in records)
+    reachability = sorted({
+        item
+        for record in records
+        for item in (record.reachability or (("direct",) if record.direct else ("transitive",)))
+    })
+    if reachability:
+        location["reachability"] = bounded_dependency_reachability(reachability)
+    location["ecosystem"] = _evidence_sample(records[0].ecosystem, 64)
+    return location
+
+
+def _dependency_scope_summary(
+    records: Sequence[DependencyRecord],
+    groups: Mapping[tuple[str, str, str], list[DependencyRecord]],
+    results: Mapping[tuple[str, str, str], OSVQueryResult],
+) -> dict[str, Any]:
+    """Summarize coverage by install scope without collapsing occurrences."""
+    occurrence_counts = Counter()
+    coordinates: dict[str, set[tuple[str, str, str]]] = {
+        scope: set() for scope in DEPENDENCY_SCOPE_VALUES
+    }
+    queried_occurrences = Counter()
+    assessed_occurrences = Counter()
+    vulnerability_coordinates: dict[str, set[tuple[str, str, str]]] = {
+        scope: set() for scope in DEPENDENCY_SCOPE_VALUES
+    }
+    vulnerability_roots: dict[str, set[tuple[str, str, str, str]]] = {
+        scope: set() for scope in DEPENDENCY_SCOPE_VALUES
+    }
+    resolved_keys: dict[int, set[tuple[str, str, str]]] = {}
+    for key, occurrences in groups.items():
+        for record in occurrences:
+            resolved_keys.setdefault(id(record), set()).add(key)
+    attempted_statuses = {"succeeded", "failed", "rate_limited"}
+
+    for record in records:
+        scope = record.scope if record.scope in DEPENDENCY_SCOPE_VALUES else "unknown"
+        keys = resolved_keys.get(id(record), {dependency_coordinate(record)})
+        occurrence_counts[scope] += 1
+        coordinates[scope].update(keys)
+        statuses = {
+            results[key].status if key in results else "not_queried"
+            for key in keys
+        }
+        if statuses & attempted_statuses:
+            queried_occurrences[scope] += 1
+        if statuses == {"succeeded"}:
+            assessed_occurrences[scope] += 1
+        for key in keys:
+            result = results.get(key)
+            if result is not None and result.vulnerability_ids:
+                vulnerability_coordinates[scope].add(key)
+                vulnerability_roots[scope].update(
+                    (*key, vulnerability_id) for vulnerability_id in result.vulnerability_ids
+                )
+
+    scope_coverage: dict[str, dict[str, int]] = {}
+    for scope in DEPENDENCY_SCOPE_VALUES:
+        total = occurrence_counts[scope]
+        scope_coverage[scope] = {
+            "occurrences": total,
+            "unique_coordinates": len(coordinates[scope]),
+            "queried_occurrences": queried_occurrences[scope],
+            "assessed_occurrences": assessed_occurrences[scope],
+            "unassessed_occurrences": max(0, total - assessed_occurrences[scope]),
+            "vulnerable_coordinates": len(vulnerability_coordinates[scope]),
+            "vulnerability_count": len(vulnerability_roots[scope]),
+        }
+    return {
+        "occurrence_counts": {scope: occurrence_counts[scope] for scope in DEPENDENCY_SCOPE_VALUES},
+        "unique_coordinate_counts": {
+            scope: len(coordinates[scope]) for scope in DEPENDENCY_SCOPE_VALUES
+        },
+        "vulnerability_counts": {
+            scope: len(vulnerability_roots[scope]) for scope in DEPENDENCY_SCOPE_VALUES
+        },
+        "coverage": scope_coverage,
+    }
 
 
 def _dependency_query_groups(
@@ -1139,7 +1274,7 @@ def _bounded_osv_query_results(
         if not isinstance(response_status, int) or not 100 <= response_status <= 599:
             response_status = None
         item: dict[str, Any] = {
-            "ecosystem": key[0][:64] or "unknown",
+            "ecosystem": _evidence_sample(key[0], 64) or "unknown",
             "package_name": (key[1] or str(occurrences[0].name or "").strip())[:256] or "<invalid>",
             "version": key[2][:256] or None,
             "status": result.status,
@@ -1177,10 +1312,83 @@ def _bounded_osv_query_results(
     return details
 
 
+def _apply_dependency_parse_errors(
+    scanner: Any,
+    parse_errors: Sequence[Mapping[str, str]],
+) -> None:
+    """Make dependency parser gaps visible instead of treating them as clean."""
+    if not parse_errors:
+        return
+    scan = getattr(scanner, "dependency_scan", None)
+    if not isinstance(scan, dict):
+        return
+    scan["status"] = "partial"
+    scan["known_vulnerabilities"] = None
+    scan["vulnerability_status"] = "not_assessed"
+    failure_reasons = Counter(scan.get("failure_reasons", {}))
+    failure_reasons["dependency_parse_error"] += len(parse_errors)
+    scan["failure_reasons"] = dict(sorted(failure_reasons.items()))
+    scan["parse_errors"] = [
+        {
+            "file": str(item.get("file", "")),
+            "parser": str(item.get("parser", "unknown")),
+            "reason": str(item.get("reason", "dependency_parse_error")),
+            **({"source_ref": item["source_ref"]} if item.get("source_ref") else {}),
+        }
+        for item in parse_errors
+    ]
+    add_advisory = getattr(scanner, "_add_advisory", None)
+    if callable(add_advisory):
+        add_advisory(
+            code="dependency_parse_error",
+            category="supply_chain",
+            level="warning",
+            title="依赖清单解析不完整",
+            description=(
+                f"依赖清单或锁文件存在 {len(parse_errors)} 处解析缺口；"
+                "未解析内容不能解释为没有依赖漏洞。"
+            ),
+            deduction=0,
+            affects_grade=False,
+            requires_manual_review=True,
+            evidence="; ".join(
+                f"{item.get('file', '<unknown>')}:{item.get('reason', 'dependency_parse_error')}"
+                for item in parse_errors
+            )[:1000],
+            location={"file": str(parse_errors[0].get("file", "manifest.json"))},
+        )
+
+
+def _is_npm_inventory_declaration(record: DependencyRecord) -> bool:
+    """Peer compatibility ranges and bundled-name inventories need not pin versions."""
+    return (
+        normalize_ecosystem(record.ecosystem) == "npm"
+        and PurePosixPath(record.source_file.replace("\\", "/")).name == "package.json"
+        and (
+            record.scope in {"peer", "bundled"}
+            # A peer declaration can also be bundled without acquiring an
+            # install-time pinning requirement. Other mixed install scopes do.
+            or (
+                record.scope == "mixed"
+                and (record.source_ref or "").startswith("#/peerDependencies/")
+            )
+        )
+    )
+
+
+def _inventory_reason(record: DependencyRecord) -> str | None:
+    if normalize_ecosystem(record.ecosystem) == "npm" and is_local_npm_reference(record.local_reference or record.version):
+        return "local_workspace_dependency"
+    if _is_npm_inventory_declaration(record):
+        return "manifest_inventory_only"
+    return None
+
+
 def _check_dependency_records(
     scanner: Any,
     records: list[DependencyRecord],
     sources: list[DependencySourceObservation],
+    parse_errors: Sequence[Mapping[str, str]] = (),
 ) -> None:
     if not records:
         configured_limit = getattr(
@@ -1189,6 +1397,7 @@ def _check_dependency_records(
             getattr(getattr(scanner, "policy", None), "max_osv_queries", 5000),
         )
         scanner.dependency_scan = empty_dependency_scan(configured_limit, status="complete")
+        _apply_dependency_parse_errors(scanner, parse_errors)
         return
     locked_by_package: dict[tuple[str, str], list[DependencyRecord]] = {}
     for record in records:
@@ -1202,7 +1411,11 @@ def _check_dependency_records(
                 for locked in locked_by_package.get(dependency_coordinate(record)[:2], [])
             )
         )
-        if _is_unlocked_version(record.version, record.ecosystem) and not reconciled_with_lockfile:
+        if (
+            _is_unlocked_version(record.version, record.ecosystem)
+            and not reconciled_with_lockfile
+            and not _inventory_reason(record)
+        ):
             scanner._add_finding(
                 rule_id="SR-008", severity="medium", category="supply_chain",
                 title=f"依赖版本未锁定: {record.name}",
@@ -1217,9 +1430,20 @@ def _check_dependency_records(
     source_index = _osv_source_index(sources)
     representatives: list[DependencyRecord] = []
     precomputed_results: dict[tuple[str, str, str], OSVQueryResult] = {}
+    inventory_keys: set[tuple[str, str, str]] = set()
     for key in sorted(groups):
         occurrences = groups[key]
         queryable, reason = dependency_queryability(occurrences[0])
+        if (
+            not queryable
+            and reason in {"missing_version", "non_exact_version", "local_workspace_dependency"}
+            and all(_inventory_reason(record) for record in occurrences)
+        ):
+            inventory_keys.add(key)
+            precomputed_results[key] = OSVQueryResult(
+                [], status="not_queried", failure_reason=_inventory_reason(occurrences[0]),
+            )
+            continue
         relevant_sources = [
             *source_index.get(key[:2], []),
             *source_index.get((key[0], None), []),
@@ -1285,6 +1509,10 @@ def _check_dependency_records(
             status="failed",
             failure_reason="missing_client_result",
         )
+        if key in inventory_keys:
+            # This loop visits ALL groups, including precomputed inventory.
+            # Keep inventory out of skipped/failure counts, not out of reports.
+            continue
         status_counts[result.status] += 1
         if result.status != "succeeded" and result.failure_reason:
             failure_reasons[result.failure_reason] += 1
@@ -1295,7 +1523,17 @@ def _check_dependency_records(
         if not result.vulnerability_ids:
             continue
         locations = {
-            (record.source_file, record.source_ref or "", record.line or 0): _dependency_location(record)
+            (
+                record.source_file,
+                record.source_ref or "",
+                record.line or 0,
+                record.ecosystem,
+                record.name,
+                record.version or "",
+                record.scope,
+                bool(record.direct),
+                record.reachability or (("direct",) if record.direct else ("transitive",)),
+            ): _dependency_location(record)
             for record in occurrences
         }
         occurrence_items = [locations[key] for key in sorted(locations)[:_MAX_OSV_OCCURRENCES_PER_COORDINATE]]
@@ -1317,7 +1555,7 @@ def _check_dependency_records(
                     f"依赖 {key[1]}@{key[2] or '*'} "
                     f"存在 OSV 已知漏洞或安全公告 {vulnerability_id}。"
                 ),
-                location=occurrence_items[0],
+                location=_dependency_finding_location(occurrences, occurrence_items),
                 evidence=f"OSV: {vulnerability_id}; coordinate={key[0]}/{key[1]}@{key[2]}",
                 remediation=f"升级 {key[1]} 到修复版本，或替换为安全替代包。",
                 kind="vulnerability",
@@ -1342,7 +1580,7 @@ def _check_dependency_records(
     rate_limited = status_counts["rate_limited"]
     skipped = status_counts["not_queried"]
     unsupported = status_counts["unsupported"]
-    queryable = len(groups) - unsupported
+    queryable = len(groups) - unsupported - len(inventory_keys)
     queried = succeeded + failed + rate_limited
     attempted_statuses = {"succeeded", "failed", "rate_limited"}
     covered_occurrence_ids = {
@@ -1371,6 +1609,9 @@ def _check_dependency_records(
     )
     if status == "complete" and unsupported:
         status = "partial"
+    if len(inventory_keys) == len(groups):
+        status = "complete"
+    vulnerability_assessed = status == "complete" and not inventory_keys
     scanner.dependency_scan = {
         "status": status,
         "data_source": "OSV",
@@ -1386,20 +1627,23 @@ def _check_dependency_records(
         "failed": failed,
         "skipped": skipped,
         "unsupported": unsupported,
+        "inventory_only": len(inventory_keys),
         "rate_limited": rate_limited,
         "remaining": remaining,
         "cache_hits": cache_hits,
         "provider_requests": int(getattr(client, "request_count", queried)),
         "resumed_queries": int(getattr(client, "resumed_queries", 0)),
         "known_vulnerabilities": (
-            len(known_vulnerability_roots) if status == "complete" else None
+            len(known_vulnerability_roots) if vulnerability_assessed else None
         ),
-        "vulnerability_status": "assessed" if status == "complete" else "not_assessed",
+        "vulnerability_status": "assessed" if vulnerability_assessed else "not_assessed",
         "failure_reasons": dict(sorted(failure_reasons.items())),
+        "scope_summary": _dependency_scope_summary(records, groups, results),
         "query_results": query_results,
         "query_results_truncated": len(query_results) < len(groups),
         "query_results_omitted": len(groups) - len(query_results),
     }
+    _apply_dependency_parse_errors(scanner, parse_errors)
     if status != "complete":
         add_advisory = getattr(scanner, "_add_advisory", None)
         if callable(add_advisory):
@@ -1529,10 +1773,12 @@ def _check_dependency_integrity(scanner: Any, records: list[DependencyRecord]) -
             remediation="核对获取的制品、锁文件摘要与发布来源，重新锁定可信版本。",
             llm_review_exempt=True,
         )
-    if not claims:
-        status = "not_applicable"
-    elif mismatch_count:
+    if mismatch_count:
         status = "mismatch"
+    elif collection_errors or scanner.dependency_scan.get("parse_errors"):
+        status = "partial"
+    elif not claims:
+        status = "not_applicable"
     elif verified == len(claims):
         status = "verified"
     elif unsupported and not verified and not unavailable:
@@ -1666,7 +1912,7 @@ def _check_manifest_lock_consistency(scanner: Any, files: dict[str, str]) -> Non
         try:
             manifest = json.loads(files[manifest_file])
             lock = json.loads(content)
-        except (json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             continue
         if not isinstance(manifest, dict) or not isinstance(lock, dict):
             continue
@@ -1676,7 +1922,12 @@ def _check_manifest_lock_consistency(scanner: Any, files: dict[str, str]) -> Non
             continue
         checked += 1
         differences: list[str] = []
-        for section in ("dependencies", "devDependencies", "optionalDependencies"):
+        for section in (
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ):
             declared = manifest.get(section, {})
             locked = root.get(section, {})
             if not isinstance(declared, dict) or not isinstance(locked, dict):
@@ -1912,7 +2163,9 @@ def run(scanner: Any) -> None:
     # not inspect their structured contents.
     metadata_source = metadata_location(scanner).get("file", "")
     manifest_records = _manifest_records(meta, metadata_source) if meta else []
-    parsed_records = parse_dependencies(getattr(scanner, "_file_contents", {}))
+    parsed_records, dependency_parse_errors = parse_dependencies_with_errors(
+        getattr(scanner, "_file_contents", {})
+    )
     manifest_osv_records = [
         record
         for record in manifest_records
@@ -1936,12 +2189,19 @@ def run(scanner: Any) -> None:
                     "source_file": record.source_file,
                     "source_ref": record.source_ref,
                     "line": record.line,
+                    "ecosystem": record.ecosystem,
+                    "scope": record.scope,
+                    "direct": bool(record.direct),
+                    "reachability": bounded_dependency_reachability(
+                        record.reachability
+                        or (("direct",) if record.direct else ("transitive",))
+                    ),
                 }
                 for record in records
             ]
         }
         _check_typosquatting(scanner, normalized_meta)
-    _check_dependency_records(scanner, records, sources)
+    _check_dependency_records(scanner, records, sources, dependency_parse_errors)
     scanner.dependency_scan["non_osv_manifest_dependencies"] = (
         _non_osv_manifest_dependencies(meta) if meta else {
             "total": 0,

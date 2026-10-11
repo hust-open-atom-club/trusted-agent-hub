@@ -28,7 +28,7 @@ import time
 from typing import Literal, Protocol
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from scanners.risk_scanner.dependency_parsers import parse_dependencies
+from scanners.risk_scanner.dependency_parsers import parse_dependencies_with_errors
 from scanners.risk_scanner.dependency_parsers.models import (
     DependencyRecord,
     DependencySourceUsage,
@@ -390,7 +390,9 @@ def _artifact_requests(
     errors: set[str] = set()
     for path, content in sorted(files.items()):
         try:
-            records.extend(parse_dependencies({path: content}))
+            parsed, parse_errors = parse_dependencies_with_errors({path: content})
+            records.extend(parsed)
+            errors.update(error["reason"] for error in parse_errors)
         except (RecursionError, TypeError, ValueError):
             errors.add("dependency_parse_error")
     grouped: dict[str, set[str]] = {}

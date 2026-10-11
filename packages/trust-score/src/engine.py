@@ -383,6 +383,9 @@ def _build_dimensions(
             "scan_state": (scan_report or {}).get("scan_status", {}).get("state", "failed"),
             "scan_conclusion": (scan_report or {}).get("scan_status", {}).get("conclusion", "inconclusive"),
             "scan_complete": bool(i2_disc.get("scan_complete", False)),
+            "dependency_scope_impact": i2_disc.get(
+                "dependency_scope_impact", {}
+            ),
             "failed_rules": [
                 r.get("rule_id") for r in ((scan_report or {}).get("rule_execution", {}).get("results", []) or [])
                 if r.get("status") == "failed"

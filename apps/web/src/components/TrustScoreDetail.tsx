@@ -147,6 +147,22 @@ export default function TrustScoreDetail({
   const explanations = trustScore.explanations;
   const securityAssessment = trustScore.security_assessment;
   const evidenceAssessment = trustScore.evidence_assessment;
+  const scanDetails = trustScore.dimensions?.scan_results?.details;
+  const dependencyScopeImpact = (
+    scanDetails?.dependency_scope_impact
+    && typeof scanDetails.dependency_scope_impact === 'object'
+    ? scanDetails.dependency_scope_impact
+    : null
+  ) as {
+    risk_entities?: number;
+    area_penalty_points?: Record<string, number>;
+  } | null;
+  const hasDependencyScopeImpact = Boolean(
+    dependencyScopeImpact && (dependencyScopeImpact.risk_entities ?? 0) > 0,
+  );
+  const scopePenalty = (area: string) => (
+    Number(dependencyScopeImpact?.area_penalty_points?.[area] ?? 0).toLocaleString()
+  );
   const modelFingerprint = trustScore.model_fingerprint;
   const fingerprintPreview = modelFingerprint && modelFingerprint.length > 12
     ? `${modelFingerprint.slice(0, 12)}…`
@@ -156,6 +172,7 @@ export default function TrustScoreDetail({
   const hasBodyContent = hasAssessments
     || topRisks.length > 0
     || Boolean(explanations?.length)
+    || hasDependencyScopeImpact
     || hasModelMetadata;
 
   const grade = effectiveGrade ?? summary?.grade;
@@ -352,6 +369,30 @@ export default function TrustScoreDetail({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {hasDependencyScopeImpact && (
+        <div
+          data-testid="trust-dependency-scope-impact"
+          style={{
+            padding: '0.75rem 1.25rem',
+            borderBottom: '1px solid var(--color-rule)',
+            fontSize: '0.78rem',
+            lineHeight: 1.55,
+          }}
+        >
+          <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-muted)', marginBottom: '0.3rem' }}>
+            {t('trust_score.dependency_scope_impact')}
+          </div>
+          <p style={{ margin: 0, color: 'var(--color-muted)' }}>
+            {t('trust_score.dependency_scope_impact_description')}
+          </p>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+            <span>{t('trust_score.dependency_scope_runtime')}: {scopePenalty('runtime')}</span>
+            <span>{t('trust_score.dependency_scope_development')}: {scopePenalty('development')}</span>
+            <span>{t('trust_score.dependency_scope_unknown')}: {scopePenalty('unknown')}</span>
+          </div>
         </div>
       )}
 

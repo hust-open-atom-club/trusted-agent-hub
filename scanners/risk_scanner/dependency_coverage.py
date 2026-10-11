@@ -9,6 +9,9 @@ DEFAULT_OSV_QUERY_LIMIT = 5_000
 MAX_OSV_QUERY_RESULTS = 1_000
 MAX_OSV_QUERY_RESULT_OCCURRENCES = 1_000
 MAX_OSV_QUERY_RESULTS_BYTES = 1024 * 1024
+_DEPENDENCY_SCOPES = (
+    "runtime", "dev", "test", "optional", "peer", "bundled", "mixed", "unknown",
+)
 
 
 def normalize_query_limit(
@@ -44,6 +47,7 @@ def empty_dependency_scan(
         "failed": 0,
         "skipped": 0,
         "unsupported": 0,
+        "inventory_only": 0,
         "rate_limited": 0,
         "remaining": 0,
         "cache_hits": 0,
@@ -59,4 +63,21 @@ def empty_dependency_scan(
         "query_results_truncated": False,
         "query_results_omitted": 0,
         "failure_reasons": {},
+        "scope_summary": {
+            "occurrence_counts": {scope: 0 for scope in _DEPENDENCY_SCOPES},
+            "unique_coordinate_counts": {scope: 0 for scope in _DEPENDENCY_SCOPES},
+            "vulnerability_counts": {scope: 0 for scope in _DEPENDENCY_SCOPES},
+            "coverage": {
+                scope: {
+                    "occurrences": 0,
+                    "unique_coordinates": 0,
+                    "queried_occurrences": 0,
+                    "assessed_occurrences": 0,
+                    "unassessed_occurrences": 0,
+                    "vulnerable_coordinates": 0,
+                    "vulnerability_count": 0,
+                }
+                for scope in _DEPENDENCY_SCOPES
+            },
+        },
     }
