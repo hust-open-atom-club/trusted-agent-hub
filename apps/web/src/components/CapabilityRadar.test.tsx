@@ -69,10 +69,17 @@ describe('CapabilityRadar', () => {
     }
     expect(container.querySelectorAll('.capability-radar-ring')).toHaveLength(4);
     expect(container.querySelectorAll('.capability-radar-ring.is-tier')).toHaveLength(2);
-    // 删除 + shell 决定整张图的色调
-    expect(container.querySelector('.capability-radar-area')?.getAttribute('class')).toContain(
-      'tone-danger',
+    // 面积保持中性，严重度只由顶点颜色承载
+    expect(container.querySelector('.capability-radar-area')?.getAttribute('class')).toBe(
+      'capability-radar-area',
     );
+    // 声明了具体范围的轴用实心顶点，上限未知的轴用同色描边
+    expect(
+      container.querySelectorAll('.capability-radar-vertex[fill="var(--color-success)"]').length,
+    ).toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll('.capability-radar-vertex[stroke="var(--color-danger)"]').length,
+    ).toBeGreaterThan(0);
   });
 
   it('scales each vertex by the declared scope, not by raw chart coordinates', () => {
@@ -121,14 +128,54 @@ describe('CapabilityRadar', () => {
       />,
     );
 
-    const table = screen.getByRole('table', { name: 'demo-skill 声明的权限范围' });
+    const table = screen.getByRole('table', { name: 'demo-skill 的能力与风险概览' });
 
     expect(table.querySelectorAll('tbody tr')).toHaveLength(7);
     expect(screen.getAllByText('可删除文件')).toHaveLength(1);
     // 五条未声明轴（表格）
     expect(screen.getAllByText('未声明')).toHaveLength(5);
     expect(screen.getByText('当前权限')).toBeInTheDocument();
-    expect(screen.getByText('完全权限（参考）')).toBeInTheDocument();
+    // 文件删除只有布尔声明，上限未知 → 图例给出对应说明
+    expect(screen.getByText('未声明上限')).toBeInTheDocument();
+    expect(screen.getByText('内圈受限 · 外圈最大范围')).toBeInTheDocument();
+  });
+
+  it('marks the axes whose upper bound is not declared', () => {
+    const { container } = render(
+      <CapabilityRadar
+        axes={getCapabilityAxes(permissionSummary({ shell_allowed: true }))}
+        packageName="demo-skill"
+      />,
+    );
+
+    expect(container.querySelector('[data-axis="shell"]')).toHaveAttribute('data-bound', 'unknown');
+    expect(container.querySelector('[data-axis="filesystem_read"]')).toHaveAttribute(
+      'data-bound',
+      'declared',
+    );
+    expect(container.querySelectorAll('.capability-radar-spoke.is-unknown')).toHaveLength(1);
+    expect(container.querySelectorAll('.capability-radar-vertex.is-unknown')).toHaveLength(1);
+    // 不填背景色：否则会在该轴落点处把外圈「擦」出一个缺口
+    expect(container.querySelector('.capability-radar-vertex.is-unknown')).toHaveAttribute(
+      'fill',
+      'none',
+    );
+  });
+
+  it('keeps the legend to the current scope when every axis declares a bound', () => {
+    render(
+      <CapabilityRadar
+        axes={getCapabilityAxes(
+          permissionSummary({ filesystem_read_count: 1, filesystem_write_count: 2 }),
+        )}
+        packageName="demo-skill"
+      />,
+    );
+
+    expect(screen.getByText('当前权限')).toBeInTheDocument();
+    expect(screen.queryByText('未声明上限')).not.toBeInTheDocument();
+    // 半径刻度说明与数据无关，始终展示
+    expect(screen.getByText('内圈受限 · 外圈最大范围')).toBeInTheDocument();
   });
 
   it('renders nothing when fewer than three axes are available', () => {

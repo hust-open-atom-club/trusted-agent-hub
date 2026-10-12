@@ -227,9 +227,7 @@
     "main": "主入口",
     "config": "配置",
     "scripts": "脚本",
-    "installation": "安装",
     "install_hint": "使用 TrustedAgentHub CLI 安装此 {{type}}：",
-    "install_targets": "安装目标",
     "homepage": "主页",
     "keywords": "关键词",
     "versions": "版本",
@@ -254,7 +252,6 @@
       "integrity": "完整性",
       "capability": "能力",
       "boundary": "安全边界",
-      "installation": "安装",
       "versions": "版本",
       "feedback": "反馈"
     },
@@ -262,7 +259,6 @@
       "trust_history": "信任评分历史",
       "dependencies_kicker": "运行要求",
       "entry_points_kicker": "包启动元数据",
-      "installation_kicker": "方式和目标",
       "versions_kicker": "发布历史"
     },
     "meta": {
@@ -286,11 +282,10 @@
     },
     "empty": {
       "source": "此包没有发布来源仓库元数据。",
-      "permissions": "此版本没有发布权限清单。",
+      "permissions": "作者未声明权限范围，平台无法核验它的能力边界。",
       "dependencies_manifest": "此版本没有发布依赖清单。",
       "dependencies": "未声明运行依赖。",
       "entry_points": "此版本没有发布入口元数据。",
-      "installation": "此版本没有发布安装清单。",
       "trust_score": "此版本暂无详细信任评分。"
     },
     "files": {
@@ -322,9 +317,9 @@
       "missing": "缺失"
     },
     "capability": {
-      "radar_title": "权限范围",
-      "radar_aria": "{{name}} 声明的权限范围",
-      "radar_note": "外圈表示声明范围更大或无法判定上限（按最大范围展示）。该图描述声明的能力范围，与信任等级相互独立。",
+      "radar_title": "能力与风险概览",
+      "radar_aria": "{{name}} 的能力与风险概览",
+      "radar_note": "未声明上限的能力按最大范围展示。",
       "empty": "此版本未声明任何敏感权限。",
       "axis_header": "权限项",
       "value_header": "声明范围",
@@ -333,7 +328,8 @@
       "block_summary": "以下内容全部来自 {{name}} 作者提交时声明的信息与公开的扫描结论，不含审核内部证据。",
       "legend": {
         "current": "当前权限",
-        "reference": "完全权限（参考）"
+        "unknown": "未声明上限",
+        "radius": "内圈受限 · 外圈最大范围"
       },
       "scope": {
         "shell": "命令执行",
@@ -345,16 +341,16 @@
         "use_case_label": "适用场景",
         "use_case_body": "{{title}} — {{description}}",
         "tools_label": "工具",
-        "tools_body": "{{count}} 个：{{sample}}",
         "purpose_label": "权限用途",
         "purpose_body": "{{scope}}：{{reason}}",
         "boundary_label": "边界核验",
         "keywords_label": "适用场景",
-        "keywords_body": "{{sample}}"
+        "keywords_body": "{{sample}}",
+        "expand": "展开查看更多（共 {{count}} 项）",
+        "collapse": "收起"
       },
       "boundary": {
         "verified_consistent": "扫描未发现未声明的能力。",
-        "verified_undeclared": "扫描发现未声明的能力，建议人工复核后再安装。",
         "not_verified": "此版本尚无可用扫描结果，边界未核验。"
       },
       "level": {
@@ -406,8 +402,7 @@
       "verdict": {
         "limited": "该版本声明的权限范围较小，未命中删除、执行等高风险能力。",
         "none": "该版本未声明任何敏感权限。",
-        "elevated": "该版本声明了 {{count}} 项高风险权限，请确认你能接受这些能力。",
-        "undeclared": "扫描发现未声明的能力，建议人工复核。"
+        "elevated": "该版本声明了 {{count}} 项高风险权限，请确认你能接受这些能力。"
       }
     },
     "breadcrumb": {
@@ -415,8 +410,6 @@
       "detail": "包详情"
     },
     "install": {
-      "method": "安装方式",
-      "external_warning": "此方式会执行外部命令，安装时需要显式确认。",
       "mcp_config_hint": "安装可能在确认后写入 MCP 客户端配置。",
       "target_client": "目标客户端",
       "target_path": "目标路径",
@@ -427,32 +420,6 @@
       "ai_prompt": "请根据 {{guideUrl}} 安装 {{name}} 到 {{client}}。如果本机没有 tah 命令，请先执行 npm install -g trusted-agent-hub@latest 安装 TrustedAgentHub CLI，并按指南中的步骤完成 Hub 配置。安装前请展示包名、版本、类型、风险等级、权限摘要和目标路径；如果需要确认，请先询问我。确认后只使用 tah install {{name}} --client {{client}} 安装，不要手动下载、解压或复制文件。",
       "copied": "已复制",
       "copy_failed": "复制失败"
-    },
-    "install_method": {
-      "copy_directory": {
-        "label": "目录复制",
-        "description": "下载 ZIP 并校验 SHA-256 后，复制到目标客户端目录。"
-      },
-      "npm_install": {
-        "label": "npm 安装",
-        "description": "通过 npm 安装到受管目录，不污染系统环境。"
-      },
-      "pip_install": {
-        "label": "pip 安装",
-        "description": "通过 pip 安装到受管目录。"
-      },
-      "docker_run": {
-        "label": "Docker",
-        "description": "拉取镜像并生成运行配置，不会自动启动容器。"
-      },
-      "manual_steps": {
-        "label": "人工步骤",
-        "description": "按包说明手动完成安装，CLI 只记录步骤。"
-      },
-      "unknown": {
-        "label": "未知",
-        "description": "按包说明完成安装。"
-      }
     },
     "client": {
       "claude-code": "Claude Code",

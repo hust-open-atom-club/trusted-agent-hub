@@ -7,7 +7,6 @@ import { useTranslation } from 'react-i18next';
 import { fetchPackage, fetchPackageVersion, fetchPackageVersions } from '@/data/packages';
 import type {
   Package,
-  PublicInstallation,
   PublicVersionDetail,
   VersionSummary,
 } from '@/types';
@@ -15,7 +14,6 @@ import {
   buildInstallCommand,
   getClientLabel,
   getClientTargetPath,
-  getInstallMethodInfo,
   getSelectableClients,
 } from '@/lib/install-info';
 import TypeBadge from '@/components/TypeBadge';
@@ -25,6 +23,7 @@ import CapabilityRadar from '@/components/CapabilityRadar';
 import FeedbackSection from '@/components/FeedbackSection';
 import { fadeUp, listItem, listStagger, motion, pageStagger, softPanel } from '@/components/Motion';
 import { useAuth } from '@/lib/auth';
+import CapabilityHighlightCard from './CapabilityHighlightCard';
 import InstallCommandBlock from './InstallCommandBlock';
 import PackageIcon from './PackageIcon';
 import PackageReadingNav, { type ReadingNavItem } from './PackageReadingNav';
@@ -35,7 +34,6 @@ import {
   getCapabilityHighlights,
   getFeedbackSummary,
   hasDeclaredCapability,
-  type CapabilityHighlight,
 } from './detail-view-model';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -118,52 +116,6 @@ function DetailSection({
   );
 }
 
-function InstallationDetails({
-  install,
-  t,
-  clientLabel,
-}: {
-  install?: PublicInstallation | null;
-  t: Translate;
-  clientLabel: (client: string) => string;
-}) {
-  if (!install) {
-    return <p className="detail-muted">{t('detail.empty.installation')}</p>;
-  }
-
-  const methodInfo = getInstallMethodInfo(install.method);
-
-  return (
-    <div className="detail-info-list">
-      <div className="detail-info-row">
-        <span>{t('detail.install.method')}</span>
-        <strong>{t(`detail.install_method.${methodInfo.key}.label`, { defaultValue: methodInfo.label })}</strong>
-      </div>
-      <p className="detail-muted">
-        {t(`detail.install_method.${methodInfo.key}.description`, { defaultValue: methodInfo.description })}
-      </p>
-      {methodInfo.requiresExternalCommand && (
-        <p className="install-warning">{t('detail.install.external_warning')}</p>
-      )}
-      {install.pre_install_message && <p className="install-warning">{install.pre_install_message}</p>}
-      {install.post_install_message && <p className="install-success">{install.post_install_message}</p>}
-      {install.targets?.length ? (
-        <div className="install-target-list">
-          <strong>{t('detail.install_targets')}</strong>
-          <ul>
-            {install.targets.map((target, i) => (
-              <li key={i}>
-                <span>{target.client ? clientLabel(target.client) : '—'}</span>
-                <code>{target.destination}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export default function PackageDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -171,15 +123,6 @@ export default function PackageDetailPage() {
   const { t, i18n } = useTranslation();
   const tt: Translate = (key, options) => String(t(key, options));
   const dateLocale = i18n.language === 'zh' ? 'zh-CN' : 'en-US';
-  const highlightBody = (highlight: CapabilityHighlight) => {
-    const values = { ...highlight.bodyValues };
-    if (typeof values.scopeKey === 'string') {
-      values.scope = tt(values.scopeKey);
-      delete values.scopeKey;
-    }
-    return tt(highlight.bodyKey, values);
-  };
-
   const { user, token } = useAuth();
 
   const [pkg, setPkg] = useState<Package | null | undefined>(undefined);
@@ -246,10 +189,7 @@ export default function PackageDetailPage() {
   const riskLevel = versionDetail?.risk_level ?? pkg.risk_level;
   const capabilityAxes = getCapabilityAxes(versionDetail?.permission_summary);
   const boundaryRows = getBoundaryRows(versionDetail?.permission_summary);
-  const boundaryVerdict = getBoundaryVerdict(
-    versionDetail?.permission_summary,
-    versionDetail?.trust_boundary,
-  );
+  const boundaryVerdict = getBoundaryVerdict(versionDetail?.permission_summary);
   const declaredRows = boundaryRows.filter((row) => row.allowed);
   const highlights = getCapabilityHighlights(
     versionDetail?.capabilities,
@@ -265,7 +205,6 @@ export default function PackageDetailPage() {
   const sectionNavItems: ReadingNavItem[] = [
     { id: 'capability', label: tt('detail.nav.capability') },
     { id: 'permissions', label: tt('detail.nav.boundary') },
-    { id: 'installation', label: tt('detail.nav.installation') },
     { id: 'feedback', label: tt('detail.nav.feedback') },
     { id: 'versions', label: tt('detail.nav.versions') },
   ];
@@ -341,19 +280,7 @@ export default function PackageDetailPage() {
             </p>
             <div className="capability-highlight-grid">
               {highlights.map((highlight) => (
-                <motion.article
-                  className={`capability-highlight ${highlight.tone}`}
-                  key={highlight.key}
-                  variants={fadeUp}
-                >
-                  <span>{tt(highlight.labelKey)}</span>
-                  <strong>{highlightBody(highlight)}</strong>
-                  {highlight.authorDeclared && (
-                    <em className="capability-highlight-flag">
-                      {tt('detail.capability.tile.author_declared')}
-                    </em>
-                  )}
-                </motion.article>
+                <CapabilityHighlightCard highlight={highlight} key={highlight.key} />
               ))}
             </div>
           </DetailSection>
@@ -363,29 +290,39 @@ export default function PackageDetailPage() {
             title={tt('detail.boundary.title')}
             kicker={tt('detail.boundary.subtitle', { type: typeLabel })}
           >
-            {hasPermissionManifest ? (
-              <div className="boundary-layout">
-                <div className="boundary-radar">
-                  {hasDeclaredCapability(capabilityAxes) ? (
-                    <CapabilityRadar axes={capabilityAxes} packageName={pkg.name} />
-                  ) : (
-                    <p className="detail-muted">{tt('detail.capability.empty')}</p>
-                  )}
-                </div>
-                <div className="boundary-panel">
-                  {(effectiveGrade || riskLevel || versionDetail?.install_recommendation) && (
-                    <div className="boundary-grade">
-                      <TrustScoreDetail
-                        mode="public"
-                        effectiveGrade={effectiveGrade}
-                        publicRiskLevel={riskLevel}
-                        publicInstallRecommendation={versionDetail?.install_recommendation}
-                      />
-                    </div>
-                  )}
-                  {!effectiveGrade && !riskLevel && !versionDetail?.install_recommendation && (
-                    <p className="detail-muted">{tt('detail.empty.trust_score')}</p>
-                  )}
+            {/* 评级属于这一节的主体信息，与「作者是否声明权限」无关：
+                没有权限清单时更要展示评级，不能整块消失。 */}
+            <div className="boundary-layout">
+              <div className="boundary-radar">
+                {!hasPermissionManifest ? (
+                  <p className="detail-muted">{tt('detail.empty.permissions')}</p>
+                ) : hasDeclaredCapability(capabilityAxes) ? (
+                  <CapabilityRadar axes={capabilityAxes} packageName={pkg.name} />
+                ) : (
+                  <p className="detail-muted">{tt('detail.capability.empty')}</p>
+                )}
+                {/* 结论是对这张图的读数，跟在图下方；放进右栏会把两栏拉得高低不齐。
+                    没有画出雷达时（未声明任何权限 / 无权限清单）不重复给结论。 */}
+                {hasDeclaredCapability(capabilityAxes) && (
+                  <p className={`boundary-verdict ${boundaryVerdict.tone}`}>
+                    {tt(boundaryVerdict.key, boundaryVerdict.values)}
+                  </p>
+                )}
+              </div>
+              <div className="boundary-panel">
+                {(effectiveGrade || riskLevel || versionDetail?.install_recommendation) ? (
+                  <div className="boundary-grade">
+                    <TrustScoreDetail
+                      mode="public"
+                      effectiveGrade={effectiveGrade}
+                      publicRiskLevel={riskLevel}
+                      publicInstallRecommendation={versionDetail?.install_recommendation}
+                    />
+                  </div>
+                ) : (
+                  <p className="detail-muted">{tt('detail.empty.trust_score')}</p>
+                )}
+                {hasPermissionManifest && (
                   <ul className="boundary-list">
                     {boundaryRows.map((row) => (
                       <li className={row.allowed ? row.tone : 'off'} key={row.key}>
@@ -394,18 +331,9 @@ export default function PackageDetailPage() {
                       </li>
                     ))}
                   </ul>
-                  <p className={`boundary-verdict ${boundaryVerdict.tone}`}>
-                    {tt(boundaryVerdict.key, boundaryVerdict.values)}
-                  </p>
-                </div>
+                )}
               </div>
-            ) : (
-              <p className="detail-muted">{tt('detail.empty.permissions')}</p>
-            )}
-          </DetailSection>
-
-          <DetailSection id="installation" title={tt('detail.installation')} kicker={tt('detail.section.installation_kicker')}>
-            <InstallationDetails install={install} t={tt} clientLabel={clientLabel} />
+            </div>
           </DetailSection>
 
           <div id="feedback">
@@ -463,12 +391,10 @@ export default function PackageDetailPage() {
               </label>
             )}
             <InstallCommandBlock command={installCommand} packageName={pkg.name} client={effectiveClient} />
-            {!install?.targets?.length && (
-              <div className="rail-target-path">
-                <span>{tt('detail.install.target_path')}</span>
-                <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name, pkg.type)}</code>
-              </div>
-            )}
+            <div className="rail-target-path">
+              <span>{tt('detail.install.target_path')}</span>
+              <code>{getClientTargetPath(install?.targets, effectiveClient, pkg.name, pkg.type)}</code>
+            </div>
           </motion.div>
 
           {hasPermissionManifest && (
