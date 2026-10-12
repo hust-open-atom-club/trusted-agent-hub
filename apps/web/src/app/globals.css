@@ -942,7 +942,9 @@ h3 {
 
 .market-shelves {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 货架数量随数据变化（低风险货架在没有 A/B 级包时整块不渲染），
+     用 auto-fit 让现有的货架铺满整行，不留空列。 */
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -2399,42 +2401,7 @@ h3 {
   text-underline-offset: 3px;
 }
 
-.detail-info-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-}
-
-.detail-info-row {
-  display: grid;
-  grid-template-columns: 8rem minmax(0, 1fr);
-  gap: 1rem;
-  align-items: baseline;
-  padding-bottom: 0.65rem;
-  border-bottom: 1px solid var(--color-rule);
-}
-
-.detail-info-row:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
-}
-
-.detail-info-row>span {
-  color: var(--color-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.detail-info-row strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.detail-info-row code,
-.rail-target-path code,
-.install-target-list code {
+.rail-target-path code {
   display: inline-flex;
   max-width: 100%;
   margin-left: 0.4rem;
@@ -2492,7 +2459,8 @@ h3 {
   letter-spacing: 0.04em;
 }
 
-/* 权限范围雷达图：只描述声明的能力范围，信任结论由等级单独表达 */
+/* 能力雷达图：展示包具备哪些能力与各自的风险档位（半径＝受限/最大），
+   信任结论由同栏的评级单独表达，不靠面积颜色传达 */
 
 .visually-hidden {
   position: absolute;
@@ -2549,30 +2517,30 @@ h3 {
   stroke-width: 1;
 }
 
+.capability-radar-spoke.is-unknown {
+  stroke: var(--color-rule-2);
+  stroke-dasharray: 3 2.5;
+}
+
 .capability-radar-area {
-  stroke-width: 2;
+  /* 中性面积：一处危险能力不再把整张图染红，严重度由顶点与评级承载 */
+  fill: color-mix(in oklch, var(--color-ink-2) 12%, transparent);
+  stroke: var(--color-rule-2);
+  stroke-width: 1.5;
   stroke-linejoin: round;
   transition: all var(--ease-out) 240ms;
 }
 
-.capability-radar-area.tone-safe {
-  fill: color-mix(in oklch, var(--color-success) 24%, transparent);
-  stroke: var(--color-success);
-}
-
-.capability-radar-area.tone-caution {
-  fill: color-mix(in oklch, var(--color-warning) 26%, transparent);
-  stroke: var(--color-warning);
-}
-
-.capability-radar-area.tone-danger {
-  fill: color-mix(in oklch, var(--color-danger) 20%, transparent);
-  stroke: var(--color-danger);
-}
-
 .capability-radar-vertex {
-  stroke: var(--color-paper-2);
+  /* 只定尺寸：颜色由组件的属性给出。样式表里的 stroke/fill 会覆盖 SVG
+     呈现属性，在这里写颜色会让组件的 tone 色失效（曾经因此把外圈盖出一个角）。 */
   stroke-width: 1.5;
+}
+
+/* 上限未知的轴按最大范围绘制，用空心虚线顶点区别于作者声明了具体范围的轴 */
+.capability-radar-vertex.is-unknown {
+  stroke-width: 1.8;
+  stroke-dasharray: 2.4 1.6;
 }
 
 .capability-radar-centre {
@@ -2622,21 +2590,31 @@ h3 {
   box-sizing: border-box;
   border: 2px solid var(--color-rule-2);
   border-radius: 50%;
+  background: color-mix(in oklch, var(--color-ink-2) 12%, transparent);
 }
 
-.capability-radar-legend-dot.tone-safe {
-  border-color: var(--color-success);
-  background: color-mix(in oklch, var(--color-success) 24%, transparent);
+.capability-radar-legend-dot.is-unknown {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--color-rule-2);
 }
 
-.capability-radar-legend-dot.tone-caution {
-  border-color: var(--color-warning);
-  background: color-mix(in oklch, var(--color-warning) 26%, transparent);
+/* 半径刻度说明：内圈＝受限范围，外圈＝最大范围 */
+.capability-radar-legend-rings {
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--color-rule-2);
+  border-radius: 50%;
 }
 
-.capability-radar-legend-dot.tone-danger {
-  border-color: var(--color-danger);
-  background: color-mix(in oklch, var(--color-danger) 20%, transparent);
+.capability-radar-legend-rings>i {
+  position: absolute;
+  inset: 3px;
+  border: 1.5px solid var(--color-rule-2);
+  border-radius: 50%;
 }
 
 /* 「这个 Skill 是干什么的?」要点卡 */
@@ -2674,6 +2652,57 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.capability-highlight-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capability-highlight-items li {
+  color: var(--color-ink);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.capability-highlight-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.capability-highlight-tag {
+  padding: 0.12rem 0.5rem;
+  background: var(--color-paper-3);
+  border-radius: var(--radius-pill);
+  color: var(--color-ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.capability-highlight-more {
+  align-self: flex-start;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-ink-2);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.capability-highlight-more:hover {
+  color: var(--color-ink);
+}
+
 .capability-highlight-flag {
   align-self: flex-start;
   margin-top: 0.15rem;
@@ -2707,6 +2736,9 @@ h3 {
 }
 
 .boundary-radar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   min-width: 0;
 }
 
@@ -2863,48 +2895,6 @@ h3 {
 
 .detail-table tr:last-child td {
   border-bottom: 0;
-}
-
-.install-warning,
-.install-success {
-  padding: 0.7rem 0.85rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-rule);
-}
-
-.install-warning {
-  background: var(--color-warning-light);
-  color: var(--color-warning) !important;
-}
-
-.install-success {
-  background: var(--color-success-light);
-  color: var(--color-success) !important;
-}
-
-.install-target-list {
-  padding-top: 0.25rem;
-}
-
-.install-target-list>strong {
-  display: block;
-  margin-bottom: 0.5rem;
-  color: var(--color-ink);
-}
-
-.install-target-list ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  padding-left: 0;
-  list-style: none;
-}
-
-.install-target-list li {
-  display: grid;
-  grid-template-columns: 7rem minmax(0, 1fr);
-  gap: 0.75rem;
-  align-items: start;
 }
 
 .version-list {
@@ -5785,12 +5775,6 @@ h3 {
     gap: 0.2rem;
   }
 
-  .detail-info-row,
-  .install-target-list li {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-  }
-
   .permissions-list,
   .dependencies-list,
   .integrity-grid {
@@ -8223,7 +8207,7 @@ h3 {
 }
 
 .marketplace-layout>.market-shelves {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
   margin-bottom: 2.25rem;
 }
 

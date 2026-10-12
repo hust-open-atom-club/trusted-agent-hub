@@ -59,6 +59,11 @@ export interface CapabilityAxis {
   tone: PermissionTone;
   detailKey: string;
   detailValues: Record<string, string | number | boolean>;
+  /**
+   * 公开投影只有布尔值、拿不到数量或路径上限时，该轴按最大范围绘制。
+   * 这类轴在雷达图上以虚线轴 + 空心顶点标记，区别于作者声明了具体范围的轴。
+   */
+  unknownBound: boolean;
 }
 
 const CAPABILITY_SCOPE_VALUE: Record<CapabilityScope, number> = {
@@ -75,8 +80,17 @@ function capabilityAxis(
   tone: PermissionTone,
   detailKey: string,
   detailValues: Record<string, string | number | boolean> = {},
+  unknownBound = false,
 ): CapabilityAxis {
-  return { key, scope, value: CAPABILITY_SCOPE_VALUE[scope], tone, detailKey, detailValues };
+  return {
+    key,
+    scope,
+    value: CAPABILITY_SCOPE_VALUE[scope],
+    tone,
+    detailKey,
+    detailValues,
+    unknownBound,
+  };
 }
 
 export function getCapabilityAxes(summary?: PublicPermissionSummary | null): CapabilityAxis[] {
@@ -118,15 +132,16 @@ export function getCapabilityAxes(summary?: PublicPermissionSummary | null): Cap
           'unrestricted',
           'danger',
           'detail.capability.value.filesystem_delete',
+          {},
+          true,
         )
       : capabilityAxis('filesystem_delete', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
-    // 公开投影只有 shell_allowed 布尔值，无法区分命令白名单与任意命令，
-    // 因此按范围无法判定处理（保守取最大档）。
+    // 公开投影只有 shell_allowed 布尔值，无法区分命令白名单与任意命令。
     shellAllowed
-      ? capabilityAxis('shell', 'unrestricted', 'danger', 'detail.capability.value.shell')
+      ? capabilityAxis('shell', 'unrestricted', 'danger', 'detail.capability.value.shell', {}, true)
       : capabilityAxis('shell', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
     networkAllowed
-      ? capabilityAxis('network', 'unrestricted', 'caution', 'detail.capability.value.network')
+      ? capabilityAxis('network', 'unrestricted', 'caution', 'detail.capability.value.network', {}, true)
       : capabilityAxis('network', 'none', 'safe', NO_CAPABILITY_DETAIL_KEY),
     environmentWrite > 0
       ? capabilityAxis(
@@ -256,14 +271,34 @@ export function getBoundaryRows(
   ];
 }
 
+export interface CapabilityHighlightItem {
+  key: string;
+  /** 直接展示的文字（工具名等） */
+  text?: string;
+  /** 需要翻译的条目文案；values 里的 scopeKey 由组件翻译后再代入 */
+  textKey?: string;
+  values?: Record<string, string | number>;
+}
+
 export interface CapabilityHighlight {
   key: string;
   labelKey: string;
-  bodyKey: string;
-  bodyValues: Record<string, string | number>;
   tone: PermissionTone;
   authorDeclared?: boolean;
+  /** 列表型卡片：同类内容合并成一张卡，逐条展示 */
+  items?: CapabilityHighlightItem[];
+  variant?: 'lines' | 'tags';
+  /** 折叠时展示的条数（仅列表型卡片）；超过时出现「展开查看更多」 */
+  collapsedCount?: number;
+  /** 单条文字卡片 */
+  textKey?: string;
+  values?: Record<string, string | number>;
 }
+
+/** 折叠阈值：文本列表按条数，工具是短标签所以放得更多 */
+const USE_CASE_COLLAPSED_COUNT = 3;
+const PURPOSE_COLLAPSED_COUNT = 3;
+const TOOL_COLLAPSED_COUNT = 8;
 
 export function getCapabilityHighlights(
   capabilities?: PublicCapabilitySummary | null,
@@ -272,71 +307,83 @@ export function getCapabilityHighlights(
   separator = '、',
 ): CapabilityHighlight[] {
   const highlights: CapabilityHighlight[] = [];
+  const useCases = capabilities?.use_cases ?? [];
   const tools = capabilities?.tools ?? [];
+  const purposes = capabilities?.purposes ?? [];
 
-  for (const useCase of (capabilities?.use_cases ?? []).slice(0, 6)) {
+  // 同类内容合并成一张卡：同一个标签重复出现多张卡既啰嗦也不好看
+  if (useCases.length > 0) {
     highlights.push({
-      key: `use_case_${useCase.title}`,
+      key: 'use_cases',
       labelKey: 'detail.capability.tile.use_case_label',
-      bodyKey: 'detail.capability.tile.use_case_body',
-      bodyValues: { title: useCase.title, description: useCase.description },
       tone: 'safe',
       authorDeclared: true,
+      variant: 'lines',
+      collapsedCount: USE_CASE_COLLAPSED_COUNT,
+      items: useCases.map((useCase) => ({
+        key: `use_case_${useCase.title}`,
+        textKey: 'detail.capability.tile.use_case_body',
+        values: { title: useCase.title, description: useCase.description },
+      })),
     });
   }
 
   if (tools.length > 0) {
-    const sample = tools.slice(0, 3).join(separator);
     highlights.push({
       key: 'tools',
       labelKey: 'detail.capability.tile.tools_label',
-      bodyKey: 'detail.capability.tile.tools_body',
-      bodyValues: {
-        count: tools.length,
-        sample: tools.length > 3 ? `${sample}…` : sample,
-      },
       tone: 'safe',
+      variant: 'tags',
+      collapsedCount: TOOL_COLLAPSED_COUNT,
+      items: tools.map((tool) => ({ key: `tool_${tool}`, text: tool })),
     });
   }
 
-  for (const purpose of (capabilities?.purposes ?? []).slice(0, 3)) {
+  if (purposes.length > 0) {
     highlights.push({
-      key: `purpose_${purpose.scope}`,
+      key: 'purposes',
       labelKey: 'detail.capability.tile.purpose_label',
-      bodyKey: 'detail.capability.tile.purpose_body',
-      bodyValues: {
-        scopeKey: `detail.capability.scope.${purpose.scope}`,
-        reason: purpose.reason,
-      },
       tone: 'caution',
       authorDeclared: true,
+      variant: 'lines',
+      collapsedCount: PURPOSE_COLLAPSED_COUNT,
+      items: purposes.map((purpose) => ({
+        key: `purpose_${purpose.scope}`,
+        textKey: 'detail.capability.tile.purpose_body',
+        values: {
+          scopeKey: `detail.capability.scope.${purpose.scope}`,
+          reason: purpose.reason,
+        },
+      })),
     });
   }
 
   const verification = boundary?.verification ?? 'not_verified';
-  highlights.push({
-    key: 'boundary',
-    labelKey: 'detail.capability.tile.boundary_label',
-    bodyKey: `detail.capability.boundary.${verification}`,
-    bodyValues: {},
-    tone: verification === 'verified_undeclared' ? 'caution' : 'safe',
-  });
+  if (verification !== 'verified_undeclared') {
+    highlights.push({
+      key: 'boundary',
+      labelKey: 'detail.capability.tile.boundary_label',
+      tone: 'safe',
+      textKey: `detail.capability.boundary.${verification}`,
+    });
+  }
 
-  if (highlights.length < 3 && keywords.length > 0) {
+  // 关键词只是没有作者声明内容时的兜底；已经声明了适用场景就不再重复一个同标签的卡片
+  if (useCases.length === 0 && purposes.length === 0 && keywords.length > 0) {
     highlights.push({
       key: 'keywords',
       labelKey: 'detail.capability.tile.keywords_label',
-      bodyKey: 'detail.capability.tile.keywords_body',
-      bodyValues: {
+      tone: 'safe',
+      textKey: 'detail.capability.tile.keywords_body',
+      values: {
         sample: keywords.length > 4
           ? `${keywords.slice(0, 4).join(separator)}…`
           : keywords.join(separator),
       },
-      tone: 'safe',
     });
   }
 
-  return highlights.slice(0, 8);
+  return highlights;
 }
 
 export interface BoundaryVerdict {
@@ -345,13 +392,13 @@ export interface BoundaryVerdict {
   tone: PermissionTone;
 }
 
+/**
+ * 结论只描述「声明了多大范围」。扫描是否观察到声明之外的能力属于内部审核结论，
+ * 已发布的版本不再对用户重复提示人工复核。
+ */
 export function getBoundaryVerdict(
   summary?: PublicPermissionSummary | null,
-  boundary?: PublicTrustBoundary | null,
 ): BoundaryVerdict {
-  if (boundary?.verification === 'verified_undeclared') {
-    return { key: 'detail.boundary.verdict.undeclared', values: {}, tone: 'caution' };
-  }
   const rows = getBoundaryRows(summary);
   const highRisk = rows.filter((row) => row.allowed && row.tone === 'danger').length;
   if (highRisk > 0) {
