@@ -931,8 +931,8 @@
       "provenance_owner": "仓库所有者",
       "provenance_repo": "仓库名称",
       "provenance_ref": "引用",
-      "provenance_commit_hash": "Commit",
-      "provenance_resolved_commit": "解析后的 Commit",
+      "provenance_commit_hash": "提交哈希",
+      "provenance_resolved_commit": "解析后的提交哈希",
       "provenance_subdirectory": "源码子目录",
       "provenance_acquisition_method": "采集方式",
       "provenance_server_sha256": "扫描源码 SHA-256",
@@ -950,6 +950,8 @@
       "provenance_supply_chain_status": "供应链验证状态",
       "provenance_verification_summary": "{{verified}} 项已验证，{{failed}} 项未通过",
       "provenance_claim_differences": "包声明与服务端事实的差异",
+      "provenance_claim_differences_help": "包声明来自包内的元数据；服务端事实来自实际下载与扫描。下列差异表示两者不一致，审核时请以服务端事实核对来源，不能仅凭差异认定恶意。",
+      "provenance_hash_comparison_help": "哈希只有在计算范围相同时才能比较。此处服务端哈希对应扫描源码，下方安装制品哈希对应下载压缩包；包声明未标明范围时，需先核实计算范围。",
       "provenance_package_source": "包声明来源",
       "provenance_package_integrity": "包声明完整性",
       "provenance_claimed_value": "包声明",
@@ -975,6 +977,11 @@
       "meta_homepage": "主页",
       "permissions_title": "权限声明",
       "permission_evidence_title": "权限证据",
+      "description_original": "包描述原文，保留提交时的语言。",
+      "verifier_unavailable": "当前环境未配置对应验证能力",
+      "code_changes": "代码变更",
+      "verifiers_unavailable_title": "供应链证据验证器尚未配置",
+      "verifiers_unavailable_description": "本次扫描环境不支持以下验证能力：{{capabilities}}。缺少对应验证结果不计为验证失败，也不扣分。",
       "pending_notice_title": "当前仍处于待审核状态",
       "pending_notice_description": "自动等级只是初步机器判定，不代表该包已经通过审核或被确认安全。",
       "advisories_title": "审核警告（{{count}}）",
@@ -1127,6 +1134,29 @@
       "coverage_count": "{{count}} 个候选",
       "coverage_files": "证据来源文件及候选数"
     },
+    "provenance_field": {
+      "type": "来源类型",
+      "repository_url": "仓库地址",
+      "ref_type": "引用类型",
+      "ref": "版本引用",
+      "commit_hash": "提交哈希",
+      "sha256": "SHA-256",
+      "hash_scope": "哈希范围",
+      "is_complete": "完整性"
+    },
+    "provenance_value": {
+      "type": { "local_upload": "本地上传", "github": "GitHub 仓库", "npm": "npm", "pypi": "PyPI", "docker": "Docker" },
+      "ref_type": { "commit": "提交", "branch": "分支", "tag": "标签" },
+      "hash_scope": { "scanned_source": "已扫描源码", "artifact_archive": "安装压缩包" },
+      "acquisition_method": { "github_api": "GitHub 接口采集", "git": "Git 克隆", "local_upload": "本地上传" }
+    },
+    "permission_evidence": {
+      "status": { "observed": "已观察到", "declared": "已声明", "conditional": "有条件使用", "mentioned": "文档提及", "inferred": "推断" },
+      "source": { "code": "源代码", "manifest": "包清单", "frontmatter": "文档头部元数据", "docs": "文档" },
+      "capability": { "filesystem": "文件系统", "environment": "环境变量", "shell": "命令执行", "network": "网络访问", "credentials": "凭据访问", "database": "数据库访问", "browser": "浏览器控制", "external_services": "外部服务" },
+      "boolean": { "true": "是", "false": "否" },
+      "manifest_declared": "包元数据明确声明该权限"
+    },
     "permission": {
       "filesystem": {
         "read": "文件系统 · 读取路径",
@@ -1154,6 +1184,7 @@
     },
     "installation": {
       "method": "安装方式",
+      "methods": { "copy_directory": "复制目录", "copy_file": "复制文件", "npm": "npm 安装", "pip": "pip 安装", "docker": "Docker 容器", "manual": "手动安装" },
       "target_client": "目标客户端",
       "pre_install_message": "安装前提示",
       "post_install_message": "安装后提示",
@@ -1329,8 +1360,9 @@
     "top_risks": "主要风险",
     "explanations": "说明",
     "no_data": "暂无可用的信任评分信息",
-    "model_version": "模型版本",
-    "model_fingerprint": "模型指纹",
+    "model_version": "评分引擎版本",
+    "model_fingerprint": "评分规则指纹",
+    "model_identity_help": "由信任评分程序与配置计算，用于识别本次评分使用的规则；与 LLM 复核模型配置无关。",
     "grade": {
       "A": "A · 可信",
       "B": "B · 低风险",
@@ -1360,6 +1392,8 @@
       "none": "未发现显著风险"
     },
     "explanation": {
+      "source": "证据来源为“{{level}}”（不扣安全分）",
+      "author": "作者信誉为“{{level}}”（与安全评分独立）",
       "assessed": "{{dimension}}：评估结果为“{{level}}”",
       "behavior": "行为一致性检查：{{level}}",
       "veto": "触发否决规则 {{rule}}，包被强制标记为不可信",

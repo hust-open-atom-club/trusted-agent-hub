@@ -6,6 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { apiFetch, authFetch } from '@/lib/api-fetch';
 import TrustScoreDetail from '@/components/TrustScoreDetail';
+import PermissionEvidenceList from '@/components/PermissionEvidenceList';
+import { sourceCodeUrl } from '@/lib/source-url';
+import { advisoryMessages } from '@/lib/review-messages';
 import GradeOverrideModal from '@/components/GradeOverrideModal';
 import DependencyCoverageSummary from './DependencyCoverageSummary';
 import ProvenanceSummary from './ProvenanceSummary';
@@ -46,11 +49,11 @@ function findingLocationCount(finding: Finding): number {
   return findingLocations(finding).count;
 }
 
-function formatDate(iso: string | null | undefined): string {
+function formatDate(iso: string | null | undefined, locale: string): string {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
-    return d.toLocaleString('zh-CN', {
+    return d.toLocaleString(locale, {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -98,7 +101,7 @@ export default function ReviewDetailPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user, token, loading: authLoading } = useAuth();
   const versionId = params.versionId as string;
   const returnTo = searchParams.get('returnTo') || '/review';
@@ -336,6 +339,8 @@ export default function ReviewDetailPage() {
   ].filter((reason, index, all) => all.indexOf(reason) === index);
   const parentLicenseLookup = scanReport?.scan_limits?.configured?.allow_parent_license_files;
   const provenance = scanReport?.provenance;
+  const sourceUrl = sourceCodeUrl(version?.source);
+  const description = version?.description ?? pkg?.description;
 
   const reviewResultLabel = version?.review_conclusion
     ? (version.review_conclusion === 'approved'
@@ -391,7 +396,7 @@ export default function ReviewDetailPage() {
           onClick={() => router.push(`/review/diff?versionId=${encodeURIComponent(versionId)}`)}
           className="link-btn"
         >
-          代码变更 →
+          {t('review.detail.code_changes')} →
         </button>
         <span className="review-detail-nav-user">{user?.display_name || user?.email}</span>
       </nav>
@@ -417,13 +422,13 @@ export default function ReviewDetailPage() {
               </span>
             )}
             <span>v{version?.version}</span>
-            <span>{t('review.detail.submitted_at', { date: formatDate(version?.submitted_at) })}</span>
+            <span>{t('review.detail.submitted_at', { date: formatDate(version?.submitted_at, i18n.language) })}</span>
           </div>
           {(version?.source?.repository_url || version?.source?.subdirectory) && (
             <div className="review-detail-bar-repo">
               {version.source.repository_url && (
                 <a
-                  href={version.source.repository_url}
+                  href={sourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="repo-link"
@@ -433,7 +438,10 @@ export default function ReviewDetailPage() {
               )}
               {version.source.subdirectory && (
                 <code className="source-subdirectory">
-                  {t('review.detail.source_subdirectory')}: {version.source.subdirectory}
+                  {t('review.detail.source_subdirectory')}: {' '}
+                  {sourceUrl ? (
+                    <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{version.source.subdirectory}</a>
+                  ) : version.source.subdirectory}
                 </code>
               )}
             </div>
@@ -523,7 +531,7 @@ export default function ReviewDetailPage() {
               )}
               {version.manual_grade_at && (
                 <div style={{ marginTop: '0.15rem', fontSize: '0.7rem', color: 'var(--color-muted)' }}>
-                  {t('review.detail.manual_grade_at')}: {formatDate(version.manual_grade_at)}
+                  {t('review.detail.manual_grade_at')}: {formatDate(version.manual_grade_at, i18n.language)}
                 </div>
               )}
             </div>
@@ -675,7 +683,7 @@ export default function ReviewDetailPage() {
             )}
           </div>
           <div className="review-advisory-list">
-            {scanReport.review_advisories.map((advisory) => (
+            {scanReport.review_advisories.map((item) => advisoryMessages(item, t)).map((advisory) => (
               <article
                 className={`review-advisory-card ${advisory.level}`}
                 key={advisory.id}
@@ -752,7 +760,7 @@ export default function ReviewDetailPage() {
                       {record.reviewer_display_name || record.reviewer_name || record.reviewer_id}
                     </span>
                     <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)', marginLeft: 'auto' }}>
-                      {formatDate(record.created_at)}
+                      {formatDate(record.created_at, i18n.language)}
                     </span>
                   </div>
                   {record.comment && (
@@ -770,10 +778,11 @@ export default function ReviewDetailPage() {
       <section className="review-detail-section">
         <h2 className="review-detail-section-title">{t('review.detail.package_meta')}</h2>
         <div className="review-meta-grid">
-          {pkg?.description && (
+          {description && (
             <div className="review-meta-field full">
               <span className="review-meta-label">{t('review.detail.meta_description')}</span>
-              <span className="review-meta-value">{pkg.description}</span>
+              <span className="review-meta-value" style={{ whiteSpace: 'pre-wrap' }}>{description}</span>
+              <span className="review-meta-value" style={{ color: 'var(--color-muted)' }}>{t('review.detail.description_original')}</span>
             </div>
           )}
           {(version?.license || pkg?.license) && (
@@ -840,7 +849,8 @@ export default function ReviewDetailPage() {
                         : ''
                     }`}
                   >
-                    {value}
+                    {['true', 'false'].includes(value)
+                      ? t(`review.permission_evidence.boolean.${value}`) : value}
                   </span>
                 </div>
               ))}
@@ -851,21 +861,7 @@ export default function ReviewDetailPage() {
         {scanReport?.permission_evidence && scanReport.permission_evidence.length > 0 && (
           <>
             <h3 className="review-meta-subtitle">{t('review.detail.permission_evidence_title')}</h3>
-            <div className="review-meta-grid">
-              {scanReport.permission_evidence.map((item, index) => (
-                <div
-                  className="review-meta-field full"
-                  key={`${item.capability}-${item.file || 'package'}-${index}`}
-                >
-                  <span className="review-meta-label">{item.capability}</span>
-                  <span className="review-meta-value">
-                    {item.status} · {Math.round(item.confidence * 100)}% · {item.source}
-                    {item.file ? ` · ${item.file}` : ''}
-                  </span>
-                  <span className="review-meta-value">{item.evidence}</span>
-                </div>
-              ))}
-            </div>
+            <PermissionEvidenceList items={scanReport.permission_evidence} />
           </>
         )}
 
@@ -896,7 +892,8 @@ export default function ReviewDetailPage() {
                   <span className="review-meta-label">
                     {t(`review.installation.${key}`, { defaultValue: humanizeField(key) })}
                   </span>
-                  <span className="review-meta-value">{value}</span>
+                  <span className="review-meta-value">{key === 'method'
+                    ? t(`review.installation.methods.${value}`, value) : value}</span>
                 </div>
               ))}
             </div>

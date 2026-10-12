@@ -595,6 +595,50 @@ class ProducerRepository:
             row.data = data
             session.commit()
 
+    def reopen_version_review(self, version_id: str, *, operator_id: str) -> bool:
+        """Withdraw a published version for review, including its package and audit.
+
+        Match the latest-version policy used by yanking: withdraw the package
+        only when its current latest version is affected. Keep that pointer;
+        choosing a different release is a separate publication decision.
+        """
+        with self.session_factory() as session:
+            version = session.get(PackageVersionRow, version_id, with_for_update=True)
+            if version is None or version.status != "published":
+                return False
+            package = session.get(PackageRow, version.package_id, with_for_update=True)
+            if package is None:
+                return False
+
+            now = _utc_now()
+            version.status = "pending_review"
+            version.data = {
+                **(version.data or {}),
+                "status": "pending_review",
+                "review_conclusion": None,
+                "yank_reason": None,
+                "updated_at": _serialize_dt(now),
+            }
+            # Review records and published_at remain historical evidence.
+            if package.latest_version == version.version:
+                package.status = "pending_review"
+                package.data = {
+                    **(package.data or {}),
+                    "status": "pending_review",
+                    "updated_at": _serialize_dt(now),
+                }
+            session.add(AuditLogRow(
+                id=f"audit-{uuid4().hex}",
+                action="re_review",
+                target_type="version",
+                target_id=version_id,
+                operator_id=operator_id,
+                detail={"previous_status": "published"},
+                timestamp=now,
+            ))
+            session.commit()
+            return True
+
     def update_version_data_if_status(
         self,
         version_id: str,
@@ -950,6 +994,7 @@ class ProducerRepository:
             version_row.status = "scanning"
             version_data = dict(version_row.data) if version_row.data else {}
             version_data["status"] = "scanning"
+            version_data["review_conclusion"] = None
             version_row.data = version_data
 
             scan_row = ScanTaskRow(
@@ -1033,6 +1078,7 @@ class ProducerRepository:
             version_row.status = "scanning"
             version_data = dict(version_row.data) if version_row.data else {}
             version_data["status"] = "scanning"
+            version_data["review_conclusion"] = None
             version_row.data = version_data
 
             scan_row.version_id = version_id

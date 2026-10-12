@@ -76,7 +76,7 @@ describe('TrustScoreDetail', () => {
     expect(summary).not.toHaveTextContent('100/100');
     expect(summary).not.toHaveTextContent('自动评级');
     expect(summary).not.toHaveTextContent('人工评级');
-    expect(summary).not.toHaveTextContent('模型指纹');
+    expect(summary).not.toHaveTextContent('评分规则指纹');
     expect(summary).not.toHaveTextContent('Uses shell permission');
 
     expect(screen.getAllByText('评级 A · 可信')).toHaveLength(1);
@@ -102,9 +102,9 @@ describe('TrustScoreDetail', () => {
       />,
     );
 
-    expect(screen.getByText(/模型版本/)).toBeInTheDocument();
+    expect(screen.getByText(/评分引擎版本/)).toBeInTheDocument();
     expect(screen.getByText('0.2.0')).toBeInTheDocument();
-    expect(screen.getByText(/模型指纹/)).toBeInTheDocument();
+    expect(screen.getByText(/评分规则指纹/)).toBeInTheDocument();
     expect(screen.getByTitle(modelFingerprint)).toHaveTextContent('abcdef012345…');
   });
 

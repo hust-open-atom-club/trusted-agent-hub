@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ScanProvenance } from '@/types';
+import { sourceCodeUrl } from '@/lib/source-url';
 
 interface ProvenanceSummaryProps {
   provenance?: ScanProvenance | null;
@@ -70,6 +71,7 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
 
   const facts = provenance.acquisition_facts;
   const source = facts?.source;
+  const sourceUrl = sourceCodeUrl(source);
   const integrity = facts?.integrity;
   const verification = facts?.verification;
   const capabilities = facts?.verification_capabilities;
@@ -106,6 +108,10 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
       integrity as Record<string, unknown> | undefined,
     ),
   ];
+  const displayValue = (path: string, value: string) => (
+    ['type', 'ref_type', 'hash_scope'].includes(path)
+      ? t(`review.provenance_value.${path}.${value}`, value) : value
+  );
 
   return (
     <div data-testid="provenance-summary">
@@ -126,7 +132,7 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
         {showRef && (
           <MetaField
             label={t('review.detail.provenance_ref')}
-            value={`${source?.ref_type ? `${source.ref_type} ` : ''}${source?.ref}`}
+            value={`${source?.ref_type ? `${displayValue('ref_type', source.ref_type)} ` : ''}${source?.ref}`}
           />
         )}
         {source?.commit_hash && (
@@ -140,10 +146,14 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
           />
         )}
         {source?.subdirectory && (
-          <MetaField label={t('review.detail.provenance_subdirectory')} value={source.subdirectory} code />
+          <MetaField label={t('review.detail.provenance_subdirectory')} value={sourceUrl
+            ? <a href={sourceUrl} target="_blank" rel="noopener noreferrer">{source.subdirectory}</a>
+            : source.subdirectory} code />
         )}
         {facts?.acquisition_method && (
-          <MetaField label={t('review.detail.provenance_acquisition_method')} value={facts.acquisition_method} />
+          <MetaField label={t('review.detail.provenance_acquisition_method')} value={t(
+            `review.provenance_value.acquisition_method.${facts.acquisition_method}`, facts.acquisition_method,
+          )} />
         )}
         {integrity?.sha256 && (
           <MetaField label={t('review.detail.provenance_server_sha256')} value={integrity.sha256} code full />
@@ -151,9 +161,7 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
         {integrity?.hash_scope && (
           <MetaField
             label={t('review.detail.provenance_hash_scope')}
-            value={integrity.hash_scope === 'scanned_source'
-              ? t('review.detail.provenance_hash_scope_scanned_source')
-              : integrity.hash_scope}
+            value={displayValue('hash_scope', integrity.hash_scope)}
           />
         )}
         {typeof integrity?.is_complete === 'boolean' && (
@@ -191,18 +199,29 @@ export default function ProvenanceSummary({ provenance }: ProvenanceSummaryProps
       {differences.length > 0 && (
         <div data-testid="package-claim-differences" style={{ marginTop: '1rem' }}>
           <h3 className="review-meta-subtitle">{t('review.detail.provenance_claim_differences')}</h3>
+          <p style={{ fontSize: '0.82rem', color: 'var(--color-muted)', lineHeight: 1.6 }}>
+            {t('review.detail.provenance_claim_differences_help')}
+          </p>
+          {differences.some((difference) => difference.section === 'integrity' && difference.path === 'sha256') && (
+            <p style={{ fontSize: '0.82rem', color: 'var(--color-muted)', lineHeight: 1.6 }}>
+              {t('review.detail.provenance_hash_comparison_help')}
+            </p>
+          )}
           <div className="review-meta-grid">
             {differences.map((difference) => (
               <div className="review-meta-field full" key={`${difference.section}-${difference.path}`}>
                 <span className="review-meta-label">
-                  {t(`review.detail.provenance_package_${difference.section}`)} · <code>{difference.path}</code>
+                  {t(`review.detail.provenance_package_${difference.section}`)} · {' '}
+                  {t(`review.provenance_field.${difference.path}`, difference.path)} {' '}
+                  <code>({difference.path})</code>
                 </span>
                 <span className="review-meta-value">
-                  {t('review.detail.provenance_claimed_value')}: {difference.claimed}
+                  {t('review.detail.provenance_claimed_value')}: {displayValue(difference.path, difference.claimed)}
                 </span>
                 <span className="review-meta-value">
-                  {t('review.detail.provenance_observed_value')}: {difference.observed
-                    ?? t('review.detail.provenance_observed_unavailable')}
+                  {t('review.detail.provenance_observed_value')}: {difference.observed === undefined
+                    ? t('review.detail.provenance_observed_unavailable')
+                    : displayValue(difference.path, difference.observed)}
                 </span>
               </div>
             ))}

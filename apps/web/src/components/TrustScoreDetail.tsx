@@ -186,6 +186,18 @@ export default function TrustScoreDetail({
     return key ? t(`trust_score.risk.${key}`) : risk;
   };
   const localizeExplanation = (message: string) => {
+    const source = message.match(/^Evidence source is '(.+)' \(no security deduction\)$/);
+    if (source) {
+      return t('trust_score.explanation.source', {
+        level: t(`trust_score.assessment.${source[1]}`, source[1]),
+      });
+    }
+    const author = message.match(/^Author reputation is '(.+)' \(independent from security score\)$/);
+    if (author) {
+      return t('trust_score.explanation.author', {
+        level: t(`trust_score.assessment.${author[1]}`, author[1]),
+      });
+    }
     const assessed = message.match(/^(.+): assessed as '(.+)'$/);
     if (assessed) {
       return t('trust_score.explanation.assessed', {
@@ -477,6 +489,9 @@ export default function TrustScoreDetail({
               <code title={modelFingerprint}>{fingerprintPreview}</code>
             </div>
           )}
+          <p style={{ margin: 0, flexBasis: '100%', color: 'var(--color-muted)' }}>
+            {t('trust_score.model_identity_help')}
+          </p>
         </div>
       )}
 

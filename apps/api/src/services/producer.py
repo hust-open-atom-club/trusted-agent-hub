@@ -779,9 +779,9 @@ class ProducerService:
     ) -> bool:
         """扫描流水线完成后回调：打包安装产物 + 写入扫描报告 + 更新状态。
 
-        返回 ``True`` 表示可用报告（完整或明确标记为 partial）已保存且
-        版本状态已写入 ``pending_review``；产物打包失败返回 ``False``，
-        提交者可重新提交。
+        返回 ``True`` 表示可用报告（完整或明确标记为 partial）已应用；
+        首次完成进入 ``pending_review``，重放不会回退后续审核或发布状态。
+        产物打包失败返回 ``False``，提交者可重新提交。
         """
         from src.services.artifacts import ArtifactError, build_artifact, force_rmtree
 
@@ -795,7 +795,9 @@ class ProducerService:
         )
         # A callback can be replayed after the process dies between the
         # version update and the delivery marker.  Once this scan already
-        # reached pending_review, only repair the idempotent audit record.
+        # reached review (or a later review/publication state), only repair
+        # the idempotent audit record. Never replay a completed scan over a
+        # subsequent human decision.
         if scan_id:
             existing_version = self.repository.get_version(version_id)
             existing_report = self.repository.get_scan_report(version_id)
@@ -806,7 +808,10 @@ class ProducerService:
             )
             if (
                 isinstance(existing_version, dict)
-                and existing_version.get("status") == "pending_review"
+                and existing_version.get("status") in {
+                    "pending_review", "approved", "rejected", "changes_requested",
+                    "published", "yanked", "resubmitted",
+                }
                 and isinstance(existing_scan_json, dict)
                 and existing_scan_json.get("scan_id") == scan_id
             ):
@@ -2120,14 +2125,10 @@ class ProducerService:
         target = "pending_review"
         validate_transition(current, target)
 
-        self.repository.update_version_status(version_id, target)
-        self.repository.update_version_data(version_id, {"yank_reason": None})
-        self.repository.create_audit_log(
-            action="re_review",
-            target_type="version",
-            target_id=version_id,
-            operator_id=operator_id,
-        )
+        if not self.repository.reopen_version_review(
+            version_id, operator_id=operator_id,
+        ):
+            raise ProducerServiceError("版本状态已变化，无法退回审核队列")
 
         return ReviewResponse(
             version_id=version_id,

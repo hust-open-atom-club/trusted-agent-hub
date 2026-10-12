@@ -950,6 +950,8 @@
       "provenance_supply_chain_status": "Supply-chain verification status",
       "provenance_verification_summary": "{{verified}} verified, {{failed}} failed",
       "provenance_claim_differences": "Differences between package claims and server facts",
+      "provenance_claim_differences_help": "Package claims come from package metadata; server facts come from acquisition and scanning. These differences need source verification against the server facts and do not alone establish malicious intent.",
+      "provenance_hash_comparison_help": "Hashes are comparable only when their scopes match. The server hash here covers scanned source, while the install artifact hash below covers the downloadable archive. Verify the scope first if the package claim does not specify it.",
       "provenance_package_source": "Package-declared source",
       "provenance_package_integrity": "Package-declared integrity",
       "provenance_claimed_value": "Package claim",
@@ -975,6 +977,11 @@
       "meta_homepage": "Homepage",
       "permissions_title": "Permissions",
       "permission_evidence_title": "Permission Evidence",
+      "description_original": "Original package description, preserved in its submitted language.",
+      "verifier_unavailable": "The corresponding verification capability is not configured in this environment",
+      "code_changes": "Code changes",
+      "verifiers_unavailable_title": "Supply-chain evidence verifiers are not configured",
+      "verifiers_unavailable_description": "These verification capabilities are unavailable in this scan environment: {{capabilities}}. Missing results are not counted as verification failures or score deductions.",
       "pending_notice_title": "This package is still pending review",
       "pending_notice_description": "The automatic grade is preliminary and does not mean the package has passed review or been confirmed safe.",
       "advisories_title": "Review Advisories ({{count}})",
@@ -1129,6 +1136,29 @@
       "coverage_count": "{{count}} candidates",
       "coverage_files": "Evidence source files and candidate counts"
     },
+    "provenance_field": {
+      "type": "Source type",
+      "repository_url": "Repository URL",
+      "ref_type": "Reference type",
+      "ref": "Version reference",
+      "commit_hash": "Commit hash",
+      "sha256": "SHA-256",
+      "hash_scope": "Hash scope",
+      "is_complete": "Completeness"
+    },
+    "provenance_value": {
+      "type": { "local_upload": "Local upload", "github": "GitHub repository", "npm": "npm", "pypi": "PyPI", "docker": "Docker" },
+      "ref_type": { "commit": "Commit", "branch": "Branch", "tag": "Tag" },
+      "hash_scope": { "scanned_source": "Scanned source", "artifact_archive": "Install archive" },
+      "acquisition_method": { "github_api": "GitHub API", "git": "Git clone", "local_upload": "Local upload" }
+    },
+    "permission_evidence": {
+      "status": { "observed": "Observed", "declared": "Declared", "conditional": "Conditional", "mentioned": "Mentioned", "inferred": "Inferred" },
+      "source": { "code": "Source code", "manifest": "Package manifest", "frontmatter": "Document frontmatter", "docs": "Documentation" },
+      "capability": { "filesystem": "Filesystem", "environment": "Environment", "shell": "Shell execution", "network": "Network access", "credentials": "Credential access", "database": "Database access", "browser": "Browser control", "external_services": "External services" },
+      "boolean": { "true": "Yes", "false": "No" },
+      "manifest_declared": "Package metadata explicitly declares this permission"
+    },
     "permission": {
       "filesystem": {
         "read": "Filesystem · Read Paths",
@@ -1156,6 +1186,7 @@
     },
     "installation": {
       "method": "Method",
+      "methods": { "copy_directory": "Copy directory", "copy_file": "Copy file", "npm": "npm install", "pip": "pip install", "docker": "Docker container", "manual": "Manual installation" },
       "target_client": "Target Client",
       "pre_install_message": "Pre-install Message",
       "post_install_message": "Post-install Message",
@@ -1331,8 +1362,9 @@
     "top_risks": "Top Risks",
     "explanations": "Explanations",
     "no_data": "No trust score information is available",
-    "model_version": "Model Version",
-    "model_fingerprint": "Model Fingerprint",
+    "model_version": "Scoring engine version",
+    "model_fingerprint": "Scoring rules fingerprint",
+    "model_identity_help": "Computed from the trust-scoring code and configuration to identify the rules used for this score; separate from the LLM review model configuration.",
     "grade": {
       "A": "A · Trusted",
       "B": "B · Low Risk",
@@ -1362,6 +1394,8 @@
       "none": "No significant risks identified"
     },
     "explanation": {
+      "source": "Evidence source is {{level}} (no security deduction)",
+      "author": "Author reputation is {{level}} (independent from security score)",
       "assessed": "{{dimension}}: assessed as {{level}}",
       "behavior": "Behavior consistency check: {{level}}",
       "veto": "Veto rule {{rule}} triggered; package forced to untrusted",

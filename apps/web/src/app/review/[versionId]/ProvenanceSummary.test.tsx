@@ -50,12 +50,15 @@ describe('ProvenanceSummary', () => {
   it('deduplicates a commit ref and shows only meaningful verification results', () => {
     render(<ProvenanceSummary provenance={provenance} />);
 
-    expect(screen.getByText('git')).toBeInTheDocument();
+    expect(screen.getByText('Git 克隆')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: repositoryUrl })).toHaveAttribute(
       'href',
       repositoryUrl,
     );
     expect(screen.getAllByText('a'.repeat(40))).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'packages/demo' })).toHaveAttribute(
+      'href', `${repositoryUrl}/tree/${'a'.repeat(40)}/packages/demo`,
+    );
     expect(screen.getByText('不完整，不用于完整性验证')).toBeInTheDocument();
     expect(screen.getByTestId('supply-chain-verification')).toHaveTextContent('1 项已验证，1 项未通过');
     expect(screen.queryByText('签名')).not.toBeInTheDocument();

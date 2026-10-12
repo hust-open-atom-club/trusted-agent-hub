@@ -289,17 +289,25 @@ def _require_safe_source_subdirectory(value: str) -> str:
 
 
 def first_paragraph(text: str, max_len: int = 200) -> str:
-    """提取文本中第一个有意义段落（跳过 frontmatter 和标题行）。"""
+    """提取首个段落，合并 Markdown 折行后截断；跳过 frontmatter 和标题。"""
     _parsed, body = split_frontmatter(text)
+    paragraph: list[str] = []
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            if paragraph:
+                break
             continue
-        # 跳过纯链接/图片行
-        if re.match(r"^[!\[<]", stripped):
+        # Skip leading badges/links, but retain links in wrapped prose.
+        if not paragraph and re.match(r"^[!\[<]", stripped):
             continue
-        return stripped[:max_len]
-    return ""
+        # Markdown blocks can interrupt a paragraph without a blank line.
+        if paragraph and re.match(
+            r"^(?:>|`{3,}|~{3,}|[-+*]\s|\d+[.)]\s|[-=_*]{3,}$)", stripped,
+        ):
+            break
+        paragraph.append(stripped)
+    return " ".join(paragraph)[:max_len]
 
 
 # ═══════════════════════════════════════════════════════════════════

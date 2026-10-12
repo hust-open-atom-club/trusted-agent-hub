@@ -1420,7 +1420,8 @@ def test_scan_status_recovers_from_database_and_rejects_other_user(
         )
     assert raised.value.status_code == 403
 
-    finished_at = datetime(2026, 9, 12, 1, tzinfo=timezone.utc)
+    # This recovery test needs an unexpired completed scan on any run date.
+    finished_at = datetime.now(timezone.utc)
     repository.update_scan_task(
         scan_id,
         {
