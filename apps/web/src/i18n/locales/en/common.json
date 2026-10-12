@@ -227,9 +227,7 @@
     "main": "Main",
     "config": "Config",
     "scripts": "Scripts",
-    "installation": "Installation",
     "install_hint": "Install this {{type}} using the TrustedAgentHub CLI:",
-    "install_targets": "Install Targets",
     "homepage": "Homepage",
     "keywords": "Keywords",
     "versions": "Versions",
@@ -254,7 +252,6 @@
       "integrity": "Integrity",
       "capability": "Capability",
       "boundary": "Security boundary",
-      "installation": "Installation",
       "versions": "Versions",
       "feedback": "Feedback"
     },
@@ -262,7 +259,6 @@
       "trust_history": "Trust Score History",
       "dependencies_kicker": "Runtime requirements",
       "entry_points_kicker": "Package launch metadata",
-      "installation_kicker": "Method and targets",
       "versions_kicker": "Published history"
     },
     "meta": {
@@ -286,11 +282,10 @@
     },
     "empty": {
       "source": "No source repository metadata is available for this package.",
-      "permissions": "No permission manifest was published for this version.",
+      "permissions": "The author declared no permission scope, so its capability boundary cannot be verified.",
       "dependencies_manifest": "No dependency manifest was published for this version.",
       "dependencies": "No runtime dependencies declared.",
       "entry_points": "No entry point metadata was published for this version.",
-      "installation": "No installation manifest was published for this version.",
       "trust_score": "No detailed trust score is available for this version."
     },
     "files": {
@@ -348,8 +343,7 @@
       "verdict": {
         "limited": "This version declares a small permission scope — no deletion, execution or other high-risk capabilities.",
         "none": "This version declares no sensitive permissions.",
-        "elevated": "This version declares {{count}} high-risk permissions. Confirm you accept them.",
-        "undeclared": "The scan found capabilities that were not declared. Review manually."
+        "elevated": "This version declares {{count}} high-risk permissions. Confirm you accept them."
       }
     },
     "breadcrumb": {
@@ -357,9 +351,9 @@
       "detail": "Package detail"
     },
     "capability": {
-      "radar_title": "Permission scope",
-      "radar_aria": "Declared permission scope of {{name}}",
-      "radar_note": "Outer rings mean a wider declared scope or an unbounded one (shown at the widest reading). This chart describes declared capability scope and is independent of the trust grade.",
+      "radar_title": "Capability and risk overview",
+      "radar_aria": "Capability and risk overview of {{name}}",
+      "radar_note": "Capabilities without a declared upper bound are shown at the widest reading.",
       "empty": "This version declares no sensitive permissions.",
       "axis_header": "Permission",
       "value_header": "Declared scope",
@@ -368,7 +362,8 @@
       "block_summary": "Everything below comes from the metadata {{name}} declared at submission plus the public scan conclusion. Review-only evidence is not shown.",
       "legend": {
         "current": "Current permissions",
-        "reference": "Full scope (reference)"
+        "unknown": "No declared upper bound",
+        "radius": "Inner ring scoped · outer ring max"
       },
       "scope": {
         "shell": "Shell execution",
@@ -380,16 +375,16 @@
         "use_case_label": "Use case",
         "use_case_body": "{{title}} — {{description}}",
         "tools_label": "Tools",
-        "tools_body": "{{count}}: {{sample}}",
         "purpose_label": "Permission rationale",
         "purpose_body": "{{scope}}: {{reason}}",
         "boundary_label": "Boundary verification",
         "keywords_label": "Use cases",
-        "keywords_body": "{{sample}}"
+        "keywords_body": "{{sample}}",
+        "expand": "Show more ({{count}})",
+        "collapse": "Show less"
       },
       "boundary": {
         "verified_consistent": "The scan found no undeclared capabilities.",
-        "verified_undeclared": "The scan found undeclared capabilities. Review manually before installing.",
         "not_verified": "No scan result is available for this version; the boundary is not verified."
       },
       "level": {
@@ -415,8 +410,6 @@
       }
     },
     "install": {
-      "method": "Method",
-      "external_warning": "This method executes an external command and requires explicit confirmation.",
       "mcp_config_hint": "Installation may write MCP client configuration after confirmation.",
       "target_client": "Target client",
       "target_path": "Target path",
@@ -427,32 +420,6 @@
       "ai_prompt": "Follow {{guideUrl}} to install {{name}} for {{client}}. If the tah command is not available, first run npm install -g trusted-agent-hub@latest to install the TrustedAgentHub CLI, then complete the Hub setup described in the guide. Before installing, show the package name, version, type, risk grade, permission summary, and target path; ask me first if confirmation is required. After confirmation, install only with tah install {{name}} --client {{client}}; do not manually download, extract, or copy files.",
       "copied": "Copied",
       "copy_failed": "Copy failed"
-    },
-    "install_method": {
-      "copy_directory": {
-        "label": "Copy directory",
-        "description": "Download the ZIP, verify SHA-256, then copy it to the target client directory."
-      },
-      "npm_install": {
-        "label": "npm install",
-        "description": "Install through npm into a managed directory without polluting the system environment."
-      },
-      "pip_install": {
-        "label": "pip install",
-        "description": "Install through pip into a managed directory."
-      },
-      "docker_run": {
-        "label": "Docker",
-        "description": "Pull the image and generate runtime configuration without starting the container automatically."
-      },
-      "manual_steps": {
-        "label": "Manual steps",
-        "description": "Complete installation manually from the package instructions; the CLI only records the steps."
-      },
-      "unknown": {
-        "label": "Unknown",
-        "description": "Complete installation from the package instructions."
-      }
     },
     "client": {
       "claude-code": "Claude Code",
