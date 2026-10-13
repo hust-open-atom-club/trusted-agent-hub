@@ -9,6 +9,7 @@ import threading
 from src.database import create_session_factory, get_runtime_engine
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.settings import get_settings
+from src.services.producer import ProducerService
 
 
 _logger = logging.getLogger(__name__)
@@ -36,6 +37,19 @@ def run_empty_package_cleanup(
     return deleted
 
 
+def run_artifact_cleanup(
+    repository_factory: Callable[[], ProducerRepository | None] = _get_producer_repository,
+) -> int:
+    """Run one orphan-artifact cleanup pass and return the deleted count."""
+    repository = repository_factory()
+    if repository is None:
+        return 0
+    deleted = ProducerService(repository).cleanup_orphan_artifacts()
+    if deleted:
+        _logger.info("Deleted %s orphan artifact(s)", deleted)
+    return deleted
+
+
 def run_empty_package_cleanup_loop(
     stop_event: threading.Event,
     *,
@@ -49,3 +63,18 @@ def run_empty_package_cleanup_loop(
             run_empty_package_cleanup(repository_factory)
         except Exception:  # pragma: no cover - defensive worker boundary
             _logger.exception("Periodic empty package cleanup failed")
+
+
+def run_artifact_cleanup_loop(
+    stop_event: threading.Event,
+    *,
+    interval_seconds: float = EMPTY_PACKAGE_CLEANUP_INTERVAL_SECONDS,
+    repository_factory: Callable[[], ProducerRepository | None] = _get_producer_repository,
+) -> None:
+    """Run orphan-artifact cleanup once per day until the application stops."""
+    wait_seconds = max(1.0, float(interval_seconds))
+    while not stop_event.wait(wait_seconds):
+        try:
+            run_artifact_cleanup(repository_factory)
+        except Exception:  # pragma: no cover - defensive worker boundary
+            _logger.exception("Periodic artifact cleanup failed")
