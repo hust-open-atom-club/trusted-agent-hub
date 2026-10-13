@@ -10,11 +10,13 @@ import { clearPendingScanIfMatches } from '@/lib/pending-scan';
 import { readScanPackageContext } from '@/lib/scan-package-context';
 import { API_BASE } from '@/lib/runtime-config';
 import type { ScanTaskItem } from '@/types';
+import ScanRetentionNotice from '@/components/ScanRetentionNotice';
+import VersionDeleteButton from '@/components/VersionDeleteButton';
+import { RESUBMITTABLE_STATUSES, versionStatusHref } from '@/lib/submission-workflow';
 
 const PAGE_SIZE = 20;
 const SCAN_LIST_REFRESH_MS = 5_000;
-// The merged view sorts two sources into one timeline, so every fetch starts
-// at offset 0 and grows in fixed windows instead of paging per source.
+// Load each source in growing windows for client-side search and pagination.
 const FETCH_PAGE = 200;
 
 interface SubmittedVersionItem {
@@ -137,8 +139,12 @@ function ScanCard({ item, language, t, onDelete, deleting }: {
 }) {
   const displayStatus = item.lifecycle || item.status;
   const statusKey = STATUS_KEYS[displayStatus];
-  const statusLabel = statusKey ? t(statusKey) : displayStatus;
-  const statusClass = STATUS_CLASSES[displayStatus] || STATUS_CLASSES[item.status] || 'status-unknown';
+  const versionStatus = displayStatus === 'submitted_reviewing' ? item.submission?.status : null;
+  const statusLabel = versionStatus
+    ? t('submissions.status.' + versionStatus, { defaultValue: versionStatus })
+    : statusKey ? t(statusKey) : displayStatus;
+  const statusClass = (versionStatus && VERSION_STATUS_CLASSES[versionStatus])
+    || STATUS_CLASSES[displayStatus] || STATUS_CLASSES[item.status] || 'status-unknown';
   // Resolved after mount: the scan-to-package hint lives in localStorage,
   // which is unavailable during server rendering.
   const [continueHref, setContinueHref] = useState<string | null>(null);
@@ -189,15 +195,7 @@ function ScanCard({ item, language, t, onDelete, deleting }: {
               {t('scans.finished_at')}: {formatDate(item.finished_at, language)}
             </div>
           )}
-          {item.expires_at ? (
-            <div style={{ marginTop: '0.25rem', color: 'var(--color-muted)', fontSize: '0.8rem' }}>
-              {t('scans.retained_until')}: {formatDate(item.expires_at, language)}
-            </div>
-          ) : displayStatus === 'submitted_reviewing' ? (
-            <div style={{ marginTop: '0.25rem', color: 'var(--color-muted)', fontSize: '0.8rem' }}>
-              {t('scans.retained_forever')}
-            </div>
-          ) : null}
+          <ScanRetentionNotice item={item} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {item.submission && (
@@ -217,7 +215,7 @@ function ScanCard({ item, language, t, onDelete, deleting }: {
           <Link href="/submit" className="btn btn-secondary btn-sm" style={{ whiteSpace: 'nowrap' }}>
             {t('scans.new_scan')}
           </Link>
-          {item.delete_allowed && (
+          {item.delete_allowed && !item.submission && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -225,7 +223,7 @@ function ScanCard({ item, language, t, onDelete, deleting }: {
               disabled={deleting}
               style={{ whiteSpace: 'nowrap' }}
             >
-              {deleting ? t('scans.deleting') : t('scans.delete')}
+              {deleting ? t('scans.deleting') : t('scans.delete_scan_record')}
             </button>
           )}
         </div>
@@ -234,13 +232,11 @@ function ScanCard({ item, language, t, onDelete, deleting }: {
   );
 }
 
-function VersionCard({ item, language, t, scanTask, onDelete, deleting }: {
+function VersionCard({ item, language, t, onDeleted }: {
   item: SubmittedVersionItem;
   language: string;
   t: (key: string, options?: Record<string, unknown>) => string;
-  scanTask?: ScanTaskItem | undefined;
-  onDelete?: ((item: ScanTaskItem) => void) | undefined;
-  deleting?: boolean;
+  onDeleted: () => void;
 }) {
   return (
     <div
@@ -275,18 +271,13 @@ function VersionCard({ item, language, t, scanTask, onDelete, deleting }: {
           >
             {t('submissions.view_status')}
           </Link>
-          {scanTask && onDelete && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => onDelete(scanTask)}
-              disabled={deleting}
-              title={t('scans.delete_confirm')}
-              style={{ whiteSpace: 'nowrap' }}
-            >
-              {deleting ? t('scans.deleting') : t('scans.delete_scan_record')}
-            </button>
+          {RESUBMITTABLE_STATUSES.has(item.status) && (
+            <Link href={`${versionStatusHref(item.package_name, item.version, item.version_id)}#resubmit`}
+              className="btn btn-secondary btn-sm">{t('scans.resubmit')}</Link>
           )}
+          <Link href={`/submit?packageId=${encodeURIComponent(item.package_id)}`}
+            className="btn btn-secondary btn-sm">{t('scans.create_version')}</Link>
+          <VersionDeleteButton versionId={item.version_id} status={item.status} onDeleted={onDeleted} />
         </div>
       </div>
     </div>
@@ -310,12 +301,12 @@ export default function SubmissionsAndScansPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingScanId, setDeletingScanId] = useState<string | null>(null);
+  const [view, setView] = useState<'mine' | 'scans'>('mine');
+  const [deletedScan, setDeletedScan] = useState<ScanTaskItem | null>(null);
 
-  // /api/v1/scans exposes every scan to admins and reviewers, while the
-  // version list is always owner-scoped; merging the two would mix scopes, so
-  // those roles get the scan list only.
-  const seesAllScans = user?.role === 'admin' || user?.role === 'reviewer';
-  const includeVersions = !seesAllScans;
+  // Every role has personal submissions. Global scans are a separate view,
+  // so deleting a scan cannot make its surviving version disappear.
+  const seesAllScans = user?.role === 'admin';
 
   const loadAll = useCallback(async (size: number) => {
     if (!token || !user) return;
@@ -324,9 +315,7 @@ export default function SubmissionsAndScansPage() {
     try {
       const [scanWindow, versionWindow] = await Promise.all([
         fetchScanWindow(token, size),
-        includeVersions
-          ? fetchVersionWindow(token, user.id, size)
-          : Promise.resolve({ items: [], hasMore: false }),
+        fetchVersionWindow(token, user.id, size),
       ]);
       setItems(scanWindow.items);
       setScansHaveMore(scanWindow.hasMore);
@@ -337,7 +326,7 @@ export default function SubmissionsAndScansPage() {
     } finally {
       setLoading(false);
     }
-  }, [includeVersions, t, token, user]);
+  }, [t, token, user]);
 
   // Window growth is reloaded by the pager itself; this effect only covers
   // sign-in changes, so it deliberately does not depend on `windowSize`.
@@ -360,19 +349,12 @@ export default function SubmissionsAndScansPage() {
     return () => window.clearInterval(interval);
   }, [authLoading, items, loadAll, token, user, windowSize]);
 
-  // One list for the whole submission journey: active scans and the versions
-  // they became.  A scan that already appears as a fetched version is
-  // represented by that version row instead of being listed twice.
+  // Paginate the selected source independently: global scan traffic must not
+  // push the user's own versions out of their submissions view.
   const activity = useMemo<ActivityItem[]>(() => {
-    const knownVersionIds = new Set(
-      submittedVersions.map((version) => version.version_id),
-    );
     const needle = query.trim().toLowerCase();
     const rows: ActivityItem[] = [];
-    for (const item of items) {
-      if (item.submission && knownVersionIds.has(item.submission.version_id)) {
-        continue;
-      }
+    for (const item of view === 'scans' ? items : []) {
       const haystack = `${item.package_name ?? ''} ${item.scan_id}`.toLowerCase();
       if (needle && !haystack.includes(needle)) continue;
       rows.push({
@@ -382,7 +364,7 @@ export default function SubmissionsAndScansPage() {
         scan: item,
       });
     }
-    for (const version of submittedVersions) {
+    for (const version of view === 'mine' ? submittedVersions : []) {
       const haystack = `${version.package_name} ${version.version} ${version.version_id}`.toLowerCase();
       if (needle && !haystack.includes(needle)) continue;
       rows.push({
@@ -394,27 +376,10 @@ export default function SubmissionsAndScansPage() {
     }
     rows.sort((a, b) => b.sortKey - a.sortKey);
     return rows;
-  }, [items, query, submittedVersions]);
-
-  // Deletable scans that the version row above replaced: their delete action
-  // moves onto that row so a hidden task's owner can still release its source.
-  const hiddenDeletableScans = useMemo<Map<string, ScanTaskItem>>(() => {
-    const knownVersionIds = new Set(
-      submittedVersions.map((version) => version.version_id),
-    );
-    const hidden = new Map<string, ScanTaskItem>();
-    for (const item of items) {
-      const versionId = item.submission?.version_id;
-      if (!versionId || !knownVersionIds.has(versionId) || !item.delete_allowed) {
-        continue;
-      }
-      hidden.set(versionId, item);
-    }
-    return hidden;
-  }, [items, submittedVersions]);
+  }, [items, query, submittedVersions, view]);
 
   const totalPages = Math.max(1, Math.ceil(activity.length / PAGE_SIZE));
-  const moreAvailable = scansHaveMore || versionsHaveMore;
+  const moreAvailable = view === 'mine' ? versionsHaveMore : scansHaveMore;
 
   // Deletions and refreshes can shrink the list below the current page.
   useEffect(() => {
@@ -442,6 +407,7 @@ export default function SubmissionsAndScansPage() {
     try {
       await deleteScanTask(token, item.scan_id);
       clearPendingScanIfMatches(item.scan_id);
+      setDeletedScan(item);
       await loadAll(windowSize);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : t('scans.delete_failed'));
@@ -462,6 +428,28 @@ export default function SubmissionsAndScansPage() {
       </div>
 
       <div style={{ maxWidth: '760px', margin: '0 auto' }}>
+        {user && (
+          <div role="tablist" aria-label={t('scans.title')} style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+            {(['mine', 'scans'] as const).map((tab) => (
+              <button key={tab} type="button" role="tab" aria-selected={view === tab}
+                className={`btn ${view === tab ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => { setView(tab); setPage(0); setQuery(''); }}>
+                {t(tab === 'mine' ? 'scans.my_versions' : seesAllScans ? 'scans.all_records' : 'scans.my_records')}
+              </button>
+            ))}
+          </div>
+        )}
+        {deletedScan && (
+          <div className="submit-notice" role="status">
+            <p>{t('scans.delete_success')}</p>
+            {deletedScan.submission && (
+              <Link className="btn btn-secondary btn-sm"
+                href={`/packages/${encodeURIComponent(deletedScan.submission.package_name)}/versions/${encodeURIComponent(deletedScan.submission.version)}/status?vid=${encodeURIComponent(deletedScan.submission.version_id)}`}>
+                {t('submissions.view_status')}
+              </Link>
+            )}
+          </div>
+        )}
         {!authLoading && user && (
           <form
             onSubmit={(e) => e.preventDefault()}
@@ -527,7 +515,7 @@ export default function SubmissionsAndScansPage() {
         {isEmpty && (
           <div className="empty-state">
             <div className="empty-state-icon">&#x1F50D;</div>
-            <h3>{hasQuery ? t('scans.no_match') : t('scans.empty')}</h3>
+            <h3>{hasQuery ? t('scans.no_match') : t(view === 'mine' ? 'scans.empty_versions' : 'scans.empty')}</h3>
             <p>{hasQuery ? t('scans.no_match_hint') : t('scans.empty_hint')}</p>
             <Link href="/submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
               {t('scans.new_scan')}
@@ -548,16 +536,13 @@ export default function SubmissionsAndScansPage() {
               />
             );
           }
-          const linkedScan = hiddenDeletableScans.get(row.version.version_id);
           return (
             <VersionCard
               key={row.id}
               item={row.version}
               language={i18n.language}
               t={t}
-              scanTask={linkedScan}
-              onDelete={linkedScan ? handleDelete : undefined}
-              deleting={deletingScanId === linkedScan?.scan_id}
+              onDeleted={() => void loadAll(windowSize)}
             />
           );
         })}

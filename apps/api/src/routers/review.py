@@ -17,12 +17,14 @@ from src.database import create_session_factory, get_runtime_engine
 from src.models.common import ErrorEnvelope
 from src.models.producer import (
     AuditLogEntry,
+    DeleteVersionRequest,
     ReviewRequest,
     ReviewResponse,
 )
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.services.producer import ProducerService, ProducerServiceError
 from src.settings import get_settings
+from src.version_deletion import VersionDeletionError
 
 router = APIRouter(prefix="/api/v0/producer", tags=["review"])
 
@@ -220,6 +222,18 @@ def re_review_version(
 
 # ── DELETE /versions/{version_id} ──────────────────────────
 
+@router.get("/versions/{version_id}/deletion-preview")
+def preview_version_deletion(
+    version_id: str,
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> dict[str, object]:
+    try:
+        return _get_producer_repository().preview_version_deletion(
+            version_id, operator_id=_user.id, operator_role=_user.role,
+        )
+    except VersionDeletionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
 @router.delete(
     "/versions/{version_id}",
     response_model=ReviewResponse,
@@ -228,16 +242,21 @@ def re_review_version(
 )
 def delete_version(
     version_id: str,
-    _user: CurrentUser = Depends(require_role("admin")),
+    body: DeleteVersionRequest,
+    _user: CurrentUser = Depends(require_role("submitter")),
 ) -> ReviewResponse:
-    """管理员删除版本（不可逆操作）。"""
+    """Apply scope V after explicit confirmation and a fresh policy check."""
     repo = _get_producer_repository()
     service = ProducerService(repo)
     try:
         return service.delete_version(
             version_id=version_id,
             operator_id=_user.id,
+            operator_role=_user.role,
+            expected_status=body.expected_status,
         )
+    except VersionDeletionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except ProducerServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

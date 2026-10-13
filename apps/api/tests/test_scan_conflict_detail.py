@@ -81,13 +81,17 @@ def test_scan_conflict_detail_marks_deletable_lifetimes(
             repo_url=repo_url,
             status=status,
             callback_status=callback,
+            version_id=DRAFT_VERSION_ID if scan_id == "scan-conflict-submitted" else None,
         )
         task = repository.get_scan_task(scan_id)
         assert task is not None
         detail = trust.scan_conflict_detail(trust._scan_info_from_task(task))
         assert detail["conflict_scan_id"] == scan_id
-        assert detail["delete_allowed"] is True
-        assert "请先删除任务" in detail["message"]
+        assert detail["delete_allowed"] is (scan_id != "scan-conflict-submitted")
+        if scan_id == "scan-conflict-submitted":
+            assert "不能单独删除扫描记录" in detail["message"]
+        else:
+            assert "请先删除任务" in detail["message"]
         assert scan_id in detail["message"]
 
 
@@ -141,9 +145,9 @@ def test_submit_scan_conflict_returns_structured_delete_allowed_detail(
     detail = raised.value.detail
     assert isinstance(detail, dict)
     assert detail["conflict_scan_id"] == "scan-conflict-submitted"
-    assert detail["delete_allowed"] is True
+    assert detail["delete_allowed"] is False
     assert detail["lifecycle"] == "submitted_reviewing"
-    assert "请先删除任务" in detail["message"]
+    assert "不能单独删除扫描记录" in detail["message"]
 
 
 def test_delete_conflicted_task_then_rescan_succeeds(
@@ -158,6 +162,7 @@ def test_delete_conflicted_task_then_rescan_succeeds(
         client_request_id="request-conflict-loop",
         status="complete",
         callback_status="delivered",
+        version_id=None,
     )
     monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository)
     monkeypatch.setattr(
@@ -249,5 +254,5 @@ def test_submit_version_conflict_returns_structured_delete_allowed_detail(
     detail = raised.value.detail
     assert isinstance(detail, dict)
     assert detail["conflict_scan_id"] == "scan-conflict-producer"
-    assert detail["delete_allowed"] is True
+    assert detail["delete_allowed"] is False
     assert detail["lifecycle"] == "submitted_reviewing"

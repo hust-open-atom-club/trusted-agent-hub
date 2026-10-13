@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth';
 import { apiFetchAll, authFetch, clearFetchCache } from '@/lib/api-fetch';
 
 import { API_BASE } from '@/lib/runtime-config';
+import VersionDeleteButton from '@/components/VersionDeleteButton';
 
 interface YankItem {
   version_id: string;
@@ -55,7 +56,6 @@ export default function AdminYankPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchItems = () => {
     if (!token) return;
@@ -165,30 +165,6 @@ export default function AdminYankPage() {
       setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : t('admin.yank.error'));
-    }
-  };
-
-  const handleDelete = async (item: YankItem) => {
-    if (!token) return;
-    if (!confirm(t('admin.yank.delete_confirm', { name: item.package_name, version: item.version }))) return;
-    setDeletingId(item.version_id);
-    try {
-      const res = await authFetch(
-        `${API_BASE}/api/v0/producer/versions/${item.version_id}`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: t('admin.yank.delete_error') }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-      setSuccessMsg(t('admin.yank.delete_success', { name: item.package_name, version: item.version }));
-      clearFetchCache('versions');
-      fetchItems();
-      setTimeout(() => setSuccessMsg(null), 3000);
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : t('admin.yank.delete_error'));
-    } finally {
-      setDeletingId(null);
     }
   };
 
@@ -333,13 +309,10 @@ export default function AdminYankPage() {
                       >
                         {t('admin.yank.unyank_btn')}
                       </button>
-                      <button
-                        className="btn btn-danger btn-sm"
-                        onClick={() => handleDelete(item)}
-                        disabled={deletingId === item.version_id}
-                      >
-                        {deletingId === item.version_id ? t('admin.yank.deleting') : t('admin.yank.delete_btn')}
-                      </button>
+                      <VersionDeleteButton versionId={item.version_id} status={item.status} onDeleted={() => {
+                        setSuccessMsg(t('admin.yank.delete_success', { name: item.package_name, version: item.version }));
+                        fetchItems();
+                      }} />
                     </div>
                   </td>
                 </tr>

@@ -9,6 +9,7 @@ import pytest
 from src.repositories.orm import PackageRow, PackageVersionRow
 from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.routers import trust
+from src.version_deletion import VersionDeletionError
 from tests.test_scan_task_persistence import scan_repository
 
 
@@ -47,10 +48,12 @@ def _create_draft_version(repository: ProducerRepository) -> None:
         session.commit()
 
 
-def test_delete_version_backfills_scan_task_retention(
+@pytest.mark.parametrize("scan_status", ["pending", "complete", "error"])
+def test_delete_version_removes_attached_scans_immediately(
     scan_repository: tuple[ProducerRepository, object],
+    scan_status: str,
 ) -> None:
-    """Deleting a version sets expires_at on its attached scan tasks."""
+    """A deleted version must not leave a 30-day, resubmittable scan."""
     repository, _ = scan_repository
     _create_draft_version(repository)
     repository.create_scan_task(
@@ -58,7 +61,7 @@ def test_delete_version_backfills_scan_task_retention(
         owner_user_id="scan-user-1",
         client_request_id="request-orphan-1",
         repo_url=DRAFT_SOURCE_URL,
-        status="complete",
+        status=scan_status,
         callback_status="delivered",
         version_id=DRAFT_VERSION_ID,
     )
@@ -69,23 +72,115 @@ def test_delete_version_backfills_scan_task_retention(
     assert attached["version_id"] == DRAFT_VERSION_ID
     assert attached["expires_at"] is None
 
-    assert repository.delete_version(DRAFT_VERSION_ID) is True
+    if scan_status == "pending":
+        with pytest.raises(VersionDeletionError):
+            repository.delete_version(DRAFT_VERSION_ID, operator_id="scan-user-1", operator_role="submitter", expected_status="draft")
+        assert repository.get_scan_task("scan-orphan-1") is not None
+        return
+    assert repository.delete_version(DRAFT_VERSION_ID, operator_id="scan-user-1", operator_role="submitter", expected_status="draft") is True
 
-    # The version row is gone; the scan task survives (audit trail) with a
-    # retention deadline so the normal expiry cleaner can reclaim it.
     assert repository.get_version(DRAFT_VERSION_ID) is None
-    orphaned = repository.get_scan_task("scan-orphan-1")
-    assert orphaned is not None
-    assert orphaned["version_id"] is None
-    assert orphaned["status"] == "complete"
-    assert orphaned["expires_at"] is not None
-
-    # The expired orphan is now reclaimable by the standard cleaner.
-    deleted = repository.delete_expired_scan_tasks(
-        now=datetime.now(timezone.utc) + timedelta(days=31),
-    )
-    assert deleted == 1
     assert repository.get_scan_task("scan-orphan-1") is None
+    with pytest.raises(VersionDeletionError) as missing:
+        repository.delete_version(DRAFT_VERSION_ID, operator_id="scan-user-1", operator_role="submitter", expected_status="draft")
+    assert missing.value.status_code == 404
+
+
+@pytest.mark.parametrize("version_status", ["pending_review", "approved", "published", "rejected"])
+@pytest.mark.parametrize("scan_status", ["complete", "error", "llm_timeout", "total_timeout"])
+def test_submitted_scans_never_expire(
+    scan_repository: tuple[ProducerRepository, object],
+    version_status: str,
+    scan_status: str,
+) -> None:
+    from src.repositories.orm_producer import ScanTaskRow
+
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    old = datetime.now(timezone.utc) - timedelta(days=90)
+    repository.create_scan_task(
+        scan_id="scan-preserved", owner_user_id="scan-user-1",
+        client_request_id="preserved", repo_url=DRAFT_SOURCE_URL,
+        version_id=DRAFT_VERSION_ID, status=scan_status,
+        callback_status="delivered", created_at=old, expires_at=old,
+    )
+    assert repository.get_scan_task("scan-preserved")["expires_at"] is None
+    # A stale deadline from the old policy must not delete submitted records.
+    with repository.session_factory() as session:
+        session.get(PackageVersionRow, DRAFT_VERSION_ID).status = version_status
+        session.get(ScanTaskRow, "scan-preserved").expires_at = old
+        session.commit()
+    assert repository.delete_expired_scan_tasks() == 0
+    task = repository.get_scan_task("scan-preserved")
+    assert task is not None
+    info = trust._scan_info_from_task(task)
+    assert trust._scan_expired(info) is False
+    assert trust._scan_expiry_iso(info) is None
+    assert repository.list_version_labels([DRAFT_VERSION_ID])[DRAFT_VERSION_ID]["status"] == version_status
+    # Even workers explicitly providing an expiry cannot reinstate the TTL.
+    repository.update_scan_task("scan-preserved", {"expires_at": old})
+    assert repository.get_scan_task("scan-preserved")["expires_at"] is None
+
+
+def test_service_delete_removes_mirror_keeps_unrelated_scans_and_audit(
+    scan_repository: tuple[ProducerRepository, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import select
+    from src.repositories.orm_producer import AuditLogRow, ScanReportRow
+    from src.services.producer import ProducerService
+
+    repository, _ = scan_repository
+    _create_draft_version(repository)
+    with repository.session_factory() as session:
+        session.add(ScanReportRow(version_id=DRAFT_VERSION_ID, scan_json={"summary": {"total": 0}}))
+        session.commit()
+    for suffix, version_id in [("attached", DRAFT_VERSION_ID), ("standalone", None)]:
+        repository.create_scan_task(
+            scan_id=f"scan-{suffix}", owner_user_id="scan-user-1",
+            client_request_id=suffix, repo_url=f"https://github.com/acme/demo-{suffix}",
+            status="complete", callback_status="delivered", version_id=version_id,
+        )
+    monkeypatch.setattr(trust, "_scans", {
+        "scan-attached": {"version_id": DRAFT_VERSION_ID},
+        "scan-standalone": {"version_id": None},
+    })
+    response = ProducerService(repository).delete_version(
+        version_id=DRAFT_VERSION_ID, operator_id="scan-user-1",
+        operator_role="submitter", expected_status="draft",
+    )
+    assert response.new_status == "deleted"
+    assert repository.get_scan_task("scan-attached") is None
+    assert repository.get_scan_report(DRAFT_VERSION_ID) is None
+    assert repository.get_scan_task("scan-standalone") is not None
+    assert "scan-attached" not in trust._scans
+    assert "scan-standalone" in trust._scans
+    assert repository.update_scan_task("scan-attached", {"status": "complete"}) is False
+    with repository.session_factory() as session:
+        audit = session.scalar(select(AuditLogRow).where(AuditLogRow.action == "delete_version"))
+        assert audit is not None
+        assert audit.target_id == DRAFT_VERSION_ID
+
+
+@pytest.mark.parametrize("scan_status", ["complete", "error", "llm_timeout", "total_timeout"])
+def test_unsubmitted_retention_starts_at_finish_and_expires_at_30_days(
+    scan_repository: tuple[ProducerRepository, object],
+    scan_status: str,
+) -> None:
+    repository, _ = scan_repository
+    created = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    finished = created + timedelta(minutes=20)
+    deadline = finished + timedelta(days=30)
+    repository.create_scan_task(
+        scan_id="scan-deadline", owner_user_id="scan-user-1",
+        client_request_id="deadline", repo_url=DRAFT_SOURCE_URL, created_at=created,
+    )
+    repository.update_scan_task("scan-deadline", {"status": scan_status, "finished_at": finished})
+    task = repository.get_scan_task("scan-deadline")
+    assert task is not None
+    assert task["expires_at"] == deadline.isoformat().replace("+00:00", "Z")
+    assert repository.delete_expired_scan_tasks(now=deadline - timedelta(seconds=1)) == 0
+    assert repository.delete_expired_scan_tasks(now=deadline) == 1
 
 
 def test_backfill_orphan_scan_task_retention_reclaims_legacy_orphans(

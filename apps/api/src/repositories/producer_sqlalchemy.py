@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.llm_progress import finalize_running_llm_progress
+from src.version_deletion import VersionDeletionError, deletion_action
 from src.repositories.orm import (
     FeedbackRecordRow,
     PackageRow,
@@ -36,6 +37,10 @@ from src.repositories.orm_producer import (
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _parse_iso_date(value: str) -> datetime:
@@ -342,25 +347,79 @@ class ProducerRepository:
             session.commit()
             return True
 
-    def delete_version(self, version_id: str) -> bool:
-        """删除指定版本，并给关联扫描任务回填保留期（不物理删，保留审计）。"""
+    def _version_deletion_plan(
+        self, session: Session, version: PackageVersionRow,
+        *, operator_id: str, operator_role: str, lock: bool = False,
+    ) -> dict[str, object]:
+        package = session.get(PackageRow, version.package_id, with_for_update=lock)
+        if package is None:
+            raise VersionDeletionError("包不存在", 404)
+        owner_id = (version.data or {}).get("submitter_id") or (package.data or {}).get("submitter_id")
+        is_admin = operator_role == "admin"
+        if not is_admin and (operator_role not in {"submitter", "reviewer"} or not owner_id or owner_id != operator_id):
+            raise VersionDeletionError("只能撤回并删除自己提交的版本", 403)
+        action = deletion_action(version.status, is_admin=is_admin)
+        tasks_query = select(ScanTaskRow).where(ScanTaskRow.version_id == version.id)
+        tasks = session.scalars(tasks_query.with_for_update() if lock else tasks_query).all()
+        now = _utc_now()
+        busy = any(
+            task.status not in _SCAN_TASK_FAILURE_STATUSES | {"complete"}
+            or (task.lease_until is not None and _aware_utc(task.lease_until) > now)
+            or task.callback_status not in {"delivered", "not_required"}
+            for task in tasks
+        )
+        reason = None
+        if action is None:
+            reason = f"当前版本状态 {version.status} 不允许删除"
+        elif busy:
+            reason = "关联扫描仍在执行、租约未过期或回调未完成，暂时不能删除版本"
+        return {
+            "version_id": version.id, "package_id": version.package_id,
+            "package_name": package.name, "version": version.version,
+            "status": version.status, "allowed": reason is None,
+            "scope": "V" if reason is None else "N", "action": action,
+            "reason": reason,
+            "scan_count": len(tasks),
+            "report_count": int(session.scalar(select(func.count()).select_from(ScanReportRow).where(ScanReportRow.version_id == version.id)) or 0),
+            "review_count": int(session.scalar(select(func.count()).select_from(ReviewRecordRow).where(ReviewRecordRow.version_id == version.id)) or 0),
+        }
+
+    def preview_version_deletion(self, version_id: str, *, operator_id: str, operator_role: str) -> dict[str, object]:
         with self.session_factory() as session:
             ver = session.get(PackageVersionRow, version_id)
             if ver is None:
-                return False
-            current_time = _utc_now()
-            # scan_tasks.version_id drops to NULL via FK ondelete=SET NULL.
-            # Backfill retention now so the detached rows do not hold the
-            # source-identity dedup key forever.
-            for scan_row in session.scalars(
-                select(ScanTaskRow).where(
-                    ScanTaskRow.version_id == version_id,
-                    ScanTaskRow.expires_at.is_(None),
-                )
-            ):
-                finished = scan_row.finished_at or current_time
-                scan_row.expires_at = finished + _SCAN_TASK_RETENTION
-                scan_row.updated_at = current_time
+                raise VersionDeletionError("版本不存在", 404)
+            return self._version_deletion_plan(session, ver, operator_id=operator_id, operator_role=operator_role)
+
+    def delete_version(
+        self, version_id: str, *, operator_id: str, operator_role: str,
+        expected_status: str,
+    ) -> bool:
+        """Recheck actor/status under lock; delete and audit in one transaction."""
+        with self.session_factory() as session:
+            ver = session.get(PackageVersionRow, version_id, with_for_update=True)
+            if ver is None:
+                raise VersionDeletionError("版本不存在", 404)
+            plan = self._version_deletion_plan(session, ver, operator_id=operator_id, operator_role=operator_role, lock=True)
+            if ver.status != expected_status:
+                raise VersionDeletionError("版本状态已变化，请刷新删除清单后重新确认")
+            if not plan["allowed"]:
+                raise VersionDeletionError(str(plan["reason"]))
+            # Delete before the SET NULL FK runs: a submitted scan must never
+            # become a new, unsubmitted 30-day task when its version is removed.
+            session.execute(
+                delete(ScanTaskRow).where(ScanTaskRow.version_id == version_id)
+            )
+            package = session.get(PackageRow, ver.package_id)
+            if package.latest_version == ver.version:
+                # Do not implicitly publish another release or leave a dangling pointer.
+                package.latest_version = ""
+                package.status = "draft"
+                package.data = {**(package.data or {}), "latest_version": None, "status": "draft", "updated_at": _serialize_dt(_utc_now())}
+            session.add(AuditLogRow(
+                id=f"audit-{uuid4().hex}", action="delete_version", target_type="version",
+                target_id=version_id, operator_id=operator_id, detail=plan, timestamp=_utc_now(),
+            ))
             session.delete(ver)
             session.commit()
             return True
@@ -893,12 +952,10 @@ class ProducerRepository:
         now = created_at or _utc_now()
         # Active tasks use the execution deadline; ``expires_at`` starts only
         # after a terminal outcome.
-        if status in _SCAN_TASK_EXECUTABLE_STATUSES:
+        if version_id is not None or status in _SCAN_TASK_EXECUTABLE_STATUSES:
             expiry = None
-        elif status in _SCAN_TASK_FAILURE_STATUSES:
+        elif status in _SCAN_TASK_FAILURE_STATUSES | {"complete"}:
             expiry = expires_at or now + _SCAN_TASK_RETENTION
-        elif status == "complete":
-            expiry = None if version_id is not None else expires_at or now + _SCAN_TASK_RETENTION
         else:
             expiry = expires_at
         callback_state = callback_status or (
@@ -1105,28 +1162,16 @@ class ProducerRepository:
             return _scan_task_data(scan_row)
 
     def delete_expired_scan_tasks(self, *, now: datetime | None = None) -> int:
-        """Delete expired tasks without dropping callback-owing rows."""
+        """Only unsubmitted terminal scans are eligible for timed cleanup."""
         current_time = now or _utc_now()
         with self.session_factory() as session:
             result = session.execute(
                 delete(ScanTaskRow).where(
                     ScanTaskRow.expires_at.is_not(None),
                     ScanTaskRow.expires_at <= current_time,
-                    or_(
-                        and_(
-                            ScanTaskRow.status.in_(_SCAN_TASK_FAILURE_STATUSES),
-                            # Preserve rows still needed for callback recovery.
-                            or_(
-                                ScanTaskRow.version_id.is_(None),
-                                ScanTaskRow.callback_status.in_(
-                                    ("delivered", "not_required")
-                                ),
-                            ),
-                        ),
-                        and_(
-                            ScanTaskRow.status == "complete",
-                            ScanTaskRow.version_id.is_(None),
-                        ),
+                    ScanTaskRow.version_id.is_(None),
+                    ScanTaskRow.status.in_(
+                        {"complete"} | _SCAN_TASK_FAILURE_STATUSES
                     ),
                 )
             )
@@ -1253,6 +1298,7 @@ class ProducerRepository:
                 select(
                     PackageVersionRow.id,
                     PackageVersionRow.version,
+                    PackageVersionRow.status,
                     PackageRow.name,
                 )
                 .join(PackageRow, PackageRow.id == PackageVersionRow.package_id)
@@ -1262,6 +1308,7 @@ class ProducerRepository:
             str(row.id): {
                 "package_name": str(row.name or ""),
                 "version": str(row.version or ""),
+                "status": str(row.status or ""),
             }
             for row in rows
         }
@@ -1287,18 +1334,15 @@ class ProducerRepository:
             if row is None:
                 return None
 
-            if row.lease_until is not None and row.lease_until > current_time:
+            if row.lease_until is not None and _aware_utc(row.lease_until) > _aware_utc(current_time):
                 raise ValueError("扫描任务仍在处理中，暂时不能删除")
 
             failure = row.status in _SCAN_TASK_FAILURE_STATUSES
             complete = row.status == "complete"
             if not failure and not complete:
                 raise ValueError("扫描任务仍在处理中，暂时不能删除")
-            if row.version_id is not None and row.callback_status not in {
-                "delivered",
-                "not_required",
-            }:
-                raise ValueError("扫描任务回调尚未完成，暂时不能删除")
+            if row.version_id is not None:
+                raise ValueError("扫描记录已关联版本，请通过撤回提交或删除版本处理")
 
             data = _scan_task_data(row)
             session.delete(row)
@@ -1349,7 +1393,7 @@ class ProducerRepository:
             row.status = status
             row.error = error
             row.finished_at = finished_at
-            row.expires_at = expires_at
+            row.expires_at = None if row.version_id is not None else expires_at
             row.callback_status = (
                 "pending" if row.version_id is not None else "not_required"
             )
@@ -1648,7 +1692,9 @@ class ProducerRepository:
             if row.finished_at is None:
                 row.finished_at = current_time
             finished = row.finished_at or current_time
-            row.expires_at = finished + _SCAN_TASK_RETENTION
+            row.expires_at = (
+                None if row.version_id is not None else finished + _SCAN_TASK_RETENTION
+            )
             row.callback_status = "delivered"
             row.resource_consumed = True
             row.callback_next_attempt_at = None
@@ -1746,7 +1792,11 @@ class ProducerRepository:
             current_time = _utc_now()
             effective_status = str(updates.get("status") or row.status)
             effective_version_id = updates.get("version_id", row.version_id)
-            if effective_status in _SCAN_TASK_EXECUTABLE_STATUSES:
+            if effective_version_id is not None:
+                # Includes failures and legacy workers explicitly sending an
+                # expiry. Submitted records live until explicitly deleted.
+                row.expires_at = None
+            elif effective_status in _SCAN_TASK_EXECUTABLE_STATUSES:
                 # A stale pre-terminal expiry must never remove a running
                 # task. The execution deadline is enforced by the worker.
                 if "expires_at" not in updates:
@@ -1763,18 +1813,13 @@ class ProducerRepository:
                             finished = current_time
                     row.expires_at = finished + _SCAN_TASK_RETENTION
             elif effective_status == "complete" and "expires_at" not in updates:
-                if effective_version_id is None:
-                    finished = row.finished_at or current_time
-                    if isinstance(finished, str):
-                        try:
-                            finished = _parse_iso_date(finished)
-                        except ValueError:
-                            finished = current_time
-                    row.expires_at = finished + _SCAN_TASK_RETENTION
-                else:
-                    # Once a scan is attached and its callback is delivered,
-                    # the review workflow owns retention, not this cleaner.
-                    row.expires_at = None
+                finished = row.finished_at or current_time
+                if isinstance(finished, str):
+                    try:
+                        finished = _parse_iso_date(finished)
+                    except ValueError:
+                        finished = current_time
+                row.expires_at = finished + _SCAN_TASK_RETENTION
             row.updated_at = current_time
             session.commit()
             return True

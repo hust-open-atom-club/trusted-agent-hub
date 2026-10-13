@@ -46,6 +46,8 @@ import {
 } from '@/lib/submission-metadata';
 
 import { API_BASE } from '@/lib/runtime-config';
+import ExistingPackageNotice from '@/components/ExistingPackageNotice';
+import { blocksNewPackage, lookupExistingPackage, type ExistingPackage } from '@/lib/submission-workflow';
 
 const PACKAGE_TYPES = [
   { value: 'skill', label: 'Skill' },
@@ -250,6 +252,29 @@ function SubmitForm() {
   const [checkingResume, setCheckingResume] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [fieldSource, setFieldSource] = useState<Record<string, string>>({});
+  const [existingPackage, setExistingPackage] = useState<ExistingPackage | null>(null);
+  const [lookupError, setLookupError] = useState('');
+  const [checkingPackage, setCheckingPackage] = useState(false);
+  const existingPackageRef = useRef<HTMLDivElement>(null);
+  const matchingPackage = existingPackage?.package_name === pkgName.trim() ? existingPackage : null;
+
+  useEffect(() => {
+    setExistingPackage(null);
+    setLookupError('');
+    if (!token || isNewVersion || !pkgName.trim() || phase !== 'confirm') {
+      setCheckingPackage(false);
+      return;
+    }
+    const controller = new AbortController();
+    setCheckingPackage(true);
+    const timer = setTimeout(() => {
+      lookupExistingPackage(pkgName, token, controller.signal)
+        .then(result => { if (!controller.signal.aborted) setExistingPackage(result); })
+        .catch(err => { if (!controller.signal.aborted) setLookupError(err.message); })
+        .finally(() => { if (!controller.signal.aborted) setCheckingPackage(false); });
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [pkgName, token, isNewVersion, phase]);
 
   const isBusy = phase === 'scanning' || phase === 'submitting' || checkingResume;
 
@@ -820,6 +845,7 @@ function SubmitForm() {
 
   const handleDeleteConflictedTask = async () => {
     if (!conflict || conflictBusy) return;
+    if (!window.confirm(t('scans.delete_confirm'))) return;
     setConflictBusy(true);
     setError('');
     try {
@@ -843,7 +869,7 @@ function SubmitForm() {
       });
       setConflict(null);
       setPhase('scanning');
-      setStatusMsg('旧扫描任务已删除，正在重新提交扫描...');
+      setStatusMsg('旧扫描记录已删除，已有包版本和审核历史仍保留。正在重新扫描...');
       const scanId = await submitScanRequest(
         repoUrl.trim(),
         retryRequestId,
@@ -978,6 +1004,7 @@ function SubmitForm() {
 
   /* ── 提交 ── */
   const handleSubmit = async () => {
+    if (isBusy) return;
     if (!token) { setError('请先登录'); return; }
     if (!pkgName.trim()) { setError('请输入包名称'); return; }
     if (!pkgSourceUrl.trim() || !pkgSourceUrl.trim().startsWith('https://')) {
@@ -1000,6 +1027,18 @@ function SubmitForm() {
     const fs = { ...fieldSource };
 
     try {
+      // Recheck immediately before any write, including when the debounced
+      // lookup failed or the package was created in another tab meanwhile.
+      if (!isNewVersion) {
+        const existing = await lookupExistingPackage(pkgName, token);
+        setExistingPackage(existing);
+        setLookupError('');
+        if (blocksNewPackage(existing)) {
+          setPhase('confirm');
+          existingPackageRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          return;
+        }
+      }
       const meta = metadata || {} as PackageMetadata;
       const version = pkgVersion && SEMVER_RE.test(pkgVersion) ? pkgVersion : '0.1.0';
       const sUrl = pkgSourceUrl.trim();
@@ -1119,7 +1158,12 @@ function SubmitForm() {
       };
 
       const pkgRes = await authFetch(`${API_BASE}/api/v0/producer/packages`, { method: 'POST', headers, body: JSON.stringify(pkgBody) });
-      if (!pkgRes.ok) { const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' })); throw new Error(e.detail || `创建包失败 (${pkgRes.status})`); }
+      if (!pkgRes.ok) {
+        const e = await pkgRes.json().catch(() => ({ detail: '创建包失败' }));
+        // Another tab may have created the package after our preflight.
+        setExistingPackage(await lookupExistingPackage(pkgName, token).catch(() => null));
+        throw new Error(e.detail || `创建包失败 (${pkgRes.status})`);
+      }
       const pkgData = await pkgRes.json();
       const createdPkgId: string = pkgData.id;
       patchPendingSubmitContext({ packageId: createdPkgId });
@@ -1219,6 +1263,18 @@ function SubmitForm() {
         </div>
 
         {error && <div className="submit-error">{error}</div>}
+        {phase === 'confirm' && !isNewVersion && (
+          <div ref={existingPackageRef}>
+            {checkingPackage && <p role="status">正在检查已有包…</p>}
+            {lookupError && <p role="alert" className="submit-error">{lookupError} 点击提交审核可重试检查。</p>}
+            {matchingPackage && <ExistingPackageNotice existing={matchingPackage} version={pkgVersion}
+              scanId={scanResult?.status === 'complete' ? scanResult.scan_id : undefined}
+              onNavigate={() => {
+                const pending = readPendingSubmitContext();
+                if (pending?.packageName === pkgName.trim() && !pending.versionId) clearPendingSubmitContext();
+              }} />}
+          </div>
+        )}
         {resumeNotice && phase !== 'submitting' && phase !== 'done' && (
           <div className="submit-notice" role="status">
             <span>{resumeNotice}</span>
@@ -1264,7 +1320,7 @@ function SubmitForm() {
               onClick={handleDeleteConflictedTask}
               disabled={conflictBusy}
             >
-              {conflictBusy ? '正在删除旧任务...' : '删除旧任务并重试'}
+              {conflictBusy ? '正在删除扫描记录...' : '删除扫描记录并重新扫描'}
             </button>
           </div>
         )}
@@ -1668,7 +1724,7 @@ function SubmitForm() {
                 重新扫描
               </button>
               <button type="button" className="btn btn-primary btn-lg" onClick={handleSubmit}
-                disabled={isBusy || !confirmed || !pkgName.trim() || !pkgSourceUrl.trim() || !pkgLicense.trim() || pkgLicense === 'UNLICENSED' || pkgCompatibility.length === 0}>
+                disabled={isBusy || checkingPackage || (!isNewVersion && blocksNewPackage(matchingPackage)) || !confirmed || !pkgName.trim() || !pkgSourceUrl.trim() || !pkgLicense.trim() || pkgLicense === 'UNLICENSED' || pkgCompatibility.length === 0}>
                 提交审核
               </button>
             </div>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, Field
 
@@ -165,6 +165,11 @@ class ReviewRequest(StrictContractModel):
 
     conclusion: str = Field(description='审核结论：approved | rejected | changes_requested')
     comment: str | None = Field(default=None, description='审核意见（驳回/要求修改时必填）')
+
+
+class DeleteVersionRequest(StrictContractModel):
+    confirmed: Literal[True]
+    expected_status: str = Field(min_length=1)
 
 
 class ReviewResponse(StrictContractModel):

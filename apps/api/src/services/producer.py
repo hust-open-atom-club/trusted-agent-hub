@@ -2140,24 +2140,19 @@ class ProducerService:
         self,
         *,
         version_id: str,
-        operator_id: str = "system",
+        operator_id: str,
+        operator_role: str,
+        expected_status: str,
     ) -> "ReviewResponse":
-        """管理员删除版本（不可逆）。"""
+        """Delete an eligible own submission or admin-managed version."""
         from src.models.producer import ReviewResponse
-        from schema.constants import AuditAction
-
-        version = self.repository.get_version(version_id)
-        if version is None:
-            raise ProducerServiceError(f"版本 {version_id} 不存在")
-
-        self.repository.delete_version(version_id)
-        self.repository.create_audit_log(
-            action="delete_version",
-            target_type="version",
-            target_id=version_id,
-            operator_id=operator_id,
-            detail={"version": version.get("version", ""), "package_name": version.get("package_name", "")},
+        self.repository.delete_version(
+            version_id, operator_id=operator_id, operator_role=operator_role,
+            expected_status=expected_status,
         )
+        from src.routers.trust import discard_version_scan_runtime
+
+        discard_version_scan_runtime(version_id)
 
         return ReviewResponse(
             version_id=version_id,

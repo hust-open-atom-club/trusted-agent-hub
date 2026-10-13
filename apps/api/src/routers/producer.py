@@ -641,6 +641,35 @@ def list_packages(
     return service.list_all_packages(limit=limit, offset=offset)
 
 
+# Keep the literal lookup route before /packages/{package_id}.
+@router.get("/packages/lookup")
+def lookup_package(
+    name: str = Query(..., min_length=1, max_length=128),
+    _user: CurrentUser = Depends(require_role("submitter")),
+) -> dict[str, object] | None:
+    """Resolve an accessible existing submission without changing it.
+
+    Use producer data so unpublished/changes-requested versions are included;
+    public catalog lookup cannot guide these submissions.
+    """
+    repo = _get_producer_repository()
+    package = repo.find_package_by_name(name.strip())
+    if package is None:
+        return None
+    verify_resource_access(_user, str(package.get("submitter_id") or ""))
+    package_id = str(package["id"])
+    versions = repo.list_package_versions(package_id)
+    return {
+        "package_id": package_id,
+        "package_name": package.get("name"),
+        "status": package.get("status", "draft"),
+        "versions": [
+            {key: version.get(key) for key in ("id", "version", "status", "submitted_at")}
+            for version in versions
+        ],
+    }
+
+
 # ── GET /packages/{package_id} ────────────────────────────
 
 @router.get(

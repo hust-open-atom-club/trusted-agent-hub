@@ -5217,6 +5217,111 @@ h3 {
   margin-top: 0.375rem;
 }
 
+.scan-retention-notice {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-paper-3);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--color-ink-2);
+}
+
+.scan-retention-notice p { margin: 0; }
+.scan-retention-notice p + p { margin-top: 0.2rem; }
+
+/* Version status findings are separate from the reviewer evidence layout. */
+.status-findings {
+  margin-top: 2rem;
+  min-width: 0;
+}
+
+.status-findings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.status-findings-heading h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.status-findings-pass-rate {
+  font-size: 0.83rem;
+  color: var(--color-ink-2);
+  background: var(--color-paper-3);
+  border-radius: var(--radius-pill);
+  padding: 0.25rem 0.7rem;
+}
+
+.status-findings-note {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  line-height: 1.6;
+  margin: 0 0 1rem;
+}
+
+.status-finding-card {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-2);
+  margin-bottom: 0.75rem;
+  min-width: 0;
+}
+
+.status-finding-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.status-finding-rule {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.status-finding-location {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.status-finding-recommendation {
+  border-top: 1px solid var(--color-rule);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.status-finding-recommendation > span {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.status-finding-recommendation p {
+  margin: 0.25rem 0 0;
+  color: var(--color-ink-2);
+}
+
+@media (max-width: 640px) {
+  .status-finding-card { padding: 1rem; }
+  .status-finding-location { flex-basis: 100%; margin-left: 0; }
+}
+
 /* 审核结论 */
 .review-conclusion {
   margin: 1.5rem 0;

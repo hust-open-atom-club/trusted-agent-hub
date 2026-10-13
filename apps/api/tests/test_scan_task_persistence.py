@@ -7,11 +7,12 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src import main as main_module
+from src.auth import get_current_user
 from src.database import Base, create_engine_from_url, create_session_factory
 from src.dependencies import CurrentUser
 from src.repositories.orm import PackageRow, PackageVersionRow
@@ -926,50 +927,114 @@ def test_scan_list_keeps_legacy_array_and_v1_pagination(
             offset=0,
             _user=CurrentUser(id="reviewer-1", role="reviewer"),
         )
-        assert reviewer_page["total"] == 4
-        assert len(reviewer_page["items"]) == 4
-        assert any(
-            item["scan_id"] == "scan-list-other-owner"
-            for item in reviewer_page["items"]
+        assert reviewer_page["total"] == 0
+        assert reviewer_page["items"] == []
+        assert reviewer_page["has_more"] is False
+
+        reviewer_own_page = trust.list_scans_v1(
+            limit=1,
+            offset=1,
+            _user=CurrentUser(id="scan-user-1", role="reviewer"),
         )
-        assert {
-            item["owner_user_id"] for item in reviewer_page["items"]
-        } == {"scan-user-1", "scan-user-2"}
-        assert all(
-            item["delete_allowed"] is False
-            for item in reviewer_page["items"]
-        )
+        assert reviewer_own_page["total"] == 3
+        assert len(reviewer_own_page["items"]) == 1
+        assert reviewer_own_page["has_more"] is True
+        assert reviewer_own_page["items"][0]["owner_user_id"] == "scan-user-1"
 
         admin_page = trust.list_scans_v1(
             limit=50,
             offset=0,
             _user=CurrentUser(id="admin-1", role="admin"),
         )
+        assert admin_page["total"] == 4
+        assert len(admin_page["items"]) == 4
         assert next(
             item
             for item in admin_page["items"]
             if item["scan_id"] == "scan-list-other-owner"
         )["delete_allowed"] is True
 
-        reviewer_status = trust.get_scan_status(
-            "scan-list-other-owner",
-            _user=CurrentUser(id="reviewer-1", role="reviewer"),
-        )
+        with pytest.raises(HTTPException) as denied:
+            trust.get_scan_status(
+                "scan-list-other-owner",
+                _user=CurrentUser(id="reviewer-1", role="reviewer"),
+            )
+        assert denied.value.status_code == 403
         admin_status = trust.get_scan_status(
             "scan-list-other-owner",
             _user=CurrentUser(id="admin-1", role="admin"),
         )
-        assert reviewer_status["delete_allowed"] is False
         assert admin_status["delete_allowed"] is True
         assert "owner_user_id" in trust.ScanListItem.model_fields
     finally:
         trust._scans.clear()
 
 
-def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
+@pytest.mark.parametrize("role", ["submitter", "reviewer", "admin"])
+@pytest.mark.parametrize("persisted", [False, True])
+def test_scan_management_enforces_owner_or_admin_over_http(
+    scan_repository, monkeypatch, role, persisted,
+):
+    repository, _ = scan_repository
+    now = datetime.now(timezone.utc)
+    own_id, other_id = "scan-user-1", "scan-user-2"
+    monkeypatch.setattr(trust, "_cleanup_expired_scans", lambda: None)
+    monkeypatch.setattr(trust, "_scans", {})
+    monkeypatch.setattr(trust, "_get_scan_task_repository", lambda: repository if persisted else None)
+    for index, owner in enumerate((own_id, own_id, other_id)):
+        scan_id = f"scan-auth-{index}"
+        if persisted:
+            repository.create_scan_task(
+                scan_id=scan_id, owner_user_id=owner,
+                client_request_id=f"request-auth-{index}",
+                repo_url=f"https://github.com/acme/auth-{index}",
+                status="complete", callback_status="not_required", created_at=now,
+            )
+        else:
+            # Cover current and legacy owner keys in memory-only mode.
+            owner_key = "user_id" if index == 1 else "owner_user_id"
+            trust._scans[scan_id] = {
+                "scan_id": scan_id, owner_key: owner, "status": "complete",
+                "callback_status": "not_required", "created_at": now.isoformat(),
+            }
+
+    app = FastAPI()
+    app.include_router(trust.router, prefix="/api/v0")
+    app.include_router(trust.v1_router, prefix="/api/v1")
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=own_id, role=role)
+    allowed_ids = {"scan-auth-0", "scan-auth-1"}
+    if role == "admin":
+        allowed_ids.add("scan-auth-2")
+    with TestClient(app) as client:
+        # Client-supplied scope/owner filters cannot expand server-side access.
+        page = client.get("/api/v1/scans", params={
+            "limit": 1, "offset": 0, "scope": "all", "owner_user_id": other_id,
+        })
+        assert page.status_code == 200
+        assert page.json()["total"] == len(allowed_ids)
+        assert page.json()["has_more"] is True
+        all_items = []
+        for offset in range(len(allowed_ids)):
+            result = client.get("/api/v1/scans", params={"limit": 1, "offset": offset}).json()
+            all_items.extend(result["items"])
+        assert {item["scan_id"] for item in all_items} == allowed_ids
+        assert client.get("/api/v1/scans", params={"limit": 1, "offset": len(allowed_ids)}).json()["items"] == []
+        assert {item["scan_id"] for item in client.get("/api/v0/scans").json()} == allowed_ids
+
+        for suffix in ("", "/metadata"):
+            assert client.get(f"/api/v0/scan/scan-auth-0{suffix}").status_code == 200
+            expected = 200 if role == "admin" else 403
+            assert client.get(f"/api/v0/scan/scan-auth-2{suffix}").status_code == expected
+        if role != "admin":
+            assert client.delete("/api/v0/scan/scan-auth-2").status_code == 403
+
+
+@pytest.mark.parametrize("role", ["reviewer", "admin"])
+def test_only_admin_can_reuse_another_users_scan_and_callback_errors_remain_visible(
     scan_repository: tuple[ProducerRepository, object],
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    role: str,
 ) -> None:
     repository, _ = scan_repository
     _create_draft_version(repository)
@@ -1060,13 +1125,27 @@ def test_reviewer_reuses_foreign_scan_owner_and_reports_callback_error(
     trust._scans.clear()
 
     try:
+        if role == "reviewer":
+            version_before = repository.get_version(DRAFT_VERSION_ID)
+            scan_before = repository.get_scan_task(scan_id)
+            with pytest.raises(HTTPException) as denied:
+                producer_router.submit_version(
+                    DRAFT_VERSION_ID,
+                    BackgroundTasks(),
+                    body=producer_router.SubmitVersionRequest(initial_scan_id=scan_id),
+                    _user=CurrentUser(id="scan-user-2", role=role),
+                )
+            assert denied.value.status_code == 403
+            assert repository.get_version(DRAFT_VERSION_ID) == version_before
+            assert repository.get_scan_task(scan_id) == scan_before
+            return
         response = producer_router.submit_version(
             DRAFT_VERSION_ID,
             BackgroundTasks(),
             body=producer_router.SubmitVersionRequest(
                 initial_scan_id=scan_id,
             ),
-            _user=CurrentUser(id="scan-user-2", role="reviewer"),
+            _user=CurrentUser(id="scan-user-2", role=role),
         )
         assert response.status == "error"
         attached = repository.get_scan_task(scan_id)
@@ -1284,8 +1363,8 @@ def test_expired_attached_failure_with_pending_callback_remains_recoverable(
         expires_at=expired_at,
     )
 
-    assert repository.delete_expired_scan_tasks(now=now) == 1
-    assert repository.get_scan_task(delivered_scan_id) is None
+    assert repository.delete_expired_scan_tasks(now=now) == 0
+    assert repository.get_scan_task(delivered_scan_id) is not None
     assert repository.get_scan_task(pending_scan_id) is not None
 
     recovered = repository.claim_recoverable_scan_tasks(
@@ -1602,14 +1681,29 @@ def test_scan_task_delete_is_terminal_only_and_preserves_attached_version(
         "scan-delete-attached",
         {"report_json": {"scan_id": "scan-delete-attached"}},
     )
-    deleted = repository.delete_scan_task(
-        "scan-delete-attached",
-        owner_user_id="scan-user-1",
-        now=now,
+    repository.save_scan_report(version_id=DRAFT_VERSION_ID, scan_json={"findings": []})
+    repository.create_review_record(
+        version_id=DRAFT_VERSION_ID,
+        reviewer_id="scan-user-2",
+        conclusion="changes_requested",
+        comment="Preserve this review history",
     )
-    assert deleted is not None
-    assert repository.get_scan_task("scan-delete-attached") is None
+    version_before = repository.get_version(DRAFT_VERSION_ID)
+    package_before = repository.get_package(DRAFT_PACKAGE_ID)
+    report_before = repository.get_scan_report(DRAFT_VERSION_ID)
+    reviews_before = repository.list_review_records(DRAFT_VERSION_ID)
+    with pytest.raises(ValueError, match="已关联版本"):
+        repository.delete_scan_task(
+            "scan-delete-attached",
+            owner_user_id="scan-user-1",
+            now=now,
+        )
+    assert repository.get_scan_task("scan-delete-attached") is not None
     assert repository.get_version(DRAFT_VERSION_ID)["status"] == "draft"
+    assert repository.get_version(DRAFT_VERSION_ID) == version_before
+    assert repository.get_package(DRAFT_PACKAGE_ID) == package_before
+    assert repository.get_scan_report(DRAFT_VERSION_ID) == report_before
+    assert repository.list_review_records(DRAFT_VERSION_ID) == reviews_before
 
 
 def test_scan_status_projection_exposes_each_policy_row() -> None:
@@ -1675,7 +1769,7 @@ def test_scan_status_projection_exposes_each_policy_row() -> None:
     )
     assert attached["lifecycle"] == "submitted_reviewing"
     assert attached["auto_refresh"] is False
-    assert attached["delete_allowed"] is True
+    assert attached["delete_allowed"] is False
     assert attached["expires_at"] is None
 
 
@@ -1774,6 +1868,7 @@ def test_scan_list_exposes_the_attached_submission(
         DRAFT_VERSION_ID: {
             "package_name": DRAFT_PACKAGE_ID,
             "version": "1.0.0",
+            "status": "draft",
         }
     }
 
@@ -1789,6 +1884,7 @@ def test_scan_list_exposes_the_attached_submission(
         "version_id": DRAFT_VERSION_ID,
         "package_name": DRAFT_PACKAGE_ID,
         "version": "1.0.0",
+        "status": "draft",
     }
 
     detached = trust._scan_list_item(
@@ -2238,7 +2334,7 @@ def test_packaging_failure_end_to_end_keeps_detailed_error_and_demotes_scan(
     assert "invalid package layout" in str(task["error"])
     assert task["callback_status"] == "delivered"
     assert task["resource_consumed"] is True
-    assert task["expires_at"] is not None
+    assert task["expires_at"] is None
     assert mirror is not None
     assert mirror["status"] == "error"
     assert trust._scan_lifecycle(mirror) == "error"
@@ -2285,7 +2381,7 @@ def test_packaging_failure_backstop_terminalizes_db_row_without_report_scan_id(
     assert "源码目录已保留待重试" in str(task["error"])
     assert task["callback_status"] == "delivered"
     assert task["resource_consumed"] is True
-    assert task["expires_at"] is not None
+    assert task["expires_at"] is None
     assert mirror is not None
     assert mirror["status"] == "error"
     assert trust._scan_lifecycle(mirror) == "error"

@@ -52,6 +52,7 @@ export interface ScanSubmissionRef {
   version_id: string;
   package_name: string;
   version: string;
+  status?: string | null;
 }
 
 export interface ScanTaskItem {

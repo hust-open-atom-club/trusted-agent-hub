@@ -7,6 +7,9 @@ import { useAuth } from '@/lib/auth';
 import { apiFetch, authFetch } from '@/lib/api-fetch';
 import type { SubmitterFinding, SubmitterVersionDetail, ReviewRecord } from '@/types';
 import { SCAN_TOTAL_TIMEOUT_MS } from '@/lib/scan-polling';
+import { RESUBMITTABLE_STATUSES } from '@/lib/submission-workflow';
+import { clearPendingScanIfMatches } from '@/lib/pending-scan';
+import VersionDeleteButton from '@/components/VersionDeleteButton';
 
 import { API_BASE, SUPPORT_EMAIL } from '@/lib/runtime-config';
 
@@ -41,14 +44,6 @@ const TERMINAL_BAD: Record<string, string> = {
 
 const BAD_STOP_AT = 'pending_review';
 
-const SEVERITY_CLASS: Record<string, string> = {
-  critical: 'severity-critical',
-  high: 'severity-high',
-  medium: 'severity-medium',
-  low: 'severity-low',
-  info: 'severity-info',
-};
-
 const SEVERITY_LABELS: Record<string, string> = {
   critical: '严重',
   high: '高',
@@ -77,6 +72,7 @@ function StatusContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const versionId = searchParams.get('vid') || '';
+  const initialScanId = searchParams.get('scan') || '';
   const { user, token, loading: authLoading } = useAuth();
 
   const [detail, setDetail] = useState<SubmitterVersionDetail | null>(null);
@@ -91,12 +87,13 @@ function StatusContent() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef(0);
 
-  const fetchDetail = useCallback(async () => {
+  const fetchDetail = useCallback(async (signal?: AbortSignal) => {
     if (!token) return null;
     try {
       setError(null);
       const res = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
       if (!res.ok) {
         if (res.status === 404) throw new Error('版本不存在');
@@ -109,6 +106,7 @@ function StatusContent() {
         try {
           const pkgRes = await authFetch(`${API_BASE}/api/v0/producer/packages/${data.package_id}`, {
             headers: { Authorization: `Bearer ${token}` },
+            signal,
           });
           if (pkgRes.ok) {
             const pkgData = await pkgRes.json();
@@ -121,6 +119,7 @@ function StatusContent() {
         try {
           const reviewsRes = await authFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/reviews`, {
             headers: { Authorization: `Bearer ${token}` },
+            signal,
           });
           if (reviewsRes.ok) {
             const reviews: ReviewRecord[] = await reviewsRes.json();
@@ -132,22 +131,32 @@ function StatusContent() {
 
       return data;
     } catch (err: unknown) {
+      if (signal?.aborted) return null;
       setError(err instanceof Error ? err.message : '加载失败');
       return null;
     }
-  }, [versionId, packageName]);
+  }, [token, versionId, packageName]);
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!token || !versionId) {
+      setError(!token ? '请先登录后查看版本状态' : '链接缺少版本 ID');
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     setLoading(true);
-    fetchDetail().finally(() => setLoading(false));
+    fetchDetail(controller.signal).finally(() => {
+      if (!controller.signal.aborted) setLoading(false);
+    });
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      controller.abort();
     };
-  }, [fetchDetail]);
+  }, [authLoading, token, versionId, fetchDetail]);
 
   useEffect(() => {
-    if (!detail) return;
+    if (authLoading || !token || !detail) return;
     if (TERMINAL_STATUSES.has(detail.status)) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -188,7 +197,7 @@ function StatusContent() {
         intervalRef.current = null;
       }
     };
-  }, [detail?.status, fetchDetail]);
+  }, [authLoading, token, detail?.status, fetchDetail]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -203,9 +212,11 @@ function StatusContent() {
     try {
       await apiFetch(`${API_BASE}/api/v0/producer/versions/${versionId}/submit`, {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({}),
+        body: JSON.stringify(initialScanId ? { initial_scan_id: initialScanId } : {}),
       });
+      if (initialScanId) clearPendingScanIfMatches(initialScanId);
       setSubmitMsg('已提交，正在扫描中...');
       setTimeout(() => fetchDetail(), 2000);
     } catch (err: unknown) {
@@ -219,8 +230,6 @@ function StatusContent() {
     if (!detail?.package_id) return;
     router.push(`/submit?packageId=${detail.package_id}`);
   };
-
-  const RESUBMITABLE = new Set(['rejected', 'changes_requested', 'error']);
 
   const buildTimeline = () => {
     if (!detail) return [];
@@ -282,7 +291,7 @@ function StatusContent() {
         <div className="empty-state">
           <div className="empty-state-icon">&#x26A0;</div>
           <h3>{error || '版本不存在'}</h3>
-          <p>请检查版本 ID 是否正确</p>
+          <p>{token ? '请检查链接或刷新后重试' : '登录后重新打开此链接即可'}</p>
           <button className="btn btn-secondary" style={{ marginTop: '1rem' }} onClick={() => router.push('/')}>
             返回首页
           </button>
@@ -326,6 +335,7 @@ function StatusContent() {
       </div>
 
       <div className="status-refresh">
+        <VersionDeleteButton versionId={versionId} status={detail.status} onDeleted={() => router.push('/scans')} />
         <span className="status-refresh-meta">
           当前状态: <strong style={{ color: 'var(--color-ink)' }}>{statusLabel}</strong>
           {detail.submitted_at && (
@@ -340,8 +350,9 @@ function StatusContent() {
         </button>
       </div>
 
-      {RESUBMITABLE.has(detail.status) && (
-        <div className="status-action-bar">
+      {(RESUBMITTABLE_STATUSES.has(detail.status) || detail.status === 'rejected') && (
+        <div className="status-action-bar" id="resubmit">
+          {RESUBMITTABLE_STATUSES.has(detail.status) && (
           <button
             className="btn btn-primary btn-sm"
             onClick={handleResubmit}
@@ -349,6 +360,7 @@ function StatusContent() {
           >
             {submitting ? '提交中...' : '重新提交'}
           </button>
+          )}
           <button
             className="btn btn-secondary btn-sm"
             onClick={handleCreateNewVersion}
@@ -443,7 +455,7 @@ function StatusContent() {
             )}
             {stage.phase === 'rejected' && detail.status === 'changes_requested' && (
               <p className="timeline-stage-hint">
-                修改后在提交页面重新提交即可
+                修改源码后，点击本页“重新提交”继续审核；如需使用不同版本号，请选择“创建新版本”。已有审核历史会保留。
               </p>
             )}
             {stage.phase === 'rejected' && detail.status === 'rejected' && (
@@ -488,16 +500,16 @@ function StatusContent() {
       )}
 
       {hasFindingProjection && !isScanning && (
-        <div className="findings-section">
-          <h2>
-            扫描发现 ({findingTotal} 项)
+        <section className="status-findings" aria-labelledby="status-findings-title">
+          <div className="status-findings-heading">
+            <h2 id="status-findings-title">扫描发现（{findingTotal} 项）</h2>
             {detail.scan_summary?.pass_rate !== undefined && (
-              <span style={{ fontSize: '0.83rem', fontWeight: 400, color: 'var(--color-muted)', marginLeft: '0.5rem' }}>
+              <span className="status-findings-pass-rate">
                 通过率 {Math.round(detail.scan_summary.pass_rate)}%
               </span>
             )}
-          </h2>
-          <p style={{ fontSize: '0.8rem', color: 'var(--color-muted)', margin: '0 0 0.9rem' }}>
+          </div>
+          <p className="status-findings-note">
             仅展示规则、严重级别、文件位置和修复建议，不包含源码或审核内部信息。
           </p>
 
@@ -508,24 +520,27 @@ function StatusContent() {
               const severity = f.severity;
               const recommendation = f.suggestion ?? f.remediation;
               return (
-                <div key={f.id ?? `${f.rule_id}-${i}`} className="finding-card">
-                  <div className="finding-card-header">
-                    <span className={`finding-rule-id ${SEVERITY_CLASS[f.severity] || ''}`}>
+                <article key={f.id ?? `${f.rule_id}-${i}`} className="status-finding-card">
+                  <div className="status-finding-header">
+                    <span className="status-finding-rule">
                       {f.rule_id}
                     </span>
                     <span className={`finding-severity-chip ${severity}`}>
                       {SEVERITY_LABELS[severity] ?? severity}
                     </span>
                     {file && (
-                      <span className="finding-location">
+                      <code className="status-finding-location">
                         {file}{line ? `:${line}` : ''}
-                      </span>
+                      </code>
                     )}
                   </div>
                   {recommendation && (
-                    <p className="finding-suggestion">{recommendation}</p>
+                    <div className="status-finding-recommendation">
+                      <span>修复建议</span>
+                      <p>{recommendation}</p>
+                    </div>
                   )}
-                </div>
+                </article>
               );
             })
           ) : (
@@ -533,7 +548,7 @@ function StatusContent() {
               未发现需要展示的安全风险。
             </p>
           )}
-        </div>
+        </section>
       )}
 
       {!hasFindingProjection && isScanning && (

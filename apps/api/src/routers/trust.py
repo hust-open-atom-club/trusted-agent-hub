@@ -48,7 +48,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from src.auth import require_role, verify_resource_access
+from src.auth import require_role
 from src.database import create_session_factory, get_runtime_engine
 from src.dependencies import CurrentUser
 from src.llm_progress import (
@@ -372,6 +372,8 @@ def _scan_expired(info: dict[str, Any], now: float | None = None) -> bool:
     (version-attached scans); they carry no retention deadline and
     therefore never expire.
     """
+    if not _scan_is_auto_expirable(info):
+        return False
     expires_at = _scan_expiry_seconds(info)
     if expires_at is None:
         return False
@@ -1281,6 +1283,7 @@ class ScanSubmissionRef(BaseModel):
     version_id: str
     package_name: str
     version: str
+    status: Optional[str] = None
 
 
 class ScanListItem(BaseModel):
@@ -1452,10 +1455,10 @@ def _scan_report_status(info: dict[str, Any]) -> str | None:
 
 def _scan_is_auto_expirable(info: dict[str, Any]) -> bool:
     """Whether ``expires_at`` is an active retention deadline for this task."""
+    if info.get("version_id") is not None:
+        return False
     task_status = str(info.get("status") or "")
-    if task_status in _SCAN_FAILURE_STATUSES:
-        return True
-    return task_status == "complete" and info.get("version_id") is None
+    return task_status in _SCAN_FAILURE_STATUSES | {"complete"}
 
 
 def _scan_lifecycle(info: dict[str, Any]) -> str:
@@ -1503,10 +1506,7 @@ def _scan_delete_allowed(
     lease_until = _coerce_scan_datetime(info.get("lease_until"))
     if lease_until is not None and lease_until > datetime.now(timezone.utc):
         return False
-    if info.get("version_id") is not None and info.get("callback_status") not in {
-        "delivered",
-        "not_required",
-    }:
+    if info.get("version_id") is not None:
         return False
     return True
 
@@ -1544,6 +1544,11 @@ def scan_conflict_detail(info: dict[str, Any]) -> dict[str, Any]:
         message = (
             f"该源码已有扫描任务 {scan_id}（{lifecycle}），"
             f"请先删除任务 {scan_id} 后重试"
+        )
+    elif info.get("version_id") is not None:
+        message = (
+            f"该源码已有扫描任务 {scan_id}（{lifecycle}），不允许重复扫描。"
+            "记录已关联提交版本，不能单独删除扫描记录，请前往‘我的提交版本’查看状态或按版本权限撤回提交。"
         )
     else:
         message = (
@@ -1733,6 +1738,21 @@ def _remember_scan_info(info: dict[str, Any]) -> None:
         else:
             current_arg = current
         _scans[scan_id] = _merge_runtime_scan_info(persisted_info, current_arg)
+
+
+def discard_version_scan_runtime(version_id: str) -> None:
+    """Invalidate this process's scan mirror after a version is deleted.
+
+    Durable rows have already been deleted transactionally. Other workers
+    cannot resurrect them: progress updates require an existing scan row.
+    """
+    with _SCAN_PROGRESS_LOCK:
+        scan_ids = [
+            scan_id for scan_id, info in _scans.items()
+            if info.get("version_id") == version_id
+        ]
+        for scan_id in scan_ids:
+            _scans.pop(scan_id, None)
 
 
 def _load_scan_info(scan_id: str) -> dict[str, Any] | None:
@@ -2421,10 +2441,14 @@ def _authorized_scan_info(
     # 被保留的过期终态记录不再面向接口暴露（清理批次按最老 50 条推进）。
     if _scan_expired_finished(info):
         return None
-    verify_resource_access(
-        user,
-        str(info.get("owner_user_id") or info.get("user_id") or ""),
-    )
+    # Scan-task management is owner/admin only. Reviewers access submitted
+    # version reports through the review API, not other users' raw tasks.
+    if user.role != UserRole.ADMIN.value:
+        owner_id = _scan_owner_id(info)
+        if not owner_id:
+            raise HTTPException(status_code=404, detail="扫描任务不存在")
+        if user.id != owner_id:
+            raise HTTPException(status_code=403, detail="只能访问自己的扫描记录")
     return info
 
 
@@ -7010,7 +7034,7 @@ def delete_scan_task(
     task_owner_id = _scan_owner_id(info)
     requester_is_owner, requester_is_admin = _scan_requester_flags(info, _user)
     if not requester_is_owner and not requester_is_admin:
-        # v1 reviewers can see this task, so return an explicit 403.
+        # Defense in depth: deletion never grants reviewers global access.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="只有扫描任务的所有者或管理员可以删除扫描任务",
@@ -7025,7 +7049,7 @@ def delete_scan_task(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 "扫描任务当前状态不允许删除；活动扫描需等待结束或超时，"
-                "已提交任务需等待回调完成。"
+                "已绑定版本的扫描不能单独删除，请按版本权限撤回提交或删除版本。"
             ),
         )
 
@@ -7238,6 +7262,7 @@ def _scan_list_item(
                 "version_id": str(version_id),
                 "package_name": str(submission_label["package_name"]),
                 "version": str(submission_label["version"]),
+                "status": submission_label.get("status"),
             }
             if submission_label
             else None
@@ -7252,10 +7277,7 @@ def _list_scan_page(
     offset: int,
 ) -> dict[str, Any]:
     """Build the versioned paginated projection with owner isolation."""
-    can_view_all_scans = _user.role in (
-        UserRole.ADMIN.value,
-        UserRole.REVIEWER.value,
-    )
+    can_view_all_scans = _user.role == UserRole.ADMIN.value
     repository = _get_scan_task_repository()
     if repository is not None:
         owner_user_id = None if can_view_all_scans else _user.id
@@ -7289,7 +7311,7 @@ def _list_scan_page(
     visible_runtime_scans = [
         (sid, info)
         for sid, info in runtime_scans
-        if can_view_all_scans or info.get("user_id") == _user.id
+        if can_view_all_scans or _scan_owner_id(info) == _user.id
     ]
     visible_runtime_scans.sort(
         key=lambda item: _coerce_scan_datetime(item[1].get("created_at"))
@@ -7345,7 +7367,7 @@ def list_scans(
             requester=_user,
         )
         for sid, info in runtime_scans
-        if can_view_all_scans or info.get("user_id") == _user.id
+        if can_view_all_scans or _scan_owner_id(info) == _user.id
     ]
 
 
