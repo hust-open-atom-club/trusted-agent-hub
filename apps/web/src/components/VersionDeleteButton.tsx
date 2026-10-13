@@ -1,10 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/lib/auth';
 import { authFetch, clearFetchCache } from '@/lib/api-fetch';
 import { API_BASE } from '@/lib/runtime-config';
 import { clearPendingSubmitContext, readPendingSubmitContext } from '@/lib/pending-submit';
+import styles from './VersionDeleteButton.module.css';
 
 export const WITHDRAWABLE_STATUSES = new Set(['draft', 'pending_review', 'changes_requested', 'rejected', 'error']);
 
@@ -18,13 +21,32 @@ export default function VersionDeleteButton({ versionId, status, onDeleted }: {
   versionId: string; status: string; onDeleted: () => void;
 }) {
   const { user, token } = useAuth();
+  const { t } = useTranslation();
   const eligible = WITHDRAWABLE_STATUSES.has(status) || (status === 'yanked' && user?.role === 'admin');
   const [plan, setPlan] = useState<DeletionPlan | null>(null);
   const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<'review' | 'confirm'>('review');
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const trigger = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
+  const descriptionId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    const returnTarget = trigger.current;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      returnTarget?.focus();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) dialog.current?.focus();
+  }, [open, step]);
 
   async function loadPlan(signal?: AbortSignal): Promise<DeletionPlan | null> {
     const res = await authFetch(`${API_BASE}/api/v0/producer/versions/${encodeURIComponent(versionId)}/deletion-preview`, {
@@ -60,15 +82,14 @@ export default function VersionDeleteButton({ versionId, status, onDeleted }: {
     try {
       const latest = await loadPlan();
       setPlan(latest);
-      if (latest?.allowed) { setChecked(false); setOpen(true); }
+      if (latest?.allowed) { setChecked(false); setStep('review'); setOpen(true); }
       else setError(latest?.reason || '该版本已不存在或当前账号无权删除');
     } catch (err) { setError(err instanceof Error ? err.message : '无法读取删除范围'); }
     finally { setBusy(false); }
   }
 
   async function remove() {
-    if (!plan || !checked || busy) return;
-    if (!window.confirm(`二次确认：${plan.action} ${plan.package_name} v${plan.version}？将永久删除清单中的目标版本及关联记录，无法恢复；包本身、其他版本和独立操作审计保留。`)) return;
+    if (!plan || !checked || busy || step !== 'confirm') return;
     setBusy(true);
     setError('');
     try {
@@ -89,6 +110,7 @@ export default function VersionDeleteButton({ versionId, status, onDeleted }: {
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败');
       setChecked(false);
+      setStep('review');
     } finally { setBusy(false); }
   }
 
@@ -97,39 +119,88 @@ export default function VersionDeleteButton({ versionId, status, onDeleted }: {
     {plan?.allowed && <button ref={trigger} type="button" className="btn btn-danger btn-sm" disabled={busy} onClick={showPreview}>
       {busy ? '处理中…' : plan.action}
     </button>}
-    {error && !open && <span role="alert">{error}</span>}
-    {open && plan && <div className="modal-overlay" onClick={close}>
-      <div className="modal-dialog" role="dialog" aria-modal="true" aria-label="版本删除范围清单"
-        style={{ maxWidth: '560px' }} onClick={e => e.stopPropagation()}
+    {error && !open && <span role="alert" className={styles.inlineError}>{error}</span>}
+    {open && plan && createPortal(<div className={styles.overlay} onClick={close}>
+      <div ref={dialog} className={styles.dialog} role="dialog" aria-modal="true" tabIndex={-1}
+        aria-label={step === 'review' ? '版本删除范围清单' : '确认永久删除'}
+        aria-describedby={descriptionId} aria-busy={busy} onClick={e => e.stopPropagation()}
         onKeyDown={e => {
-          if (e.key === 'Escape') close();
+          if (e.key === 'Escape') { e.stopPropagation(); close(); }
           if (e.key === 'Tab') {
             const controls = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)'));
             const first = controls[0], last = controls[controls.length - 1];
-            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
-            if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+            if (!first) { e.preventDefault(); e.currentTarget.focus(); }
+            else if (e.shiftKey && (document.activeElement === first || document.activeElement === e.currentTarget)) {
+              e.preventDefault(); last?.focus();
+            } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
           }
         }}>
-        <h3>{plan.action}</h3>
-        <p><strong>{plan.package_name} v{plan.version}</strong> · {plan.status}</p>
-        <p>范围 V：以下数据将永久删除，无法恢复。</p>
-        <ul>
-          <li>目标提交版本：1 个（含版本评分、安装记录）</li>
-          <li>关联扫描记录：{plan.scan_count} 条</li>
-          <li>版本扫描报告：{plan.report_count} 份</li>
-          <li>版本审核记录：{plan.review_count} 条</li>
-        </ul>
-        <p>保留：包本身、其他版本、独立操作审计。删除后不会自动发布其他版本。</p>
-        <label style={{ display: 'flex', gap: '0.5rem', margin: '1rem 0' }}>
-          <input type="checkbox" autoFocus checked={checked} disabled={busy} onChange={e => setChecked(e.target.checked)} />
-          我已核对目标版本和删除范围，理解此操作不可恢复
-        </label>
-        {error && <p role="alert" className="submit-error">{error}</p>}
-        <div className="submit-notice__actions">
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={close}>取消</button>
-          <button type="button" className="btn btn-danger" disabled={!checked || busy} onClick={remove}>继续二次确认</button>
+        <header className={styles.header}>
+          <span className={styles.icon} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" />
+            </svg>
+          </span>
+          <div className={styles.heading}>
+            <h2>{step === 'review' ? plan.action : '确认永久删除'}</h2>
+            <p id={descriptionId}>{step === 'review' ? '删除前，请核对目标版本与影响范围。' : '这是最后一步，请再次确认以下删除内容。'}</p>
+          </div>
+          <button type="button" className={styles.close} aria-label="关闭删除确认" disabled={busy} onClick={close}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
+          </button>
+        </header>
+
+        <ol className={styles.steps} aria-label="删除确认步骤">
+          <li aria-current={step === 'review' ? 'step' : undefined} data-complete={step === 'confirm'}><span>1</span>核对删除范围</li>
+          <li aria-current={step === 'confirm' ? 'step' : undefined}><span>2</span>最终确认</li>
+        </ol>
+
+        <div className={styles.body}>
+          <section className={styles.target} aria-label="目标版本">
+            <span className={styles.caption}>目标版本</span>
+            <strong className={styles.packageName}>{plan.package_name}</strong>
+            <div className={styles.metadata}>
+              <span className={styles.version}>v{plan.version}</span>
+              <span className={styles.status}>{t(`submissions.status.${plan.status}`, { defaultValue: plan.status })}</span>
+            </div>
+          </section>
+
+          <div className={styles.scope}>
+            <div className={styles.sectionHeading}><h3>将永久删除</h3><span>仅限当前版本</span></div>
+            <dl className={styles.inventory}>
+              <div><dt>目标提交版本<small>含版本评分、安装记录</small></dt><dd><strong>1</strong> 个</dd></div>
+              <div><dt>关联扫描记录</dt><dd><strong>{plan.scan_count}</strong> 条</dd></div>
+              <div><dt>版本扫描报告</dt><dd><strong>{plan.report_count}</strong> 份</dd></div>
+              <div><dt>版本审核记录</dt><dd><strong>{plan.review_count}</strong> 条</dd></div>
+            </dl>
+          </div>
+
+          <div className={styles.retained}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" /><path d="m8 12 3 3 5-6" /></svg>
+            <div><strong>包本身、其他版本和独立操作审计将保留</strong><p>删除后不会自动发布其他版本。</p></div>
+          </div>
+
+          {step === 'review' ? <label className={styles.acknowledgement} data-checked={checked}>
+            <input type="checkbox" checked={checked} disabled={busy} onChange={e => setChecked(e.target.checked)} />
+            <span><strong>我已核对目标版本和删除范围</strong><small>我理解此操作将永久删除以上数据，且无法恢复。</small></span>
+          </label> : <div className={styles.warning} role="note">
+            <strong>删除后无法恢复</strong>
+            <p>点击“确认永久删除”后，将立即删除上述版本及关联记录。</p>
+          </div>}
+          {error && <p role="alert" className={styles.error}>{error}</p>}
         </div>
+
+        <footer className={styles.footer}>
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={step === 'review' ? close : () => setStep('review')}>
+            {step === 'review' ? '取消' : '返回核对'}
+          </button>
+          {step === 'review' ? <button type="button" className={`btn btn-primary ${styles.next}`} disabled={!checked || busy} onClick={() => setStep('confirm')}>
+            继续二次确认 <span aria-hidden="true">→</span>
+          </button> : <button type="button" className="btn btn-danger" disabled={busy} onClick={remove}>
+            {busy ? '正在删除…' : '确认永久删除'}
+          </button>}
+        </footer>
       </div>
-    </div>}
+    </div>, document.body)}
   </>;
 }

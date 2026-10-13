@@ -366,6 +366,24 @@ def test_list_excludes_non_public_packages(fake_repository: FakeRepository) -> N
     assert "private-package" not in {item.name for item in page.items}
 
 
+def test_list_ignores_draft_package_without_latest_version(
+    fake_repository: FakeRepository,
+) -> None:
+    draft = fake_repository.packages[3].model_copy(update={"latest_version": None})
+    repository = FakeRepository(
+        (*fake_repository.packages[:3], draft),
+        fake_repository.versions,
+    )
+
+    page = PackageService(repository).list_packages(PackageListQuery())
+
+    assert {item.name for item in page.items} == {
+        "alpha-package",
+        "beta-package",
+        "Gamma-package",
+    }
+
+
 @pytest.mark.parametrize("field", [SortField.AVG_RATING])
 @pytest.mark.parametrize("order", [SortOrder.ASC, SortOrder.DESC])
 def test_null_numeric_sort_values_are_always_last(

@@ -37,7 +37,7 @@ _logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_application: FastAPI):
-    """Start the scan recovery and maintenance workers; release resources on shutdown."""
+    """Start recovery/maintenance workers and release resources on shutdown."""
     worker_stop = threading.Event()
     worker_threads: list[threading.Thread] = []
     try:
@@ -49,14 +49,23 @@ async def lifespan(_application: FastAPI):
             run_scan_maintenance,
             run_scan_maintenance_loop,
         )
+        from src.services.package_cleanup import (
+            run_empty_package_cleanup,
+            run_empty_package_cleanup_loop,
+        )
         recover_persisted_scan_tasks()
         try:
             run_scan_maintenance()
         except Exception:
             _logger.exception("Initial scan maintenance failed")
+        try:
+            run_empty_package_cleanup()
+        except Exception:
+            _logger.exception("Initial empty package cleanup failed")
         for target, name in (
             (run_persisted_scan_recovery_loop, "scan-recovery-loop"),
             (run_scan_maintenance_loop, "scan-maintenance-loop"),
+            (run_empty_package_cleanup_loop, "empty-package-cleanup-loop"),
         ):
             thread = threading.Thread(
                 target=target,

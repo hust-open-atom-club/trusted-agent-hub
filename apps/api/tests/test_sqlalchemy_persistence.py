@@ -27,6 +27,7 @@ from src.repositories.orm import (
     PackageRow,
     PackageVersionRow,
 )
+from src.repositories.producer_sqlalchemy import ProducerRepository
 from src.repositories.sqlalchemy import (
     SqlAlchemyPackageRepository,
     seed_sqlalchemy_repository,
@@ -65,6 +66,109 @@ def test_consumer_persistence_repository_is_runtime_checkable(
     )
     assert type_guard(sqlalchemy_repository)
     assert not type_guard(json_repository)
+
+
+def test_list_packages_tolerates_draft_without_latest_version(
+    repository: tuple[SqlAlchemyPackageRepository, Callable[[], Session]],
+) -> None:
+    sqlalchemy_repository, session_factory = repository
+    with session_factory() as session:
+        session.add(
+            PackageRow(
+                id="p-draft-without-version",
+                name="draft-without-version",
+                status="draft",
+                latest_version="",
+                data={
+                    "id": "p-draft-without-version",
+                    "name": "draft-without-version",
+                    "description": "Incomplete draft",
+                    "type": "skill",
+                    "latest_version": None,
+                    "status": "draft",
+                },
+            )
+        )
+        session.commit()
+
+    packages = sqlalchemy_repository.list_packages()
+    draft = next(
+        package
+        for package in packages
+        if package.name == "draft-without-version"
+    )
+
+    assert draft.status == "draft"
+    assert draft.latest_version is None
+
+
+def test_delete_empty_draft_packages_removes_only_version_shells(
+    repository: tuple[SqlAlchemyPackageRepository, Callable[[], Session]],
+) -> None:
+    _, session_factory = repository
+    with session_factory() as session:
+        session.add_all(
+            [
+                PackageRow(
+                    id="p-empty-after-delete",
+                    name="empty-after-delete",
+                    status="draft",
+                    latest_version="",
+                    data={
+                        "id": "p-empty-after-delete",
+                        "name": "empty-after-delete",
+                        "description": "Old draft",
+                        "type": "skill",
+                        "latest_version": None,
+                        "status": "draft",
+                    },
+                ),
+                PackageRow(
+                    id="p-new-draft",
+                    name="new-draft",
+                    status="draft",
+                    latest_version="0.0.0",
+                    data={
+                        "id": "p-new-draft",
+                        "name": "new-draft",
+                        "description": "New draft",
+                        "type": "skill",
+                        "latest_version": "0.0.0",
+                        "status": "draft",
+                    },
+                ),
+                PackageRow(
+                    id="p-draft-with-version",
+                    name="draft-with-version",
+                    status="draft",
+                    latest_version="1.0.0",
+                    data={
+                        "id": "p-draft-with-version",
+                        "name": "draft-with-version",
+                        "description": "Draft with data",
+                        "type": "skill",
+                        "latest_version": "1.0.0",
+                        "status": "draft",
+                    },
+                ),
+                PackageVersionRow(
+                    id="v-draft-with-version",
+                    package_id="p-draft-with-version",
+                    version="1.0.0",
+                    status="draft",
+                    data={},
+                ),
+            ]
+        )
+        session.commit()
+
+    producer_repository = ProducerRepository(session_factory)
+    assert producer_repository.delete_empty_draft_packages() == 1
+
+    with session_factory() as session:
+        assert session.get(PackageRow, "p-empty-after-delete") is None
+        assert session.get(PackageRow, "p-new-draft") is not None
+        assert session.get(PackageRow, "p-draft-with-version") is not None
 
 
 def test_consumer_persistence_type_guard_does_not_execute_dynamic_attributes(

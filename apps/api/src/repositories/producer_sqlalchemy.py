@@ -347,6 +347,31 @@ class ProducerRepository:
             session.commit()
             return True
 
+    def delete_empty_draft_packages(self) -> int:
+        """删除已撤回全部版本的空草稿包。
+
+        ``latest_version == ""`` is the marker written by
+        :meth:`delete_version` after the package's latest version is removed.
+        Newly-created draft packages keep the initial ``0.0.0`` marker and are
+        therefore not removed by this maintenance task.
+        """
+        with self.session_factory() as session:
+            packages = session.scalars(
+                select(PackageRow)
+                .where(
+                    PackageRow.status == "draft",
+                    PackageRow.latest_version == "",
+                    ~select(PackageVersionRow.id)
+                    .where(PackageVersionRow.package_id == PackageRow.id)
+                    .exists(),
+                )
+                .with_for_update()
+            ).all()
+            for package in packages:
+                session.delete(package)
+            session.commit()
+            return len(packages)
+
     def _version_deletion_plan(
         self, session: Session, version: PackageVersionRow,
         *, operator_id: str, operator_role: str, lock: bool = False,

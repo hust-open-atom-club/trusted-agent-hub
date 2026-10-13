@@ -786,6 +786,13 @@ class FeedbackCounts(StrictContractModel):
 
 
 class PackageSummary(StrictContractModel):
+    """Package metadata shared by repository records and public responses.
+
+    Draft packages may not have a current version yet. Public service methods
+    still validate that published packages point to a published version before
+    returning them.
+    """
+
     id: str
     name: str
     description: str
@@ -796,7 +803,7 @@ class PackageSummary(StrictContractModel):
     homepage: str | None = None
     icon_url: str | None = None
     owner: Owner | None = None
-    latest_version: str
+    latest_version: str | None = None
     status: str
     risk_level: str | None = None
     grade: Grade | None = None

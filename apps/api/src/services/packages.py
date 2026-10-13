@@ -362,6 +362,11 @@ class PackageService:
         )
 
     def _get_public_latest(self, package: PackageSummary) -> VersionDetail:
+        if not package.latest_version:
+            raise RepositoryDataError(
+                f"Package {package.name} has invalid latest_version "
+                f"{package.latest_version!r}"
+            )
         version = self.repository.get_version(package.name, package.latest_version)
         if version is None or version.status != "published":
             raise RepositoryDataError(
@@ -590,7 +595,7 @@ class PackageService:
                 return val
 
         package = self.get_public_package(name)
-        self._get_public_latest(package)
+        latest = self._get_public_latest(package)
         if hasattr(self.repository, "get_package_stats"):
             stats = self.repository.get_package_stats(name)
             if stats is not None:
@@ -606,7 +611,7 @@ class PackageService:
             install_count=package.install_count,
             avg_rating=package.avg_rating,
             total_versions=len(versions),
-            latest_version=package.latest_version,
+            latest_version=latest.version,
             status=package.status,
         )
         _STATS_CACHE[name] = (now, result)
