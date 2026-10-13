@@ -1200,8 +1200,15 @@
             "type": "array"
           },
           "latest_version": {
-            "title": "Latest Version",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
           },
           "latest_version_detail": {
             "$ref": "#/components/schemas/VersionSummary"
@@ -1266,7 +1273,6 @@
           "name",
           "description",
           "type",
-          "latest_version",
           "status",
           "latest_version_detail"
         ],
@@ -1357,6 +1363,7 @@
       },
       "PackageSummary": {
         "additionalProperties": false,
+        "description": "Package metadata shared by repository records and public responses.\n\nDraft packages may not have a current version yet. Public service methods\nstill validate that published packages point to a published version before\nreturning them.",
         "properties": {
           "avg_rating": {
             "anyOf": [
@@ -1454,8 +1461,15 @@
             "type": "array"
           },
           "latest_version": {
-            "title": "Latest Version",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Version"
           },
           "license": {
             "anyOf": [
@@ -1517,7 +1531,6 @@
           "name",
           "description",
           "type",
-          "latest_version",
           "status"
         ],
         "title": "PackageSummary",
